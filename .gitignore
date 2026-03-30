@@ -1,0 +1,9 @@
+# Public repo policy: track only code and repo policy.
+*
+!/.gitignore
+!/code/
+!/code/**
+
+# Ignore generated Python cache files inside code.
+/code/__pycache__/
+/code/**/*.pyc
