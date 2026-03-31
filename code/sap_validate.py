@@ -37,10 +37,12 @@ from sap_model import (
     SiteParams,
     compute_adaptive_weights,
     compute_mu,
+    compute_neff,
     compute_s_matrix,
     fit_hurdle_tweedie,
     fit_site,
     load_model,
+    load_production_spec,
     tweedie_deviance,
     tweedie_deviance_residuals,
     tweedie_total_deviance,
@@ -96,6 +98,69 @@ def _load_result(filename: str) -> Optional[ValidationResult]:
         return None
     with open(path) as f:
         return ValidationResult.from_dict(json.load(f))
+
+
+def _subset_data_by_conditions(data, conditions: List[str]):
+    """Subset SAPData to only samples from specified conditions.
+
+    Returns a shallow copy with sample_meta, a_obs, bulk_phospho, and r_tensor
+    subsetted along the sample axis. Used for pairwise validation (audit D).
+    """
+    import copy
+    mask = data.sample_meta["condition"].isin(conditions)
+    idx = np.where(mask.values)[0]
+    data_sub = copy.copy(data)
+    data_sub.sample_meta = data.sample_meta.loc[mask].reset_index(drop=True)
+    data_sub.a_obs = data.a_obs.iloc[idx].reset_index(drop=True)
+    data_sub.bulk_phospho = data.bulk_phospho.iloc[:, idx].copy()
+    data_sub.bulk_phospho.columns = range(len(idx))
+    if data.r_tensor is not None:
+        data_sub.r_tensor = data.r_tensor[:, idx, :]
+    print(f"  Subsetted to conditions {conditions}: {len(idx)} samples")
+    print(f"  Condition counts: {data_sub.sample_meta['condition'].value_counts().to_dict()}")
+    return data_sub
+
+
+def _extract_validation_hyperparams(
+    model: ModelFit,
+    data,  # SAPData — needed to recompute omega if model lacks omega_override
+) -> Dict:
+    """Extract production-aligned hyperparameters for validation refits.
+
+    Uses saved omega_override if present (audit finding 1), otherwise
+    falls back to recomputing from cv_result + data.cvs.
+    """
+    cv = model.cv_result
+    if cv is None:
+        lam_q = np.full(config.N_INTENSITY_STRATA, 0.1)
+        lam_rho, eta, gamma = 0.1, 2.0, 0.5
+    else:
+        lam_q = cv.best_lambda
+        lam_rho, eta, gamma = cv.best_lambda_rho, cv.best_eta, cv.best_gamma
+
+    # Omega: prefer saved production value, fall back to recomputation
+    omega_override = model.omega_override
+    if omega_override is None:
+        omega = compute_adaptive_weights(data.cvs, gamma)
+    else:
+        omega = omega_override
+
+    spec_id = model.model_spec_id or "unknown"
+    penalty_mode = model.penalty_mode or "adaptive"
+    print(f"  Production spec: mode={penalty_mode}, spec_id={spec_id}")
+    if omega_override is not None:
+        print(f"  Using saved omega_override (n_eff-scaled penalty weights)")
+    else:
+        print(f"  omega recomputed from cv_result (no saved omega_override)")
+
+    return {
+        "lam_q": lam_q,
+        "lam_rho": lam_rho,
+        "eta": eta,
+        "gamma": gamma,
+        "omega": omega,
+        "omega_override": omega_override,
+    }
 
 
 # ============================================================================
@@ -389,6 +454,62 @@ def _generate_delta_true(
                 r_mean = np.mean(data.r_tensor[k, :, j])
                 # Inject opposite sign, scaled
                 delta[k, j, 0] = -np.sign(r_mean) * abs(rng.normal(0.5, 0.2))
+
+    elif scenario == "kinase_program":
+        # Structured injection: coherent effects across kinase substrate sets.
+        # Sites sharing a kinase get the same cell-type-specific effect.
+        # This tests pathway-level recovery, not site-level (audit Phase D).
+        from sap_data import build_kinase_substrate_map
+        ks_map = build_kinase_substrate_map(data.site_meta, data.kinase_genes or [])
+
+        # Invert: kinase → list of site indices
+        kinase_to_sites: Dict[str, List[int]] = {}
+        for j, kinases in ks_map.items():
+            for kin in kinases:
+                kinase_to_sites.setdefault(kin, []).append(j)
+
+        # Select kinases with ≥ 5 substrates for detectable programs
+        eligible = [(kin, sites) for kin, sites in kinase_to_sites.items()
+                    if len(sites) >= 5]
+        if not eligible:
+            # Fall back to dense if no eligible kinases
+            return _generate_delta_true("dense", data, model, seed)
+
+        n_programs = min(len(eligible), 20)
+        chosen_programs = rng.choice(len(eligible), size=n_programs, replace=False)
+
+        for prog_idx in chosen_programs:
+            kin_name, substrate_sites = eligible[prog_idx]
+            # Each program affects 1-3 cell types with coherent direction
+            n_ct_affected = rng.integers(1, 4)
+            affected_cts = rng.choice(n_types, size=n_ct_affected, replace=False)
+            # Coherent effect: same sign and similar magnitude across substrates
+            for k in affected_cts:
+                program_effect = rng.normal(0, 0.5)  # shared direction
+                for j in substrate_sites:
+                    delta[k, j, 0] = program_effect + rng.normal(0, 0.05)
+                    delta[k, j, 1] = program_effect * 0.5 + rng.normal(0, 0.05)
+
+    elif scenario == "low_rank":
+        # Low-rank cell-type × condition signals: a small number of latent
+        # factors drive correlated effects across sites and cell types.
+        # This tests whether aggregated (pathway-level) recovery is feasible
+        # even when per-site recovery is not (audit Phase D).
+        n_factors = 3
+        n_affected = max(int(0.3 * n_sites), 100)
+        affected_sites = rng.choice(n_sites, size=n_affected, replace=False)
+
+        # Factor loadings: (n_factors, n_types) — cell-type patterns
+        ct_loadings = rng.normal(0, 1.0, size=(n_factors, n_types))
+        # Factor scores: (n_factors, n_affected) — site-specific amplitudes
+        site_scores = rng.normal(0, 0.3, size=(n_factors, n_affected))
+
+        # Reconstruct: delta = sum_f ct_loadings[f] * site_scores[f]
+        for f in range(n_factors):
+            for k in range(n_types):
+                delta[k, affected_sites, 0] += ct_loadings[f, k] * site_scores[f]
+                delta[k, affected_sites, 1] += ct_loadings[f, k] * site_scores[f] * 0.5
+
     else:
         raise ValueError(f"Unknown scenario: {scenario}")
 
@@ -531,6 +652,7 @@ def validate_synthetic_phospho(
     n_workers: int = None,
     site_subsample: float = None,
     seed: int = 42,
+    max_outer_iter: int = None,
 ) -> List[ValidationResult]:
     """§6.1: Synthetic phospho-validation across one or all scenarios.
 
@@ -568,23 +690,19 @@ def validate_synthetic_phospho(
         else:
             site_indices = np.arange(n_sites)
 
-        # Refit model on synthetic data
+        # Refit model on synthetic data with production-aligned penalty
         print(f"    Refitting model on {len(site_indices)} sites...")
-        cv = model.cv_result
-        if cv is None:
-            lam_q = np.full(config.N_INTENSITY_STRATA, 0.1)
-            lam_rho, eta, gamma = 0.1, 2.0, 0.5
-        else:
-            lam_q = cv.best_lambda
-            lam_rho, eta, gamma = cv.best_lambda_rho, cv.best_eta, cv.best_gamma
+        hp = _extract_validation_hyperparams(model, data)
 
         data_syn = _make_data_copy_with_y(data, y_syn)
         model_syn = fit_hurdle_tweedie(
-            data_syn, lam_q, lam_rho, eta, gamma,
+            data_syn, hp["lam_q"], hp["lam_rho"], hp["eta"], hp["gamma"],
             n_workers=n_workers, site_indices=site_indices,
+            omega_override=hp["omega_override"],
+            max_outer_iter=max_outer_iter,
         )
 
-        # Assess recovery — overall and split by mapped/unmapped
+        # Assess recovery — convergence-stratified (audit F6) + component-split (audit F5)
         metrics: Dict[str, float] = {}
         all_passed = True
         est_types = config.SAP_ESTIMATED_CELLTYPES
@@ -595,23 +713,58 @@ def validate_synthetic_phospho(
         metrics["n_mapped"] = float(mapped_mask.sum())
         metrics["n_unmapped"] = float(unmapped_mask.sum())
 
+        # Convergence strata (audit finding 6)
+        prod_conv_mask = np.array([
+            model.converged[j] if model.converged is not None else True
+            for j in site_indices
+        ])
+        syn_conv_mask = np.array([
+            model_syn.converged[i] if model_syn.converged is not None else True
+            for i in range(len(model_syn.site_params))
+        ])
+        strata_masks = {
+            "all": np.ones(len(site_indices), dtype=bool),
+            "prod_conv": prod_conv_mask,
+            "syn_conv": syn_conv_mask,
+        }
+        for sname, smask in strata_masks.items():
+            metrics[f"n_{sname}"] = float(smask.sum())
+
+        # Component names for factorial decomposition
+        comp_names = ["App", "Tau", "Int"]
+
         for k, ct in enumerate(est_types):
             d_hat = np.array([model_syn.site_params[i].beta[k]
                               for i in range(len(model_syn.site_params))])  # (n_assessed, 3)
             d_true_k = delta_true[k, site_indices, :]  # (n_assessed, 3)
 
-            # Overall correlation
+            # Overall correlation (all components flattened)
             hat_flat = d_hat.flatten()
             true_flat = d_true_k.flatten()
             r_val = _safe_pearson(hat_flat, true_flat)
             slope = _safe_slope(hat_flat, true_flat)
 
-            # Split: mapped sites
+            # Component-specific recovery (audit finding 5)
+            for c, cname in enumerate(comp_names):
+                r_comp = _safe_pearson(d_hat[:, c], d_true_k[:, c])
+                sl_comp = _safe_slope(d_hat[:, c], d_true_k[:, c])
+                metrics[f"pearson_{cname}_{ct}"] = r_comp
+                metrics[f"slope_{cname}_{ct}"] = sl_comp
+
+            # Split: mapped/unmapped sites
             r_mapped = _safe_pearson(d_hat[mapped_mask].flatten(),
                                      d_true_k[mapped_mask].flatten())
-            # Split: unmapped sites
             r_unmapped = _safe_pearson(d_hat[unmapped_mask].flatten(),
                                        d_true_k[unmapped_mask].flatten())
+
+            # Convergence-stratified recovery (audit finding 6)
+            for sname, smask in strata_masks.items():
+                if smask.sum() > 0:
+                    r_s = _safe_pearson(d_hat[smask].flatten(),
+                                        d_true_k[smask].flatten())
+                else:
+                    r_s = float("nan")
+                metrics[f"pearson_{sname}_{ct}"] = r_s
 
             thresh = config.SYNTH_PEARSON_PER_CELLTYPE.get(ct, config.SYNTH_PEARSON_OVERALL)
             ct_pass = r_val >= thresh
@@ -626,7 +779,14 @@ def validate_synthetic_phospho(
 
             lo, hi = config.SYNTH_SLOPE_RANGE
             slope_ok = lo <= slope <= hi
-            print(f"    {ct:20s}: r={r_val:.3f} (mapped={r_mapped:.3f}, unmapped={r_unmapped:.3f}), "
+            r_app = metrics.get(f"pearson_App_{ct}", 0.0)
+            r_tau = metrics.get(f"pearson_Tau_{ct}", 0.0)
+            r_int = metrics.get(f"pearson_Int_{ct}", 0.0)
+            r_pc = metrics.get(f"pearson_prod_conv_{ct}", 0.0)
+            r_sc = metrics.get(f"pearson_syn_conv_{ct}", 0.0)
+            print(f"    {ct:20s}: r={r_val:.3f} "
+                  f"[App={r_app:.3f} Tau={r_tau:.3f} Int={r_int:.3f}] "
+                  f"(conv: prod={r_pc:.3f} syn={r_sc:.3f}) "
                   f"slope={slope:.3f} ({'OK' if slope_ok else 'BIAS'}) "
                   f"→ {'PASS' if ct_pass else 'FAIL'}")
 
@@ -753,18 +913,13 @@ def validate_pseudobulk_stress(
         np.random.default_rng(seed).choice(n_sites, min(n_assess, n_sites), replace=False)
     )
 
-    cv = model.cv_result
-    if cv is None:
-        lam_q = np.full(config.N_INTENSITY_STRATA, 0.1)
-        lam_rho, eta, gamma = 0.1, 2.0, 0.5
-    else:
-        lam_q = cv.best_lambda
-        lam_rho, eta, gamma = cv.best_lambda_rho, cv.best_eta, cv.best_gamma
+    hp = _extract_validation_hyperparams(model, data)
 
     data_pseudo = _make_data_copy_with_y(data, y_pseudo)
     model_pseudo = fit_hurdle_tweedie(
-        data_pseudo, lam_q, lam_rho, eta, gamma,
+        data_pseudo, hp["lam_q"], hp["lam_rho"], hp["eta"], hp["gamma"],
         n_workers=n_workers, site_indices=site_indices,
+        omega_override=hp["omega_override"],
     )
 
     # Compare recovered vs ground truth condition effects
@@ -826,7 +981,7 @@ def _perturb_worker(args: Tuple) -> np.ndarray:
      strata, omega, a_bar, p, lam_q, lam_rho, eta,
      site_indices, sigma, iteration, seed,
      warm_beta, warm_alpha_gen, warm_alpha_time, warm_rho,
-     warm_gamma0, warm_gamma1, warm_phi) = args
+     warm_gamma0, warm_gamma1, warm_phi, max_outer_iter) = args
 
     rng = np.random.default_rng(seed + iteration)
     n_samples, n_types = a_obs_vals.shape
@@ -862,7 +1017,8 @@ def _perturb_worker(args: Tuple) -> np.ndarray:
             j, y_all[j], a_star_df, sample_meta,
             x_base_all[j], r_slice, p,
             float(lam_q[strata[j]]), lam_rho, omega, a_bar, eta,
-            int(strata[j]), max_outer_iter=5, params_init=params_init,
+            int(strata[j]), max_outer_iter=max_outer_iter,
+            params_init=params_init,
         )
 
         for k in range(5):
@@ -879,6 +1035,7 @@ def validate_perturbation_audit(
     n_workers: int = None,
     site_subsample: float = 0.2,
     seed: int = 42,
+    max_outer_iter: int = None,
 ) -> List[ValidationResult]:
     """§6.3: Perturbation audit — inject noise into A_obs, assess stability."""
     print("\n§6.3 Perturbation Audit")
@@ -890,16 +1047,13 @@ def validate_perturbation_audit(
         n_iter = config.PERTURB_N_ITER
     if n_workers is None:
         n_workers = config.N_WORKERS
+    if max_outer_iter is None:
+        max_outer_iter = config.OUTER_MAX_ITER
+    print(f"  max_outer_iter = {max_outer_iter}")
 
-    cv = model.cv_result
-    if cv is None:
-        lam_q = np.full(config.N_INTENSITY_STRATA, 0.1)
-        lam_rho, eta, gamma_cvs = 0.1, 2.0, 0.5
-    else:
-        lam_q = cv.best_lambda
-        lam_rho, eta, gamma_cvs = cv.best_lambda_rho, cv.best_eta, cv.best_gamma
-
-    omega = compute_adaptive_weights(data.cvs, gamma_cvs)
+    hp = _extract_validation_hyperparams(model, data)
+    lam_q, lam_rho, eta = hp["lam_q"], hp["lam_rho"], hp["eta"]
+    omega = hp["omega"]
     a_bar = data.a_obs[config.SAP_ESTIMATED_CELLTYPES].mean(axis=0).values
 
     # Site subsampling
@@ -942,7 +1096,7 @@ def validate_perturbation_audit(
              strata, omega, a_bar, model.p, lam_q, lam_rho, eta,
              site_indices, sigma, it, seed,
              warm_beta, warm_alpha_gen, warm_alpha_time, warm_rho,
-             warm_gamma0, warm_gamma1, warm_phi)
+             warm_gamma0, warm_gamma1, warm_phi, max_outer_iter)
             for it in range(n_iter)
         ]
 
@@ -1037,7 +1191,7 @@ def _permute_worker(args: Tuple) -> Tuple[np.ndarray, int]:
      strata, omega, a_bar, p, lam_q, lam_rho, eta,
      site_indices, perm_idx, seed,
      warm_beta, warm_alpha_gen, warm_alpha_time, warm_rho,
-     warm_gamma0, warm_gamma1, warm_phi) = args
+     warm_gamma0, warm_gamma1, warm_phi, max_outer_iter) = args
 
     # Reconstruct sample_meta and apply permuted conditions
     sample_meta = pd.DataFrame(sample_meta_dict)
@@ -1067,7 +1221,8 @@ def _permute_worker(args: Tuple) -> Tuple[np.ndarray, int]:
             j, y_all[j], a_obs_df, sample_meta_perm,
             x_base_all[j], r_slice, p,
             float(lam_q[strata[j]]), lam_rho, omega, a_bar, eta,
-            int(strata[j]), max_outer_iter=5, params_init=params_init,
+            int(strata[j]), max_outer_iter=max_outer_iter,
+            params_init=params_init,
         )
 
         for k in range(5):
@@ -1083,6 +1238,7 @@ def validate_permutation_null(
     n_workers: int = None,
     site_subsample: float = 0.2,
     seed: int = 42,
+    max_outer_iter: int = None,
 ) -> ValidationResult:
     """§6.4: Permutation null — restricted permutation of condition labels."""
     print("\n§6.4 Permutation Null (False Positive Calibration)")
@@ -1092,16 +1248,13 @@ def validate_permutation_null(
         n_perm = config.PERM_NULL_N
     if n_workers is None:
         n_workers = config.N_WORKERS
+    if max_outer_iter is None:
+        max_outer_iter = config.OUTER_MAX_ITER
+    print(f"  max_outer_iter = {max_outer_iter}")
 
-    cv = model.cv_result
-    if cv is None:
-        lam_q = np.full(config.N_INTENSITY_STRATA, 0.1)
-        lam_rho, eta, gamma_cvs = 0.1, 2.0, 0.5
-    else:
-        lam_q = cv.best_lambda
-        lam_rho, eta, gamma_cvs = cv.best_lambda_rho, cv.best_eta, cv.best_gamma
-
-    omega = compute_adaptive_weights(data.cvs, gamma_cvs)
+    hp = _extract_validation_hyperparams(model, data)
+    lam_q, lam_rho, eta = hp["lam_q"], hp["lam_rho"], hp["eta"]
+    omega = hp["omega"]
     a_bar = data.a_obs[config.SAP_ESTIMATED_CELLTYPES].mean(axis=0).values
 
     # Site subsampling
@@ -1146,7 +1299,7 @@ def validate_permutation_null(
          strata, omega, a_bar, model.p, lam_q, lam_rho, eta,
          site_indices, perm_i, seed,
          zero_beta, zero_alpha_gen, zero_alpha_time, zero_rho,
-         zero_gamma0, zero_gamma1, warm_phi)
+         zero_gamma0, zero_gamma1, warm_phi, max_outer_iter)
         for perm_i in range(n_perm)
     ]
 
@@ -1477,7 +1630,7 @@ def main() -> None:
     parser.add_argument("--cross-modality", action="store_true", help="§6.2: Cross-modality concordance")
     parser.add_argument("--synthetic", action="store_true", help="§6.1: Synthetic phospho-validation")
     parser.add_argument("--scenario", type=str, default="all",
-                        choices=["all", "mdes", "sparse", "dense", "de_novo", "rna_discordant"],
+                        choices=["all"] + config.SYNTH_SCENARIOS,
                         help="§6.1 scenario (default: all)")
     parser.add_argument("--pseudobulk", action="store_true", help="§6.1.1: Pseudobulk stress test")
     parser.add_argument("--perturbation", action="store_true", help="§6.3: Perturbation audit")
@@ -1487,6 +1640,12 @@ def main() -> None:
     parser.add_argument("--n-workers", type=int, default=None, help="Parallelism")
     parser.add_argument("--site-subsample", type=float, default=None,
                         help="Site subsampling fraction for expensive validations")
+    parser.add_argument("--max-outer-iter", type=int, default=None,
+                        help="Outer iteration budget (default: config.OUTER_MAX_ITER)")
+    parser.add_argument("--pairwise-conditions", type=str, default=None,
+                        help="Comma-separated pair of conditions for pairwise validation "
+                        "(e.g., WTyp,AppP). Subsets data to these conditions before "
+                        "running synthetic validation.")
     parser.add_argument("--summary", action="store_true", help="Print cached results summary")
     args = parser.parse_args()
 
@@ -1525,8 +1684,13 @@ def main() -> None:
         validate_cross_modality_concordance(data, model)
 
     if args.all or args.synthetic:
-        validate_synthetic_phospho(data, model, scenario=args.scenario,
-                                   n_workers=n_workers, site_subsample=site_sub)
+        data_for_synth = data
+        if args.pairwise_conditions:
+            conds = [c.strip() for c in args.pairwise_conditions.split(",")]
+            data_for_synth = _subset_data_by_conditions(data, conds)
+        validate_synthetic_phospho(data_for_synth, model, scenario=args.scenario,
+                                   n_workers=n_workers, site_subsample=site_sub,
+                                   max_outer_iter=args.max_outer_iter)
 
     if args.all or args.pseudobulk:
         validate_pseudobulk_stress(data, model, n_workers=n_workers,
@@ -1534,11 +1698,13 @@ def main() -> None:
 
     if args.all or args.perturbation:
         validate_perturbation_audit(data, model, n_workers=n_workers,
-                                    site_subsample=site_sub or 0.2)
+                                    site_subsample=site_sub or 0.2,
+                                    max_outer_iter=args.max_outer_iter)
 
     if args.all or args.permutation:
         validate_permutation_null(data, model, n_workers=n_workers,
-                                  site_subsample=site_sub or 0.2)
+                                  site_subsample=site_sub or 0.2,
+                                  max_outer_iter=args.max_outer_iter)
 
     if args.all or args.bmind:
         validate_bmind_benchmark(data, model)

@@ -312,7 +312,8 @@ SYNTH_PEARSON_PER_CELLTYPE = {
     "Microglia":          0.50,
 }
 SYNTH_SLOPE_RANGE = (0.8, 1.2)
-SYNTH_SCENARIOS = ["mdes", "sparse", "dense", "de_novo", "rna_discordant"]
+SYNTH_SCENARIOS = ["mdes", "sparse", "dense", "de_novo", "rna_discordant",
+                    "kinase_program", "low_rank"]
 SYNTH_SPARSE_FRAC = 0.05
 SYNTH_SPARSE_NTYPES = 2
 SYNTH_DENSE_FRAC = 0.25
