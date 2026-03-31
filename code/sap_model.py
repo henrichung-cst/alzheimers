@@ -246,6 +246,15 @@ class SampleArrays:
         return SampleArrays.from_data(sample_meta, a_obs)
 
 
+@dataclass
+class ThetaStateContext:
+    """Cached constants for repeated theta-state evaluation within one IRLS run."""
+
+    sa: SampleArrays
+    base_signal: np.ndarray        # (6, n_samples): x_base + rho * r_slice
+    inv_a_bar: np.ndarray          # (5,)
+
+
 # ============================================================================
 # Model serialization
 # ============================================================================
@@ -306,23 +315,37 @@ def load_model(path: Optional[str] = None) -> ModelFit:
     if path is None:
         path = config.SAP_MODEL_FILE
 
-    data = np.load(path)
+    npz = np.load(path)
     json_path = path.replace(".npz", ".json")
     with open(json_path) as f:
         meta = json.load(f)
+
+    # Extract all arrays once up front.  NpzFile (from savez_compressed)
+    # re-decompresses the zip entry on every __getitem__ call, so indexing
+    # inside a loop would decompress each array n_sites times → OOM.
+    beta_all = npz["beta_all"]          # (n, 5, 3)
+    alpha_gen = npz["alpha_gen"]        # (n,)
+    alpha_time = npz["alpha_time"]      # (n, 2)
+    rho = npz["rho"]                    # (n,)
+    gamma0 = npz["gamma0"]             # (n,)
+    gamma1 = npz["gamma1"]             # (n,)
+    phi = npz["phi"]                    # (n,)
+    strata = npz["strata"]              # (n,)
+    converged_arr = npz["converged"]    # (n,)
+    npz.close()
 
     n = meta["n_sites"]
     site_params: List[SiteParams] = []
     for i in range(n):
         site_params.append(SiteParams(
-            beta=data["beta_all"][i],
-            alpha_gen=float(data["alpha_gen"][i]),
-            alpha_time=data["alpha_time"][i],
-            rho=float(data["rho"][i]),
-            gamma0=float(data["gamma0"][i]),
-            gamma1=float(data["gamma1"][i]),
-            phi=float(data["phi"][i]),
-            stratum=int(data["strata"][i]),
+            beta=beta_all[i],
+            alpha_gen=float(alpha_gen[i]),
+            alpha_time=alpha_time[i],
+            rho=float(rho[i]),
+            gamma0=float(gamma0[i]),
+            gamma1=float(gamma1[i]),
+            phi=float(phi[i]),
+            stratum=int(strata[i]),
         ))
 
     cv_result = None
@@ -344,7 +367,7 @@ def load_model(path: Optional[str] = None) -> ModelFit:
         site_params=site_params,
         p=meta["p"],
         cv_result=cv_result,
-        converged=data["converged"],
+        converged=converged_arr,
         binding_freq=binding_freq,
     )
 
@@ -383,7 +406,7 @@ def _compute_s_core(
             [config.SAP_FACTORIAL[c] for c in conditions], dtype=float,
         )
 
-    S = np.tile(x_base_j, (n_samples, 1)).T  # (6, n_samples)
+    S = np.broadcast_to(x_base_j[:, np.newaxis], (len(x_base_j), n_samples)).copy()
 
     global_adj = (params.alpha_gen * female_ind
                   + params.alpha_time[0] * time_4mo
@@ -398,6 +421,84 @@ def _compute_s_core(
         np.maximum(S, 0.0, out=S)
 
     return S
+
+
+def _compute_theta_state(
+    theta: np.ndarray,
+    rho: float,
+    a_obs: pd.DataFrame,
+    sample_meta: pd.DataFrame,
+    x_base_j: np.ndarray,
+    r_slice_j: np.ndarray,
+    a_bar: np.ndarray,
+    cached_arrays: Optional["SampleArrays"] = None,
+    with_jacobian: bool = False,
+) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+    """Compute projected mu and active-set information directly from theta.
+
+    This avoids repeatedly converting theta -> SiteParams -> S -> mu in the
+    IRLS hot path. Returns:
+    - mu: projected bulk mean, shape (n_samples,)
+    - active: active-set mask before projection, shape (6, n_samples)
+    - J: optional Jacobian dmu/dtheta, shape (n_samples, 18)
+    """
+    sa = SampleArrays.ensure(cached_arrays, sample_meta, a_obs)
+    n_samples = sa.A.shape[0]
+
+    base_signal = np.broadcast_to(
+        x_base_j[:, np.newaxis], (len(x_base_j), n_samples),
+    ).copy()
+    base_signal += rho * r_slice_j
+    ctx = ThetaStateContext(
+        sa=sa,
+        base_signal=base_signal,
+        inv_a_bar=1.0 / np.maximum(a_bar, 1e-10),
+    )
+    return _compute_theta_state_from_context(theta, ctx, with_jacobian=with_jacobian)
+
+
+def _compute_theta_state_from_context(
+    theta: np.ndarray,
+    ctx: ThetaStateContext,
+    with_jacobian: bool = False,
+) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+    """Compute projected mu and optional Jacobian using cached IRLS constants."""
+    sa = ctx.sa
+    n_samples = sa.A.shape[0]
+    S = ctx.base_signal.copy()
+
+    global_adj = (theta[0] * sa.female_ind
+                  + theta[1] * sa.time_4mo
+                  + theta[2] * sa.time_6mo)
+    S += global_adj[np.newaxis, :]
+
+    delta = theta[3:18].reshape(5, 3)
+    beta = delta * ctx.inv_a_bar[:, np.newaxis]
+    S[:5, :] += beta @ sa.fact_indicators.T
+
+    active = S > 0
+    np.maximum(S, 0.0, out=S)
+    mu = np.sum(sa.A * S.T, axis=1)
+    np.maximum(mu, 1e-10, out=mu)
+
+    if not with_jacobian:
+        return mu, active, None
+
+    A_active = sa.A * active.T
+    a_sum = A_active.sum(axis=1)
+
+    J = np.empty((n_samples, 18))
+    J[:, 0] = a_sum * sa.female_ind
+    J[:, 1] = a_sum * sa.time_4mo
+    J[:, 2] = a_sum * sa.time_6mo
+
+    for k in range(5):
+        a_ratio_k = A_active[:, k] * ctx.inv_a_bar[k]
+        J[:, 3 + k * 3: 3 + (k + 1) * 3] = (
+            a_ratio_k[:, np.newaxis] * sa.fact_indicators
+        )
+
+    return mu, active, J
 
 
 def compute_s_matrix(
@@ -581,6 +682,32 @@ def group_lasso_prox(
     return result
 
 
+def _apply_group_lasso_prox_inplace(
+    theta: np.ndarray,
+    lambda_q: float,
+    omega: np.ndarray,
+    eta: float,
+    step_size: float,
+) -> None:
+    """Apply the Group Lasso proximal update to all 5 delta groups in-place."""
+    delta = theta[3:18].reshape(5, 3)
+    delta_scaled = delta.copy()
+    sqrt_eta = np.sqrt(eta)
+    delta_scaled[:, 2] *= sqrt_eta
+
+    norms = np.linalg.norm(delta_scaled, axis=1)
+    tau = step_size * lambda_q * omega * np.sqrt(3.0)
+    active = norms > tau
+
+    delta_scaled[~active] = 0.0
+    if np.any(active):
+        shrink = 1.0 - tau[active] / norms[active]
+        delta_scaled[active] *= shrink[:, np.newaxis]
+
+    delta_scaled[:, 2] /= sqrt_eta
+    theta[3:18] = delta_scaled.ravel()
+
+
 def compute_adaptive_weights(
     cvs: pd.DataFrame,
     gamma: float,
@@ -606,6 +733,24 @@ def compute_adaptive_weights(
 
     cvs_max = cvs.max(axis=1).values  # (5,): max CVS per cell type
     return 1.0 / (np.power(cvs_max, gamma) + epsilon)
+
+
+def compute_neff(a_obs: pd.DataFrame) -> np.ndarray:
+    """Satterthwaite effective sample size per cell type (§4.2, §8.4).
+
+    n_eff_k = (sum_i (A_{i,k} - A_bar_k)^2)^2 / sum_i (A_{i,k} - A_bar_k)^4
+
+    Returns:
+        (5,) array of effective sample sizes.
+    """
+    neff = np.zeros(len(config.SAP_ESTIMATED_CELLTYPES))
+    for k, ct in enumerate(config.SAP_ESTIMATED_CELLTYPES):
+        a_k = a_obs[ct].values
+        dev = a_k - a_k.mean()
+        s2 = np.sum(dev ** 2)
+        s4 = np.sum(dev ** 4)
+        neff[k] = (s2 ** 2) / s4 if s4 > 0 else 1.0
+    return neff
 
 
 def compute_lambda_max(
@@ -840,12 +985,7 @@ def irls_inner_loop(
     if tol is None:
         tol = config.IRLS_TOL
 
-    # Use only positive observations for the continuous component
-    # (zeros are handled by the hurdle)
     pos_mask = y > 0
-    y_pos = y.copy()  # keep all for mu computation; weight zeros to 0
-
-    D = design_matrix if design_matrix is not None else _build_inner_design(a_obs, sample_meta, a_bar)  # (24, 18)
 
     # Initialize
     if theta_init is not None:
@@ -856,43 +996,25 @@ def irls_inner_loop(
     converged = False
     prev_dev = np.inf
     dev = np.inf
-    mu = None  # will be set at end of each iteration (or fresh at start)
+    sa = SampleArrays.ensure(cached_arrays, sample_meta, a_obs)
+    n_samples = sa.A.shape[0]
+    ctx = ThetaStateContext(
+        sa=sa,
+        base_signal=np.broadcast_to(
+            x_base_j[:, np.newaxis], (len(x_base_j), n_samples),
+        ).copy(),
+        inv_a_bar=1.0 / np.maximum(a_bar, 1e-10),
+    )
+    ctx.base_signal += rho * r_slice_j
+    prev_step = 1.0
 
     for iteration in range(max_iter):
-        # Reconstruct params (δ→β conversion) to compute mu
-        # Reuse mu from end of previous iteration if available
-        if mu is None:
-            params = _theta_to_params(theta, rho, 0.0, 0.0, phi, stratum, a_bar=a_bar)
-            mu = compute_mu(params, a_obs, sample_meta, x_base_j, r_slice_j,
-                           cached_arrays=cached_arrays)
+        mu, _, J = _compute_theta_state_from_context(
+            theta, ctx, with_jacobian=True,
+        )
 
-        # Compute working weights and response (log link)
-        log_mu = np.log(mu)
         w = np.power(mu, 2.0 - p) / phi  # (24,)
-
-        # Zero out weights for zero observations (handled by hurdle)
         w[~pos_mask] = 0.0
-
-        z = log_mu + (y - mu) / mu  # (24,)
-
-        # Offset from RNA covariate and baseline
-        # The working response needs to be adjusted for the offset
-        # eta_offset = log(sum_k A_{k} * (X_base + rho*r)) computed from current params
-        # But in IRLS with log link, we work in eta = log(mu) space.
-        # The design matrix D maps theta → additive perturbation in S-space,
-        # which is then mixed by A to get mu. This is NOT a standard GLM
-        # because the link is on the mixed mu, not on S directly.
-
-        # Due to the non-standard structure (mixing before link), we use a
-        # gradient-based approach rather than classical IRLS.
-
-        # Gradient of Tweedie deviance w.r.t. theta:
-        # dD/dtheta = sum_i w_i * (y_i - mu_i) / mu_i * dmu_i/dtheta
-        # where dmu_i/dtheta_p = sum_k A_{i,k} * dS_{k,i}/dtheta_p
-
-        # Compute dmu/dtheta: (24, 18) Jacobian (δ-space)
-        J = _compute_jacobian(theta, a_obs, sample_meta, x_base_j, r_slice_j,
-                              rho, stratum, a_bar, cached_arrays=cached_arrays)
 
         # Gradient of negative log-likelihood (Tweedie quasi-score)
         # For Tweedie with log link: score_i = (y_i - mu_i) / (phi * mu_i^{p-1})
@@ -913,12 +1035,12 @@ def irls_inner_loop(
             newton_step = -np.linalg.lstsq(JtWJ, grad, rcond=None)[0]
 
         # Line search: ensure deviance decreases
-        step = 1.0
+        step = prev_step
         theta_new = theta + step * newton_step
         for _ in range(10):
-            params_new = _theta_to_params(theta_new, rho, 0.0, 0.0, phi, stratum, a_bar=a_bar)
-            mu_new = compute_mu(params_new, a_obs, sample_meta, x_base_j, r_slice_j,
-                               cached_arrays=cached_arrays)
+            mu_new, _, _ = _compute_theta_state_from_context(
+                theta_new, ctx, with_jacobian=False,
+            )
             dev_new = tweedie_total_deviance(y[pos_mask], mu_new[pos_mask], p)
             if dev_new < prev_dev or step < 1e-4:
                 break
@@ -926,19 +1048,15 @@ def irls_inner_loop(
             theta_new = theta + step * newton_step
 
         theta = theta_new
+        prev_step = step
 
         # Apply Group Lasso proximal step to δ groups (no Ā_k in threshold)
-        for k in range(5):
-            delta_k = theta[3 + k * 3: 3 + (k + 1) * 3]
-            theta[3 + k * 3: 3 + (k + 1) * 3] = group_lasso_prox(
-                delta_k, lambda_q, omega[k], eta, step_size=step,
-            )
+        _apply_group_lasso_prox_inplace(theta, lambda_q, omega, eta, step)
 
-        # Compute current deviance (convert δ→β for mu computation)
-        # This mu is reused at the top of the next iteration
-        params = _theta_to_params(theta, rho, 0.0, 0.0, phi, stratum, a_bar=a_bar)
-        mu = compute_mu(params, a_obs, sample_meta, x_base_j, r_slice_j,
-                        cached_arrays=cached_arrays)
+        # Recompute projected mean after the proximal step for the objective.
+        mu, _, _ = _compute_theta_state_from_context(
+            theta, ctx, with_jacobian=False,
+        )
         dev = tweedie_total_deviance(y[pos_mask], mu[pos_mask], p)
 
         # Check convergence
@@ -1435,25 +1553,43 @@ def _fit_site_worker(args: tuple) -> Tuple[int, SiteParams, bool]:
     return j, params_j, conv_j
 
 
-def _cv_site_worker(args: tuple) -> float:
+def _cv_site_worker(args: tuple) -> Tuple[float, "SiteParams"]:
     """Module-level worker for LOCO-CV site parallelism.
 
-    Fits one site on training data, predicts on test data, returns deviance.
+    Fits one site on training data, predicts on test data, returns
+    (normalized_deviance, fitted_params).  Deviance is normalized by
+    the number of positive test observations so each site contributes
+    equally to hyperparameter selection.
+
+    Args tuple layout (21 or 22 elements):
+        0-20: standard arguments (j, y_train, y_test, ..., sa_test)
+        21 (optional): params_init — warm-start SiteParams from previous λ
     """
-    (j, y_train, y_test, train_a_obs, train_meta,
-     test_a_obs, test_meta,
-     x_base_j, r_train, r_test, p,
-     lq, lambda_rho, omega, a_bar, eta, stratum_j,
-     gamma1_fixed, design_matrix, sa_train, sa_test) = args
+    # Unpack: 21 base args + optional warm-start
+    if len(args) == 22:
+        (j, y_train, y_test, train_a_obs, train_meta,
+         test_a_obs, test_meta,
+         x_base_j, r_train, r_test, p,
+         lq, lambda_rho, omega, a_bar, eta, stratum_j,
+         gamma1_fixed, design_matrix, sa_train, sa_test,
+         params_init) = args
+    else:
+        (j, y_train, y_test, train_a_obs, train_meta,
+         test_a_obs, test_meta,
+         x_base_j, r_train, r_test, p,
+         lq, lambda_rho, omega, a_bar, eta, stratum_j,
+         gamma1_fixed, design_matrix, sa_train, sa_test) = args
+        params_init = None
 
     params_j, _ = fit_site(
         j, y_train, train_a_obs, train_meta,
         x_base_j, r_train, p, lq, lambda_rho,
         omega, a_bar, eta, stratum_j,
-        max_outer_iter=5,
+        max_outer_iter=config.OUTER_MAX_ITER,
         gamma1_fixed=gamma1_fixed,
         design_matrix=design_matrix,
         cached_arrays=sa_train,
+        params_init=params_init,
     )
 
     mu_test = compute_mu(
@@ -1461,11 +1597,13 @@ def _cv_site_worker(args: tuple) -> float:
         x_base_j, r_test, cached_arrays=sa_test,
     )
     pos_test = y_test > 0
-    if np.any(pos_test):
-        return float(tweedie_total_deviance(
+    n_pos = int(np.sum(pos_test))
+    if n_pos > 0:
+        raw_dev = float(tweedie_total_deviance(
             y_test[pos_test], mu_test[pos_test], p,
         ))
-    return 0.0
+        return (raw_dev / n_pos, params_j)
+    return (0.0, params_j)
 
 
 def fit_hurdle_tweedie(
@@ -1477,6 +1615,7 @@ def fit_hurdle_tweedie(
     n_workers: int = None,
     site_indices: Optional[np.ndarray] = None,
     p_init: float = 1.5,
+    omega_override: Optional[np.ndarray] = None,
 ) -> ModelFit:
     """Fit the full Hurdle-Tweedie model across all (or selected) sites.
 
@@ -1489,6 +1628,9 @@ def fit_hurdle_tweedie(
         n_workers: parallelism (default from config).
         site_indices: subset of sites to fit (None = all).
         p_init: initial Tweedie power guess.
+        omega_override: (5,) pre-computed penalty weights. If provided,
+            overrides the weights computed from gamma_cvs. Used for
+            n_eff-scaled cell-type-specific penalization (§4.2).
 
     Returns:
         ModelFit with estimated parameters for all sites.
@@ -1501,7 +1643,10 @@ def fit_hurdle_tweedie(
         site_indices = np.arange(n_sites)
 
     # Compute adaptive weights and mean proportions
-    omega = compute_adaptive_weights(data.cvs, gamma_cvs)
+    if omega_override is not None:
+        omega = omega_override
+    else:
+        omega = compute_adaptive_weights(data.cvs, gamma_cvs)
     a_bar = data.a_obs[config.SAP_ESTIMATED_CELLTYPES].mean(axis=0).values  # (5,)
 
     # Prepare bulk data as numpy
@@ -1632,19 +1777,33 @@ def loco_cv(
     p_init: float = 1.5,
     site_subsample: Optional[float] = None,
     n_workers: int = None,
+    stratum_sites: Optional[np.ndarray] = None,
 ) -> CVResult:
     """Leave-one-condition-out CV for hyperparameter selection (§4.2).
 
+    Only disease-condition folds (AppP, Ttau, ApTt) are used — WTyp is
+    excluded because its zero factorial indicators mean β does not
+    contribute to its test prediction, providing no information for λ
+    selection.
+
+    λ grid is traversed in descending order (most sparse → least sparse)
+    with warm-starting: each site's fitted params from the previous
+    (higher) λ are passed as initialization for the next λ.
+
+    Deviance is normalized per site (divided by number of positive test
+    observations) so each site contributes equally regardless of intensity.
+
     Args:
         data: SAPData with Phase 1 fields.
-        lambda_grid: (n_lambda,) candidate Group Lasso penalties (shared
-                     across strata, then scaled by stratum-specific factor).
+        lambda_grid: (n_lambda,) candidate Group Lasso penalties.
         lambda_rho_grid: ridge penalty candidates.
         eta_grid: interaction multiplier candidates.
         gamma_grid: CVS exponent candidates.
         p_init: initial Tweedie power.
         site_subsample: fraction of sites to use (None = all).
         n_workers: parallelism.
+        stratum_sites: if provided, only fit these site indices (for
+            per-stratum CV). Overrides site_subsample.
 
     Returns:
         CVResult with best hyperparameters.
@@ -1656,12 +1815,12 @@ def loco_cv(
     if gamma_grid is None:
         gamma_grid = config.GAMMA_GRID
 
-    # Site subsampling for efficiency
+    # Site selection
     n_sites = data.n_sites_filtered
-    if site_subsample is not None:
-        n_sub = max(int(n_sites * site_subsample), 100)
+    if stratum_sites is not None:
+        site_indices = stratum_sites
+    elif site_subsample is not None:
         strata = data.intensity_strata
-        # Stratified subsample
         site_indices = []
         for q in range(config.N_INTENSITY_STRATA):
             q_sites = np.where(strata == q)[0]
@@ -1683,23 +1842,35 @@ def loco_cv(
         y_all_cv, data.a_obs.values, x_base_cv, strata_cv,
     )
 
-    conditions = config.SAP_CONDITIONS
+    # Pre-compute stratum membership for winsorization (constant across CV)
+    site_strata_for_cv = np.array([
+        data.intensity_strata[j] for j in site_indices
+    ])
+
+    # Disease-condition folds only — WTyp excluded (zero factorial indicators)
+    cv_conditions = [c for c in config.SAP_CONDITIONS if c != "WTyp"]
     results = []
 
-    for lam in lambda_grid:
-        for lam_rho in lambda_rho_grid:
-            for eta in eta_grid:
-                for gamma in gamma_grid:
-                    # Lambda vector: same penalty across strata for now
+    # Sort λ descending for warm-starting (most sparse → least sparse)
+    lambda_sorted = np.sort(lambda_grid)[::-1]
+
+    for lam_rho in lambda_rho_grid:
+        for eta in eta_grid:
+            for gamma in gamma_grid:
+                omega = compute_adaptive_weights(data.cvs, gamma)
+
+                # Per-fold warm caches: fold_name → {site_idx: SiteParams}
+                warm_caches = {cond: {} for cond in cv_conditions}
+
+                for lam in lambda_sorted:
                     lam_q = np.full(config.N_INTENSITY_STRATA, lam)
 
                     fold_deviances = []
-                    for held_out_cond in conditions:
+                    for held_out_cond in cv_conditions:
                         # Split samples
                         train_mask = data.sample_meta["condition"].values != held_out_cond
                         test_mask = ~train_mask
 
-                        # Create subset views
                         train_meta = data.sample_meta[train_mask]
                         train_a_obs = data.a_obs[train_mask]
                         test_a_obs = data.a_obs[test_mask]
@@ -1708,21 +1879,20 @@ def loco_cv(
                         y_all = np.nan_to_num(data.bulk_phospho.values, nan=0.0)
                         x_base_all = data.x_base.values
 
-                        omega = compute_adaptive_weights(data.cvs, gamma)
                         a_bar = train_a_obs[config.SAP_ESTIMATED_CELLTYPES].mean(axis=0).values
-
-                        # Pre-compute design matrix and sample arrays for this fold
                         D_cv = _build_inner_design(train_a_obs, train_meta, a_bar)
                         sa_train = SampleArrays.from_data(train_meta, train_a_obs)
                         sa_test = SampleArrays.from_data(test_meta, test_a_obs)
 
-                        # Build worker arguments for all sites in this fold
+                        warm_cache = warm_caches[held_out_cond]
+
+                        # Build worker arguments with warm-start from previous λ
                         cv_worker_args = []
                         for j in site_indices:
                             r_slice = (data.r_tensor[:, :, j]
                                        if data.r_tensor is not None
                                        else np.zeros((6, 24)))
-                            cv_worker_args.append((
+                            base_args = (
                                 j, y_all[j, train_mask], y_all[j, test_mask],
                                 train_a_obs, train_meta,
                                 test_a_obs, test_meta,
@@ -1733,28 +1903,47 @@ def loco_cv(
                                 data.intensity_strata[j],
                                 float(gamma1_by_stratum[strata_cv[j]]),
                                 D_cv, sa_train, sa_test,
-                            ))
+                            )
+                            # Append warm-start params if available
+                            pinit = warm_cache.get(int(j))
+                            cv_worker_args.append(base_args + (pinit,))
 
-                        # Fit sites (parallel when n_workers > 1)
+                        # Fit sites
                         if n_workers is not None and n_workers > 1:
                             from concurrent.futures import ProcessPoolExecutor
                             with ProcessPoolExecutor(max_workers=n_workers) as pool:
-                                fold_dev = sum(pool.map(_cv_site_worker, cv_worker_args))
+                                fold_results = list(pool.map(_cv_site_worker, cv_worker_args))
                         else:
-                            fold_dev = sum(
+                            fold_results = [
                                 _cv_site_worker(a) for a in cv_worker_args
-                            )
+                            ]
 
-                        fold_deviances.append(fold_dev)
+                        # Collect per-site deviances; update warm cache
+                        site_devs = np.array([dev for dev, _ in fold_results])
+                        for idx, j in enumerate(site_indices):
+                            warm_cache[int(j)] = fold_results[idx][1]
 
-                    mean_dev = np.mean(fold_deviances)
+                        # Winsorize per-site deviance at 95th percentile
+                        # within each stratum to prevent catastrophic OOS
+                        # predictions from dominating CV (§4.2)
+                        for q in range(config.N_INTENSITY_STRATA):
+                            q_mask = site_strata_for_cv == q
+                            if q_mask.sum() > 0:
+                                cap = np.percentile(site_devs[q_mask], 95)
+                                site_devs[q_mask] = np.minimum(
+                                    site_devs[q_mask], cap,
+                                )
+                        fold_deviances.append(float(site_devs.sum()))
+
+                    # dev/site: average across folds, then divide by n_sites
+                    mean_dev = np.mean(fold_deviances) / len(site_indices)
                     results.append({
                         "lambda": lam, "lambda_rho": lam_rho,
                         "eta": eta, "gamma": gamma,
                         "mean_deviance": mean_dev,
                     })
                     print(f"  CV: λ={lam:.4f} λ_ρ={lam_rho:.3f} η={eta:.1f} "
-                          f"γ={gamma:.1f} → dev={mean_dev:.2f}")
+                          f"γ={gamma:.1f} → dev/site={mean_dev:.2f}")
 
     cv_df = pd.DataFrame(results)
     best_row = cv_df.loc[cv_df["mean_deviance"].idxmin()]
@@ -1784,11 +1973,13 @@ def loco_cv_two_stage(
 ) -> CVResult:
     """Two-stage LOCO-CV for hyperparameter selection (§4.2).
 
-    Stage 1: search (λ, λ_ρ) with fixed η and γ defaults.
-    Stage 2: search (η, γ) with best (λ*, λ_ρ*) from stage 1.
+    Stage 1: Per-stratum search for (λ_q, λ_ρ) with fixed η and γ
+        defaults. Each stratum's sites are CV'd independently, yielding
+        stratum-specific λ_q as §4.2 specifies.
+    Stage 2: Global search for (η, γ) with best (λ_q*, λ_ρ*) from
+        stage 1, using all sites.
 
-    This reduces the grid from O(|λ|·|λ_ρ|·|η|·|γ|) to
-    O(|λ|·|λ_ρ| + |η|·|γ|), typically 240 → 40 combos.
+    Complexity: O(Q·|λ|·|λ_ρ| + |η|·|γ|) where Q = N_INTENSITY_STRATA.
     """
     if lambda_rho_grid is None:
         lambda_rho_grid = config.LAMBDA_RHO_GRID
@@ -1797,33 +1988,79 @@ def loco_cv_two_stage(
     if gamma_grid is None:
         gamma_grid = config.GAMMA_GRID
 
-    n_stage1 = len(lambda_grid) * len(lambda_rho_grid)
+    strata = data.intensity_strata
+    Q = config.N_INTENSITY_STRATA
+
+    n_stage1_per = len(lambda_grid) * len(lambda_rho_grid)
     n_stage2 = len(eta_grid) * len(gamma_grid)
-    print(f"\n  Two-stage CV: stage 1 = {n_stage1} combos (λ × λ_ρ), "
-          f"stage 2 = {n_stage2} combos (η × γ)")
+    print(f"\n  Two-stage CV: stage 1 = {n_stage1_per} combos × {Q} strata "
+          f"(λ × λ_ρ per stratum), stage 2 = {n_stage2} combos (η × γ)")
 
-    # Stage 1: search (λ, λ_ρ) with fixed η, γ
-    print(f"\n--- Stage 1: searching (λ, λ_ρ) with η={config.LOCO_STAGE1_ETA_DEFAULT}, "
+    # --- Stage 1: per-stratum (λ_q, λ_ρ) search ---
+    print(f"\n--- Stage 1: per-stratum (λ, λ_ρ) search with "
+          f"η={config.LOCO_STAGE1_ETA_DEFAULT}, "
           f"γ={config.LOCO_STAGE1_GAMMA_DEFAULT} ---")
-    stage1_result = loco_cv(
-        data, lambda_grid,
-        lambda_rho_grid=lambda_rho_grid,
-        eta_grid=[config.LOCO_STAGE1_ETA_DEFAULT],
-        gamma_grid=[config.LOCO_STAGE1_GAMMA_DEFAULT],
-        p_init=p_init,
-        site_subsample=site_subsample,
-        n_workers=n_workers,
-    )
-    print(f"  Stage 1 best: λ={stage1_result.best_lambda[0]:.4f}, "
-          f"λ_ρ={stage1_result.best_lambda_rho:.4f}")
 
-    # Stage 2: search (η, γ) with best (λ*, λ_ρ*)
-    best_lam = float(stage1_result.best_lambda[0])
-    best_lam_rho = stage1_result.best_lambda_rho
-    print(f"\n--- Stage 2: searching (η, γ) with λ={best_lam:.4f}, "
+    best_lam_q = np.zeros(Q)
+    best_lam_rho_candidates = []
+    all_stage1_scores = []
+
+    for q in range(Q):
+        q_all_sites = np.where(strata == q)[0]
+
+        # Subsample within this stratum if requested
+        if site_subsample is not None:
+            n_q = max(int(len(q_all_sites) * site_subsample), 25)
+            np.random.seed(42 + q)
+            q_sites = np.sort(np.random.choice(q_all_sites, n_q, replace=False))
+        else:
+            q_sites = q_all_sites
+
+        print(f"\n  Stratum {q}: {len(q_sites)} sites "
+              f"(of {len(q_all_sites)} total)")
+
+        q_result = loco_cv(
+            data, lambda_grid,
+            lambda_rho_grid=lambda_rho_grid,
+            eta_grid=[config.LOCO_STAGE1_ETA_DEFAULT],
+            gamma_grid=[config.LOCO_STAGE1_GAMMA_DEFAULT],
+            p_init=p_init,
+            n_workers=n_workers,
+            stratum_sites=q_sites,
+        )
+
+        best_lam_q[q] = float(q_result.best_lambda[0])
+        best_lam_rho_candidates.append(q_result.best_lambda_rho)
+
+        # Tag stratum in scores
+        q_scores = q_result.cv_scores.copy()
+        q_scores["stratum"] = q
+        all_stage1_scores.append(q_scores)
+
+        at_boundary = (np.isclose(best_lam_q[q], lambda_grid.min()) or
+                       np.isclose(best_lam_q[q], lambda_grid.max()))
+        flag = " ⚠ BOUNDARY" if at_boundary else ""
+        print(f"  Stratum {q} best: λ={best_lam_q[q]:.4f}, "
+              f"λ_ρ={q_result.best_lambda_rho:.4f}{flag}")
+
+    # Select λ_ρ by majority vote (most common selection across strata)
+    from collections import Counter
+    lam_rho_counts = Counter(best_lam_rho_candidates)
+    best_lam_rho = lam_rho_counts.most_common(1)[0][0]
+    print(f"\n  Stage 1 summary:")
+    print(f"    λ_q = {best_lam_q}")
+    print(f"    λ_ρ = {best_lam_rho} (selected by majority across strata)")
+
+    # --- Stage 2: global (η, γ) search with fixed λ_q*, λ_ρ* ---
+    # For stage 2, we need a single λ value for the grid since loco_cv
+    # applies the same λ across strata. Use median of best_lam_q.
+    median_lam = float(np.median(best_lam_q))
+    print(f"\n--- Stage 2: searching (η, γ) with λ_q={best_lam_q}, "
           f"λ_ρ={best_lam_rho:.4f} ---")
+    print(f"  (using median λ={median_lam:.4f} for stage 2 CV)")
+
     stage2_result = loco_cv(
-        data, np.array([best_lam]),
+        data, np.array([median_lam]),
         lambda_rho_grid=[best_lam_rho],
         eta_grid=eta_grid,
         gamma_grid=gamma_grid,
@@ -1834,15 +2071,15 @@ def loco_cv_two_stage(
     print(f"  Stage 2 best: η={stage2_result.best_eta:.1f}, "
           f"γ={stage2_result.best_gamma:.1f}")
 
-    # Combine: best (λ, λ_ρ) from stage 1, best (η, γ) from stage 2
+    # Combine all CV scores
     combined_scores = pd.concat(
-        [stage1_result.cv_scores, stage2_result.cv_scores],
+        all_stage1_scores + [stage2_result.cv_scores],
         ignore_index=True,
     )
 
     return CVResult(
-        best_lambda=stage1_result.best_lambda,
-        best_lambda_rho=stage1_result.best_lambda_rho,
+        best_lambda=best_lam_q,
+        best_lambda_rho=best_lam_rho,
         best_eta=stage2_result.best_eta,
         best_gamma=stage2_result.best_gamma,
         selected_p=p_init,
@@ -1862,6 +2099,18 @@ def main() -> None:
                         help="Full LOCO-CV + model fit")
     parser.add_argument("--fit-fast", action="store_true",
                         help="Coarse grid, site subsampling (dev/debug)")
+    parser.add_argument("--fit-fixed", action="store_true",
+                        help="Fit with fixed hyperparameters (no CV)")
+    parser.add_argument("--lam", type=float, default=None,
+                        help="Fixed λ for --fit-fixed (uniform across strata)")
+    parser.add_argument("--lam-rho", type=float, default=None,
+                        help="Fixed λ_ρ for --fit-fixed")
+    parser.add_argument("--eta", type=float, default=None,
+                        help="Fixed η for --fit-fixed")
+    parser.add_argument("--gamma", type=float, default=None,
+                        help="Fixed γ for --fit-fixed")
+    parser.add_argument("--neff-scale", action="store_true",
+                        help="Scale λ per cell type by n_eff_max/n_eff_k")
     parser.add_argument("--fit-site", type=int, default=None,
                         help="Fit a single site (debugging)")
     parser.add_argument("--smoke-test", action="store_true",
@@ -1882,6 +2131,15 @@ def main() -> None:
 
     if args.fit_site is not None:
         _fit_single_site_cli(args.fit_site)
+        return
+
+    if args.fit_fixed:
+        _fit_fixed_cli(
+            lam=args.lam, lam_rho=args.lam_rho,
+            eta=args.eta, gamma=args.gamma,
+            n_workers=args.n_workers,
+            neff_scale=args.neff_scale,
+        )
         return
 
     if args.fit or args.fit_fast:
@@ -2033,29 +2291,36 @@ def _smoke_test_cli() -> None:
     print("COMPUTE PROJECTIONS (based on median per-site time)")
     print(f"{'=' * 70}")
 
-    # LOCO-CV grids (two-stage: stage1 = λ×λ_ρ, stage2 = η×γ)
+    # LOCO-CV grids (two-stage: stage1 = Q × λ×λ_ρ per stratum, stage2 = η×γ)
     n_lambda_full = config.LAMBDA_GRID_FULL_N
     n_lambda_fast = config.LAMBDA_GRID_FAST_N
     n_lam_rho = len(config.LAMBDA_RHO_GRID)
     n_eta = len(config.ETA_GRID)
     n_gamma = len(config.GAMMA_GRID)
-    n_folds = 4  # LOCO-CV: 4 conditions
+    Q = config.N_INTENSITY_STRATA
+    n_folds = 3  # LOCO-CV: 3 disease-condition folds (WTyp excluded)
 
-    combos_full = n_lambda_full * n_lam_rho + n_eta * n_gamma  # two-stage
-    combos_fast = n_lambda_fast * n_lam_rho + n_eta * n_gamma  # two-stage
+    # Stage 1 runs per stratum (~n_sites/Q sites each), stage 2 runs globally
+    combos_s1_full = n_lambda_full * n_lam_rho  # per stratum
+    combos_s1_fast = n_lambda_fast * n_lam_rho
+    combos_s2 = n_eta * n_gamma
 
     n_sub = max(int(n_sites * 0.2), 100)
+    n_per_stratum = n_sites // Q
+    n_per_stratum_sub = n_sub // Q
     n_workers = config.N_WORKERS
 
-    # Fast mode: CV on subsample + full fit
-    cv_fast_s = combos_fast * n_folds * n_sub * t_per_site / n_workers
+    # Fast mode: stage1 per-stratum on subsample + stage2 global on subsample + fit
+    cv_s1_fast_s = combos_s1_fast * n_folds * n_sub * t_per_site / n_workers
+    cv_s2_fast_s = combos_s2 * n_folds * n_sub * t_per_site / n_workers
     fit_fast_s = n_sites * t_per_site / n_workers
-    total_fast_s = cv_fast_s + fit_fast_s
+    total_fast_s = cv_s1_fast_s + cv_s2_fast_s + fit_fast_s
 
-    # Full mode: CV on all sites + full fit
-    cv_full_s = combos_full * n_folds * n_sites * t_per_site / n_workers
+    # Full mode: stage1 per-stratum on all sites + stage2 global + fit
+    cv_s1_full_s = combos_s1_full * n_folds * n_sites * t_per_site / n_workers
+    cv_s2_full_s = combos_s2 * n_folds * n_sites * t_per_site / n_workers
     fit_full_s = n_sites * t_per_site / n_workers
-    total_full_s = cv_full_s + fit_full_s
+    total_full_s = cv_s1_full_s + cv_s2_full_s + fit_full_s
 
     def _fmt_time(seconds: float) -> str:
         if seconds < 3600:
@@ -2069,16 +2334,22 @@ def _smoke_test_cli() -> None:
     print(f"  Total sites: {n_sites}")
     print(f"  CV subsample (20%): {n_sub}")
     print(f"  Parallel workers: {n_workers}")
+    print(f"  CV folds: {n_folds} (disease conditions only, WTyp excluded)")
+    print(f"  Intensity strata: {Q}")
     print()
-    print(f"  --fit-fast ({combos_fast} combos × {n_folds} folds × {n_sub} sites ÷ {n_workers} workers):")
-    print(f"    CV phase:    {_fmt_time(cv_fast_s)}")
-    print(f"    Final fit:   {_fmt_time(fit_fast_s)}")
-    print(f"    Total:       {_fmt_time(total_fast_s)}")
+    print(f"  --fit-fast (stage1: {combos_s1_fast}×{Q} strata, stage2: {combos_s2} combos"
+          f" × {n_folds} folds × {n_sub} sites ÷ {n_workers} workers):")
+    print(f"    CV stage 1:  {_fmt_time(float(cv_s1_fast_s))}")
+    print(f"    CV stage 2:  {_fmt_time(float(cv_s2_fast_s))}")
+    print(f"    Final fit:   {_fmt_time(float(fit_fast_s))}")
+    print(f"    Total:       {_fmt_time(float(total_fast_s))}")
     print()
-    print(f"  --fit ({combos_full} combos × {n_folds} folds × {n_sites} sites ÷ {n_workers} workers):")
-    print(f"    CV phase:    {_fmt_time(cv_full_s)}")
-    print(f"    Final fit:   {_fmt_time(fit_full_s)}")
-    print(f"    Total:       {_fmt_time(total_full_s)}")
+    print(f"  --fit (stage1: {combos_s1_full}×{Q} strata, stage2: {combos_s2} combos"
+          f" × {n_folds} folds × {n_sites} sites ÷ {n_workers} workers):")
+    print(f"    CV stage 1:  {_fmt_time(float(cv_s1_full_s))}")
+    print(f"    CV stage 2:  {_fmt_time(float(cv_s2_full_s))}")
+    print(f"    Final fit:   {_fmt_time(float(fit_full_s))}")
+    print(f"    Total:       {_fmt_time(float(total_full_s))}")
 
     # Feasibility warning
     if total_fast_s > 48 * 3600:
@@ -2182,6 +2453,94 @@ def _run_self_tests() -> None:
     assert w1[0] > w1[1], "Lower CVS should get higher weight"
     print("  [PASS] Adaptive weights")
 
+    # Test 7: Direct theta-state path matches reference mu/J calculations
+    sample_meta = pd.DataFrame({
+        "gender": ["fe", "ma", "fe", "ma"],
+        "timepoint": ["4mo", "6mo", "4mo", "6mo"],
+        "condition": ["AppP", "Ttau", "ApTt", "WTyp"],
+    })
+    a_obs = pd.DataFrame(
+        np.array([
+            [0.20, 0.10, 0.15, 0.25, 0.20, 0.10],
+            [0.18, 0.12, 0.17, 0.23, 0.20, 0.10],
+            [0.22, 0.11, 0.14, 0.24, 0.19, 0.10],
+            [0.19, 0.10, 0.16, 0.25, 0.20, 0.10],
+        ]),
+        columns=config.SAP_CELLTYPES,
+    )
+    sa = SampleArrays.from_data(sample_meta, a_obs)
+    a_bar = a_obs[config.SAP_ESTIMATED_CELLTYPES].mean(axis=0).values
+    theta = np.array([
+        0.1, -0.2, 0.15,
+        0.03, -0.01, 0.02,
+        -0.02, 0.04, -0.03,
+        0.01, 0.00, 0.02,
+        -0.04, 0.02, 0.01,
+        0.03, -0.02, 0.05,
+    ])
+    x_base_j = np.array([1.0, 1.2, 0.8, 1.1, 0.9, 0.7])
+    r_slice_j = np.array([
+        [0.10, -0.05, 0.02, 0.00],
+        [0.03, 0.02, -0.01, 0.04],
+        [-0.02, 0.01, 0.05, -0.03],
+        [0.00, -0.02, 0.03, 0.01],
+        [0.01, 0.00, -0.04, 0.02],
+        [-0.01, 0.03, 0.00, -0.02],
+    ])
+    rho = 0.25
+    params_ref = _theta_to_params(theta, rho, 0.0, 0.0, 1.0, 0, a_bar=a_bar)
+    mu_ref = compute_mu(
+        params_ref, a_obs, sample_meta, x_base_j, r_slice_j, cached_arrays=sa,
+    )
+    mu_fast, _, j_fast = _compute_theta_state(
+        theta, rho, a_obs, sample_meta, x_base_j, r_slice_j,
+        a_bar, cached_arrays=sa, with_jacobian=True,
+    )
+    ctx = ThetaStateContext(
+        sa=sa,
+        base_signal=np.broadcast_to(
+            x_base_j[:, np.newaxis], (len(x_base_j), len(sample_meta)),
+        ).copy(),
+        inv_a_bar=1.0 / np.maximum(a_bar, 1e-10),
+    )
+    ctx.base_signal += rho * r_slice_j
+    mu_ctx, _, j_ctx = _compute_theta_state_from_context(
+        theta, ctx, with_jacobian=True,
+    )
+    j_ref = _compute_jacobian(
+        theta, a_obs, sample_meta, x_base_j, r_slice_j,
+        rho, 0, a_bar=a_bar, cached_arrays=sa,
+    )
+    assert np.allclose(mu_fast, mu_ref), "theta-state mu mismatch"
+    assert np.allclose(j_fast, j_ref), "theta-state Jacobian mismatch"
+    assert np.allclose(mu_ctx, mu_ref), "context theta-state mu mismatch"
+    assert np.allclose(j_ctx, j_ref), "context theta-state Jacobian mismatch"
+    print("  [PASS] Theta-state fast path matches reference mu/J")
+
+    # Test 8: Batched proximal update matches per-group reference
+    theta_test = np.array([
+        0.0, 0.0, 0.0,
+        0.4, -0.3, 0.2,
+        -0.2, 0.5, -0.1,
+        0.0, 0.0, 0.0,
+        0.1, -0.2, 0.3,
+        -0.4, 0.1, -0.2,
+    ])
+    theta_ref = theta_test.copy()
+    theta_new = theta_test.copy()
+    lambda_q = 0.15
+    omega = np.array([1.0, 0.8, 1.2, 0.9, 1.1])
+    eta = 2.0
+    step = 0.75
+    for k in range(5):
+        delta_k = theta_ref[3 + k * 3: 3 + (k + 1) * 3]
+        theta_ref[3 + k * 3: 3 + (k + 1) * 3] = group_lasso_prox(
+            delta_k, lambda_q, omega[k], eta, step_size=step,
+        )
+    _apply_group_lasso_prox_inplace(theta_new, lambda_q, omega, eta, step)
+    assert np.allclose(theta_new, theta_ref), "batched prox mismatch"
+    print("  [PASS] Batched Group Lasso prox matches reference")
+
     print("\nAll self-tests passed.")
 
 
@@ -2238,6 +2597,104 @@ def _fit_single_site_cli(site_idx: int) -> None:
     print(f"  Total deviance (positive obs): {dev:.4f}")
 
 
+def _fit_fixed_cli(
+    lam: Optional[float] = None,
+    lam_rho: Optional[float] = None,
+    eta: Optional[float] = None,
+    gamma: Optional[float] = None,
+    n_workers: Optional[int] = None,
+    neff_scale: bool = False,
+) -> None:
+    """Fit model with fixed hyperparameters, bypassing CV (§4.2 override).
+
+    Used when LOCO-CV cannot identify a stable λ (e.g., monotonically
+    decreasing deviance surface at N=24).  The hyperparameters are
+    specified explicitly based on external calibration (fast-fit anchor,
+    sparsity targets, or domain knowledge).
+    """
+    from sap_data import load_all
+
+    # Defaults: fast-fit anchor values
+    lam = lam if lam is not None else 10.93
+    lam_rho = lam_rho if lam_rho is not None else 0.01
+    eta = eta if eta is not None else 5.0
+    gamma = gamma if gamma is not None else 0.0
+
+    print("Loading data (Phase 1)...")
+    data, report = load_all(include_rna=True)
+
+    if not report.all_passed:
+        print("\nWARNING: Not all diagnostics passed. Proceeding anyway.")
+        print(report.summary())
+
+    lambda_q = np.full(config.N_INTENSITY_STRATA, lam)
+
+    # Cell-type-specific penalty scaling via n_eff (§4.2, §8.4)
+    omega_override = None
+    if neff_scale:
+        neff = compute_neff(data.a_obs)
+        neff_max = neff.max()
+        neff_ratios = neff_max / neff
+        omega_override = neff_ratios
+        print(f"\n--- Fixed-hyperparameter fit with n_eff scaling (no CV) ---")
+        print(f"  n_eff per cell type:")
+        for k, ct in enumerate(config.SAP_ESTIMATED_CELLTYPES):
+            print(f"    {ct:20s}: n_eff={neff[k]:.2f}, "
+                  f"λ_k/λ_0={neff_ratios[k]:.2f}")
+    else:
+        print(f"\n--- Fixed-hyperparameter fit (no CV) ---")
+
+    print(f"  λ_0 = {lam:.4f} (base penalty, uniform across strata)")
+    print(f"  λ_ρ = {lam_rho}")
+    print(f"  η = {eta}")
+    print(f"  γ = {gamma}")
+    if neff_scale:
+        print(f"  n_eff scaling: enabled (penalty × n_eff_max/n_eff_k)")
+    print(f"  OUTER_MAX_ITER = {config.OUTER_MAX_ITER}")
+    print(f"  Sites: {data.n_sites_filtered}")
+
+    print("\nFitting full model...")
+    model = fit_hurdle_tweedie(
+        data,
+        lambda_q=lambda_q,
+        lambda_rho=lam_rho,
+        eta=eta,
+        gamma_cvs=gamma,
+        n_workers=n_workers,
+        omega_override=omega_override,
+    )
+    # Store hyperparameters as a CVResult for serialization compatibility
+    model.cv_result = CVResult(
+        best_lambda=lambda_q,
+        best_lambda_rho=lam_rho,
+        best_eta=eta,
+        best_gamma=gamma,
+        selected_p=1.5,
+    )
+
+    n_conv = int(model.converged.sum()) if model.converged is not None else 0
+    print(f"\nConvergence: {n_conv}/{data.n_sites_filtered} sites")
+    print(f"Global Tweedie power: {model.p}")
+
+    if model.binding_freq is not None:
+        print(f"\nNon-negativity binding frequency:")
+        print(model.binding_freq.to_string())
+
+    # Sparsity summary
+    n_sites = len(model.site_params)
+    active_counts = np.zeros(5)
+    for sp in model.site_params:
+        for k in range(5):
+            if np.linalg.norm(sp.beta[k]) > 1e-6:
+                active_counts[k] += 1
+    print(f"\nSparsity pattern (fraction nonzero per cell type):")
+    for k, ct in enumerate(config.SAP_ESTIMATED_CELLTYPES):
+        print(f"  {ct:20s}: {active_counts[k]/n_sites:.1%} "
+              f"({int(active_counts[k])}/{n_sites})")
+
+    save_model(model)
+
+
 def _fit_model_cli(fast: bool = False, n_workers: Optional[int] = None) -> None:
     """Full model fitting via CLI (Checkpoint 2/4)."""
     from sap_data import load_all
@@ -2287,14 +2744,17 @@ def _fit_model_cli(fast: bool = False, n_workers: Optional[int] = None) -> None:
     print(f"  γ: {cv_result.best_gamma}")
     print(f"  p: {cv_result.selected_p}")
 
-    # Check for boundary selections
-    lam_best = float(cv_result.best_lambda[0])
-    if np.isclose(lam_best, lambda_grid[0]) or np.isclose(lam_best, lambda_grid[-1]):
-        print(f"  ⚠ WARNING: λ at grid boundary — consider extending the grid")
+    # Check for boundary selections (per-stratum)
+    for q in range(config.N_INTENSITY_STRATA):
+        lam_q = float(cv_result.best_lambda[q])
+        if np.isclose(lam_q, lambda_grid[0]) or np.isclose(lam_q, lambda_grid[-1]):
+            print(f"  ⚠ WARNING: λ[stratum {q}]={lam_q:.2f} at grid boundary")
     if cv_result.best_lambda_rho in (config.LAMBDA_RHO_GRID[0], config.LAMBDA_RHO_GRID[-1]):
         print(f"  ⚠ WARNING: λ_ρ at grid boundary")
     if cv_result.best_eta in (config.ETA_GRID[0], config.ETA_GRID[-1]):
         print(f"  ⚠ WARNING: η at grid boundary")
+    if cv_result.best_gamma in (config.GAMMA_GRID[0], config.GAMMA_GRID[-1]):
+        print(f"  ⚠ WARNING: γ at grid boundary")
 
     print("\nFitting full model with best hyperparameters...")
     model = fit_hurdle_tweedie(

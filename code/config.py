@@ -242,12 +242,12 @@ PHOSPHATASE_GENES_EXTRA = [
 TWEEDIE_P_GRID = [1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8]
 
 # --- Group Lasso / LOCO-CV grids (§4) ---
-GAMMA_GRID = [0, 0.5, 1.0, 1.5]          # CVS adaptive weight exponent (§4.3)
+GAMMA_GRID = [0, 0.5, 1.0, 1.5, 2.0]     # CVS adaptive weight exponent (§4.3)
 ETA_GRID = [2.0, 2.5, 3.0, 4.0, 5.0]     # interaction penalty multiplier (§4.4)
 ETA_MIN = 2.0
-LAMBDA_RHO_GRID = [0.01, 0.1, 1.0, 10.0]  # ridge penalty on rho_j (§3.2.1)
+LAMBDA_RHO_GRID = [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]  # ridge penalty on rho_j (§3.2.1)
 N_INTENSITY_STRATA = 4                     # quartile-based intensity strata (§4.2)
-N_LOCO_FOLDS = 4                           # one per condition (§4.2)
+N_LOCO_FOLDS = 3                           # disease conditions only, WTyp excluded (§4.2)
 N_BOOTSTRAP = 500                          # residual block bootstrap (§7.2)
 
 # --- Two-stage LOCO-CV (§4.2 implementation) ---
@@ -262,7 +262,7 @@ LAMBDA_GRID_FULL_N = 8                     # 8-point log grid for --fit
 # --- IRLS convergence (§3.5) ---
 IRLS_MAX_ITER = 50
 IRLS_TOL = 1e-6
-OUTER_MAX_ITER = 40
+OUTER_MAX_ITER = 80
 OUTER_TOL = 1e-4
 
 # --- VIF diagnostic (§6.0) ---

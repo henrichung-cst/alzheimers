@@ -3,7 +3,7 @@
 !/.gitignore
 !/code/
 !/code/**
-
+!README.md
 # Ignore generated Python cache files inside code.
 /code/__pycache__/
 /code/**/*.pyc

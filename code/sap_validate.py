@@ -64,8 +64,9 @@ class ValidationResult:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
-            "passed": self.passed,
-            "metrics": self.metrics,
+            "passed": bool(self.passed) if self.passed is not None else None,
+            "metrics": {k: float(v) if hasattr(v, '__float__') else v
+                        for k, v in self.metrics.items()},
             "detail": self.detail,
         }
 
@@ -400,50 +401,106 @@ def _generate_synthetic_bulk(
     model: ModelFit,
     seed: int = 42,
 ) -> np.ndarray:
-    """Construct synthetic bulk observations Y_syn from X_base + Δ^true + ε.
+    """Permuted-residual injection: condition-free noise + clean synthetic signal.
 
-    Y_syn[i,j] = Σ_k A_{i,k}(X^base_{k,j} + Δ^true_{k,c(i),j}) + ε_{i,j}
+    Procedure:
+      1. Compute full model prediction μ̂_{i,j} using all fitted parameters
+      2. Compute residuals: e = Y_real - μ̂
+      3. Per-site: permute residuals among non-NaN positions (destroys condition
+         structure while preserving noise magnitude and marginal distribution)
+      4. Construct synthetic prediction μ_syn with Δ^true as condition signal
+      5. Y_syn = μ_syn + e_permuted, preserving real NaN mask
 
-    where ε follows compound Poisson-Gamma noise matching fitted (phi, p).
-
-    Returns: (J, 24) synthetic bulk matrix.
+    Returns: (J, n_samples) synthetic bulk matrix with real NaN pattern preserved.
     """
+    from sap_model import compute_mu, SampleArrays
+
     rng = np.random.default_rng(seed)
     n_sites = len(model.site_params)
     n_samples = data.a_obs.shape[0]
-    a_obs = data.a_obs.values  # (24, 6)
-    x_base = data.x_base.values  # (J, 6)
     sample_conds = data.sample_meta["condition"].values
 
-    # Map condition → factorial index for delta
-    cond_to_idx = {"WTyp": -1, "AppP": 0, "Ttau": 1, "ApTt": 2}
+    y_real = data.bulk_phospho.values.copy()  # (J, n_samples), may contain NaN
+    nan_mask = np.isnan(y_real)
 
-    y_syn = np.zeros((n_sites, n_samples))
+    # Precompute cached arrays and factorial indicators
+    sa_cached = SampleArrays.from_data(data.sample_meta, data.a_obs)
+    x_base_all = data.x_base.values  # (J, 6)
+    fact_ind = np.array([config.SAP_FACTORIAL[c] for c in sample_conds], dtype=float)
+
+    y_syn = y_real.copy()
+
+    n_neg = 0
+    n_obs = 0
 
     for j in range(n_sites):
         sp = model.site_params[j]
-        for i in range(n_samples):
-            cond = sample_conds[i]
-            # Perturbed cell-type signals
-            mu_j_i = 0.0
-            for k in range(5):
-                s_kj = x_base[j, k]
-                cidx = cond_to_idx[cond]
-                if cidx >= 0:
-                    s_kj += delta_true[k, j, cidx]
-                s_kj = max(s_kj, 0.0)
-                mu_j_i += a_obs[i, k] * s_kj
-            # "Other" cell type (index 5) — baseline only
-            mu_j_i += a_obs[i, 5] * max(x_base[j, 5], 0.0)
-            mu_j_i = max(mu_j_i, 1e-10)
+        if sp is None:
+            continue
 
-            # Hurdle: dropout
-            dropout_prob = 1.0 / (1.0 + np.exp(-(sp.gamma0 + sp.gamma1 * np.log(mu_j_i))))
-            if rng.random() < dropout_prob:
-                y_syn[j, i] = 0.0
-            else:
-                # Compound Poisson-Gamma noise for Tweedie p in (1, 2)
-                y_syn[j, i] = _sample_tweedie(mu_j_i, sp.phi, model.p, rng)
+        r_slice_j = data.r_tensor[:, :, j] if data.r_tensor is not None else np.zeros((6, n_samples))
+
+        # 1. Full model prediction μ̂ (includes x_base, α, ρ·r, β·indicators)
+        mu_hat = compute_mu(sp, data.a_obs, data.sample_meta,
+                            x_base_all[j], r_slice_j, cached_arrays=sa_cached)
+
+        # 2. Residuals at observed (non-NaN) positions
+        obs_j = ~nan_mask[j]
+        y_j_obs = np.where(obs_j, y_real[j], 0.0)
+        e_j = y_j_obs - mu_hat  # residual at all positions (0 at NaN)
+
+        # 3. Permute residuals among non-NaN positions only (Option B)
+        obs_idx = np.where(obs_j)[0]
+        if len(obs_idx) > 1:
+            e_obs = e_j[obs_idx].copy()
+            rng.shuffle(e_obs)
+            e_perm = np.zeros(n_samples)
+            e_perm[obs_idx] = e_obs
+        else:
+            e_perm = e_j
+
+        # 4. Synthetic prediction: baseline (x_base + α) + Δ^true · indicators
+        S_syn = np.broadcast_to(
+            x_base_all[j, :, np.newaxis], (6, n_samples),
+        ).copy()  # (6, n_samples)
+
+        # Global covariates (gender, time)
+        global_adj = (sp.alpha_gen * sa_cached.female_ind
+                      + sp.alpha_time[0] * sa_cached.time_4mo
+                      + sp.alpha_time[1] * sa_cached.time_6mo)
+        S_syn += global_adj[np.newaxis, :]
+
+        # Δ^true condition effects on estimated cell types
+        delta_contrib = delta_true[:, j, :] @ fact_ind.T  # (5, n_samples)
+        S_syn[:5, :] += delta_contrib
+
+        # Non-negativity projection
+        np.maximum(S_syn, 0.0, out=S_syn)
+
+        # Bulk prediction
+        mu_syn = np.sum(sa_cached.A * S_syn.T, axis=1)
+        np.maximum(mu_syn, 1e-10, out=mu_syn)
+
+        # 5. Y_syn = μ_syn + e_permuted
+        y_syn_j = mu_syn + e_perm
+
+        # Clamp negatives
+        neg_j = obs_j & (y_syn_j < 0)
+        n_neg += neg_j.sum()
+        n_obs += obs_j.sum()
+        y_syn_j[neg_j] = 0.0
+
+        # Preserve NaN mask
+        y_syn_j[nan_mask[j]] = np.nan
+
+        y_syn[j] = y_syn_j
+
+    if n_neg > 0:
+        frac_neg = n_neg / n_obs if n_obs > 0 else 0
+        print(f"    Residual injection: {n_neg}/{n_obs} ({frac_neg:.1%}) "
+              f"values clamped to zero")
+        if frac_neg > 0.05:
+            print(f"    WARNING: clamp rate > 5% — consider reducing injection magnitude")
 
     return y_syn
 
