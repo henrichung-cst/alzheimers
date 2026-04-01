@@ -4,6 +4,7 @@
 !/code/
 !/code/**
 !README.md
+!sap_audit.md
 # Ignore generated Python cache files inside code.
 /code/__pycache__/
 /code/**/*.pyc
