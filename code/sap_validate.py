@@ -719,8 +719,8 @@ def validate_synthetic_phospho(
             for j in site_indices
         ])
         syn_conv_mask = np.array([
-            model_syn.converged[i] if model_syn.converged is not None else True
-            for i in range(len(model_syn.site_params))
+            model_syn.converged[j] if model_syn.converged is not None else True
+            for j in site_indices
         ])
         strata_masks = {
             "all": np.ones(len(site_indices), dtype=bool),
@@ -734,8 +734,8 @@ def validate_synthetic_phospho(
         comp_names = ["App", "Tau", "Int"]
 
         for k, ct in enumerate(est_types):
-            d_hat = np.array([model_syn.site_params[i].beta[k]
-                              for i in range(len(model_syn.site_params))])  # (n_assessed, 3)
+            d_hat = np.array([model_syn.site_params[j].beta[k]
+                              for j in site_indices])  # (n_assessed, 3)
             d_true_k = delta_true[k, site_indices, :]  # (n_assessed, 3)
 
             # Overall correlation (all components flattened)
