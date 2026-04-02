@@ -585,7 +585,8 @@ def _center_scale_per_celltype(df: pd.DataFrame) -> pd.DataFrame:
 def preprocess_aggexp(
     aggexp_pooled: pd.DataFrame,
     sample_map: Dict[int, str],
-) -> Tuple[pd.DataFrame, List[str], List[str]]:
+    return_cpm: bool = False,
+) -> Tuple[pd.DataFrame, List[str], List[str], ...]:
     """Full §2.2 pseudobulk preprocessing pipeline.
 
     Returns:
@@ -593,6 +594,7 @@ def preprocess_aggexp(
              MultiIndex (cell_type, sample_id), ~600-700 gene columns.
         kinase_genes: List of kinase genes in gkp.
         phosphatase_genes: List of phosphatase genes in gkp.
+        cpm_kp (only if return_cpm=True): Pre-z-scored CPM matrix for DE analysis.
     """
     print("  Remapping sample indices...")
     df = _remap_aggexp_samples(aggexp_pooled, sample_map)
@@ -616,9 +618,13 @@ def preprocess_aggexp(
     print(f"    {len(kinase_genes)} kinases + {len(phosphatase_genes)} phosphatases "
           f"= {len(kp_genes)} KP genes")
 
+    cpm_kp = df.copy() if return_cpm else None
+
     print("  Per-cell-type centering and scaling...")
     gkp = _center_scale_per_celltype(df)
 
+    if return_cpm:
+        return gkp, kinase_genes, phosphatase_genes, cpm_kp
     return gkp, kinase_genes, phosphatase_genes
 
 

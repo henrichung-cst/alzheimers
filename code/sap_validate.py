@@ -654,6 +654,7 @@ def validate_synthetic_phospho(
     seed: int = 42,
     max_outer_iter: int = None,
     fix_rho_zero: bool = False,
+    unpenalized: bool = False,
 ) -> List[ValidationResult]:
     """§6.1: Synthetic phospho-validation across one or all scenarios.
 
@@ -697,10 +698,15 @@ def validate_synthetic_phospho(
         lam_rho_eff = 1e6 if fix_rho_zero else hp["lam_rho"]
         if fix_rho_zero:
             print(f"    [rho=0 control] lambda_rho overridden: {hp['lam_rho']} -> {lam_rho_eff}")
+        if unpenalized:
+            lam_q_eff = np.zeros_like(hp["lam_q"])
+            print(f"    [unpenalized] lambda_q overridden: {hp['lam_q']} -> zeros")
+        else:
+            lam_q_eff = hp["lam_q"]
 
         data_syn = _make_data_copy_with_y(data, y_syn)
         model_syn = fit_hurdle_tweedie(
-            data_syn, hp["lam_q"], lam_rho_eff, hp["eta"], hp["gamma"],
+            data_syn, lam_q_eff, lam_rho_eff, hp["eta"], hp["gamma"],
             n_workers=n_workers, site_indices=site_indices,
             omega_override=hp["omega_override"],
             max_outer_iter=max_outer_iter,
@@ -747,6 +753,25 @@ def validate_synthetic_phospho(
         metrics["n_kinases_assessed"] = float(len(eligible_kinases))
         print(f"    Kinase-level: {len(eligible_kinases)} kinases with "
               f">={config.SYNTH_MIN_KINASE_SUBSTRATES} assessed substrates")
+
+        # Factor model: pre-build W matrix (n_eligible_kinases × n_assessed_sites)
+        from scipy.linalg import solve as _fm_solve
+        W_fm = None
+        n_kin = 0
+        kin_order: List[str] = []
+        A_ridge = np.empty(0)
+        if eligible_kinases:
+            n_kin = len(eligible_kinases)
+            kin_order = sorted(eligible_kinases.keys())
+            W_fm = np.zeros((n_kin, len(site_indices)))
+            for ki, kin in enumerate(kin_order):
+                for local_idx in eligible_kinases[kin]:
+                    W_fm[ki, local_idx] = 1.0
+            WWT = W_fm @ W_fm.T
+            fm_ridge = config.SYNTH_FM_RIDGE_FRAC * np.trace(WWT) / n_kin
+            A_ridge = WWT + fm_ridge * np.eye(n_kin)
+            print(f"    Factor model: W ({n_kin}×{len(site_indices)}), "
+                  f"ridge={fm_ridge:.4f}")
 
         # Component names for factorial decomposition
         comp_names = ["App", "Tau", "Int"]
@@ -836,6 +861,34 @@ def validate_synthetic_phospho(
                       f"[App={ka_r_app:.3f} Tau={ka_r_tau:.3f} Int={ka_r_int:.3f}] "
                       f"slope={ka_slope:.3f} (n_kin={len(eligible_kinases)})")
 
+            # Factor model: Ridge regression theta = (W@W.T + λI)^{-1} W @ d_hat
+            if W_fm is not None:
+                theta_true = np.zeros((n_kin, 3))
+                for ki, kin in enumerate(kin_order):
+                    idxs = np.array(eligible_kinases[kin])
+                    theta_true[ki] = np.mean(d_true_k[idxs], axis=0)
+                theta_hat = np.zeros((n_kin, 3))
+                for c in range(3):
+                    theta_hat[:, c] = _fm_solve(
+                        A_ridge, W_fm @ d_hat[:, c], assume_a='pos')
+
+                fm_r = _safe_pearson(theta_hat.flatten(), theta_true.flatten())
+                fm_slope = _safe_slope(theta_hat.flatten(), theta_true.flatten())
+                metrics[f"fm_pearson_{ct}"] = fm_r
+                metrics[f"fm_slope_{ct}"] = fm_slope
+                for c, cname in enumerate(comp_names):
+                    metrics[f"fm_pearson_{cname}_{ct}"] = _safe_pearson(
+                        theta_hat[:, c], theta_true[:, c])
+                    metrics[f"fm_slope_{cname}_{ct}"] = _safe_slope(
+                        theta_hat[:, c], theta_true[:, c])
+
+                fm_r_app = metrics.get(f"fm_pearson_App_{ct}", 0.0)
+                fm_r_tau = metrics.get(f"fm_pearson_Tau_{ct}", 0.0)
+                fm_r_int = metrics.get(f"fm_pearson_Int_{ct}", 0.0)
+                print(f"      FM Ridge    : r={fm_r:.3f} "
+                      f"[App={fm_r_app:.3f} Tau={fm_r_tau:.3f} Int={fm_r_int:.3f}] "
+                      f"slope={fm_slope:.3f} (n_kin={n_kin})")
+
         # Scenario 5 supplementary check
         if scen == "rna_discordant" and data.r_tensor is not None:
             for k, ct in enumerate(est_types):
@@ -858,7 +911,11 @@ def validate_synthetic_phospho(
             metrics=metrics,
             detail=f"Scenario {scen}: {'PASS' if all_passed else 'FAIL'}",
         )
-        suffix = "_rho0" if fix_rho_zero else ""
+        suffix = ""
+        if fix_rho_zero:
+            suffix += "_rho0"
+        if unpenalized:
+            suffix += "_unpen"
         _save_result(result, f"synthetic_{scen}{suffix}.json")
         results.append(result)
 
@@ -1596,6 +1653,10 @@ def print_validation_summary() -> None:
         ("§6.1 Synthetic: low_rank", "synthetic_low_rank.json"),
         ("§6.1 Synthetic: kinase_program (ρ=0)", "synthetic_kinase_program_rho0.json"),
         ("§6.1 Synthetic: low_rank (ρ=0)", "synthetic_low_rank_rho0.json"),
+        ("§6.1 Synthetic: kinase_program (unpen)", "synthetic_kinase_program_unpen.json"),
+        ("§6.1 Synthetic: kinase_program (ρ=0,unpen)", "synthetic_kinase_program_rho0_unpen.json"),
+        ("§6.1 Synthetic: low_rank (unpen)", "synthetic_low_rank_unpen.json"),
+        ("§6.1 Synthetic: mdes (unpen)", "synthetic_mdes_unpen.json"),
         ("§6.1.1 Pseudobulk Stress", "pseudobulk_stress.json"),
         ("§6.3 Perturbation (σ=0.03)", "perturbation_0.03.json"),
         ("§6.3 Perturbation (σ=0.05)", "perturbation_0.05.json"),
@@ -1699,6 +1760,8 @@ def main() -> None:
                         "running synthetic validation.")
     parser.add_argument("--fix-rho-zero", action="store_true",
                         help="Fix rho≈0 during synthetic refit (extreme ridge on rho)")
+    parser.add_argument("--unpenalized", action="store_true",
+                        help="Set lambda_q=0 to disable Group Lasso on beta")
     parser.add_argument("--summary", action="store_true", help="Print cached results summary")
     args = parser.parse_args()
 
@@ -1744,7 +1807,8 @@ def main() -> None:
         validate_synthetic_phospho(data_for_synth, model, scenario=args.scenario,
                                    n_workers=n_workers, site_subsample=site_sub,
                                    max_outer_iter=args.max_outer_iter,
-                                   fix_rho_zero=args.fix_rho_zero)
+                                   fix_rho_zero=args.fix_rho_zero,
+                                   unpenalized=args.unpenalized)
 
     if args.all or args.pseudobulk:
         validate_pseudobulk_stress(data, model, n_workers=n_workers,
