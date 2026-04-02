@@ -653,6 +653,7 @@ def validate_synthetic_phospho(
     site_subsample: float = None,
     seed: int = 42,
     max_outer_iter: int = None,
+    fix_rho_zero: bool = False,
 ) -> List[ValidationResult]:
     """§6.1: Synthetic phospho-validation across one or all scenarios.
 
@@ -693,10 +694,13 @@ def validate_synthetic_phospho(
         # Refit model on synthetic data with production-aligned penalty
         print(f"    Refitting model on {len(site_indices)} sites...")
         hp = _extract_validation_hyperparams(model, data)
+        lam_rho_eff = 1e6 if fix_rho_zero else hp["lam_rho"]
+        if fix_rho_zero:
+            print(f"    [rho=0 control] lambda_rho overridden: {hp['lam_rho']} -> {lam_rho_eff}")
 
         data_syn = _make_data_copy_with_y(data, y_syn)
         model_syn = fit_hurdle_tweedie(
-            data_syn, hp["lam_q"], hp["lam_rho"], hp["eta"], hp["gamma"],
+            data_syn, hp["lam_q"], lam_rho_eff, hp["eta"], hp["gamma"],
             n_workers=n_workers, site_indices=site_indices,
             omega_override=hp["omega_override"],
             max_outer_iter=max_outer_iter,
@@ -729,6 +733,20 @@ def validate_synthetic_phospho(
         }
         for sname, smask in strata_masks.items():
             metrics[f"n_{sname}"] = float(smask.sum())
+
+        # Kinase-level aggregate recovery (§1 kinase-aggregate audit)
+        global_to_local = {g: i for i, g in enumerate(site_indices)}
+        kinase_to_local: Dict[str, List[int]] = {}
+        for global_j, kinases in ks_map.items():
+            if global_j in global_to_local:
+                local_idx = global_to_local[global_j]
+                for kin in kinases:
+                    kinase_to_local.setdefault(kin, []).append(local_idx)
+        eligible_kinases = {kin: idxs for kin, idxs in kinase_to_local.items()
+                            if len(idxs) >= config.SYNTH_MIN_KINASE_SUBSTRATES}
+        metrics["n_kinases_assessed"] = float(len(eligible_kinases))
+        print(f"    Kinase-level: {len(eligible_kinases)} kinases with "
+              f">={config.SYNTH_MIN_KINASE_SUBSTRATES} assessed substrates")
 
         # Component names for factorial decomposition
         comp_names = ["App", "Tau", "Int"]
@@ -790,6 +808,34 @@ def validate_synthetic_phospho(
                   f"slope={slope:.3f} ({'OK' if slope_ok else 'BIAS'}) "
                   f"→ {'PASS' if ct_pass else 'FAIL'}")
 
+            # Kinase-level aggregate recovery
+            if eligible_kinases:
+                ka_hat_list, ka_true_list = [], []
+                for kin, local_idxs in eligible_kinases.items():
+                    idxs = np.array(local_idxs)
+                    ka_hat_list.append(np.mean(d_hat[idxs], axis=0))
+                    ka_true_list.append(np.mean(d_true_k[idxs], axis=0))
+                ka_hat = np.array(ka_hat_list)    # (n_kinases, 3)
+                ka_true = np.array(ka_true_list)  # (n_kinases, 3)
+
+                ka_r = _safe_pearson(ka_hat.flatten(), ka_true.flatten())
+                ka_slope = _safe_slope(ka_hat.flatten(), ka_true.flatten())
+                metrics[f"ka_pearson_{ct}"] = ka_r
+                metrics[f"ka_slope_{ct}"] = ka_slope
+
+                for c, cname in enumerate(comp_names):
+                    metrics[f"ka_pearson_{cname}_{ct}"] = _safe_pearson(
+                        ka_hat[:, c], ka_true[:, c])
+                    metrics[f"ka_slope_{cname}_{ct}"] = _safe_slope(
+                        ka_hat[:, c], ka_true[:, c])
+
+                ka_r_app = metrics.get(f"ka_pearson_App_{ct}", 0.0)
+                ka_r_tau = metrics.get(f"ka_pearson_Tau_{ct}", 0.0)
+                ka_r_int = metrics.get(f"ka_pearson_Int_{ct}", 0.0)
+                print(f"      KA aggregate : r={ka_r:.3f} "
+                      f"[App={ka_r_app:.3f} Tau={ka_r_tau:.3f} Int={ka_r_int:.3f}] "
+                      f"slope={ka_slope:.3f} (n_kin={len(eligible_kinases)})")
+
         # Scenario 5 supplementary check
         if scen == "rna_discordant" and data.r_tensor is not None:
             for k, ct in enumerate(est_types):
@@ -812,7 +858,8 @@ def validate_synthetic_phospho(
             metrics=metrics,
             detail=f"Scenario {scen}: {'PASS' if all_passed else 'FAIL'}",
         )
-        _save_result(result, f"synthetic_{scen}.json")
+        suffix = "_rho0" if fix_rho_zero else ""
+        _save_result(result, f"synthetic_{scen}{suffix}.json")
         results.append(result)
 
     return results
@@ -1545,6 +1592,10 @@ def print_validation_summary() -> None:
         ("§6.1 Synthetic: dense", "synthetic_dense.json"),
         ("§6.1 Synthetic: de_novo", "synthetic_de_novo.json"),
         ("§6.1 Synthetic: rna_discordant", "synthetic_rna_discordant.json"),
+        ("§6.1 Synthetic: kinase_program", "synthetic_kinase_program.json"),
+        ("§6.1 Synthetic: low_rank", "synthetic_low_rank.json"),
+        ("§6.1 Synthetic: kinase_program (ρ=0)", "synthetic_kinase_program_rho0.json"),
+        ("§6.1 Synthetic: low_rank (ρ=0)", "synthetic_low_rank_rho0.json"),
         ("§6.1.1 Pseudobulk Stress", "pseudobulk_stress.json"),
         ("§6.3 Perturbation (σ=0.03)", "perturbation_0.03.json"),
         ("§6.3 Perturbation (σ=0.05)", "perturbation_0.05.json"),
@@ -1646,6 +1697,8 @@ def main() -> None:
                         help="Comma-separated pair of conditions for pairwise validation "
                         "(e.g., WTyp,AppP). Subsets data to these conditions before "
                         "running synthetic validation.")
+    parser.add_argument("--fix-rho-zero", action="store_true",
+                        help="Fix rho≈0 during synthetic refit (extreme ridge on rho)")
     parser.add_argument("--summary", action="store_true", help="Print cached results summary")
     args = parser.parse_args()
 
@@ -1690,7 +1743,8 @@ def main() -> None:
             data_for_synth = _subset_data_by_conditions(data, conds)
         validate_synthetic_phospho(data_for_synth, model, scenario=args.scenario,
                                    n_workers=n_workers, site_subsample=site_sub,
-                                   max_outer_iter=args.max_outer_iter)
+                                   max_outer_iter=args.max_outer_iter,
+                                   fix_rho_zero=args.fix_rho_zero)
 
     if args.all or args.pseudobulk:
         validate_pseudobulk_stress(data, model, n_workers=n_workers,

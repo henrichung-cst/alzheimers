@@ -318,6 +318,7 @@ SYNTH_SPARSE_FRAC = 0.05
 SYNTH_SPARSE_NTYPES = 2
 SYNTH_DENSE_FRAC = 0.25
 SYNTH_RNA_RHO_GRID = [0.0, 0.2, 0.4, 0.6]
+SYNTH_MIN_KINASE_SUBSTRATES = 5  # min substrates for kinase-level assessment
 
 # --- §6.3: Perturbation audit ---
 PERTURB_SIGMA_GRID = [0.03, 0.05, 0.07]
