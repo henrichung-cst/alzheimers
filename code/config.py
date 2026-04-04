@@ -1,119 +1,115 @@
 import os
 
-# --- Site classification ---
-# Percentile-based classification (primary method)
-PERCENT_RANK = "logFC"
-PERCENT_THRESH = 5  # top/bottom 5% of sites by LFC
-# Foreground quality gate: the 95th percentile of |LFC| must exceed this value
-# for a comparison to be eligible for enrichment. When the deconvoluted signal
-# is too low (e.g. Excitatory-Pyramidal, mean intensity ~0.05), the top 5% of
-# sites have |LFC| < 0.001 and the percentile method runs Fisher's test on
-# noise, producing spurious kinase hits.  A threshold of 0.1 requires that
-# at least the extreme 5% of sites show a ~7% fold change.
-MIN_FOREGROUND_LFC = 0.1
+# =============================================================================
+# Core paths
+# =============================================================================
 
-# --- Enrichment significance (tiered) ---
-# LFF: minimum |log2 frequency factor| for a kinase to be called significant.
-LFF_THRESH = .01
-# PVAL_SIG: adjusted p-value threshold for statistical significance.
-# Used for: thick borders on bubble maps, "significant" tier in tables,
-# narrative claims in reports.
-PVAL_SIG = .1
-# PVAL_DISPLAY: lenient p-value ceiling for the "display" tier.
-# A kinase cell qualifies as "display" if it is in the top/bottom
-# BUBBLE_PERCENTILE% of LFF AND adj_pval < PVAL_DISPLAY.
-# Kinases that are neither "significant" nor "display" in any cell
-# are excluded from visualizations.  Tables still contain all kinases.
-PVAL_DISPLAY = .5
-KL_METHOD = "percentile_rank"
-KL_THRESH = 15
-KIN_TYPE = "ser_thr"
-MAX_COMPARISONS = None
-
-# --- Bubble map display ---
-# --- Multiple testing correction method ---
-# "bh"          — original BH correction from kinase-library (backward compatible)
-# "permutation" — permutation-based empirical p-values on FET
-# "meff_bh"     — BH correction using m_eff (effective number of independent tests)
-CORRECTION_METHOD = "permutation"
-N_PERMUTATIONS = 1000
-PERMUTATION_SEED = 42
-N_WORKERS = 12
-
-BUBBLE_PERCENTILE = 5  # show kinases in top/bottom N% of LFF per comparison
-
-# --- Substrate evidence tiers ---
-SUBSTRATE_TIER_BOUNDARIES = (0.5, 0.75)  # (moderate, strong) median |LFC| cutoffs
-
-# --- File paths ---
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SONG_WORKSPACE_DIR = os.path.join(REPO_ROOT, "data", "incytr_collections", "song")
+SONG_PRIMARY_DIR = os.path.join(SONG_WORKSPACE_DIR, "primary")
+SONG_PRIMARY_PROTEOMICS_DIR = os.path.join(SONG_PRIMARY_DIR, "proteomics")
+SONG_TRANSCRIPTOMICS_DIR = os.path.join(SONG_WORKSPACE_DIR, "transcriptomics")
+SONG_SNRNA_SAMPLE_MANIFEST = os.path.join(
+    SONG_TRANSCRIPTOMICS_DIR, "snrna_sample_manifest.csv"
+)
 SONG_PROTEOMICS_DIR = os.path.join(SONG_WORKSPACE_DIR, "proteomics")
 SONG_ANALYSIS_SUPPORT_DIR = os.path.join(SONG_WORKSPACE_DIR, "analysis_support")
 SONG_ANALYSIS_CACHE_DIR = os.path.join(SONG_WORKSPACE_DIR, "analysis_cache")
 
-INPUT_FILES = {
-    "ser_thr": os.path.join(SONG_PROTEOMICS_DIR, "ps_yuyu_deconvoluted.csv"),
-    "tyrosine": os.path.join(SONG_PROTEOMICS_DIR, "py_yuyu_deconvoluted.csv"),
-}
-MEDIAN_CLUSTER_SIZES_FILE = os.path.join(SONG_ANALYSIS_SUPPORT_DIR, "median_cluster_sizes.csv")
-MAPPING_CACHE_FILE = os.path.join(SONG_ANALYSIS_CACHE_DIR, "kinase_to_gene_mapping.csv")
-ALLEN_EXPRESSION_CACHE_FILE = os.path.join(SONG_ANALYSIS_CACHE_DIR, "allen_expression_cache.csv")
-ORGANISM = "mouse"
-KEPT_RANKS = None # Number of top kinases to keep in summary. None for all.
-
-CONDITION_COLORS = {"Ttau": "#1f77b4", "AppP": "#ff7f0e", "ApTt": "#d62728"}
-GENDER_MAP = {"ma": "M"}
-
-# Bulk data settings
-BULK_INPUT_FILES = {
-    "ser_thr": os.path.join(SONG_PROTEOMICS_DIR, "source", "imac_median.csv"),
-    "tyrosine": os.path.join(SONG_PROTEOMICS_DIR, "source", "py_median.csv"),
-}
-BULK_GENDER_MAP = {"M": "M"}
-BULK_CONDITION_MAP = {"Ttau": "T22", "AppP": "APP", "ApTt": "T22/APP"}  # canonical → column suffix
-
-
-def get_input_file(kin_type=None):
-    if kin_type is None:
-        kin_type = KIN_TYPE
-    return INPUT_FILES[kin_type]
-
-
-def get_bulk_input_file(kin_type=None):
-    if kin_type is None:
-        kin_type = KIN_TYPE
-    return BULK_INPUT_FILES[kin_type]
-
-
-INPUT_FILE = get_input_file()
-BULK_INPUT_FILE = get_bulk_input_file()
-
+EXTERNAL_DATA_DIR = os.path.join(REPO_ROOT, "data", "external")
 
 # =============================================================================
-# SAP Model Configuration (Hurdle-Tweedie condition-specific deconvolution)
+# Live pipeline: enrichment parameters
 # =============================================================================
 
-# --- Data paths ---
-A_OBS_FILE = os.path.join(
-    SONG_WORKSPACE_DIR, "method_records", "aobs_desp_standardized",
-    "inputs", "A_obs_fractions.tsv",
-)
-AGGEXP_FILE = os.path.join(
-    SONG_WORKSPACE_DIR, "method_records", "legacy_deconvolution_20250721",
-    "inputs", "aggexp.csv",
-)
-DESP_BASELINE_FILE = INPUT_FILES["ser_thr"]  # ps_yuyu_deconvoluted.csv
-BULK_PHOSPHO_FILE = BULK_INPUT_FILES["ser_thr"]  # imac_median.csv
-SAMPLEKEY_FILE = os.path.join(SONG_WORKSPACE_DIR, "source", "metadata", "yuyu_samplekey.csv")
-CLUSTERSIZE_FILE = os.path.join(
-    SONG_WORKSPACE_DIR, "method_records", "legacy_deconvolution_20250721",
-    "inputs", "yuyu_clustersize.csv",
-)
-KLDATA_FILE = os.path.join(SONG_WORKSPACE_DIR, "kinase", "kldata.csv")
+# MEA enrichment (GSEA-based, replaces DiffPhos Fisher)
+KL_METHOD = "percentile_rank"
+KL_THRESH = 15
+MEA_FDR_THRESH = 0.25           # standard GSEA FDR threshold
+MEA_PERMUTATION_NUM = 1000      # GSEApy prerank permutations
+MEA_SEED = 112123               # GSEApy default seed
 
-# --- 5+1 cell-type pooling (SAP §2.1) ---
-# Maps each of the 10 A_obs cell types to a resolved SAP type.
+# Unified attribution
+SEA_AD_LFC_MIN = 0.1            # minimum |sea_ad_lfc| for moderate confidence
+SPECIFICITY_HIGH = 0.4          # WMB specificity threshold for high confidence
+SPECIFICITY_LOW = 0.2           # WMB specificity threshold for moderate confidence
+
+# Shared permutation parameters (attribution recovery)
+N_PERMS = 1000
+PERM_SEED = 42
+
+# Deprecated: DiffPhos parameters (retained for archived code only)
+PERCENT_RANK = "logFC"
+PERCENT_THRESH = 5
+LFF_THRESH = .01
+PVAL_SIG = .1
+
+# =============================================================================
+# Live pipeline: output directories
+# =============================================================================
+
+DATA_INGEST_OUTPUT_DIR = os.path.join("outputs", "reports", "data_ingest")
+KINASE_ATTRIBUTION_OUTPUT_DIR = os.path.join("outputs", "reports", "kinase_attribution")
+ATTRIBUTION_RECOVERY_OUTPUT_DIR = os.path.join("outputs", "reports", "attribution_recovery")
+
+# =============================================================================
+# Supporting: external atlas acquisition (atlas_reference.py)
+# =============================================================================
+
+ALLEN_ABC_CACHE_DIR = os.path.join(EXTERNAL_DATA_DIR, "allen_abc")
+SEA_AD_DIR = os.path.join(EXTERNAL_DATA_DIR, "sea_ad")
+ALLEN_AGING_DIR = os.path.join(EXTERNAL_DATA_DIR, "allen_aging")
+ATLAS_REFERENCE_OUTPUT_DIR = os.path.join("outputs", "reports", "atlas_reference")
+
+# Spot-check kinases for WMB expression validation
+WMB_SPOT_CHECK_KINASES = ["Gsk3b", "Cdk5", "Camk2a", "Mapk1", "Lrrk2"]
+
+# ABC Atlas dataset keys
+WMB_DATASET_KEY = "WMB-10Xv3"
+WMB_REPR_REGION = "WMB-10Xv3-HPF"
+AGING_DATASET_KEY = "Zeng-Aging-Mouse-10Xv3"
+
+# All 13 WMB-10Xv3 region keys (log2 variants only)
+WMB_ALL_REGION_KEYS = [
+    "WMB-10Xv3-CB/log2",
+    "WMB-10Xv3-CTXsp/log2",
+    "WMB-10Xv3-HPF/log2",
+    "WMB-10Xv3-HY/log2",
+    "WMB-10Xv3-Isocortex-1/log2",
+    "WMB-10Xv3-Isocortex-2/log2",
+    "WMB-10Xv3-MB/log2",
+    "WMB-10Xv3-MY/log2",
+    "WMB-10Xv3-OLF/log2",
+    "WMB-10Xv3-P/log2",
+    "WMB-10Xv3-PAL/log2",
+    "WMB-10Xv3-STR/log2",
+    "WMB-10Xv3-TH/log2",
+]
+
+# SEA-AD access
+SEA_AD_S3_BUCKET = "sea-ad-single-cell-profiling"
+
+# =============================================================================
+# Supporting: WMB expression export for Track B
+# =============================================================================
+
+WMB_EXPRESSION_OUTPUT_DIR = os.path.join("outputs", "reports", "wmb_expression")
+WMB_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_kinase_expression.csv")
+WMB_REGIONAL_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_regional_kinase_expression.csv")
+WMB_PROTEOME_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_proteome_expression.csv")
+PROTEOME_GENE_LIST_FILE = os.path.join(DATA_INGEST_OUTPUT_DIR, "total_proteome_genes.txt")
+TIER1_CONDITION_TO_CONTRAST = {"AppP": "App", "Ttau": "Tau", "ApTt": "Int"}
+
+# =============================================================================
+# Supporting: shared cell-type definitions and data paths
+#
+# The 5+1 cell-type pooling, factorial design, and SAP data paths are shared
+# infrastructure used by the live pipeline,
+# supporting scripts (atlas_reference, wmb_expression), and archived SAP code.
+# =============================================================================
+
+# --- 5+1 cell-type pooling ---
+# Maps each of the 10 A_obs cell types to a resolved type.
 AOBS_POOL_MAP = {
     "Excitatory neurons": "Excitatory_neurons",
     "Oligodendrocytes":   "Oligodendrocytes",
@@ -127,8 +123,7 @@ AOBS_POOL_MAP = {
     "Other":              "Other",
 }
 
-# Maps DESP column cell-type suffixes to resolved SAP types.
-# DESP uses broad labels: Glut (glutamatergic/excitatory), Gaba (GABAergic/inhibitory).
+# Maps DESP column cell-type suffixes to resolved types.
 DESP_POOL_MAP = {
     "Glut":               "Excitatory_neurons",
     "Oligodendrocytes":   "Oligodendrocytes",
@@ -140,9 +135,7 @@ DESP_POOL_MAP = {
     "OPCs":               "Other",
 }
 
-# Maps aggexp fine-grained cluster name prefixes to resolved SAP types.
-# Prefixes are matched against the row index after stripping the trailing
-# sample number (e.g. "Astrocytes14" → prefix "Astrocytes").
+# Maps aggexp fine-grained cluster name prefixes to resolved types.
 AGGEXP_POOL_MAP = {
     # Excitatory neurons
     "Excitatory-Rorb":        "Excitatory_neurons",
@@ -195,12 +188,12 @@ SAP_CELLTYPES = [
 # Only the first 5 receive condition-effect estimates (Delta).
 SAP_ESTIMATED_CELLTYPES = SAP_CELLTYPES[:5]
 
-# --- Factorial design (SAP §3.4) ---
+# --- Factorial design ---
 SAP_CONDITIONS = ["WTyp", "AppP", "Ttau", "ApTt"]
 SAP_TIMEPOINTS = ["2mo", "4mo", "6mo"]
 SAP_GENDERS = ["ma", "fe"]
 
-# 2×2 Amyloid × Tau factorial indicator matrix (SAP §3.4)
+# 2×2 Amyloid × Tau factorial indicator matrix
 # Keys: condition → (App indicator, Tau indicator, App×Tau indicator)
 SAP_FACTORIAL = {
     "WTyp": (0, 0, 0),
@@ -209,66 +202,25 @@ SAP_FACTORIAL = {
     "ApTt": (1, 1, 1),
 }
 
-# --- Pre-fit diagnostic thresholds (SAP §6.0) ---
-CONDITION_NUMBER_MAX = 5e3
-COMPOSITION_MIN_RANK = 5
-COMPOSITION_MIN_SV = 0.01
-MAX_EFFECTIVE_DOF = 20
-MIN_RESIDUAL_DOF = 4
+# --- Data paths ---
+A_OBS_FILE = os.path.join(
+    SONG_WORKSPACE_DIR, "method_records", "aobs_desp_standardized",
+    "inputs", "A_obs_fractions.tsv",
+)
+AGGEXP_FILE = os.path.join(
+    SONG_WORKSPACE_DIR, "method_records", "legacy_deconvolution_20250721",
+    "inputs", "aggexp.csv",
+)
+DESP_BASELINE_FILE = os.path.join(SONG_PROTEOMICS_DIR, "ps_yuyu_deconvoluted.csv")
+BULK_PHOSPHO_FILE = os.path.join(SONG_PROTEOMICS_DIR, "source", "imac_median.csv")
+SAMPLEKEY_FILE = os.path.join(SONG_WORKSPACE_DIR, "source", "metadata", "yuyu_samplekey.csv")
+CLUSTERSIZE_FILE = os.path.join(
+    SONG_WORKSPACE_DIR, "method_records", "legacy_deconvolution_20250721",
+    "inputs", "yuyu_clustersize.csv",
+)
+KLDATA_FILE = os.path.join(SONG_WORKSPACE_DIR, "kinase", "kldata.csv")
 
-# --- Feature filtering (SAP §2.5) ---
-MIN_SAMPLE_DETECTION = 6  # site must be nonzero in >= 6 of 24 samples
-
-# --- RNA preprocessing (SAP §2.2) ---
-MIN_GENE_DETECTION = 12  # gene must be nonzero in >= 12 of 24 samples
-
-# Phosphatase gene families for §3.2.1 covariate construction.
-# No site-specific phosphatase-substrate database is available, so these are
-# used as a global opposing term in the kinase-phosphatase balance covariate.
-PHOSPHATASE_GENE_PREFIXES = [
-    "Ppp", "Ptpn", "Ptpr", "Dusp", "Ppm", "Ssh", "Ctdsp", "Ctds",
-]
-PHOSPHATASE_GENES_EXTRA = [
-    "Pten", "Cdc25a", "Cdc25b", "Cdc25c", "Inpp5d", "Inpp5e",
-    "Inpp4a", "Inpp4b", "Synj1", "Synj2", "Mtmr1", "Mtmr2",
-]
-
-# Maps clustersize.csv row names to resolved SAP types for sample fingerprinting.
-# =============================================================================
-# Phase 2: Hurdle-Tweedie Model Hyperparameters (§3–§4)
-# =============================================================================
-
-# --- Tweedie power parameter (§3.1) ---
-TWEEDIE_P_GRID = [1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8]
-
-# --- Group Lasso / LOCO-CV grids (§4) ---
-GAMMA_GRID = [0, 0.5, 1.0, 1.5, 2.0]     # CVS adaptive weight exponent (§4.3)
-ETA_GRID = [2.0, 2.5, 3.0, 4.0, 5.0]     # interaction penalty multiplier (§4.4)
-ETA_MIN = 2.0
-LAMBDA_RHO_GRID = [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]  # ridge penalty on rho_j (§3.2.1)
-N_INTENSITY_STRATA = 4                     # quartile-based intensity strata (§4.2)
-N_LOCO_FOLDS = 3                           # disease conditions only, WTyp excluded (§4.2)
-N_BOOTSTRAP = 500                          # residual block bootstrap (§7.2)
-
-# --- Two-stage LOCO-CV (§4.2 implementation) ---
-# Stage 1: search (λ, λ_ρ) with fixed η, γ defaults
-LOCO_STAGE1_ETA_DEFAULT = 2.0
-LOCO_STAGE1_GAMMA_DEFAULT = 0.5
-# Stage 2: search (η, γ) with best (λ, λ_ρ) from stage 1
-# (uses existing ETA_GRID and GAMMA_GRID)
-LAMBDA_GRID_FAST_N = 5                     # 5-point log grid for --fit-fast
-LAMBDA_GRID_FULL_N = 8                     # 8-point log grid for --fit
-
-# --- IRLS convergence (§3.5) ---
-IRLS_MAX_ITER = 50
-IRLS_TOL = 1e-6
-OUTER_MAX_ITER = 80
-OUTER_TOL = 1e-4
-
-# --- VIF diagnostic (§6.0) ---
-VIF_THRESHOLD = 10
-VIF_PASS_FRACTION = 0.90
-
+# Maps clustersize.csv row names to resolved types for sample fingerprinting.
 CLUSTERSIZE_POOL_MAP = {
     "Excitatory_neurons": [
         "Excitatory-Rorb", "Excitatory-Pyramidal", "Excitatory-Pyramidal-Satb2-Cux2",
@@ -289,20 +241,139 @@ CLUSTERSIZE_POOL_MAP = {
     "Microglia": ["Microglia"],
 }
 
+# --- Pre-fit diagnostic thresholds ---
+CONDITION_NUMBER_MAX = 5e3
+COMPOSITION_MIN_RANK = 5
+COMPOSITION_MIN_SV = 0.01
+MAX_EFFECTIVE_DOF = 20
+MIN_RESIDUAL_DOF = 4
+
+# --- Feature filtering ---
+MIN_SAMPLE_DETECTION = 6  # site must be nonzero in >= 6 of 24 samples
+
+# --- RNA preprocessing ---
+MIN_GENE_DETECTION = 12  # gene must be nonzero in >= 12 of 24 samples
+
+# Phosphatase gene families for kinase-phosphatase balance covariate.
+PHOSPHATASE_GENE_PREFIXES = [
+    "Ppp", "Ptpn", "Ptpr", "Dusp", "Ppm", "Ssh", "Ctdsp", "Ctds",
+]
+PHOSPHATASE_GENES_EXTRA = [
+    "Pten", "Cdc25a", "Cdc25b", "Cdc25c", "Inpp5d", "Inpp5e",
+    "Inpp4a", "Inpp4b", "Synj1", "Synj2", "Mtmr1", "Mtmr2",
+]
+
 # =============================================================================
-# Phase 3: Validation Suite (§5, §6.1–§6.5)
+# Archived: deconvoluted cluster analysis (kl_analysis_clusters.py)
+#
+# Settings below this line are used only by archived or legacy code.
+# They are retained for reproducibility but are not part of the live pipeline.
 # =============================================================================
 
-# --- Output paths ---
+# Foreground quality gate for deconvoluted enrichment
+MIN_FOREGROUND_LFC = 0.1
+
+# Display tier (lenient threshold for bubble map inclusion)
+PVAL_DISPLAY = .5
+BUBBLE_PERCENTILE = 5  # show kinases in top/bottom N% of LFF per comparison
+
+# Multiple testing correction method
+CORRECTION_METHOD = "permutation"
+N_PERMUTATIONS = 1000
+PERMUTATION_SEED = 42
+N_WORKERS = 12
+
+KIN_TYPE = "ser_thr"
+MAX_COMPARISONS = None
+
+INPUT_FILES = {
+    "ser_thr": os.path.join(SONG_PROTEOMICS_DIR, "ps_yuyu_deconvoluted.csv"),
+    "tyrosine": os.path.join(SONG_PROTEOMICS_DIR, "py_yuyu_deconvoluted.csv"),
+}
+MEDIAN_CLUSTER_SIZES_FILE = os.path.join(SONG_ANALYSIS_SUPPORT_DIR, "median_cluster_sizes.csv")
+MAPPING_CACHE_FILE = os.path.join(SONG_ANALYSIS_CACHE_DIR, "kinase_to_gene_mapping.csv")
+ALLEN_EXPRESSION_CACHE_FILE = os.path.join(SONG_ANALYSIS_CACHE_DIR, "allen_expression_cache.csv")
+ORGANISM = "mouse"
+KEPT_RANKS = None  # Number of top kinases to keep in summary. None for all.
+
+CONDITION_COLORS = {"Ttau": "#1f77b4", "AppP": "#ff7f0e", "ApTt": "#d62728"}
+GENDER_MAP = {"ma": "M"}
+
+# Substrate evidence tiers (sap_tier_annotation.py)
+SUBSTRATE_TIER_BOUNDARIES = (0.5, 0.75)
+
+# =============================================================================
+# Archived: bulk analysis (kl_analysis_bulk.py)
+# =============================================================================
+
+BULK_INPUT_FILES = {
+    "ser_thr": os.path.join(SONG_PROTEOMICS_DIR, "source", "imac_median.csv"),
+    "tyrosine": os.path.join(SONG_PROTEOMICS_DIR, "source", "py_median.csv"),
+}
+BULK_GENDER_MAP = {"M": "M"}
+BULK_CONDITION_MAP = {"Ttau": "T22", "AppP": "APP", "ApTt": "T22/APP"}
+
+
+def get_input_file(kin_type=None):
+    if kin_type is None:
+        kin_type = KIN_TYPE
+    return INPUT_FILES[kin_type]
+
+
+def get_bulk_input_file(kin_type=None):
+    if kin_type is None:
+        kin_type = KIN_TYPE
+    return BULK_INPUT_FILES[kin_type]
+
+
+INPUT_FILE = get_input_file()
+BULK_INPUT_FILE = get_bulk_input_file()
+
+# =============================================================================
+# Archived: SAP model hyperparameters
+# =============================================================================
+
+# Tweedie power parameter
+TWEEDIE_P_GRID = [1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8]
+
+# Group Lasso / LOCO-CV grids
+GAMMA_GRID = [0, 0.5, 1.0, 1.5, 2.0]
+ETA_GRID = [2.0, 2.5, 3.0, 4.0, 5.0]
+ETA_MIN = 2.0
+LAMBDA_RHO_GRID = [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
+N_INTENSITY_STRATA = 4
+N_LOCO_FOLDS = 3
+N_BOOTSTRAP = 500
+
+# Two-stage LOCO-CV
+LOCO_STAGE1_ETA_DEFAULT = 2.0
+LOCO_STAGE1_GAMMA_DEFAULT = 0.5
+LAMBDA_GRID_FAST_N = 5
+LAMBDA_GRID_FULL_N = 8
+
+# IRLS convergence
+IRLS_MAX_ITER = 50
+IRLS_TOL = 1e-6
+OUTER_MAX_ITER = 80
+OUTER_TOL = 1e-4
+
+# VIF diagnostic
+VIF_THRESHOLD = 10
+VIF_PASS_FRACTION = 0.90
+
+# =============================================================================
+# Archived: SAP validation suite
+# =============================================================================
+
 SAP_VALIDATION_DIR = os.path.join(SONG_ANALYSIS_CACHE_DIR, "sap_validation")
 SAP_MODEL_FILE = os.path.join(SONG_ANALYSIS_CACHE_DIR, "sap_model_fit.npz")
 
-# --- §5: bMIND benchmark ---
-BMIND_CONCORDANCE_R_THRESH = 0.3      # site-level Pearson r
-BMIND_JACCARD_THRESH = 0.25           # kinase enrichment Jaccard
-BMIND_TOP_K_KINASES = 20              # for Jaccard calculation
+# bMIND benchmark
+BMIND_CONCORDANCE_R_THRESH = 0.3
+BMIND_JACCARD_THRESH = 0.25
+BMIND_TOP_K_KINASES = 20
 
-# --- §6.1: Synthetic phospho-validation ---
+# Synthetic phospho-validation
 SYNTH_PEARSON_OVERALL = 0.60
 SYNTH_PEARSON_PER_CELLTYPE = {
     "Excitatory_neurons": 0.70,
@@ -318,17 +389,23 @@ SYNTH_SPARSE_FRAC = 0.05
 SYNTH_SPARSE_NTYPES = 2
 SYNTH_DENSE_FRAC = 0.25
 SYNTH_RNA_RHO_GRID = [0.0, 0.2, 0.4, 0.6]
-SYNTH_MIN_KINASE_SUBSTRATES = 5  # min substrates for kinase-level assessment
-SYNTH_FM_RIDGE_FRAC = 0.1  # factor model Ridge = frac * mean(diag(W@W.T))
+SYNTH_MIN_KINASE_SUBSTRATES = 5
+SYNTH_FM_RIDGE_FRAC = 0.1
 
-# --- §6.3: Perturbation audit ---
+# Perturbation audit
 PERTURB_SIGMA_GRID = [0.03, 0.05, 0.07]
 PERTURB_N_ITER = 200
-PERTURB_COLLAPSE_THRESH = 0.10        # >10% collapse → flag
+PERTURB_COLLAPSE_THRESH = 0.10
 
-# --- §6.4: Permutation null ---
+# Permutation null
 PERM_NULL_N = 500
-PERM_NULL_SPARSITY_TOLERANCE = 0.10   # 10% relative inflation allowed
+PERM_NULL_SPARSITY_TOLERANCE = 0.10
 
-# --- §6.5: Residual orthogonality ---
+# Residual orthogonality
 RESIDUAL_ORTH_ALPHA = 0.05
+
+# =============================================================================
+# Archived: correlation-based cell-type matching
+# =============================================================================
+
+MODULE5C_OUTPUT_DIR = os.path.join("outputs", "reports", "module5c")
