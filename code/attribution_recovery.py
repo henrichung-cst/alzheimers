@@ -61,7 +61,7 @@ def step_cross_contrast():
 
     # Build matrix: (kinase, cell_type) x contrast, value = combined_score
     pivot = attr.pivot_table(
-        index=["kinase", "gene_symbol", "cell_type_5plus1"],
+        index=["kinase", "gene_symbol", "cell_type"],
         columns="contrast",
         values="combined_score",
         aggfunc="first",
@@ -90,7 +90,7 @@ def step_cross_contrast():
     top_pairs = pivot[pivot["n_contrasts"] >= 2].head(30)
     if len(top_pairs) > 0:
         labels = top_pairs.apply(
-            lambda r: f"{r['kinase']} / {r['cell_type_5plus1']}", axis=1)
+            lambda r: f"{r['kinase']} / {r['cell_type']}", axis=1)
         plot_data = top_pairs[score_cols].values
 
         fig, ax = plt.subplots(
@@ -140,12 +140,12 @@ def step_comprehensive():
     cc_lookup = {}
     if len(cc_df) > 0 and "n_contrasts" in cc_df.columns:
         for _, row in cc_df.iterrows():
-            key = (row["kinase"], row["cell_type_5plus1"])
+            key = (row["kinase"], row["cell_type"])
             cc_lookup[key] = int(row["n_contrasts"])
 
     # Add cross-contrast count to attribution table
     attr["n_contrasts_attributed"] = attr.apply(
-        lambda r: cc_lookup.get((r["kinase"], r["cell_type_5plus1"]), 1),
+        lambda r: cc_lookup.get((r["kinase"], r["cell_type"]), 1),
         axis=1)
 
     # Load mechanism annotation if available
@@ -181,7 +181,7 @@ def step_comprehensive():
         print(f"    {conf}: {cnt}")
 
     print("\n  By cell type:")
-    for ct, cnt in attr["cell_type_5plus1"].value_counts().items():
+    for ct, cnt in attr["cell_type"].value_counts().items():
         print(f"    {ct}: {cnt}")
 
     print("\n  By contrast:")
@@ -190,7 +190,7 @@ def step_comprehensive():
 
     multi = attr[attr["n_contrasts_attributed"] >= 2]
     if len(multi) > 0:
-        n_multi = multi.groupby(["kinase", "cell_type_5plus1"]).ngroups
+        n_multi = multi.groupby(["kinase", "cell_type"]).ngroups
         print(f"\n  Kinase-CT pairs consistent across 2+ contrasts: {n_multi}")
 
     print("\n  S2 complete.")

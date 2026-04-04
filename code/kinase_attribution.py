@@ -79,23 +79,7 @@ QC_GENES = ["Mapt", "Gsk3b", "Akt1", "Mapk1", "Camk2a"]
 
 WMB_EXPRESSION_FILE = config.WMB_EXPRESSION_FILE
 
-# Import cell-type mapping keywords from atlas_reference
-try:
-    from atlas_reference import SUBCLASS_KEYWORDS as _BASE_SUBCLASS_KEYWORDS
-    _SUBCLASS_KEYWORDS = {
-        k: (v + ["Chandelier"] if k == "GABAergic_neurons" else v)
-        for k, v in _BASE_SUBCLASS_KEYWORDS.items()
-    }
-except ImportError:
-    _SUBCLASS_KEYWORDS = {
-        "Excitatory_neurons": ["IT", "ET", "CT", "NP", "L2/3", "L4", "L5",
-                               "L6", "Glut", "excitat"],
-        "GABAergic_neurons": ["Lamp5", "Sncg", "Vip", "Sst", "Pvalb",
-                              "GABA", "inhibit", "Chandelier"],
-        "Oligodendrocytes": ["Oligo"],
-        "Astrocytes": ["Astro"],
-        "Microglia": ["Micro", "PVM"],
-    }
+from atlas_reference import SUBCLASS_TO_5PLUS1 as _SUBCLASS_TO_5PLUS1
 
 
 # ---------------------------------------------------------------------------
@@ -783,16 +767,6 @@ def step_enrich():
 # Stage 3: Unified cell-type attribution (SEA-AD concordance + WMB expression)
 # ===========================================================================
 
-def _map_to_5plus1(cell_type_name):
-    """Map a SEA-AD supertype name to the 5+1 broad category."""
-    name_lower = cell_type_name.lower()
-    for category, keywords in _SUBCLASS_KEYWORDS.items():
-        for kw in keywords:
-            if kw.lower() in name_lower:
-                return category
-    return "Other"
-
-
 def _assign_confidence(concordance_score, wmb_specificity, sea_ad_lfc):
     """Assign attribution confidence from combined evidence."""
     if concordance_score <= 0:
@@ -838,8 +812,8 @@ def step_attribute():
         sea_ad_genes_upper = {g.upper(): g for g in adata.obs_names}
         supertypes = list(adata.var_names)
 
-        # Build supertype → 5+1 mapping
-        st_to_5plus1 = {st: _map_to_5plus1(st) for st in supertypes}
+        # Build supertype → subclass mapping from SEA-AD metadata
+        st_to_subclass = dict(zip(adata.var_names, adata.var["Subclass"]))
 
         # Pre-build gene index for O(1) lookups
         gene_to_idx = {g: i for i, g in enumerate(adata.obs_names)}
@@ -864,29 +838,31 @@ def step_attribute():
             else:
                 effects = np.asarray(effects).flatten()
 
-            # Aggregate to 5+1 categories
-            ct_effects = {}
-            ct_counts = {}
+            # Aggregate to subclass level (24 subclasses)
+            sc_effects = {}
+            sc_counts = {}
             for i, st in enumerate(supertypes):
-                cat = st_to_5plus1[st]
+                subclass = st_to_subclass[st]
                 val = effects[i]
                 if not np.isfinite(val):
                     continue
-                ct_effects.setdefault(cat, []).append(val)
-                ct_counts[cat] = ct_counts.get(cat, 0) + 1
+                sc_effects.setdefault(subclass, []).append(val)
+                sc_counts[subclass] = sc_counts.get(subclass, 0) + 1
 
-            for cat, vals in ct_effects.items():
+            for subclass, vals in sc_effects.items():
                 median_lfc = float(np.median(vals))
                 concordance = np.sign(nes) * median_lfc
+                parent_ct = _SUBCLASS_TO_5PLUS1.get(subclass, "Other")
                 sea_ad_rows.append({
                     "kinase": kinase,
                     "gene_symbol": gene,
                     "contrast": contrast,
                     "NES": nes,
                     "FDR": fdr,
-                    "cell_type_5plus1": cat,
+                    "cell_type": subclass,
+                    "cell_type_class": parent_ct,
                     "sea_ad_lfc": median_lfc,
-                    "sea_ad_n_supertypes": ct_counts[cat],
+                    "sea_ad_n_supertypes": sc_counts[subclass],
                     "concordance_score": concordance,
                 })
 
@@ -898,12 +874,12 @@ def step_attribute():
 
     sea_ad_df = pd.DataFrame(sea_ad_rows)
 
-    # 3d. WMB expression specificity (per kinase × cell type)
+    # 3d. WMB expression specificity (per kinase × subclass)
     wmb_spec = {}
     if os.path.exists(WMB_EXPRESSION_FILE):
         wmb = pd.read_csv(WMB_EXPRESSION_FILE)
         wmb_grouped = wmb.groupby(
-            [wmb["gene_symbol"].str.upper(), "cell_type_5plus1"]
+            [wmb["gene_symbol"].str.upper(), "cell_type"]
         )["specificity_score"].max()
         wmb_spec = wmb_grouped.to_dict()
         print(f"  WMB specificity: {len(wmb_spec)} (gene, cell_type) pairs loaded")
@@ -917,15 +893,16 @@ def step_attribute():
         for _, row in sig.iterrows():
             gene_upper = row["gene_symbol"].upper() if isinstance(
                 row["gene_symbol"], str) else ""
-            for ct in config.SAP_CELLTYPES:
-                spec = wmb_spec.get((gene_upper, ct), 0.0)
+            for subclass, parent_ct in _SUBCLASS_TO_5PLUS1.items():
+                spec = wmb_spec.get((gene_upper, subclass), 0.0)
                 attribution_rows.append({
                     "kinase": row["kinase"],
                     "gene_symbol": row["gene_symbol"],
                     "contrast": row["contrast"],
                     "NES": row["NES"],
                     "FDR": row["FDR"],
-                    "cell_type_5plus1": ct,
+                    "cell_type": subclass,
+                    "cell_type_class": parent_ct,
                     "sea_ad_lfc": np.nan,
                     "sea_ad_n_supertypes": 0,
                     "wmb_specificity": spec,
@@ -936,13 +913,9 @@ def step_attribute():
         unified = pd.DataFrame(attribution_rows)
     else:
         unified = sea_ad_df.copy()
-        unified["wmb_specificity"] = unified.apply(
-            lambda r: wmb_spec.get(
-                (r["gene_symbol"].upper() if isinstance(
-                    r["gene_symbol"], str) else "",
-                 r["cell_type_5plus1"]),
-                0.0),
-            axis=1)
+        genes_upper = unified["gene_symbol"].fillna("").str.upper()
+        keys = list(zip(genes_upper, unified["cell_type"]))
+        unified["wmb_specificity"] = [wmb_spec.get(k, 0.0) for k in keys]
         unified["combined_score"] = (
             unified["concordance_score"] * (0.5 + unified["wmb_specificity"]))
         unified["combined_confidence"] = unified.apply(
@@ -974,9 +947,13 @@ def step_attribute():
         for conf, cnt in attributed[
                 "combined_confidence"].value_counts().items():
             print(f"    {conf}: {cnt}")
-        print(f"\n  By cell type:")
+        print(f"\n  By cell type (subclass):")
         for ct, cnt in attributed[
-                "cell_type_5plus1"].value_counts().items():
+                "cell_type"].value_counts().items():
+            print(f"    {ct}: {cnt}")
+        print(f"\n  By cell type class (5+1):")
+        for ct, cnt in attributed[
+                "cell_type_class"].value_counts().items():
             print(f"    {ct}: {cnt}")
 
     # Save summary JSON
@@ -986,8 +963,10 @@ def step_attribute():
         "n_attributed": int(len(attributed)),
         "by_confidence": (attributed["combined_confidence"].value_counts()
                           .to_dict() if len(attributed) > 0 else {}),
-        "by_cell_type": (attributed["cell_type_5plus1"].value_counts()
+        "by_cell_type": (attributed["cell_type"].value_counts()
                          .to_dict() if len(attributed) > 0 else {}),
+        "by_cell_type_class": (attributed["cell_type_class"].value_counts()
+                               .to_dict() if len(attributed) > 0 else {}),
         "by_contrast": (attributed["contrast"].value_counts()
                         .to_dict() if len(attributed) > 0 else {}),
     }
@@ -1166,8 +1145,13 @@ def print_summary():
                 print(f"    {conf}: {cnt}")
         by_ct = summ.get("by_cell_type", {})
         if by_ct:
-            print(f"  By cell type:")
-            for ct, cnt in by_ct.items():
+            print(f"  By cell type (subclass):")
+            for ct, cnt in sorted(by_ct.items(), key=lambda x: -x[1]):
+                print(f"    {ct}: {cnt}")
+        by_ctc = summ.get("by_cell_type_class", {})
+        if by_ctc:
+            print(f"  By cell type class (5+1):")
+            for ct, cnt in sorted(by_ctc.items(), key=lambda x: -x[1]):
                 print(f"    {ct}: {cnt}")
     elif os.path.exists(attr_path):
         attr = pd.read_csv(attr_path)

@@ -29,10 +29,23 @@ MEA_FDR_THRESH = 0.25           # standard GSEA FDR threshold
 MEA_PERMUTATION_NUM = 1000      # GSEApy prerank permutations
 MEA_SEED = 112123               # GSEApy default seed
 
-# Unified attribution
+# Unified attribution: 24 SEA-AD subclasses used for cell-type attribution
+SEA_AD_SUBCLASSES = [
+    # GABAergic
+    "Chandelier", "Lamp5", "Lamp5 Lhx6", "Pax6", "Pvalb",
+    "Sncg", "Sst", "Sst Chodl", "Vip",
+    # Glutamatergic
+    "L2/3 IT", "L4 IT", "L5 ET", "L5 IT", "L5/6 NP",
+    "L6 CT", "L6 IT", "L6 IT Car3", "L6b",
+    # Non-neuronal
+    "Astrocyte", "Endothelial", "Microglia-PVM", "OPC",
+    "Oligodendrocyte", "VLMC",
+]
 SEA_AD_LFC_MIN = 0.1            # minimum |sea_ad_lfc| for moderate confidence
-SPECIFICITY_HIGH = 0.4          # WMB specificity threshold for high confidence
-SPECIFICITY_LOW = 0.2           # WMB specificity threshold for moderate confidence
+N_CELL_TYPES = len(SEA_AD_SUBCLASSES)
+# Thresholds are multiples of uniform (1/N): 2× for high, 1× for moderate
+SPECIFICITY_HIGH = 2.0 / N_CELL_TYPES   # ~0.083: ≥2× more specific than uniform
+SPECIFICITY_LOW = 1.0 / N_CELL_TYPES    # ~0.042: ≥1× uniform (above-average specificity)
 
 # Shared permutation parameters (attribution recovery)
 N_PERMS = 1000
