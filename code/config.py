@@ -103,7 +103,7 @@ WMB_ALL_REGION_KEYS = [
 SEA_AD_S3_BUCKET = "sea-ad-single-cell-profiling"
 
 # =============================================================================
-# Supporting: WMB expression export for Track B
+# Supporting: WMB expression export for unified attribution
 # =============================================================================
 
 WMB_EXPRESSION_OUTPUT_DIR = os.path.join("outputs", "reports", "wmb_expression")

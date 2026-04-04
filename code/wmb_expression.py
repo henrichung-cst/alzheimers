@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""WMB Expression Export: supporting surface for Track B attribution.
+"""WMB Expression Export: supporting surface for unified cell-type attribution.
 
 Computes per-cell-type kinase/phosphatase expression from the Allen Institute
 Whole Mouse Brain (WMB) 10Xv3 HPF dataset.  The output file
-(wmb_kinase_expression.csv) is consumed by kinase_attribution.py Track B and
-attribution_recovery.py.
+(wmb_kinase_expression.csv) is consumed by kinase_attribution.py unified
+attribution and attribution_recovery.py.
 
 Extracted from the archived pre-stoichiometry concordance logic to isolate
 the live supporting dependency.
@@ -572,7 +572,7 @@ def print_summary() -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="WMB Expression Export: supporting surface for Track B attribution"
+        description="WMB Expression Export: supporting surface for unified cell-type attribution"
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--run", action="store_true",
