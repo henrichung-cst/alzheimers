@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# data_ingest — Song proteomics pipeline entry point
 """Primary data ingestion and characterization for the Song proteomics pipeline.
 
 Reads the raw Song 72-animal TMT proteomics workbooks and produces the
@@ -488,6 +489,56 @@ def step_phospho_match():
 # ===========================================================================
 
 
+def _compute_subclass_fractions():
+    """Recompute snRNA composition fractions at SEA-AD subclass resolution.
+
+    Reads per-cluster-label cell counts from yuyu_clustersize.csv (46 labels ×
+    24 sample groups), maps labels to SEA-AD subclasses via
+    config.SNRNA_CLUSTER_TAXONOMY, sums counts per subclass per group, and
+    returns fractions (each group sums to 1).
+
+    Returns
+    -------
+    pd.DataFrame
+        Index: sample group IDs (24 rows, e.g., "fe_2mo_AppP").
+        Columns: subclass names that have nonzero counts (SEA-AD subclasses +
+        researcher categories like "Generic_excitatory", "Medium spiny neurons").
+    """
+    raw = pd.read_csv(config.CLUSTERSIZE_FILE, index_col=0)
+    # raw: rows = cluster labels, columns = 24 sample groups
+
+    # Map each row label → sea_ad_subclass
+    taxonomy = config.SNRNA_CLUSTER_TAXONOMY
+    label_to_subclass = {}
+    for label in raw.index:
+        if label.startswith("cluster-"):
+            label_to_subclass[label] = "Other"
+        elif label in taxonomy:
+            label_to_subclass[label] = taxonomy[label]["sea_ad_subclass"]
+        else:
+            raise ValueError(
+                f"SNRNA_CLUSTER_TAXONOMY is missing label: {label!r}. "
+                "Update config.SNRNA_CLUSTER_TAXONOMY to include this cluster."
+            )
+
+    raw["_subclass"] = raw.index.map(label_to_subclass)
+    grouped = raw.groupby("_subclass").sum()
+
+    # Convert counts → fractions (each sample group sums to 1)
+    fractions = grouped.div(grouped.sum(axis=0), axis=1).T
+    fractions.index.name = "sample_id"
+
+    # Drop columns that are all zero (no cells in any group)
+    fractions = fractions.loc[:, (fractions > 0).any(axis=0)]
+
+    n_subclasses = len(fractions.columns)
+    n_from_sea_ad = sum(1 for c in fractions.columns if c in config.SEA_AD_SUBCLASSES)
+    print(f"  Subclass fractions: {n_subclasses} categories "
+          f"({n_from_sea_ad} SEA-AD subclasses, "
+          f"{n_subclasses - n_from_sea_ad} researcher categories)")
+    return fractions
+
+
 def step_markers():
     """Identify cell-type markers from WMB atlas expression, test against proteome.
 
@@ -511,50 +562,31 @@ def step_markers():
     meta, quant, mapping = load_total_proteome()
     gene_upper = meta["Gene Symbol"].astype(str).str.upper()
 
-    # Load A_obs for snRNA-seq composition
-    aobs = pd.read_csv(config.A_OBS_FILE, sep="\t")
-    aobs = aobs.set_index("sample_id")
+    # Recompute snRNA composition fractions at subclass resolution
+    subclass_fracs = _compute_subclass_fractions()
+    available_frac_cols = set(subclass_fracs.columns)
 
-    # Map 24 SEA-AD subclasses to A_obs composition columns for correlation.
-    # Multiple subclasses map to the same A_obs column (e.g., all GABAergic
-    # subclasses → "Interneurons"). This is honest: specificity is reported at
-    # subclass resolution, correlation is validated at A_obs resolution.
-    subclass_to_aobs = {
-        # GABAergic subclasses
-        "Chandelier": "Interneurons",
-        "Lamp5": "Interneurons",
-        "Lamp5 Lhx6": "Interneurons",
-        "Pax6": "Interneurons",
-        "Pvalb": "Interneurons",
-        "Sncg": "Interneurons",
-        "Sst": "Interneurons",
-        "Sst Chodl": "Interneurons",
-        "Vip": "Interneurons",
-        # Glutamatergic subclasses
-        "L2/3 IT": "Excitatory neurons",
-        "L4 IT": "Excitatory neurons",
-        "L5 ET": "Excitatory neurons",
-        "L5 IT": "Excitatory neurons",
-        "L5/6 NP": "Excitatory neurons",
-        "L6 CT": "Excitatory neurons",
-        "L6 IT": "Excitatory neurons",
-        "L6 IT Car3": "Excitatory neurons",
-        "L6b": "Excitatory neurons",
-        # Non-neuronal subclasses
-        "Astrocyte": "Astrocytes",
-        "Oligodendrocyte": "Oligodendrocytes",
-        "Microglia-PVM": "Microglia",
-        "OPC": "OPCs",
-        "Endothelial": "Endothelial cells",
-        "VLMC": None,  # No A_obs equivalent
-    }
-    assert set(subclass_to_aobs) == set(config.SEA_AD_SUBCLASSES), (
-        "subclass_to_aobs keys out of sync with config.SEA_AD_SUBCLASSES"
-    )
+    # Map each WMB cell type → composition column.  For SEA-AD subclasses with
+    # cluster data the column is the subclass name itself; for subclasses with
+    # no snRNA clusters mapped (e.g., Pvalb, Sst, Chandelier) → None.
+    subclass_to_frac_col = {}
+    for sc in config.SEA_AD_SUBCLASSES:
+        subclass_to_frac_col[sc] = sc if sc in available_frac_cols else None
 
     # Pre-compute lookups used in the inner loop
     col_to_idx = {col: i for i, col in enumerate(quant.columns)}
+    gene_to_row = {}
+    for i, g in enumerate(gene_upper):
+        gene_to_row.setdefault(g, i)  # first occurrence wins
+
+    # Pre-compute snRNA animal → (quant column index, sample group ID) pairs
     snrna_animals = mapping[mapping["has_snrna_seq"]].copy()
+    snrna_pairs = []  # [(col_idx, group_id), ...]
+    for _, srow in snrna_animals.iterrows():
+        col = srow["column_name"]
+        gid = srow["phospho_group_id"]
+        if col in col_to_idx and gid in subclass_fracs.index:
+            snrna_pairs.append((col_to_idx[col], gid))
 
     records = []
     cell_types = wmb["cell_type"].unique()
@@ -565,15 +597,24 @@ def step_markers():
         ct_expr = ct_df[ct_df["binary_expressed"]].copy()
         ct_expr = ct_expr.sort_values("specificity_score", ascending=False)
 
-        aobs_col = subclass_to_aobs.get(ct)
+        frac_col = subclass_to_frac_col.get(ct)
+        has_composition = frac_col is not None
+
+        # Pre-extract composition values for this cell type (constant across genes)
+        if has_composition and snrna_pairs:
+            frac_dict = subclass_fracs[frac_col].to_dict()
+            comp_by_pair = [(ci, frac_dict[gid])
+                           for ci, gid in snrna_pairs
+                           if not np.isnan(frac_dict.get(gid, np.nan))]
+        else:
+            comp_by_pair = []
 
         for rank, (_, row) in enumerate(ct_expr.iterrows(), 1):
             gene_human = row["gene_symbol_human"]
             gene_mouse = row["gene_symbol_mouse"]
 
-            # Check if gene is in total proteome
-            mask = gene_upper == gene_human
-            found = mask.any()
+            row_idx = gene_to_row.get(gene_human)
+            found = row_idx is not None
 
             rec = {
                 "cell_type": ct,
@@ -587,27 +628,22 @@ def step_markers():
                 "mean_intensity": np.nan,
                 "correlation_with_snrna_composition": np.nan,
                 "correlation_pvalue": np.nan,
+                "composition_resolution": "subclass" if has_composition else "none",
             }
 
             if found:
-                idx = mask.values.nonzero()[0][0]
-                intensities = quant.iloc[idx].values.astype(float)
+                intensities = quant.iloc[row_idx].values.astype(float)
                 rec["mean_intensity"] = float(np.nanmean(intensities))
 
-                # Correlation with snRNA-seq composition
-                if aobs_col and aobs_col in aobs.columns and len(snrna_animals) > 0:
+                # Correlation with snRNA-seq composition at subclass resolution
+                if comp_by_pair:
                     prot_vals = []
                     comp_vals = []
-                    for _, srow in snrna_animals.iterrows():
-                        col = srow["column_name"]
-                        gid = srow["phospho_group_id"]
-                        if col in col_to_idx and gid in aobs.index:
-                            col_idx = col_to_idx[col]
-                            pv = intensities[col_idx]
-                            cv = aobs.loc[gid, aobs_col]
-                            if not np.isnan(pv) and not np.isnan(cv):
-                                prot_vals.append(pv)
-                                comp_vals.append(cv)
+                    for col_idx, cv in comp_by_pair:
+                        pv = intensities[col_idx]
+                        if not np.isnan(pv):
+                            prot_vals.append(pv)
+                            comp_vals.append(cv)
                     if len(prot_vals) >= 5:
                         r, p = stats.pearsonr(prot_vals, comp_vals)
                         rec["correlation_with_snrna_composition"] = float(r)
@@ -658,9 +694,14 @@ def step_markers():
         df.loc[ct_mask, "pi0"] = pi0_hat
         print(f"  {ct}: π₀={pi0_hat:.3f} ({len(pvals)} tests)")
 
+    # Add tissue category for researcher-level reporting
+    df["tissue_category"] = df["cell_type"].map(config.SUBCLASS_TO_TISSUE_CATEGORY)
+
     out_path = os.path.join(OUTPUT_DIR, "datadriven_marker_assessment.csv")
     df.to_csv(out_path, index=False)
-    print(f"\n  Saved: {out_path} ({len(df)} rows)")
+    n_with_comp = (df["composition_resolution"] == "subclass").sum()
+    print(f"\n  Saved: {out_path} ({len(df)} rows, "
+          f"{n_with_comp} with subclass-resolution composition)")
 
     # Summary: top markers per cell type
     for ct in sorted(cell_types):
@@ -672,7 +713,9 @@ def step_markers():
         sig_q = ct_df[ct_df["qvalue"] < 0.10]
         pi0 = ct_df["pi0"].dropna().iloc[0] if has_q.any() else np.nan
 
-        print(f"\n  {ct} (π₀={pi0:.3f}):")
+        comp_res = ct_df["composition_resolution"].iloc[0] if len(ct_df) > 0 else "none"
+        tissue = ct_df["tissue_category"].iloc[0] if len(ct_df) > 0 else "?"
+        print(f"\n  {ct} [{tissue}] (π₀={pi0:.3f}, composition={comp_res}):")
         print(f"    Expressed+specific: {n_total}, in proteome: {n_in_proteome}")
         print(f"    Raw p<0.05: {len(sig_raw)}, Storey q<0.10: {len(sig_q)}")
 

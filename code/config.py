@@ -49,6 +49,93 @@ N_CELL_TYPES = len(SEA_AD_SUBCLASSES)
 SPECIFICITY_HIGH = 2.0 / N_CELL_TYPES   # ~0.083: ≥2× more specific than uniform
 SPECIFICITY_LOW = 1.0 / N_CELL_TYPES    # ~0.042: ≥1× uniform (above-average specificity)
 
+# =============================================================================
+# snRNA cluster → SEA-AD subclass mapping (single authoritative edit point)
+# =============================================================================
+#
+# Maps each snRNA cluster label (row names in yuyu_clustersize.csv, as annotated
+# in kr_cluster_id_key.csv) to its SEA-AD subclass assignment.
+#
+# This is the single authoritative mapping from the Song/InCyTr snRNA-seq
+# cluster annotations to the 24 SEA-AD subclasses used throughout the pipeline.
+# Any change to the cluster → subclass relationship should be made HERE.
+#
+# Fields per entry:
+#   sea_ad_subclass  One of SEA_AD_SUBCLASSES, or a researcher category
+#                    ("Generic_excitatory", "Generic_inhibitory",
+#                     "Medium spiny neurons", "Other").
+#   confidence       "unambiguous" — clear 1:1 correspondence (marker genes / naming)
+#                    "close"       — strong but imperfect match; best available
+#                    "ambiguous"   — class-level match only; cannot resolve subclass
+#                    "unmapped"    — no cortical equivalent or unidentified cluster
+#   note             Free-text rationale for the mapping decision.
+#
+# Unnamed clusters (cluster-27, cluster-64, …) are handled programmatically:
+# any label starting with "cluster-" is assigned to "Other" / "unmapped".
+SNRNA_CLUSTER_TAXONOMY = {
+    # ── Unambiguous mappings ─────────────────────────────────────────────
+    "Astrocytes":              {"sea_ad_subclass": "Astrocyte",       "confidence": "unambiguous", "note": "Direct match"},
+    "Ptprz1-protoplasmic-astrocytes": {"sea_ad_subclass": "Astrocyte", "confidence": "unambiguous", "note": "Protoplasmic astrocyte subtype"},
+    "Excitatory-Rorb":         {"sea_ad_subclass": "L4 IT",           "confidence": "unambiguous", "note": "Rorb is the canonical L4 marker"},
+    "Excitatory-Pyramidal-Satb2-Cux2": {"sea_ad_subclass": "L2/3 IT", "confidence": "unambiguous", "note": "Satb2+Cux2 mark upper-layer IT"},
+    "Erbb4-VIP-inhibitory-neurons": {"sea_ad_subclass": "Vip",        "confidence": "unambiguous", "note": "VIP+ inhibitory"},
+    "VIP-positive-interneuron": {"sea_ad_subclass": "Vip",            "confidence": "unambiguous", "note": "VIP+ interneuron"},
+    "GABAergic-inhibitory-interneurons-VIP-positive": {"sea_ad_subclass": "Vip", "confidence": "unambiguous", "note": "VIP+ GABAergic"},
+    "Ndnf-positive-neurogliaform-inhibitory-interneurons-GABAergic": {"sea_ad_subclass": "Lamp5", "confidence": "unambiguous", "note": "Ndnf neurogliaform → Lamp5 subclass"},
+    "Oligodendrocytes":        {"sea_ad_subclass": "Oligodendrocyte", "confidence": "unambiguous", "note": "Direct match"},
+    "OPC":                     {"sea_ad_subclass": "OPC",             "confidence": "unambiguous", "note": "Direct match"},
+    "Microglia":               {"sea_ad_subclass": "Microglia-PVM",   "confidence": "unambiguous", "note": "Direct match"},
+    "Endothelial-cell":        {"sea_ad_subclass": "Endothelial",     "confidence": "unambiguous", "note": "Direct match"},
+    "Vascular-Leptomeningeal-Cells": {"sea_ad_subclass": "VLMC",      "confidence": "unambiguous", "note": "Direct match"},
+    # ── Close mappings ───────────────────────────────────────────────────
+    "Excitatory-Pyramidal":    {"sea_ad_subclass": "L5 IT",           "confidence": "close", "note": "Deep pyramidal without upper-layer markers → L5 IT"},
+    "Foxp2-Excitatory-Neurons-layers-6-and-2-3": {"sea_ad_subclass": "L6 CT", "confidence": "close", "note": "Foxp2 is a strong L6 marker"},
+    "Glutamatergic-excitatory-neurons-Cortical-layer-2-4-pyramidal-neurons": {"sea_ad_subclass": "L2/3 IT", "confidence": "close", "note": "Layer 2-4 pyramidal, closest to L2/3 IT"},
+    "Pericyte":                {"sea_ad_subclass": "VLMC",            "confidence": "close", "note": "Mural/perivascular, closest SEA-AD type is VLMC"},
+    # ── Ambiguous: class-level only ──────────────────────────────────────
+    "glutamatergic-excitatory-neurons": {"sea_ad_subclass": "Generic_excitatory", "confidence": "ambiguous", "note": "No layer/marker info to resolve subclass"},
+    "Excitatory-neurons":      {"sea_ad_subclass": "Generic_excitatory", "confidence": "ambiguous", "note": "No layer/marker info to resolve subclass"},
+    "Inhibitory-Neurons":      {"sea_ad_subclass": "Generic_inhibitory", "confidence": "ambiguous", "note": "No marker info to resolve subclass"},
+    "GABAergic inhibitory interneurons": {"sea_ad_subclass": "Generic_inhibitory", "confidence": "ambiguous", "note": "No marker info to resolve subclass"},
+    "Erbb4-inhibitory-neurons": {"sea_ad_subclass": "Generic_inhibitory", "confidence": "ambiguous", "note": "MGE-derived (Erbb4) but could be Pvalb or Sst"},
+    "GABAergic-inhibitory-interneurons-Dlx6os1-Erbb4": {"sea_ad_subclass": "Generic_inhibitory", "confidence": "ambiguous", "note": "MGE-derived but cannot distinguish Pvalb/Sst"},
+    "Reln-neurons":            {"sea_ad_subclass": "Generic_inhibitory", "confidence": "ambiguous", "note": "Reelin expressed in multiple types"},
+    # ── No cortical equivalent / unmapped ────────────────────────────────
+    "Striatal-medium-spiny-neuron": {"sea_ad_subclass": "Medium spiny neurons", "confidence": "unmapped", "note": "Subcortical; preserved as researcher category"},
+    "Basal-Ganglia-GABAergic-Neurons": {"sea_ad_subclass": "Other",   "confidence": "unmapped", "note": "Subcortical"},
+    "Excitatory principal neurons in the hippocampal dentate gyrus": {"sea_ad_subclass": "Other", "confidence": "unmapped", "note": "Hippocampal, no cortical equivalent"},
+    "Excitatory-neurons-Cajal-Retzius-cells-layer-I-Reelin": {"sea_ad_subclass": "Other", "confidence": "unmapped", "note": "Cajal-Retzius, transient L1 cell type"},
+    "Choroid-Plexus-Epithelial-Cells": {"sea_ad_subclass": "Other",   "confidence": "unmapped", "note": "Non-parenchymal"},
+    "Ependymal-cell":          {"sea_ad_subclass": "Other",           "confidence": "unmapped", "note": "Non-parenchymal"},
+    "Cholinergic-Neurons":     {"sea_ad_subclass": "Other",           "confidence": "unmapped", "note": "No SEA-AD subclass"},
+}
+
+# Reporting-time collapse: SEA-AD subclasses → researcher tissue categories.
+# Recovers the original A_obs-style groupings for interpretability.
+SUBCLASS_TO_TISSUE_CATEGORY = {
+    # GABAergic → Interneurons
+    "Chandelier": "Interneurons", "Lamp5": "Interneurons",
+    "Lamp5 Lhx6": "Interneurons", "Pax6": "Interneurons",
+    "Pvalb": "Interneurons", "Sncg": "Interneurons",
+    "Sst": "Interneurons", "Sst Chodl": "Interneurons",
+    "Vip": "Interneurons",
+    # Glutamatergic → Excitatory neurons
+    "L2/3 IT": "Excitatory neurons", "L4 IT": "Excitatory neurons",
+    "L5 ET": "Excitatory neurons", "L5 IT": "Excitatory neurons",
+    "L5/6 NP": "Excitatory neurons", "L6 CT": "Excitatory neurons",
+    "L6 IT": "Excitatory neurons", "L6 IT Car3": "Excitatory neurons",
+    "L6b": "Excitatory neurons",
+    # Non-neuronal
+    "Astrocyte": "Astrocytes", "Oligodendrocyte": "Oligodendrocytes",
+    "Microglia-PVM": "Microglia", "OPC": "OPCs",
+    "Endothelial": "Endothelial cells", "VLMC": "Endothelial cells",
+    # Researcher categories (from ambiguous / unmapped clusters)
+    "Generic_excitatory": "Excitatory neurons",
+    "Generic_inhibitory": "Interneurons",
+    "Medium spiny neurons": "Medium spiny neurons",
+    "Other": "Other",
+}
+
 # Shared permutation parameters (attribution recovery)
 N_PERMS = 1000
 PERM_SEED = 42
@@ -174,7 +261,9 @@ TIER1_CONDITION_TO_CONTRAST = {"AppP": "App", "Ttau": "Tau", "ApTt": "Int"}
 # =============================================================================
 
 # --- 5+1 cell-type pooling ---
-# Maps each of the 10 A_obs cell types to a resolved type.
+# Legacy: Maps each of the 10 A_obs cell types to a resolved type.
+# Superseded by SNRNA_CLUSTER_TAXONOMY + SUBCLASS_TO_TISSUE_CATEGORY for the
+# live pipeline.  Retained for archived code compatibility.
 AOBS_POOL_MAP = {
     "Excitatory neurons": "Excitatory_neurons",
     "Oligodendrocytes":   "Oligodendrocytes",
@@ -269,6 +358,8 @@ SAP_FACTORIAL = {
 }
 
 # --- Data paths ---
+# Legacy: A_obs 10-category fractions.  Live pipeline now uses
+# SNRNA_CLUSTER_TAXONOMY + CLUSTERSIZE_FILE for subclass-resolution fractions.
 A_OBS_FILE = os.path.join(
     SONG_WORKSPACE_DIR, "method_records", "aobs_desp_standardized",
     "inputs", "A_obs_fractions.tsv",

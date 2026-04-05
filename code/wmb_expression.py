@@ -40,7 +40,7 @@ from atlas_reference import (
     get_phosphatase_genes_from_genelist,
     get_abc_cache,
     _extract_gene_symbols,
-    _get_expression_path,
+
 )
 
 # ---------------------------------------------------------------------------
@@ -133,7 +133,29 @@ def _get_subset_path(file_key: str) -> Optional[str]:
     return None
 
 
-def _build_gene_index(cache):
+def _get_full_h5ad_path(file_key: str) -> str:
+    """Construct the expected local h5ad path for a WMB region without
+    triggering an S3 download via the ABC cache."""
+    region = file_key.split("/")[0]  # e.g. "WMB-10Xv3-CB"
+    return os.path.join(
+        config.ALLEN_ABC_CACHE_DIR, "expression_matrices",
+        config.WMB_DATASET_KEY, "20230630",
+        f"{region}-log2.h5ad",
+    )
+
+
+def _validate_h5ad(path: str) -> bool:
+    """Check that an h5ad file can be opened (not truncated or compressed)."""
+    import h5py
+    try:
+        with h5py.File(path, "r"):
+            pass
+        return True
+    except OSError:
+        return False
+
+
+def _build_gene_index():
     """Build gene symbol → column index mapping.
 
     Prefers subset h5ad files (smaller, faster) when available. Falls back
@@ -149,8 +171,15 @@ def _build_gene_index(cache):
         ref_path = subset_path
         print(f"  Gene index: using subset file")
     else:
-        ref_path = _get_expression_path(cache, config.WMB_DATASET_KEY, first_key)
+        ref_path = _get_full_h5ad_path(first_key)
         print(f"  Gene index: using full file")
+        if not os.path.exists(ref_path) or not _validate_h5ad(ref_path):
+            zst = ref_path + ".zst"
+            hint = (" (.zst exists — decompress first, or run "
+                    "extract_wmb_gene_subset.py)") if os.path.exists(zst) else ""
+            raise OSError(
+                f"Cannot open {ref_path}: file missing or truncated{hint}"
+            )
 
     adata_ref = ad.read_h5ad(str(ref_path), backed="r")
     atlas_genes, gene_fmt = _extract_gene_symbols(adata_ref)
@@ -249,7 +278,16 @@ def _stream_wmb_expression(
         if subset_path:
             region_path = subset_path
         else:
-            region_path = _get_expression_path(cache, config.WMB_DATASET_KEY, file_key)
+            region_path = _get_full_h5ad_path(file_key)
+            if not os.path.exists(region_path) or not _validate_h5ad(region_path):
+                zst = region_path + ".zst"
+                reason = ("truncated" if os.path.exists(region_path)
+                          else "missing (.zst only)" if os.path.exists(zst)
+                          else "missing")
+                print(f"\n  [{ri}/{len(config.WMB_ALL_REGION_KEYS)}] "
+                      f"Region: {region} — SKIPPED ({reason}; "
+                      f"decompress or run extract_wmb_gene_subset.py)")
+                continue
 
         print(f"\n  [{ri}/{len(config.WMB_ALL_REGION_KEYS)}] Region: {region}"
               f"{' (subset)' if subset_path else ''}")
@@ -400,8 +438,7 @@ def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
             print(f"  (use --force to recompute)")
             return pd.read_csv(WMB_EXPR_FILE)
 
-    cache = get_abc_cache()
-    atlas_genes, gene_to_idx, gene_fmt = _build_gene_index(cache)
+    atlas_genes, gene_to_idx, gene_fmt = _build_gene_index()
     print(f"  Gene format: {gene_fmt}")
 
     mouse_kinases, _ = get_all_kinase_genes()
@@ -511,8 +548,7 @@ def compute_wmb_proteome_expression(force: bool = False) -> pd.DataFrame:
     # Convert to mouse case for atlas matching
     proteome_genes_mouse = [_human_to_mouse(g) for g in proteome_genes_upper]
 
-    cache = get_abc_cache()
-    _, gene_to_idx, gene_fmt = _build_gene_index(cache)
+    _, gene_to_idx, gene_fmt = _build_gene_index()
     print(f"  Gene format: {gene_fmt}")
 
     # Intersect with atlas

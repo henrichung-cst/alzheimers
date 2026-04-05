@@ -52,7 +52,7 @@ find "$CACHE_DIR" "${FIND_ARGS[@]}" | sort | while read -r f; do
     relpath="${f#$CACHE_DIR/}"
     size=$(du -h "$f" | cut -f1)
     echo -n "  $relpath ($size) ... "
-    zstd -d --rm -q "$f"
+    zstd -d -f --rm -q "$f"
     orig="${f%.zst}"
     origsize=$(du -h "$orig" | cut -f1)
     echo "done ($origsize)"

@@ -167,6 +167,12 @@ def extract_subsets(dry_run=False):
 
         print(f"\n  [{ri}/{len(config.WMB_ALL_REGION_KEYS)}] {region_short}")
 
+        if not dry_run and os.path.exists(out_path):
+            print(f"    SKIP: subset already exists at {out_path}")
+            output_size = os.path.getsize(out_path)
+            total_output_bytes += output_size
+            continue
+
         region_path = _get_expression_path(cache, config.WMB_DATASET_KEY, file_key)
         if not os.path.exists(region_path):
             print(f"    SKIP: Full h5ad not found at {region_path}")
@@ -180,15 +186,18 @@ def extract_subsets(dry_run=False):
         print(f"    Full shape: {adata.shape[0]:,} cells × {adata.shape[1]:,} genes")
 
         # Read subset columns in row chunks to limit memory usage.
-        # For a 500K-cell region with 6,800 genes, each chunk is ~260 MB dense.
+        # The contiguous slice spans ~31K cols, so each dense chunk is
+        # row_chunk × 31K × 4 bytes.  At 10K rows that's ~1.2 GB.
         min_idx = int(sorted_indices[0])
         max_idx = int(sorted_indices[-1])
         local_indices = sorted_indices - min_idx
         n_cells = adata.shape[0]
-        row_chunk = 50_000
+        slice_width = max_idx - min_idx + 1
+        row_chunk = max(1000, min(50_000, int(2e9 / (slice_width * 4))))
 
         print(f"    Reading column slice [{min_idx}:{max_idx+1}] "
-              f"({max_idx - min_idx + 1} cols, need {len(sorted_indices)})...")
+              f"({slice_width} cols, need {len(sorted_indices)}, "
+              f"row_chunk={row_chunk:,})...")
 
         chunks = []
         for row_start in range(0, n_cells, row_chunk):
@@ -232,7 +241,7 @@ def extract_subsets(dry_run=False):
             "source_size_bytes": input_size,
         }
 
-        del adata_subset, X_subset, X_slice
+        del adata_subset, X_subset, chunks
 
     # Write manifest
     manifest_path = os.path.join(out_dir, "MANIFEST.json")
