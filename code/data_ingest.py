@@ -515,29 +515,57 @@ def step_markers():
     aobs = pd.read_csv(config.A_OBS_FILE, sep="\t")
     aobs = aobs.set_index("sample_id")
 
-    # Cell type to A_obs column mapping (reuse existing)
-    ct_to_aobs = {
-        "Excitatory_neurons": "Excitatory neurons",
-        "GABAergic_neurons": "Interneurons",
-        "Astrocytes": "Astrocytes",
-        "Oligodendrocytes": "Oligodendrocytes",
-        "Microglia": "Microglia",
+    # Map 24 SEA-AD subclasses to A_obs composition columns for correlation.
+    # Multiple subclasses map to the same A_obs column (e.g., all GABAergic
+    # subclasses → "Interneurons"). This is honest: specificity is reported at
+    # subclass resolution, correlation is validated at A_obs resolution.
+    subclass_to_aobs = {
+        # GABAergic subclasses
+        "Chandelier": "Interneurons",
+        "Lamp5": "Interneurons",
+        "Lamp5 Lhx6": "Interneurons",
+        "Pax6": "Interneurons",
+        "Pvalb": "Interneurons",
+        "Sncg": "Interneurons",
+        "Sst": "Interneurons",
+        "Sst Chodl": "Interneurons",
+        "Vip": "Interneurons",
+        # Glutamatergic subclasses
+        "L2/3 IT": "Excitatory neurons",
+        "L4 IT": "Excitatory neurons",
+        "L5 ET": "Excitatory neurons",
+        "L5 IT": "Excitatory neurons",
+        "L5/6 NP": "Excitatory neurons",
+        "L6 CT": "Excitatory neurons",
+        "L6 IT": "Excitatory neurons",
+        "L6 IT Car3": "Excitatory neurons",
+        "L6b": "Excitatory neurons",
+        # Non-neuronal subclasses
+        "Astrocyte": "Astrocytes",
+        "Oligodendrocyte": "Oligodendrocytes",
+        "Microglia-PVM": "Microglia",
+        "OPC": "OPCs",
+        "Endothelial": "Endothelial cells",
+        "VLMC": None,  # No A_obs equivalent
     }
+    assert set(subclass_to_aobs) == set(config.SEA_AD_SUBCLASSES), (
+        "subclass_to_aobs keys out of sync with config.SEA_AD_SUBCLASSES"
+    )
 
     # Pre-compute lookups used in the inner loop
     col_to_idx = {col: i for i, col in enumerate(quant.columns)}
     snrna_animals = mapping[mapping["has_snrna_seq"]].copy()
 
     records = []
-    cell_types = wmb["cell_type_5plus1"].unique()
+    cell_types = wmb["cell_type"].unique()
 
     for ct in sorted(cell_types):
-        ct_df = wmb[wmb["cell_type_5plus1"] == ct].copy()
+        ct_df = wmb[wmb["cell_type"] == ct].copy()
         # Only consider genes that are expressed (mean > 1, fraction > 10%)
         ct_expr = ct_df[ct_df["binary_expressed"]].copy()
         ct_expr = ct_expr.sort_values("specificity_score", ascending=False)
 
-        aobs_col = ct_to_aobs.get(ct)
+        aobs_col = subclass_to_aobs.get(ct)
 
         for rank, (_, row) in enumerate(ct_expr.iterrows(), 1):
             gene_human = row["gene_symbol_human"]

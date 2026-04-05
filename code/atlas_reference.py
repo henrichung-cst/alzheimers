@@ -1040,9 +1040,6 @@ def match_subclass(label: str) -> str:
     return "Other"
 
 
-# Derived: SEA-AD subclass → 5+1 parent mapping
-SUBCLASS_TO_5PLUS1 = {sc: match_subclass(sc) for sc in SEA_AD_SUBCLASSES}
-
 
 def build_taxonomy_mapping() -> pd.DataFrame:
     """Build cross-atlas cell-type mapping table from cached structure reports."""
@@ -1156,8 +1153,8 @@ def build_taxonomy_mapping() -> pd.DataFrame:
     df.to_csv(TAXONOMY_MAPPING_FILE, index=False)
     print(f"\n  Saved taxonomy mapping ({len(df)} rows) to {TAXONOMY_MAPPING_FILE}")
 
-    # Summary per our_label
-    for label in config.SAP_CELLTYPES:
+    # Summary per our_label (broad cell classes used for taxonomy mapping)
+    for label in sorted(df["our_label"].unique()):
         subset = df[df["our_label"] == label]
         n_wmb = subset["wmb_subclass"].astype(bool).sum()
         n_aging = subset["aging_subclass"].astype(bool).sum()

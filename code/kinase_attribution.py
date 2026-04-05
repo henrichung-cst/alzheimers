@@ -79,7 +79,6 @@ QC_GENES = ["Mapt", "Gsk3b", "Akt1", "Mapk1", "Camk2a"]
 
 WMB_EXPRESSION_FILE = config.WMB_EXPRESSION_FILE
 
-from atlas_reference import SUBCLASS_TO_5PLUS1 as _SUBCLASS_TO_5PLUS1
 
 
 # ---------------------------------------------------------------------------
@@ -900,7 +899,6 @@ def step_attribute():
             for subclass, vals in sc_effects.items():
                 median_lfc = float(np.median(vals))
                 concordance = np.sign(nes) * median_lfc
-                parent_ct = _SUBCLASS_TO_5PLUS1.get(subclass, "Other")
                 sea_ad_rows.append({
                     "kinase": kinase,
                     "gene_symbol": gene,
@@ -908,7 +906,6 @@ def step_attribute():
                     "NES": nes,
                     "FDR": fdr,
                     "cell_type": subclass,
-                    "cell_type_class": parent_ct,
                     "sea_ad_lfc": median_lfc,
                     "sea_ad_n_supertypes": sc_counts[subclass],
                     "concordance_score": concordance,
@@ -941,7 +938,7 @@ def step_attribute():
         for _, row in sig.iterrows():
             gene_upper = row["gene_symbol"].upper() if isinstance(
                 row["gene_symbol"], str) else ""
-            for subclass, parent_ct in _SUBCLASS_TO_5PLUS1.items():
+            for subclass in config.SEA_AD_SUBCLASSES:
                 spec = wmb_spec.get((gene_upper, subclass), 0.0)
                 attribution_rows.append({
                     "kinase": row["kinase"],
@@ -950,7 +947,6 @@ def step_attribute():
                     "NES": row["NES"],
                     "FDR": row["FDR"],
                     "cell_type": subclass,
-                    "cell_type_class": parent_ct,
                     "sea_ad_lfc": np.nan,
                     "sea_ad_n_supertypes": 0,
                     "wmb_specificity": spec,
@@ -1002,10 +998,6 @@ def step_attribute():
         for ct, cnt in attributed[
                 "cell_type"].value_counts().items():
             print(f"    {ct}: {cnt}")
-        print(f"\n  By cell type class (5+1):")
-        for ct, cnt in attributed[
-                "cell_type_class"].value_counts().items():
-            print(f"    {ct}: {cnt}")
 
     # Save summary JSON
     summary = {
@@ -1016,8 +1008,6 @@ def step_attribute():
                           .to_dict() if len(attributed) > 0 else {}),
         "by_cell_type": (attributed["cell_type"].value_counts()
                          .to_dict() if len(attributed) > 0 else {}),
-        "by_cell_type_class": (attributed["cell_type_class"].value_counts()
-                               .to_dict() if len(attributed) > 0 else {}),
         "by_contrast": (attributed["contrast"].value_counts()
                         .to_dict() if len(attributed) > 0 else {}),
     }
@@ -1198,11 +1188,6 @@ def print_summary():
         if by_ct:
             print(f"  By cell type (subclass):")
             for ct, cnt in sorted(by_ct.items(), key=lambda x: -x[1]):
-                print(f"    {ct}: {cnt}")
-        by_ctc = summ.get("by_cell_type_class", {})
-        if by_ctc:
-            print(f"  By cell type class (5+1):")
-            for ct, cnt in sorted(by_ctc.items(), key=lambda x: -x[1]):
                 print(f"    {ct}: {cnt}")
     elif os.path.exists(attr_path):
         attr = pd.read_csv(attr_path)
