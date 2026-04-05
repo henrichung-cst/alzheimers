@@ -147,6 +147,7 @@ def _stream_wmb_expression(
     label: str = "genes",
     chunk_size: int = 5000,
     cell_type_set: str = "subclass",
+    skip_regional: bool = False,
 ) -> tuple:
     """Stream through all 13 WMB regions, accumulating per-cell-type expression.
 
@@ -311,17 +312,18 @@ def _stream_wmb_expression(
             accum[ct]["nonzero_count"] += region_accum[ct]["nonzero_count"]
             accum[ct]["n_cells"] += n_cells
 
-            region_mean = region_accum[ct]["expr_sum"] / n_cells
-            region_frac = region_accum[ct]["nonzero_count"] / n_cells
-            for i, gene in enumerate(gene_names):
-                regional_rows.append({
-                    "region": region,
-                    "gene_symbol": gene,
-                    ct_col: ct,
-                    "mean_log2_expression": round(float(region_mean[i]), 6),
-                    "fraction_cells_expressing": round(float(region_frac[i]), 6),
-                    "n_cells": n_cells,
-                })
+            if not skip_regional:
+                region_mean = region_accum[ct]["expr_sum"] / n_cells
+                region_frac = region_accum[ct]["nonzero_count"] / n_cells
+                for i, gene in enumerate(gene_names):
+                    regional_rows.append({
+                        "region": region,
+                        "gene_symbol": gene,
+                        ct_col: ct,
+                        "mean_log2_expression": round(float(region_mean[i]), 6),
+                        "fraction_cells_expressing": round(float(region_frac[i]), 6),
+                        "n_cells": n_cells,
+                    })
 
         if hasattr(adata, "file") and adata.file is not None:
             adata.file.close()
@@ -448,7 +450,7 @@ def compute_wmb_proteome_expression() -> pd.DataFrame:
 
     Uses the same streaming infrastructure as the kinase computation but
     extracts all ~6,444 proteome genes instead of ~400 kinases.  Output is
-    consumed by data_ingest.py --markers-dd for data-driven marker assessment.
+    consumed by data_ingest.py --markers for cell-type marker assessment.
     """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -486,8 +488,8 @@ def compute_wmb_proteome_expression() -> pd.DataFrame:
     gene_indices = np.array(matched_indices)
 
     accum, _ = _stream_wmb_expression(
-        matched_genes, gene_indices, label="proteome", chunk_size=5000,
-        cell_type_set="5plus1",
+        matched_genes, gene_indices, label="proteome", chunk_size=2000,
+        cell_type_set="5plus1", skip_regional=True,
     )
 
     # Build output DataFrame

@@ -56,9 +56,8 @@ def step_run():
 
     # Build comparison table
     mea_sig = mea[mea["FDR"] < FDR_DEFAULT].copy()
-    mea_sig["survives_strict"] = (
-        mea_sig.set_index(["kinase", "contrast"]).index.isin(sig_strict)
-    ).values
+    mea_sig["survives_strict"] = mea_sig.set_index(
+        ["kinase", "contrast"]).index.isin(sig_strict)
     comp_path = os.path.join(OUTPUT_DIR, "fdr_comparison.csv")
     mea_sig.to_csv(comp_path, index=False)
     print(f"  Saved {comp_path}")

@@ -18,7 +18,7 @@ $PYTHON code/data_ingest.py --mapping 2>&1 | tee -a "$LOG"
 echo "--- Step 2/4: Phosphosite-to-Protein Matching ---" | tee -a "$LOG"
 $PYTHON code/data_ingest.py --phospho-match 2>&1 | tee -a "$LOG"
 
-echo "--- Step 3/4: Marker Protein Assessment ---" | tee -a "$LOG"
+echo "--- Step 3/4: Marker Protein Assessment (WMB atlas) ---" | tee -a "$LOG"
 $PYTHON code/data_ingest.py --markers 2>&1 | tee -a "$LOG"
 
 echo "--- Step 4/4: Data Quality Assessment ---" | tee -a "$LOG"

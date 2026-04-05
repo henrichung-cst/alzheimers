@@ -27,9 +27,10 @@ Outputs (all under outputs/reports/data_ingest/):
       Per-site match of IMAC phosphosites to total proteome parent proteins.
   matching_summary.json
       Summary statistics for phosphosite-to-protein matching.
-  marker_protein_assessment.csv
-      Cell-type marker protein intensities, within-group CV, genotype ANOVA,
-      and correlation with snRNA-seq composition.
+  datadriven_marker_assessment.csv
+      Data-driven cell-type marker assessment from WMB atlas expression:
+      per-gene specificity scores, correlation with snRNA-seq composition,
+      Storey q-values.  Requires wmb_expression.py --proteome output.
   data_quality.json
       Missingness, batch-effect, and PCA summary statistics.
   pca_plots/pca_by_{plex,genotype,sex,timepoint}.png
@@ -38,7 +39,7 @@ Outputs (all under outputs/reports/data_ingest/):
 Steps (run individually or all at once with --run):
   §1 --mapping        TMT channel-to-animal sample mapping
   §2 --phospho-match  Phosphosite-to-protein matching
-  §3 --markers        Cell-type marker protein assessment
+  §3 --markers        Cell-type marker protein assessment (WMB atlas, data-driven)
   §4 --quality        Data quality (missingness, batch effects, PCA)
 """
 
@@ -46,7 +47,7 @@ import argparse
 import json
 import os
 import re
-import warnings
+
 
 import matplotlib
 
@@ -84,30 +85,6 @@ IMAC_SITEQUANT_FILE = os.path.join(
 # TMT genotype labels → SAP canonical condition names
 GENOTYPE_TO_SAP = {"WT": "WTyp", "APP": "AppP", "T22": "Ttau", "T22/APP": "ApTt"}
 SEX_TO_SAP = {"M": "ma", "F": "fe"}
-
-MARKER_GENES = {
-    "Rbfox3": "Neurons", "Snap25": "Neurons", "Syn1": "Neurons", "Syt1": "Neurons",
-    "Slc17a7": "Excitatory_neurons",
-    "Gad1": "GABAergic_neurons", "Gad2": "GABAergic_neurons",
-    "Gfap": "Astrocytes", "Aldh1l1": "Astrocytes", "Aqp4": "Astrocytes",
-    "Mbp": "Oligodendrocytes", "Mog": "Oligodendrocytes", "Plp1": "Oligodendrocytes",
-    "Aif1": "Microglia", "Cx3cr1": "Microglia", "Tmem119": "Microglia",
-    "Csf1r": "Microglia",
-    "Pdgfra": "OPCs",
-    "Cldn5": "Endothelial",
-}
-
-# Mapping from marker cell-type labels to A_obs column names
-MARKER_CT_TO_AOBS = {
-    "Neurons": "Excitatory_neurons",  # closest proxy (bulk neurons)
-    "Excitatory_neurons": "Excitatory neurons",
-    "GABAergic_neurons": "GABAergic neurons",
-    "Astrocytes": "Astrocytes",
-    "Oligodendrocytes": "Oligodendrocytes",
-    "Microglia": "Microglia",
-    "OPCs": None,  # not in A_obs
-    "Endothelial": "Endothelial cells",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -507,155 +484,19 @@ def step_phospho_match():
 
 
 # ===========================================================================
-# §3  Cell-Type Marker Protein Assessment
+# §3  Cell-Type Marker Protein Assessment (WMB atlas, data-driven)
 # ===========================================================================
 
 
 def step_markers():
-    """Assess cell-type marker proteins in total proteome."""
-    _ensure_output_dir()
-    print("§3: Cell-type marker protein assessment...")
-
-    meta, quant, mapping = load_total_proteome()
-
-    # Build gene symbol lookup (case-insensitive)
-    gene_upper = meta["Gene Symbol"].astype(str).str.upper()
-
-    # Load A_obs for snRNA-seq composition
-    aobs = pd.read_csv(config.A_OBS_FILE, sep="\t")
-    aobs = aobs.set_index("sample_id")
-
-    records = []
-    for gene, cell_type in MARKER_GENES.items():
-        mask = gene_upper == gene.upper()
-        found = mask.any()
-        rec = {
-            "gene_symbol": gene,
-            "cell_type": cell_type,
-            "found_in_total_proteome": found,
-            "mean_intensity": np.nan,
-            "within_group_cv_mean": np.nan,
-            "between_group_f_statistic": np.nan,
-            "between_group_f_pvalue": np.nan,
-            "correlation_with_snrna_composition": np.nan,
-            "correlation_pvalue": np.nan,
-        }
-
-        if not found:
-            records.append(rec)
-            continue
-
-        # Get the row(s) for this gene — take first if multiple
-        idx = mask.values.nonzero()[0][0]
-        intensities = quant.iloc[idx].values.astype(float)
-        rec["mean_intensity"] = float(np.nanmean(intensities))
-
-        # Group by (sex × timepoint × genotype) using mapping
-        groups = mapping.groupby("phospho_group_id")
-        group_means = []
-        group_cvs = []
-        genotype_groups = {}  # genotype → list of intensities
-
-        for gid, grp in groups:
-            col_indices = [
-                mapping.columns.get_loc("column_name")
-            ]  # not needed, use col names
-            cols = grp["column_name"].tolist()
-            col_idx = [
-                list(quant.columns).index(c) for c in cols
-                if c in quant.columns
-            ]
-            vals = intensities[col_idx]
-            vals = vals[~np.isnan(vals)]
-            if len(vals) > 0:
-                group_means.append(np.mean(vals))
-                if len(vals) > 1 and np.mean(vals) != 0:
-                    group_cvs.append(np.std(vals, ddof=1) / np.mean(vals))
-
-            # Also group by genotype for ANOVA
-            geno = grp["genotype"].iloc[0]
-            if geno not in genotype_groups:
-                genotype_groups[geno] = []
-            genotype_groups[geno].extend(vals.tolist())
-
-        if group_cvs:
-            rec["within_group_cv_mean"] = float(np.mean(group_cvs))
-
-        # Between-group F-statistic (one-way ANOVA across genotypes)
-        geno_arrays = [
-            np.array(v) for v in genotype_groups.values() if len(v) > 0
-        ]
-        if len(geno_arrays) >= 2:
-            f_stat, f_pval = stats.f_oneway(*geno_arrays)
-            rec["between_group_f_statistic"] = float(f_stat)
-            rec["between_group_f_pvalue"] = float(f_pval)
-
-        # Correlation with snRNA-seq composition (for matched animals)
-        aobs_col = MARKER_CT_TO_AOBS.get(cell_type)
-        if aobs_col and aobs_col in aobs.columns:
-            snrna_animals = mapping[mapping["has_snrna_seq"]].copy()
-            if len(snrna_animals) > 0:
-                prot_vals = []
-                comp_vals = []
-                for _, row in snrna_animals.iterrows():
-                    col = row["column_name"]
-                    gid = row["phospho_group_id"]
-                    if col in quant.columns and gid in aobs.index:
-                        col_idx = list(quant.columns).index(col)
-                        pv = intensities[col_idx]
-                        cv = aobs.loc[gid, aobs_col]
-                        if not np.isnan(pv) and not np.isnan(cv):
-                            prot_vals.append(pv)
-                            comp_vals.append(cv)
-                if len(prot_vals) >= 5:
-                    r, p = stats.pearsonr(prot_vals, comp_vals)
-                    rec["correlation_with_snrna_composition"] = float(r)
-                    rec["correlation_pvalue"] = float(p)
-
-        records.append(rec)
-
-    df = pd.DataFrame(records)
-    out_path = os.path.join(OUTPUT_DIR, "marker_protein_assessment.csv")
-    df.to_csv(out_path, index=False)
-    print(f"\n  Saved: {out_path}")
-
-    # Print summary
-    found = df[df["found_in_total_proteome"]]
-    not_found = df[~df["found_in_total_proteome"]]
-    print(f"\n  Markers found: {len(found)}/{len(df)}")
-    if len(not_found) > 0:
-        print(f"  Not found: {', '.join(not_found['gene_symbol'].tolist())}")
-    print(f"\n  Found markers:")
-    for _, row in found.iterrows():
-        corr_str = (
-            f"r={row['correlation_with_snrna_composition']:.3f}"
-            if not np.isnan(row["correlation_with_snrna_composition"])
-            else "N/A"
-        )
-        print(
-            f"    {row['gene_symbol']:10s} ({row['cell_type']:22s}): "
-            f"mean={row['mean_intensity']:.0f}, "
-            f"CV={row['within_group_cv_mean']:.3f}, "
-            f"F={row['between_group_f_statistic']:.2f} "
-            f"(p={row['between_group_f_pvalue']:.4f}), "
-            f"snRNA corr={corr_str}"
-        )
-
-
-# ===========================================================================
-# §3b  Data-Driven Marker Assessment (WMB atlas)
-# ===========================================================================
-
-
-def step_markers_datadriven():
     """Identify cell-type markers from WMB atlas expression, test against proteome.
 
     Uses the proteome-wide WMB expression matrix (from wmb_expression.py --proteome)
     to rank genes by cell-type specificity, then correlates the top markers with
-    snRNA-seq composition fractions — replacing the hand-curated 18-marker approach.
+    snRNA-seq composition fractions.
     """
     _ensure_output_dir()
-    print("§3b: Data-driven cell-type marker assessment (WMB atlas)...")
+    print("§3: Cell-type marker protein assessment (WMB atlas)...")
 
     wmb_path = config.WMB_PROTEOME_EXPRESSION_FILE
     if not os.path.exists(wmb_path):
@@ -682,6 +523,10 @@ def step_markers_datadriven():
         "Oligodendrocytes": "Oligodendrocytes",
         "Microglia": "Microglia",
     }
+
+    # Pre-compute lookups used in the inner loop
+    col_to_idx = {col: i for i, col in enumerate(quant.columns)}
+    snrna_animals = mapping[mapping["has_snrna_seq"]].copy()
 
     records = []
     cell_types = wmb["cell_type_5plus1"].unique()
@@ -722,25 +567,23 @@ def step_markers_datadriven():
                 rec["mean_intensity"] = float(np.nanmean(intensities))
 
                 # Correlation with snRNA-seq composition
-                if aobs_col and aobs_col in aobs.columns:
-                    snrna_animals = mapping[mapping["has_snrna_seq"]].copy()
-                    if len(snrna_animals) > 0:
-                        prot_vals = []
-                        comp_vals = []
-                        for _, srow in snrna_animals.iterrows():
-                            col = srow["column_name"]
-                            gid = srow["phospho_group_id"]
-                            if col in quant.columns and gid in aobs.index:
-                                col_idx = list(quant.columns).index(col)
-                                pv = intensities[col_idx]
-                                cv = aobs.loc[gid, aobs_col]
-                                if not np.isnan(pv) and not np.isnan(cv):
-                                    prot_vals.append(pv)
-                                    comp_vals.append(cv)
-                        if len(prot_vals) >= 5:
-                            r, p = stats.pearsonr(prot_vals, comp_vals)
-                            rec["correlation_with_snrna_composition"] = float(r)
-                            rec["correlation_pvalue"] = float(p)
+                if aobs_col and aobs_col in aobs.columns and len(snrna_animals) > 0:
+                    prot_vals = []
+                    comp_vals = []
+                    for _, srow in snrna_animals.iterrows():
+                        col = srow["column_name"]
+                        gid = srow["phospho_group_id"]
+                        if col in col_to_idx and gid in aobs.index:
+                            col_idx = col_to_idx[col]
+                            pv = intensities[col_idx]
+                            cv = aobs.loc[gid, aobs_col]
+                            if not np.isnan(pv) and not np.isnan(cv):
+                                prot_vals.append(pv)
+                                comp_vals.append(cv)
+                    if len(prot_vals) >= 5:
+                        r, p = stats.pearsonr(prot_vals, comp_vals)
+                        rec["correlation_with_snrna_composition"] = float(r)
+                        rec["correlation_pvalue"] = float(p)
 
             records.append(rec)
 
@@ -848,14 +691,21 @@ def step_quality():
     n_proteins, n_samples = quant.shape
     print(f"  Matrix: {n_proteins} proteins × {n_samples} samples")
 
-    # 1. Missingness
-    is_missing = quant.isna() | (quant == 0)
-    total_missing = is_missing.sum().sum()
+    # 1. Missingness (report NA and zero separately)
+    n_na = quant.isna().sum().sum()
+    n_zero = ((quant == 0) & quant.notna()).sum().sum()
     total_cells = n_proteins * n_samples
-    frac_missing = total_missing / total_cells
+    frac_na = n_na / total_cells
+    frac_zero = n_zero / total_cells
+    frac_missing = (n_na + n_zero) / total_cells
     print(f"\n  Missingness:")
-    print(f"    Total missing/zero: {total_missing}/{total_cells} "
+    print(f"    NA: {n_na}/{total_cells} ({100*frac_na:.1f}%)")
+    print(f"    Zero: {n_zero}/{total_cells} ({100*frac_zero:.1f}%)")
+    print(f"    Total missing (NA + zero): {n_na + n_zero}/{total_cells} "
           f"({100*frac_missing:.1f}%)")
+
+    # Combined mask for plex-level and structured missingness reporting
+    is_missing = quant.isna() | (quant == 0)
 
     # Missingness by plex
     plex_missing = {}
@@ -910,12 +760,14 @@ def step_quality():
 
     # 3. PCA
     print(f"\n  Computing PCA...")
-    # Prepare matrix: log2 transform, handle zeros/NaN
+    # Prepare matrix: mark zeros as missing, log2 transform, MinProb impute
     mat = quant.values.astype(float).copy()
-    mat[np.isnan(mat)] = 0
-    mat[mat <= 0] = 0
-    # log2(x + 1) transform
-    log_mat = np.log2(mat + 1)
+    mat[mat <= 0] = np.nan
+    with np.errstate(divide="ignore"):
+        log_mat = np.log2(mat)
+    n_imputed = np.sum(~np.isfinite(log_mat))
+    log_mat = config.minprob_impute(log_mat)
+    print(f"  MinProb imputed {n_imputed} missing values for PCA")
 
     # Median-center per plex to reduce batch effects for PCA
     log_mat_centered = log_mat.copy()
@@ -988,6 +840,8 @@ def step_quality():
     quality = {
         "matrix_shape": {"proteins": n_proteins, "samples": n_samples},
         "missingness": {
+            "na_fraction": round(float(frac_na), 4),
+            "zero_fraction": round(float(frac_zero), 4),
             "total_fraction": round(float(frac_missing), 4),
             "by_plex": plex_missing,
             "proteins_missing_full_plex": n_plex_structured,
@@ -1059,26 +913,17 @@ def print_summary():
     else:
         print(f"\n§2 Phosphosite-to-Protein Matching: not run yet")
 
-    # Markers
-    mk_path = os.path.join(OUTPUT_DIR, "marker_protein_assessment.csv")
+    # Markers (data-driven, WMB atlas)
+    mk_path = os.path.join(OUTPUT_DIR, "datadriven_marker_assessment.csv")
     if os.path.exists(mk_path):
         mk = pd.read_csv(mk_path)
-        found = mk[mk["found_in_total_proteome"]]
-        print(f"\n§3 Cell-Type Marker Proteins:")
-        print(f"  Found: {len(found)}/{len(mk)}")
-        not_found = mk[~mk["found_in_total_proteome"]]
-        if len(not_found) > 0:
-            print(f"  Not found: "
-                  f"{', '.join(not_found['gene_symbol'].tolist())}")
-        # Markers with significant genotype effect
-        sig_markers = found[found["between_group_f_pvalue"] < 0.05]
-        if len(sig_markers) > 0:
-            print(f"  Markers with significant genotype effect (p<0.05): "
-                  f"{len(sig_markers)}")
-            for _, r in sig_markers.iterrows():
-                print(f"    {r['gene_symbol']} ({r['cell_type']}): "
-                      f"F={r['between_group_f_statistic']:.2f}, "
-                      f"p={r['between_group_f_pvalue']:.4f}")
+        print(f"\n§3 Cell-Type Marker Proteins (WMB atlas, data-driven):")
+        for ct in sorted(mk["cell_type"].unique()):
+            ct_df = mk[mk["cell_type"] == ct]
+            n_in_proteome = ct_df["found_in_total_proteome"].sum()
+            sig_q = ct_df[ct_df["qvalue"] < 0.10]
+            print(f"  {ct}: {len(ct_df)} genes, {n_in_proteome} in proteome, "
+                  f"{len(sig_q)} significant (q<0.10)")
     else:
         print(f"\n§3 Cell-Type Marker Proteins: not run yet")
 
@@ -1124,11 +969,7 @@ def main():
     )
     group.add_argument(
         "--markers", action="store_true",
-        help="§3: Cell-type marker protein assessment",
-    )
-    group.add_argument(
-        "--markers-dd", action="store_true",
-        help="§3b: Data-driven cell-type marker assessment (requires wmb_expression --proteome)",
+        help="§3: Cell-type marker protein assessment (WMB atlas, data-driven)",
     )
     group.add_argument(
         "--quality", action="store_true",
@@ -1157,9 +998,6 @@ def main():
 
     if args.markers or args.run:
         step_markers()
-
-    if args.markers_dd:
-        step_markers_datadriven()
 
     if args.quality or args.run:
         step_quality()

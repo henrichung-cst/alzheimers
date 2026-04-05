@@ -52,7 +52,7 @@ Canonical outputs:
 - `outputs/reports/data_ingest/sample_mapping.csv`
 - `outputs/reports/data_ingest/phospho_protein_matching.csv`
 - `outputs/reports/data_ingest/matching_summary.json`
-- `outputs/reports/data_ingest/marker_protein_assessment.csv`
+- `outputs/reports/data_ingest/datadriven_marker_assessment.csv`
 - `outputs/reports/data_ingest/data_quality.json`
 - `outputs/reports/data_ingest/pca_plots/`
 

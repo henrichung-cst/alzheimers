@@ -14,7 +14,7 @@ Requires Python 3.11 (kinase-library compatibility):
 ```bash
 conda create -n kinaseLibrary python=3.11 -y
 conda activate kinaseLibrary
-pip install kinase-library natsort pandas numpy matplotlib seaborn scipy requests
+mamba install kinase-library natsort pandas numpy matplotlib seaborn scipy requests
 ```
 
 ## Running the Analysis
@@ -39,8 +39,7 @@ bash code/runners/main/run_attribution_recovery.sh  # attribution recovery
 ```bash
 python code/data_ingest.py --mapping       # TMT channel-to-animal sample mapping (72 animals, 6 plexes)
 python code/data_ingest.py --phospho-match # Phosphosite-to-protein matching (91.7% match rate)
-python code/data_ingest.py --markers       # Cell-type marker protein assessment
-python code/data_ingest.py --markers-dd    # Data-driven marker assessment (requires wmb_expression --proteome)
+python code/data_ingest.py --markers       # Cell-type marker protein assessment (WMB atlas, requires wmb_expression --proteome)
 python code/data_ingest.py --quality       # Data quality (PCA, batch effects, missingness)
 python code/data_ingest.py --run           # All steps in order
 python code/data_ingest.py --summary       # Print cached results
@@ -79,8 +78,9 @@ python code/atlas_reference.py --run       # All steps in priority order
 python code/atlas_reference.py --summary   # Print cached results
 # Runner: bash code/runners/supporting/run_atlas_reference.sh
 
-# WMB Expression Export (required for unified attribution)
+# WMB Expression Export (required for unified attribution + marker assessment)
 python code/wmb_expression.py --run       # Compute WMB per-cell-type kinase expression matrix
+python code/wmb_expression.py --proteome  # Compute proteome-wide WMB expression (for --markers)
 python code/wmb_expression.py --summary   # Print cached results
 # Runner: bash code/runners/supporting/run_wmb_expression.sh
 ```
@@ -249,9 +249,12 @@ The `docs/foundation/` directory contains authoritative design documents:
 
 - **Limited automated tests** — live pipeline has no unit tests; verify with `--summary` flags on each script
 - **Song proteomics files must be mounted** — data_ingest.py reads Excel workbooks from `data/incytr_collections/song/primary/proteomics/`
-- **WMB prerequisite** — `run_live_pipeline.sh` gates on `outputs/reports/wmb_expression/wmb_kinase_expression.csv`; run `run_wmb_expression.sh` first
+- **WMB prerequisite** — `run_live_pipeline.sh` gates on `wmb_kinase_expression.csv` and `wmb_proteome_expression.csv`; run `run_wmb_expression.sh` first
+- **Atlas cache compressed** — raw h5ad files under `data/external/allen_abc/` are zstd-compressed to save space (~115 GB → ~26 GB). Decompress with `bash code/runners/supporting/decompress_atlas_cache.sh` before re-running `wmb_expression.py`. See `data/external/allen_abc/MANIFEST.json` for provenance
 - **SEA-AD data required** — Unified attribution needs SEA-AD effect sizes under `config.SEA_AD_DIR`
 - **API caching** — delete files under `data/incytr_collections/song/analysis_cache/` to force re-fetch
+- **WMB expression memory** — `wmb_expression.py --proteome` processes 6,308 genes across 13 regions; use `skip_regional=True` and `chunk_size=2000` to avoid OOM (~30GB RAM available)
+- **A_obs is group-level** — `A_obs_fractions.tsv` has 24 rows (one per factorial group), not 72 (per-animal). Marker assessment correlates per-animal protein intensity with per-group composition, so most cell types yield q≈1.0 — this is expected
 - **Do not reopen closed paths** — direct deconvolution, factor model, two-compartment, and transcript-only rescue are all closed (see charter)
 
 ### Code Intelligence

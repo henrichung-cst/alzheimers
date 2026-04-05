@@ -167,18 +167,22 @@ def _median_center_normalize(quant_df, sample_to_plex):
 
 def _run_pca_and_plot(quant_df, mapping, title_prefix, out_prefix):
     """PCA on log2-transformed data, 4 factor-colored plots."""
-    mat = quant_df.T.copy()  # samples x proteins
-    mat = mat.replace(0, np.nan)
+    mat = quant_df.values.astype(float).copy()  # proteins x samples
+    mat[mat <= 0] = np.nan
     with np.errstate(divide="ignore"):
         mat = np.log2(mat)
-    # Drop proteins with any NaN (for clean PCA)
-    mat = mat.dropna(axis=1)
-    if mat.shape[1] < 10:
-        print(f"  WARNING: only {mat.shape[1]} complete proteins for PCA")
+    n_imputed = np.sum(~np.isfinite(mat))
+    mat = config.minprob_impute(mat)
+    print(f"  MinProb imputed {n_imputed} missing values for PCA")
+    # Remove proteins with zero variance after imputation
+    var = np.var(mat, axis=1)
+    mat = mat[var > 0]
+    if mat.shape[0] < 10:
+        print(f"  WARNING: only {mat.shape[0]} proteins with variance for PCA")
         return None
 
-    pca = PCA(n_components=min(10, mat.shape[0], mat.shape[1]))
-    coords = pca.fit_transform(mat.values)
+    pca = PCA(n_components=min(10, mat.shape[1], mat.shape[0]))
+    coords = pca.fit_transform(mat.T)  # samples x components
     var_exp = pca.explained_variance_ratio_ * 100
 
     # Build sample metadata aligned to quant columns
@@ -204,7 +208,7 @@ def _run_pca_and_plot(quant_df, mapping, title_prefix, out_prefix):
         plt.close(fig)
 
     return {"pc1_var": round(var_exp[0], 2), "pc2_var": round(var_exp[1], 2),
-            "n_proteins": mat.shape[1]}
+            "n_proteins": mat.shape[0]}
 
 
 def _bh_fdr(pvals):
@@ -349,8 +353,6 @@ def step_normalize():
     # For each phosphosite, find the matching protein row (use first match)
     n_sites = len(sq)
     n_matched = 0
-    stoich_data = {}  # col -> array of stoich values
-
     # Build column-name mapping: phospho col -> proteome col
     ph_to_tp_col = {}
     for tp_col in bio_cols:
@@ -695,7 +697,6 @@ def step_enrich():
         c_vec[idx_int] = coefs["Int"]
 
         # Use complete-data XtX_inv for the fast path
-        complete = np.all(np.isfinite(Y_stoich), axis=1)
         XtX_inv = np.linalg.inv(X_np.T @ X_np)
         var_c = c_vec @ XtX_inv @ c_vec  # scalar
 

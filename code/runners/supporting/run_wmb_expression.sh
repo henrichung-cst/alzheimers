@@ -22,4 +22,7 @@ fi
 
 echo "=== WMB expression export started at $(date) ===" | tee "$LOG"
 $PYTHON code/wmb_expression.py --run 2>&1 | tee -a "$LOG"
+
+echo "=== WMB proteome expression started at $(date) ===" | tee -a "$LOG"
+$PYTHON code/wmb_expression.py --proteome 2>&1 | tee -a "$LOG"
 echo "=== WMB expression export finished at $(date) ===" | tee -a "$LOG"

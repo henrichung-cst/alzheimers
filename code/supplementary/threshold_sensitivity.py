@@ -68,7 +68,10 @@ def step_run():
     default_spec_low = config.SPECIFICITY_LOW    # 1.0/24
     default_lfc = config.SEA_AD_LFC_MIN          # 0.1
 
-    # Pre-extract arrays once for vectorized sweep
+    # Pre-extract arrays once for vectorized sweep.
+    # Missing WMB specificity or SEA-AD LFC is treated as "no evidence" (zero):
+    # absence of cross-species signal should not contribute to attribution
+    # confidence, so fillna(0.0) is a deliberate null-evidence default.
     concordance = df["concordance_score"].values
     wmb_spec = df["wmb_specificity"].fillna(0.0).values if "wmb_specificity" in df.columns else np.zeros(len(df))
     abs_lfc = df["sea_ad_lfc"].fillna(0.0).abs().values if "sea_ad_lfc" in df.columns else np.zeros(len(df))

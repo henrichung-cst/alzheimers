@@ -1,5 +1,7 @@
 import os
 
+import numpy as np
+
 # =============================================================================
 # Core paths
 # =============================================================================
@@ -56,6 +58,47 @@ PERCENT_RANK = "logFC"
 PERCENT_THRESH = 5
 LFF_THRESH = .01
 PVAL_SIG = .1
+
+# =============================================================================
+# Live pipeline: missing-value imputation (shared across PCA steps)
+# =============================================================================
+
+
+def minprob_impute(mat, q=0.01, rng=None):
+    """MinProb imputation for MNAR proteomics data.
+
+    For each protein (row), draws missing values from N(q-th percentile,
+    per-protein SD) of the observed log2 intensities. This models the
+    assumption that missing values are predominantly low-abundance (MNAR).
+
+    Parameters
+    ----------
+    mat : np.ndarray
+        Log2-transformed matrix (proteins × samples). NaN marks missing.
+    q : float
+        Quantile of observed values to use as the imputation center (default 0.01).
+    rng : np.random.Generator or None
+        Random number generator for reproducibility. If None, uses default.
+
+    Returns
+    -------
+    np.ndarray
+        Matrix with NaN replaced by draws from N(quantile, sigma_obs).
+    """
+    if rng is None:
+        rng = np.random.default_rng(42)
+    out = mat.copy()
+    for i in range(mat.shape[0]):
+        row = mat[i]
+        observed = row[np.isfinite(row)]
+        missing = ~np.isfinite(row)
+        if missing.sum() == 0 or len(observed) < 2:
+            continue
+        mu = np.quantile(observed, q)
+        sigma = np.std(observed, ddof=1)
+        out[i, missing] = rng.normal(mu, sigma, size=missing.sum())
+    return out
+
 
 # =============================================================================
 # Live pipeline: output directories

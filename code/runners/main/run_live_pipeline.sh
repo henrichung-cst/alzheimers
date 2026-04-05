@@ -38,10 +38,11 @@ if [[ "$N_H5AD" -lt 13 ]]; then
   bash code/runners/supporting/run_wmb_download.sh 2>&1 | tee -a "$LOG"
 fi
 
-# 3. WMB expression matrix (direct pipeline input)
-WMB_FILE="outputs/reports/wmb_expression/wmb_kinase_expression.csv"
-if [[ ! -f "$WMB_FILE" ]]; then
-  note "WMB expression matrix not found — running WMB expression export"
+# 3. WMB expression matrices (kinase + proteome, direct pipeline inputs)
+WMB_KINASE="outputs/reports/wmb_expression/wmb_kinase_expression.csv"
+WMB_PROTEOME="outputs/reports/wmb_expression/wmb_proteome_expression.csv"
+if [[ ! -f "$WMB_KINASE" ]] || [[ ! -f "$WMB_PROTEOME" ]]; then
+  note "WMB expression matrix missing — running WMB expression export"
   bash code/runners/supporting/run_wmb_expression.sh 2>&1 | tee -a "$LOG"
 fi
 
