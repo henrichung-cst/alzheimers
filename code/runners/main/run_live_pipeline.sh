@@ -21,11 +21,28 @@ note() {
 : > "$LOG"
 note "Live pipeline started"
 
+# --- Prerequisite checks and auto-resolution ---
+
+# 1. Atlas reference: SEA-AD data (needed for unified attribution)
+SEA_AD_DIR="data/external/sea_ad"
+if [[ ! -d "$SEA_AD_DIR" ]] || [[ -z "$(ls -A "$SEA_AD_DIR" 2>/dev/null)" ]]; then
+  note "SEA-AD data not found — running atlas reference acquisition"
+  bash code/runners/supporting/run_atlas_reference.sh 2>&1 | tee -a "$LOG"
+fi
+
+# 2. WMB h5ad files (needed for wmb_expression)
+N_H5AD=$(find data/external/allen_abc/expression_matrices/WMB-10Xv3/ \
+    -name "*-log2.h5ad" 2>/dev/null | wc -l)
+if [[ "$N_H5AD" -lt 13 ]]; then
+  note "Only $N_H5AD/13 WMB region h5ad files found — running WMB download"
+  bash code/runners/supporting/run_wmb_download.sh 2>&1 | tee -a "$LOG"
+fi
+
+# 3. WMB expression matrix (direct pipeline input)
 WMB_FILE="outputs/reports/wmb_expression/wmb_kinase_expression.csv"
 if [[ ! -f "$WMB_FILE" ]]; then
-  note "Missing supporting input: $WMB_FILE"
-  note "Run: bash code/runners/supporting/run_wmb_expression.sh"
-  exit 1
+  note "WMB expression matrix not found — running WMB expression export"
+  bash code/runners/supporting/run_wmb_expression.sh 2>&1 | tee -a "$LOG"
 fi
 
 note "Running data ingestion"
