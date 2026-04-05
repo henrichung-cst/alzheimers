@@ -143,6 +143,14 @@ WMB_ALL_REGION_KEYS = [
     "WMB-10Xv3-TH/log2",
 ]
 
+# Pre-extracted gene-subset h5ad files (proteome + kinase genes only).
+# Much smaller than full regional h5ad files, enabling fast expression queries
+# without decompressing the full atlas.
+WMB_SUBSET_DIR = os.path.join(
+    ALLEN_ABC_CACHE_DIR, "expression_matrices", "WMB-10Xv3-subset"
+)
+WMB_SUBSET_FILENAME_FMT = "{region}-log2-subset.h5ad"
+
 # SEA-AD access
 SEA_AD_S3_BUCKET = "sea-ad-single-cell-profiling"
 
@@ -233,7 +241,9 @@ AGGEXP_POOL_MAP = {
     "Cholinergic-Neurons":    "Other",
 }
 
-# Canonical order for the 6 resolved cell types (5 estimated + 1 pooled).
+# Legacy: coarse 5+1 cell-type labels from the archived deconvolution pipeline.
+# Used only by archived code under archive/code/. Live pipeline uses
+# SEA_AD_SUBCLASSES (24 data-driven subclasses) instead.
 SAP_CELLTYPES = [
     "Excitatory_neurons",
     "Oligodendrocytes",
@@ -242,7 +252,6 @@ SAP_CELLTYPES = [
     "Microglia",
     "Other",
 ]
-# Only the first 5 receive condition-effect estimates (Delta).
 SAP_ESTIMATED_CELLTYPES = SAP_CELLTYPES[:5]
 
 # --- Factorial design ---

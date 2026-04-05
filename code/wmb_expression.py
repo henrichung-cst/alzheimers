@@ -29,14 +29,13 @@ from __future__ import annotations
 
 import argparse
 import os
-from typing import Dict
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
 
 import config
 from atlas_reference import (
-    match_subclass,
     get_all_kinase_genes,
     get_phosphatase_genes_from_genelist,
     get_abc_cache,
@@ -50,30 +49,6 @@ from atlas_reference import (
 
 OUTPUT_DIR = config.WMB_EXPRESSION_OUTPUT_DIR
 WMB_EXPR_FILE = config.WMB_EXPRESSION_FILE
-
-# The 5 cell types used for attribution (exclude "Other")
-CT5 = [ct for ct in config.SAP_CELLTYPES if ct != "Other"]
-
-# ---------------------------------------------------------------------------
-# Subclass-to-5+1 mapping
-# ---------------------------------------------------------------------------
-
-
-def _match_subclass(label: str) -> str:
-    """Map a subclass/supertype label to 5+1 pooling via keyword matching.
-
-    Wraps atlas_reference.match_subclass with additional keywords for aging
-    atlas cluster names (COP/NFOL/MFOL/MOL for oligodendrocyte lineage).
-    """
-    result = match_subclass(label)
-    if result != "Other":
-        return result
-    # Additional keywords for aging atlas cluster names
-    for kw in ["COP", "NFOL", "MFOL", "MOL"]:
-        if kw in label:  # case-sensitive to avoid false matches
-            return "Oligodendrocytes"
-    return "Other"
-
 
 # SEA-AD subclass keyword patterns for matching WMB subclass labels.
 # Order matters: more specific patterns must come before general ones.
@@ -137,6 +112,64 @@ def _mouse_to_human(symbol: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Subset-aware path resolution
+# ---------------------------------------------------------------------------
+
+
+def _get_subset_path(file_key: str) -> Optional[str]:
+    """Return subset h5ad path if it exists, else None.
+
+    Subset files are pre-extracted gene-subset h5ad files that contain only
+    the proteome + kinase/phosphatase genes (~6,800 of 32,285). They're much
+    smaller and faster to read than the full regional files.
+    """
+    region = file_key.split("/")[0]  # e.g. "WMB-10Xv3-CB"
+    subset_path = os.path.join(
+        config.WMB_SUBSET_DIR,
+        config.WMB_SUBSET_FILENAME_FMT.format(region=region),
+    )
+    if os.path.exists(subset_path):
+        return subset_path
+    return None
+
+
+def _build_gene_index(cache):
+    """Build gene symbol → column index mapping.
+
+    Prefers subset h5ad files (smaller, faster) when available. Falls back
+    to the full regional files. Returns (atlas_genes, gene_to_idx, gene_fmt).
+    """
+    import anndata as ad
+
+    first_key = config.WMB_ALL_REGION_KEYS[0]
+
+    # Prefer subset file for index building
+    subset_path = _get_subset_path(first_key)
+    if subset_path:
+        ref_path = subset_path
+        print(f"  Gene index: using subset file")
+    else:
+        ref_path = _get_expression_path(cache, config.WMB_DATASET_KEY, first_key)
+        print(f"  Gene index: using full file")
+
+    adata_ref = ad.read_h5ad(str(ref_path), backed="r")
+    atlas_genes, gene_fmt = _extract_gene_symbols(adata_ref)
+
+    if "gene_symbol" in adata_ref.var.columns:
+        gene_to_idx = {}
+        for i, sym in enumerate(adata_ref.var["gene_symbol"]):
+            if pd.notna(sym):
+                gene_to_idx[sym] = i
+    else:
+        gene_to_idx = {g: i for i, g in enumerate(adata_ref.var_names)}
+
+    if hasattr(adata_ref, "file") and adata_ref.file is not None:
+        adata_ref.file.close()
+
+    return atlas_genes, gene_to_idx, gene_fmt
+
+
+# ---------------------------------------------------------------------------
 # WMB Expression Computation
 # ---------------------------------------------------------------------------
 
@@ -146,14 +179,11 @@ def _stream_wmb_expression(
     gene_indices: np.ndarray,
     label: str = "genes",
     chunk_size: int = 5000,
-    cell_type_set: str = "subclass",
     skip_regional: bool = False,
 ) -> tuple:
     """Stream through all 13 WMB regions, accumulating per-cell-type expression.
 
-    Args:
-        cell_type_set: "subclass" for 24 SEA-AD subclasses (default),
-                       "5plus1" for 5 broad classes (legacy).
+    Uses the 24 SEA-AD subclasses as cell-type categories.
 
     Returns (accum, regional_rows) where accum is {ct: {expr_sum, nonzero_count,
     n_cells}} and regional_rows is a list of per-region per-gene dicts.
@@ -163,15 +193,8 @@ def _stream_wmb_expression(
     cache = get_abc_cache()
     n_genes = len(gene_indices)
 
-    # Determine cell type categories and mapping function
-    if cell_type_set == "subclass":
-        ct_list = config.SEA_AD_SUBCLASSES
-        map_fn = _match_sea_ad_subclass
-        ct_col = "cell_type"
-    else:
-        ct_list = CT5
-        map_fn = _match_subclass
-        ct_col = "cell_type_5plus1"
+    ct_list = config.SEA_AD_SUBCLASSES
+    map_fn = _match_sea_ad_subclass
 
     # Load WMB cell metadata (shared across all regions)
     print("  Loading WMB cell metadata ...")
@@ -189,16 +212,23 @@ def _stream_wmb_expression(
     if "cell_label" in wmb_meta.columns:
         wmb_meta_by_label = wmb_meta.set_index("cell_label")
 
-    # Verify gene panel from first region
-    first_key = config.WMB_ALL_REGION_KEYS[0]
-    first_path = _get_expression_path(cache, config.WMB_DATASET_KEY, first_key)
-    adata_ref = ad.read_h5ad(first_path, backed="r")
-    ref_var_names = list(adata_ref.var_names)
-    if hasattr(adata_ref, "file") and adata_ref.file is not None:
-        adata_ref.file.close()
+    # Detect whether subset files are available
+    _first_subset = _get_subset_path(config.WMB_ALL_REGION_KEYS[0])
+    using_subsets = _first_subset is not None
+    if using_subsets:
+        print("  Using pre-extracted gene-subset h5ad files (fast path)")
+    else:
+        print("  Using full regional h5ad files")
+        # Pre-compute contiguous slice bounds for full-file fallback
+        if len(gene_indices) > 0:
+            _sorted_gi = np.sort(gene_indices)
+            _min_col, _max_col = int(_sorted_gi[0]), int(_sorted_gi[-1])
+            _local_indices = gene_indices - _min_col
+            print(f"  Contiguous slice: cols [{_min_col}:{_max_col+1}] "
+                  f"({_max_col - _min_col + 1} cols for {n_genes} genes)")
 
     print(f"  Target {label}: {n_genes}")
-    print(f"  Cell type set: {cell_type_set} ({len(ct_list)} categories)")
+    print(f"  Cell type set: 24 SEA-AD subclasses ({len(ct_list)} categories)")
 
     # Per-cell-type accumulators
     accum: Dict[str, Dict] = {}
@@ -213,14 +243,18 @@ def _stream_wmb_expression(
 
     for ri, file_key in enumerate(config.WMB_ALL_REGION_KEYS, 1):
         region = file_key.split("/")[0].replace("WMB-10Xv3-", "")
-        region_path = _get_expression_path(cache, config.WMB_DATASET_KEY, file_key)
 
-        print(f"\n  [{ri}/{len(config.WMB_ALL_REGION_KEYS)}] Region: {region}")
-        adata = ad.read_h5ad(region_path, backed="r")
+        # Prefer subset file, fall back to full file
+        subset_path = _get_subset_path(file_key)
+        if subset_path:
+            region_path = subset_path
+        else:
+            region_path = _get_expression_path(cache, config.WMB_DATASET_KEY, file_key)
+
+        print(f"\n  [{ri}/{len(config.WMB_ALL_REGION_KEYS)}] Region: {region}"
+              f"{' (subset)' if subset_path else ''}")
+        adata = ad.read_h5ad(str(region_path), backed="r")
         print(f"    Shape: {adata.shape}")
-
-        assert list(adata.var_names) == ref_var_names, \
-            f"Gene panel mismatch in {region}: expected {len(ref_var_names)} genes"
 
         # Match cells to metadata
         h5ad_cells = set(adata.obs.index.tolist())
@@ -285,7 +319,18 @@ def _stream_wmb_expression(
         for start in range(0, len(all_row_indices), chunk_size):
             chunk_rows = all_row_indices[start:start + chunk_size]
             chunk_cts = all_row_cts[start:start + chunk_size]
-            chunk_data = adata.X[chunk_rows][:, gene_indices]
+
+            if using_subsets:
+                # Subset files contain only target genes — read all columns
+                chunk_data = adata.X[chunk_rows][:, gene_indices]
+            else:
+                # Full files: use contiguous column slice for HDF5 efficiency,
+                # then pick needed columns in memory
+                chunk_slice = adata.X[chunk_rows, _min_col:_max_col + 1]
+                if hasattr(chunk_slice, "toarray"):
+                    chunk_slice = chunk_slice.toarray()
+                chunk_data = chunk_slice[:, _local_indices]
+
             if hasattr(chunk_data, "toarray"):
                 chunk_data = chunk_data.toarray()
 
@@ -319,7 +364,7 @@ def _stream_wmb_expression(
                     regional_rows.append({
                         "region": region,
                         "gene_symbol": gene,
-                        ct_col: ct,
+                        "cell_type": ct,
                         "mean_log2_expression": round(float(region_mean[i]), 6),
                         "fraction_cells_expressing": round(float(region_frac[i]), 6),
                         "n_cells": n_cells,
@@ -331,45 +376,29 @@ def _stream_wmb_expression(
     return accum, regional_rows
 
 
-def _build_gene_index(cache):
-    """Build gene symbol → column index mapping from the first WMB region.
-
-    Returns (atlas_genes, gene_to_idx, gene_fmt).
-    """
-    import anndata as ad
-
-    first_key = config.WMB_ALL_REGION_KEYS[0]
-    first_path = _get_expression_path(cache, config.WMB_DATASET_KEY, first_key)
-    adata_ref = ad.read_h5ad(first_path, backed="r")
-
-    atlas_genes, gene_fmt = _extract_gene_symbols(adata_ref)
-
-    if "gene_symbol" in adata_ref.var.columns:
-        gene_to_idx = {}
-        for i, sym in enumerate(adata_ref.var["gene_symbol"]):
-            if pd.notna(sym):
-                gene_to_idx[sym] = i
-    else:
-        gene_to_idx = {g: i for i, g in enumerate(adata_ref.var_names)}
-
-    if hasattr(adata_ref, "file") and adata_ref.file is not None:
-        adata_ref.file.close()
-
-    return atlas_genes, gene_to_idx, gene_fmt
-
-
-def compute_wmb_expression() -> pd.DataFrame:
+def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
     """Compute whole-brain kinase/phosphatase expression matrix.
 
     Streams through all 13 WMB-10Xv3 regional h5ad files, accumulating
     cell-weighted expression sums per cell type.  This correctly models
     whole-brain homogenate: larger regions contribute proportionally more.
+
+    If the cached output exists and force=False, returns the cached result.
     """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     print("=" * 60)
     print("WMB Whole-Brain Kinase Expression Matrix (13 regions)")
     print("=" * 60)
+
+    # Cache staleness check: compare output mtime against kinase mapping cache
+    if not force and os.path.exists(WMB_EXPR_FILE):
+        mapping_cache = config.MAPPING_CACHE_FILE
+        if (not os.path.exists(mapping_cache)
+                or os.path.getmtime(WMB_EXPR_FILE) > os.path.getmtime(mapping_cache)):
+            print("  Cached kinase expression is up-to-date, skipping recomputation")
+            print(f"  (use --force to recompute)")
+            return pd.read_csv(WMB_EXPR_FILE)
 
     cache = get_abc_cache()
     atlas_genes, gene_to_idx, gene_fmt = _build_gene_index(cache)
@@ -384,7 +413,6 @@ def compute_wmb_expression() -> pd.DataFrame:
 
     accum, regional_rows = _stream_wmb_expression(
         kinase_genes, kinase_idx, label="kinase/phosphatase",
-        cell_type_set="subclass",
     )
 
     # Compute global whole-brain means
@@ -445,12 +473,15 @@ def compute_wmb_expression() -> pd.DataFrame:
     return df
 
 
-def compute_wmb_proteome_expression() -> pd.DataFrame:
+def compute_wmb_proteome_expression(force: bool = False) -> pd.DataFrame:
     """Compute whole-brain expression for all genes in the total proteome.
 
     Uses the same streaming infrastructure as the kinase computation but
     extracts all ~6,444 proteome genes instead of ~400 kinases.  Output is
     consumed by data_ingest.py --markers for cell-type marker assessment.
+
+    If the cached output is newer than the input gene list, returns the
+    cached result immediately (unless force=True).
     """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -458,8 +489,16 @@ def compute_wmb_proteome_expression() -> pd.DataFrame:
     print("WMB Whole-Brain Proteome Expression Matrix (13 regions)")
     print("=" * 60)
 
-    # Load proteome gene list (produced by data_ingest.py --phospho-match)
+    # Cache staleness check: skip if output is newer than input gene list
     gene_list_path = config.PROTEOME_GENE_LIST_FILE
+    out_path = config.WMB_PROTEOME_EXPRESSION_FILE
+    if not force and os.path.exists(out_path):
+        if (not os.path.exists(gene_list_path)
+                or os.path.getmtime(out_path) > os.path.getmtime(gene_list_path)):
+            print("  Cached proteome expression is up-to-date, skipping recomputation")
+            print(f"  (use --force to recompute)")
+            return pd.read_csv(out_path)
+
     if not os.path.exists(gene_list_path):
         raise FileNotFoundError(
             f"Proteome gene list not found at {gene_list_path}. "
@@ -488,14 +527,14 @@ def compute_wmb_proteome_expression() -> pd.DataFrame:
     gene_indices = np.array(matched_indices)
 
     accum, _ = _stream_wmb_expression(
-        matched_genes, gene_indices, label="proteome", chunk_size=2000,
-        cell_type_set="5plus1", skip_regional=True,
+        matched_genes, gene_indices, label="proteome", chunk_size=5000,
+        skip_regional=True,
     )
 
     # Build output DataFrame
     print("\n  Computing whole-brain aggregates ...")
     rows = []
-    for ct in CT5:
+    for ct in config.SEA_AD_SUBCLASSES:
         n_total = accum[ct]["n_cells"]
         if n_total == 0:
             continue
@@ -508,7 +547,7 @@ def compute_wmb_proteome_expression() -> pd.DataFrame:
             rows.append({
                 "gene_symbol_mouse": gene,
                 "gene_symbol_human": _mouse_to_human(gene),
-                "cell_type_5plus1": ct,
+                "cell_type": ct,
                 "mean_log2_expression": round(float(mean_expr[i]), 6),
                 "fraction_cells_expressing": round(float(frac_expr[i]), 6),
                 "specificity_score": np.nan,
@@ -534,8 +573,8 @@ def compute_wmb_proteome_expression() -> pd.DataFrame:
     print(f"\n  Saved {len(df)} rows to {out_path}")
 
     # Summary: top-5 most specific genes per cell type
-    for ct in CT5:
-        sub = df[df["cell_type_5plus1"] == ct].copy()
+    for ct in config.SEA_AD_SUBCLASSES:
+        sub = df[df["cell_type"] == ct].copy()
         n_expr = sub["binary_expressed"].sum()
         top5 = sub.sort_values("specificity_score", ascending=False).head(5)
         top_str = ", ".join(
@@ -559,10 +598,9 @@ def print_summary() -> None:
         return
 
     df = pd.read_csv(WMB_EXPR_FILE)
-    ct_col = "cell_type" if "cell_type" in df.columns else "cell_type_5plus1"
-    print(f"  WMB expression: {len(df)} rows, {df[ct_col].nunique()} cell types")
-    for ct in sorted(df[ct_col].unique()):
-        sub = df[df[ct_col] == ct]
+    print(f"  WMB expression: {len(df)} rows, {df['cell_type'].nunique()} cell types")
+    for ct in sorted(df["cell_type"].unique()):
+        sub = df[df["cell_type"] == ct]
         n_expr = sub["binary_expressed"].sum()
         print(f"    {ct}: {n_expr}/{len(sub)} kinases expressed")
 
@@ -583,13 +621,15 @@ def main():
                        help="Compute proteome-wide WMB expression matrix")
     group.add_argument("--summary", action="store_true",
                        help="Print cached results")
+    parser.add_argument("--force", action="store_true",
+                        help="Force recomputation even if cached results exist")
 
     args = parser.parse_args()
 
     if args.run:
-        compute_wmb_expression()
+        compute_wmb_expression(force=args.force)
     elif args.proteome:
-        compute_wmb_proteome_expression()
+        compute_wmb_proteome_expression(force=args.force)
     elif args.summary:
         print_summary()
 
