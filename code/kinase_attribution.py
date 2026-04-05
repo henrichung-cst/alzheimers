@@ -778,6 +778,53 @@ def _assign_confidence(concordance_score, wmb_specificity, sea_ad_lfc):
     return "low"
 
 
+def _assign_evidence_basis(wmb_specificity, sea_ad_lfc):
+    """Classify which evidence sources support an attribution.
+
+    Returns one of: cross_species, mouse_expression_only,
+    human_concordance_only, weak.
+    """
+    has_wmb = wmb_specificity >= config.SPECIFICITY_LOW
+    lfc_finite = np.isfinite(sea_ad_lfc) if not isinstance(sea_ad_lfc, (int, float)) else not np.isnan(sea_ad_lfc)
+    has_sea_ad = lfc_finite and abs(sea_ad_lfc) > config.SEA_AD_LFC_MIN
+    if has_wmb and has_sea_ad:
+        return "cross_species"
+    if has_wmb:
+        return "mouse_expression_only"
+    if has_sea_ad:
+        return "human_concordance_only"
+    return "weak"
+
+
+def _assign_confidence_and_basis(concordance_score, wmb_specificity, sea_ad_lfc):
+    """Assign both confidence tier and evidence basis in one call."""
+    if concordance_score <= 0:
+        return "none", "weak"
+
+    has_wmb = wmb_specificity >= config.SPECIFICITY_LOW
+    has_wmb_high = wmb_specificity >= config.SPECIFICITY_HIGH
+    lfc_val = sea_ad_lfc if np.isfinite(sea_ad_lfc) else 0.0
+    has_sea_ad = abs(lfc_val) > config.SEA_AD_LFC_MIN
+
+    if has_wmb_high and has_sea_ad:
+        conf = "high"
+    elif has_wmb or has_sea_ad:
+        conf = "moderate"
+    else:
+        conf = "low"
+
+    if has_wmb and has_sea_ad:
+        basis = "cross_species"
+    elif has_wmb:
+        basis = "mouse_expression_only"
+    elif has_sea_ad:
+        basis = "human_concordance_only"
+    else:
+        basis = "weak"
+
+    return conf, basis
+
+
 def step_attribute():
     """Stage 3: Unified cell-type attribution (SEA-AD concordance + WMB expression)."""
     _ensure_output_dir()
@@ -909,6 +956,7 @@ def step_attribute():
                     "concordance_score": 0.0,
                     "combined_score": 0.0,
                     "combined_confidence": "none",
+                    "evidence_basis": "weak",
                 })
         unified = pd.DataFrame(attribution_rows)
     else:
@@ -918,11 +966,13 @@ def step_attribute():
         unified["wmb_specificity"] = [wmb_spec.get(k, 0.0) for k in keys]
         unified["combined_score"] = (
             unified["concordance_score"] * (0.5 + unified["wmb_specificity"]))
-        unified["combined_confidence"] = unified.apply(
-            lambda r: _assign_confidence(
+        both = unified.apply(
+            lambda r: _assign_confidence_and_basis(
                 r["concordance_score"], r["wmb_specificity"],
                 r["sea_ad_lfc"]),
-            axis=1)
+            axis=1, result_type="expand")
+        unified["combined_confidence"] = both[0]
+        unified["evidence_basis"] = both[1]
 
     # Filter to attributed rows (confidence != none)
     attributed = unified[unified["combined_confidence"] != "none"].copy()

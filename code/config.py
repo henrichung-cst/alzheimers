@@ -64,6 +64,7 @@ PVAL_SIG = .1
 DATA_INGEST_OUTPUT_DIR = os.path.join("outputs", "reports", "data_ingest")
 KINASE_ATTRIBUTION_OUTPUT_DIR = os.path.join("outputs", "reports", "kinase_attribution")
 ATTRIBUTION_RECOVERY_OUTPUT_DIR = os.path.join("outputs", "reports", "attribution_recovery")
+SUPPLEMENTARY_OUTPUT_DIR = os.path.join("outputs", "reports", "supplementary")
 
 # =============================================================================
 # Supporting: external atlas acquisition (atlas_reference.py)
