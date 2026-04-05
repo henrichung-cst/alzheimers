@@ -1,10 +1,14 @@
-# Public repo policy: track only code and repo policy.
+# Public repo policy: track code, docs, and repo policy.
 *
 !/.gitignore
 !/code/
 !/code/**
 !README.md
-!sap_audit.md
+!CLAUDE.md
+!/archive/
+!/archive/**
+!/docs/
+!/docs/**
 # Ignore generated Python cache files inside code.
 /code/__pycache__/
 /code/**/*.pyc

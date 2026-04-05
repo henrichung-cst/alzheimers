@@ -1,65 +1,85 @@
 # Alzheimer's Kinase Analysis
 
-This repository is the study-specific workspace for Alzheimer's multi-omic kinase and signaling analysis.
+This repository is the study workspace for Alzheimer's multi-omic kinase and signaling analysis.
 
-It now has three clearly separated surfaces:
+The current documentation in `docs/` defines the live program as a 72-sample, stoichiometry-enabled, mechanism-stratified attribution workflow. The localized Song workspace under `data/incytr_collections/song/` is the operational dataset surface. Upstream collaborator material remains under `data/gdrive_shared/`, and retired deconvolution and older SAP records are preserved under `archive/`.
 
-- main analysis code in `code/`
-- authoritative Song dataset workspace in `data/incytr_collections/song/`
-- archived deconvolution benchmark and transition work in `deconv/`
+The repo now keeps executable code under `code/` or `archive/`. The labels `main`, `supporting`, and `archived` are documented classifications, not new top-level directories.
 
-The reusable signaling method implementation lives in the separate `incytr` repository and is loaded from the local environment when needed.
+## Read This First
 
-## Current Status
+Use the documentation by role, not by creation date:
 
-For the Song (`yuyu01`) dataset:
+- [`docs/sap_document_map.md`](docs/sap_document_map.md): map of the live documentation set
+- [`docs/foundation/analysis_charter.md`](docs/foundation/analysis_charter.md): single source of truth for the active analysis program
+- [`docs/foundation/analysis_rationale.md`](docs/foundation/analysis_rationale.md): why the project pivoted away from direct deconvolution
+- [`docs/foundation/statistical_constraints.md`](docs/foundation/statistical_constraints.md): identifiability limits and interpretation guardrails
+- [`docs/foundation/repo_surface_index.md`](docs/foundation/repo_surface_index.md): explicit `main` / `supporting` / `archived` file inventory
+- [`docs/foundation/live_pipeline_contract.md`](docs/foundation/live_pipeline_contract.md): exact live stage contract, outputs, and ordered run sequence
+- [`docs/integrations/integrations-structure.md`](docs/integrations/integrations-structure.md): upstream archive layout and current operational data locations
+- [`docs/integrations/alzheimers-incytr-input-validation.md`](docs/integrations/alzheimers-incytr-input-validation.md): current input mapping and validation notes for Song and 5xFAD
+- [`docs/integrations/5xfad-lucie-manifest.json`](docs/integrations/5xfad-lucie-manifest.json): machine-readable inventory of local 5xFAD Lucie proteomics files
+- [`docs/report_writing_checklist.md`](docs/report_writing_checklist.md): report-writing guidance derived from reviewer feedback
 
-- `data/incytr_collections/song/` is the authoritative local workspace
-- `data/gdrive_shared/yuyu01/` should be treated as upstream archive and provenance source
-- the active Song `pr` / `ps` / `py` files are regenerated with the standardized `A_obs + DESP` workflow
-- the exact historical collaborator outputs are preserved under `data/incytr_collections/song/proteomics/legacy/`
+Historical context lives under `archive/`:
 
-For benchmarking and method-transition history:
+- [`archive/sap_docs/transitional_notes/sap_primary_path_summary.md`](archive/sap_docs/transitional_notes/sap_primary_path_summary.md)
+- [`archive/sap_docs/atlas_working_notes/sap_atlas_part4.md`](archive/sap_docs/atlas_working_notes/sap_atlas_part4.md)
+- [`archive/sap_docs/legacy_design/sap_24group_identifiability_record.md`](archive/sap_docs/legacy_design/sap_24group_identifiability_record.md)
+- [`archive/deconv/docs/deconvolution-transition-aobs-desp.md`](archive/deconv/docs/deconvolution-transition-aobs-desp.md)
 
-- `deconv/` is retained as an archive
-- it should not be treated as the main live analysis surface
+## Current Analysis Program
 
-## Top-Level Layout
+The live workflow described in `docs/foundation/` is:
+
+1. integrate the 72-animal total proteome,
+2. compute phospho-to-protein stoichiometry,
+3. split kinase findings into abundance-driven, both, and activity-driven classes,
+4. run Track A attribution on abundance-coupled classes,
+5. run Track B attribution on activity-driven classes,
+6. assemble the final attribution table.
+
+Important guardrails from the foundation docs:
+
+- direct cell-type deconvolution from the original 24-group design is a closed path
+- transcript-only rescue is a closed path
+- factor-model and two-compartment rescue branches are archived, not live methods
+- transcriptomic concordance should not be used on activity-driven kinase sets
+- old deconvolution outputs should be treated as provenance only
+
+## Repository Layout
 
 ```text
 alzheimers/
-├── code/                           # Main analysis scripts and helpers
-│   ├── export_song_aobs_desp.py    # Regenerate Song pr/ps/py with A_obs + DESP
-│   ├── kl_analysis_clusters.py     # Deconvoluted kinase-enrichment pipeline
-│   ├── kl_analysis_bulk.py         # Bulk kinase-enrichment pipeline
-│   ├── sap_data.py                 # SAP Phase 0–1: data ingestion + RNA preprocessing
-│   ├── sap_model.py                # SAP Phase 2: Hurdle-Tweedie GLM fitting + LOCO-CV
-│   ├── sap_validate.py             # SAP Phase 3: validation suite (synthetic, permutation, etc.)
-│   ├── sap_perf_test.py            # SAP numerical regression tests
-│   └── r/                          # Alzheimer's-specific InCytr runners
+├── archive/
+│   ├── code/                       # Archived Python/R code (SAP, enrichment, side analyses)
+│   ├── deconv/                     # Archived benchmark and transition workspace
+│   ├── runners/                    # Archived validation and side-workflow runners
+│   └── sap_docs/                   # Archived SAP design, atlas, and transition notes
+├── code/
+│   ├── runners/
+│   │   ├── main/                   # Main pipeline stage runners
+│   │   └── supporting/             # Supporting setup and demoted mixed runners
+│   ├── data_ingest.py              # Main: data ingestion + characterization
+│   ├── kinase_attribution.py       # Main: stoichiometry + attribution
+│   ├── attribution_recovery.py     # Main: attribution recovery + final table assembly
+│   ├── config.py                   # Supporting: shared configuration
+│   ├── atlas_reference.py          # Supporting: external-reference prep
+│   ├── wmb_expression.py           # Supporting: WMB expression export for Track B
+│   ├── map_kinases_to_genes.py     # Supporting: kinase-gene mapping utility
+│   └── lucie_5xfad_manifest.py     # Supporting: 5xFAD integration/provenance
 ├── data/
 │   ├── incytr_collections/song/    # Authoritative localized Song workspace
-│   ├── gdrive_shared/              # Upstream archive mounts
-│   └── lucie_proteomics/           # 5xFAD upstream proteomics sources
-├── docs/                           # Live repo docs
+│   ├── gdrive_shared/              # Upstream collaborator archive mounts
+│   └── lucie_proteomics/           # Local 5xFAD upstream proteomics sources
+├── docs/
+│   ├── foundation/                 # Live analysis charter, rationale, constraints
+│   └── integrations/               # External dataset mapping and validation notes
 ├── outputs/                        # Generated outputs and reports
-├── sap.md                          # Statistical Analysis Plan for SAP deconvolution model
-├── deconv/                         # Archived benchmark and transition workspace
-├── scripts/setup_gdrive_mounts.sh  # Mount helper
-├── regenerate_outputs_and_reports.sh
+├── scripts/setup_gdrive_mounts.sh  # Mount helper for upstream data
 ├── environment.yml
 └── README.md
 ```
-
-## Documentation Entry Points
-
-Start here if you need orientation:
-
-- [data/incytr_collections/song/INDEX.md](/home/hchung/Projects/work/alzheimers/data/incytr_collections/song/INDEX.md)
-- [data/incytr_collections/song/source/INDEX.md](/home/hchung/Projects/work/alzheimers/data/incytr_collections/song/source/INDEX.md)
-- [data/incytr_collections/song/CODE_DATA_RELATIONSHIP.md](/home/hchung/Projects/work/alzheimers/data/incytr_collections/song/CODE_DATA_RELATIONSHIP.md)
-- [docs/downstream_output_index.md](/home/hchung/Projects/work/alzheimers/docs/downstream_output_index.md)
-- [deconv/docs/deconvolution-transition-aobs-desp.md](/home/hchung/Projects/work/alzheimers/deconv/docs/deconvolution-transition-aobs-desp.md)
 
 ## Environment Setup
 
@@ -70,7 +90,7 @@ mamba env create -f environment.yml
 mamba activate alzheimers
 ```
 
-Install the local `incytr` package into the environment:
+Install the local `incytr` package into that environment only if you need the archived InCytr compatibility workflows:
 
 ```bash
 mamba run -n alzheimers Rscript -e 'devtools::install("/home/hchung/Projects/work/incytr", dependencies=FALSE)'
@@ -82,171 +102,91 @@ If you need the study data mounts:
 bash scripts/setup_gdrive_mounts.sh
 ```
 
-## Authoritative Data Layout
+## Data Surfaces
 
 ### Song workspace
 
-The active Song dataset lives under:
+The active Song dataset lives under `data/incytr_collections/song/`.
 
-- `data/incytr_collections/song/source/`
-- `data/incytr_collections/song/transcriptomics/`
-- `data/incytr_collections/song/proteomics/`
-- `data/incytr_collections/song/markers/`
-- `data/incytr_collections/song/kinase/`
-- `data/incytr_collections/song/analysis_support/`
-- `data/incytr_collections/song/analysis_cache/`
-- `data/incytr_collections/song/method_records/`
+Important references:
 
-Important files:
+- [`data/incytr_collections/song/INDEX.md`](data/incytr_collections/song/INDEX.md)
+- [`data/incytr_collections/song/primary/INDEX.md`](data/incytr_collections/song/primary/INDEX.md)
 
-- foundational source records:
-  - `data/incytr_collections/song/source/single_cell/`
-  - `data/incytr_collections/song/source/bulk_omics/`
-  - `data/incytr_collections/song/source/metadata/`
-- active proteomics:
-  - `data/incytr_collections/song/proteomics/pr_yuyu_deconvoluted.csv`
-  - `data/incytr_collections/song/proteomics/ps_yuyu_deconvoluted.csv`
-  - `data/incytr_collections/song/proteomics/py_yuyu_deconvoluted.csv`
-- preserved historical bundle:
-  - `data/incytr_collections/song/proteomics/legacy/*.csv`
-- localized bulk median inputs:
-  - `data/incytr_collections/song/proteomics/source/pr_median.csv`
-  - `data/incytr_collections/song/proteomics/source/imac_median.csv`
-  - `data/incytr_collections/song/proteomics/source/py_median.csv`
-- current support and cache files:
-  - `data/incytr_collections/song/analysis_support/median_cluster_sizes.csv`
-  - `data/incytr_collections/song/analysis_cache/kinase_to_gene_mapping.csv`
-  - `data/incytr_collections/song/analysis_cache/allen_expression_cache.csv`
+Operational rules:
 
-### Upstream archive
+- treat `data/incytr_collections/song/` as the authoritative local workspace
+- treat `data/gdrive_shared/yuyu01/` as upstream archive and provenance, not the default runtime dependency
+- treat `data/incytr_collections/song/proteomics/legacy/` as preserved collaborator outputs
+- treat the regenerated `pr` / `ps` / `py` files in `data/incytr_collections/song/proteomics/` as the active Song proteomics bundle
 
-The collaborator-owned mounted tree under `data/gdrive_shared/` is still useful for provenance and source recovery, but it is no longer the default runtime dependency for Song.
+### 5xFAD integrations
 
-## Main Workflows
+The current reference for 5xFAD input mapping is [`docs/integrations/alzheimers-incytr-input-validation.md`](docs/integrations/alzheimers-incytr-input-validation.md).
 
-### 1. Regenerate Song `pr` / `ps` / `py`
+Key points:
 
-This rebuilds the active Song proteomics bundle with the current `A_obs + DESP` workflow:
+- `data/lucie_proteomics/` contains upstream source files, not direct InCytr-ready inputs
+- `docs/integrations/5xfad-lucie-manifest.json` inventories the local Lucie `.sne` files
+- the packaged InCytr-ready 5xFAD inputs are treated as integration targets and comparison material, not as raw provenance
+
+## Main Workflow
+
+Use the bundled live runner as the main front door:
 
 ```bash
-python code/export_song_aobs_desp.py --modalities pr,ps,py
+bash code/runners/main/run_live_pipeline.sh
 ```
 
-Inputs come from the localized Song workspace and the localized `A_obs` records under `data/incytr_collections/song/method_records/aobs_desp_standardized/`.
-
-### 2. Run deconvoluted kinase enrichment
-
-Serine/threonine:
+Equivalent explicit ordered sequence:
 
 ```bash
-python code/kl_analysis_clusters.py --step all --kin-type ser_thr
+bash code/runners/main/run_data_ingest.sh
+bash code/runners/main/run_kinase_attribution.sh
+bash code/runners/main/run_attribution_recovery.sh
 ```
 
-Tyrosine:
+Equivalent direct module entry points:
 
 ```bash
-python code/kl_analysis_clusters.py --step all --kin-type tyrosine
+python code/data_ingest.py --run
+python code/kinase_attribution.py --run
+python code/attribution_recovery.py --run
 ```
 
-These write to:
+## Supporting Setup
 
-- `outputs/deconv/`
-- `outputs/deconv_tyrosine/`
-
-### 3. Run bulk kinase enrichment
-
-Serine/threonine:
+These are retained because the main pipeline consumes their outputs or context, but they are not co-equal front doors:
 
 ```bash
-python code/kl_analysis_bulk.py --step all --kin-type ser_thr
+bash code/runners/supporting/run_atlas_reference.sh
 ```
 
-Tyrosine:
+The WMB expression export is a standalone supporting surface at `code/wmb_expression.py`. The live pipeline expects `outputs/reports/wmb_expression/wmb_kinase_expression.csv` to exist before kinase attribution Track B runs.
 
 ```bash
-python code/kl_analysis_bulk.py --step all --kin-type tyrosine
+bash code/runners/supporting/run_wmb_expression.sh
 ```
 
-These write to:
+## Demoted And Archived Workflows
 
-- `outputs/bulk/`
-- `outputs/bulk_tyrosine/`
-
-### 4. Refresh plots, summaries, and reports
-
-Fast mode recomputes summaries and plots from existing enrichment CSVs:
-
-```bash
-bash regenerate_outputs_and_reports.sh
-```
-
-Full mode reruns enrichment first:
-
-```bash
-bash regenerate_outputs_and_reports.sh --full
-```
-
-### 5. SAP model (condition-specific deconvolution)
-
-Cell-type-resolved phosphoproteomic deconvolution via Hurdle-Tweedie GLM. See [`sap.md`](sap.md) for the full statistical analysis plan and `CLAUDE.md` for all CLI flags.
-
-```bash
-python code/sap_model.py --fit       # full LOCO-CV + model fit
-python code/sap_validate.py --all    # validation suite
-```
-
-### 6. Run the local Song InCytr example
-
-```bash
-Rscript code/r/run_incytr_ad_models_yuyu01.R
-```
-
-This consumes the localized Song bundle under `data/incytr_collections/song/`.
-
-## Analysis Logic
-
-The main kinase-enrichment pipeline currently uses:
-
-- percentile-based site classification
-- `kinase-library` enrichment
-- ser/thr and tyrosine modes via `--kin-type`
-- Song-owned support and cache files under `data/incytr_collections/song/`
-
-For the Song dataset, the important provenance split is:
-
-1. historical collaborator deconvolution outputs preserved in `proteomics/legacy/`
-2. active standardized `A_obs + DESP` outputs in `proteomics/`
+Legacy compatibility builders, kinase-enrichment workflows, local InCytr examples, and archived SAP validation runners remain in the repository for provenance and reproducibility, but they are not part of the main front door. Use [`docs/foundation/repo_surface_index.md`](docs/foundation/repo_surface_index.md) for the current classification before invoking any non-Module-6 surface.
 
 ## Outputs
 
-The main generated output trees are:
+The primary live deliverables live under `outputs/reports/`, especially:
 
-- `outputs/deconv/`
-- `outputs/deconv_tyrosine/`
-- `outputs/bulk/`
-- `outputs/bulk_tyrosine/`
-- `outputs/reports/`
+- `outputs/reports/data_ingest/`
+- `outputs/reports/kinase_attribution/`
+- `outputs/reports/attribution_recovery/`
+- `outputs/reports/attribution_recovery/final_attribution_table.csv`
 
-See [docs/downstream_output_index.md](/home/hchung/Projects/work/alzheimers/docs/downstream_output_index.md) for the current output map.
+Supporting and archived outputs may remain elsewhere under `outputs/`, but they should not be treated as the primary current-state deliverables.
 
-Important note:
+## Conventions
 
-- some existing files under `outputs/` may still reflect older mixed-history runs from before the Song workspace migration
-- if you need a clean current-state result set, regenerate the relevant output tree
-
-## Repository Conventions
-
+- use the `docs/foundation/` documents as the live analytical contract
+- use `docs/foundation/repo_surface_index.md` when deciding whether a file is `main`, `supporting`, or `archived`
+- use `docs/integrations/` when the question is about external bundles, input mapping, or provenance
 - prefer `data/incytr_collections/song/` over ad hoc files elsewhere in `data/`
-- treat `data/gdrive_shared/yuyu01/` as upstream archive, not active workspace
-- treat `deconv/` as archived benchmark context, not the primary analysis surface
-- use the docs indexes before adding new one-off notes
-
-## 5xFAD Note
-
-`5xFAD` work remains in this repository, but it is separate from the Song-localization effort. The current 5xFAD provenance and input validation notes live under:
-
-- `docs/integrations/`
-
-and the upstream proteomics source area is:
-
-- `data/lucie_proteomics/`
+- treat `archive/` as provenance and history, not as the default source of live methods
