@@ -30,6 +30,11 @@ KL_THRESH = 15
 MEA_FDR_THRESH = 0.25           # standard GSEA FDR threshold
 MEA_PERMUTATION_NUM = 1000      # GSEApy prerank permutations
 MEA_SEED = 112123               # GSEApy default seed
+MEA_WINSORIZE_PERCENTILE = 1.0  # winsorize site LFCs at this percentile before MEA
+
+# Sample filtering: outlier exclusion and sex-based subsetting
+OUTLIER_ZSCORE_THRESH = 3.0     # within-group z-score threshold for outlier exclusion
+ANALYSIS_MODE = os.environ.get("ANALYSIS_MODE", "males_only")  # "males_only" or "full_cohort"
 
 # Unified attribution: 24 SEA-AD subclasses used for cell-type attribution
 SEA_AD_SUBCLASSES = [
@@ -44,6 +49,16 @@ SEA_AD_SUBCLASSES = [
     "Oligodendrocyte", "VLMC",
 ]
 SEA_AD_LFC_MIN = 0.1            # minimum |sea_ad_lfc| for moderate confidence
+
+# Map mouse-model pathway prefixes to the most biologically appropriate
+# SEA-AD CPS stratification (amyloid cascade model: plaques precede tangles).
+# Pearson r(early, late) ≈ −0.12 with ~48% sign flips across kinase genes,
+# confirming early and late AD drive distinct transcriptomic programs.
+SEA_AD_PATHWAY_MAP = {
+    "App":  "early",   # amyloid-driven → early/low-CPS human donors
+    "Tau":  "late",    # tau-driven → late/high-CPS human donors
+    "ApTt": "full",    # combined pathology → full CPS range
+}
 N_CELL_TYPES = len(SEA_AD_SUBCLASSES)
 # Thresholds are multiples of uniform (1/N): 2× for high, 1× for moderate
 SPECIFICITY_HIGH = 2.0 / N_CELL_TYPES   # ~0.083: ≥2× more specific than uniform
@@ -202,6 +217,12 @@ SUPPLEMENTARY_OUTPUT_DIR = os.path.join("outputs", "reports", "supplementary")
 
 ALLEN_ABC_CACHE_DIR = os.path.join(EXTERNAL_DATA_DIR, "allen_abc")
 SEA_AD_DIR = os.path.join(EXTERNAL_DATA_DIR, "sea_ad")
+# Pathway-matched effect size files (keyed by SEA_AD_PATHWAY_MAP values)
+SEA_AD_EFFECT_SIZES = {
+    "full":  os.path.join(SEA_AD_DIR, "effect_sizes.h5ad"),
+    "early": os.path.join(SEA_AD_DIR, "effect_sizes_early.h5ad"),
+    "late":  os.path.join(SEA_AD_DIR, "effect_sizes_late.h5ad"),
+}
 ALLEN_AGING_DIR = os.path.join(EXTERNAL_DATA_DIR, "allen_aging")
 ATLAS_REFERENCE_OUTPUT_DIR = os.path.join("outputs", "reports", "atlas_reference")
 
@@ -251,6 +272,71 @@ WMB_REGIONAL_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_regi
 WMB_PROTEOME_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_proteome_expression.csv")
 PROTEOME_GENE_LIST_FILE = os.path.join(DATA_INGEST_OUTPUT_DIR, "total_proteome_genes.txt")
 TIER1_CONDITION_TO_CONTRAST = {"AppP": "App", "Ttau": "Tau", "ApTt": "Int"}
+
+# =============================================================================
+# Supporting: Song snRNA-seq integration (paired within-cohort evidence)
+# =============================================================================
+#
+# The 170_gex_celltypes_00.h5ad contains Allen Cell Type Mapper annotations
+# (210 subclass_name labels, per-nucleus confidence scores) for 63,695 nuclei
+# across 28 paired animals. This maps directly to 22/24 SEA-AD subclasses,
+# bypassing the lossy 46-cluster taxonomy (which only covers 12/24).
+
+SONG_H5AD_FILE = os.path.join(SONG_TRANSCRIPTOMICS_DIR, "170_gex_celltypes_00.h5ad")
+
+# Output paths
+SNRNA_INTEGRATION_OUTPUT_DIR = os.path.join("outputs", "reports", "snrna_integration")
+SONG_PSEUDOBULK_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "pseudobulk_cpm.csv")
+SONG_CELL_COUNTS_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "pseudobulk_cell_counts.csv")
+SONG_EXPRESSION_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "song_expression_specificity.csv")
+SONG_CONCORDANCE_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "song_concordance.csv")
+
+# Thresholds
+SONG_LFC_MIN = 0.1       # minimum |song_lfc| for concordance (same as SEA_AD_LFC_MIN)
+# Weighted concordance: Song is within-cohort same-species (3×), SEA-AD is
+# cross-species human proxy (1×). When both are available, effective
+# concordance = (3 × song_cs + 1 × sea_ad_cs) / 4.
+SONG_CONCORDANCE_WEIGHT = 3.0
+SEA_AD_CONCORDANCE_WEIGHT = 1.0
+SONG_MIN_CELLS = 10       # minimum cells per animal×subclass for pseudobulk
+SONG_MIN_ANIMALS = 10     # minimum animals per subclass for concordance DE
+SONG_MIN_SUBCLASS_PROB = 0.9  # minimum subclass_prob for nucleus inclusion
+
+# 210 Allen Cell Type Mapper subclass_name → 22 SEA-AD subclass mapping.
+# Derived from inspecting the 170_gex_celltypes_00.h5ad annotations.
+# Only cortical and non-neuronal types are mapped; subcortical/olfactory
+# types (STR, OB, HY, MB, etc.) are excluded as they lack SEA-AD equivalents.
+SONG_SUBCLASS_MAP = {
+    # GABAergic interneurons
+    "Pvalb Gaba": "Pvalb",
+    "Pvalb chandelier Gaba": "Chandelier",
+    "Sst Gaba": "Sst",
+    "Sst Chodl Gaba": "Sst Chodl",
+    "Vip Gaba": "Vip",
+    "Lamp5 Gaba": "Lamp5",
+    "Lamp5 Lhx6 Gaba": "Lamp5 Lhx6",
+    "Sncg Gaba": "Sncg",
+    # Glutamatergic excitatory neurons
+    "L2/3 IT CTX Glut": "L2/3 IT",
+    "L4/5 IT CTX Glut": "L4 IT",
+    "L5 IT CTX Glut": "L5 IT",
+    "L5 ET CTX Glut": "L5 ET",
+    "L5 NP CTX Glut": "L5/6 NP",
+    "L6 CT CTX Glut": "L6 CT",
+    "L6 IT CTX Glut": "L6 IT",
+    "L6b CTX Glut": "L6b",
+    # Non-neuronal
+    "Oligo NN": "Oligodendrocyte",
+    "OPC NN": "OPC",
+    "Astro-TE NN": "Astrocyte",
+    "Microglia NN": "Microglia-PVM",
+    "Endo NN": "Endothelial",
+    "VLMC NN": "VLMC",
+    "Peri NN": "VLMC",  # pericytes grouped with VLMC (mural/perivascular)
+}
+
+# Pathway map for Song concordance: contrast prefix → factorial term
+SONG_PATHWAY_MAP = {"App": "App", "Tau": "Tau", "ApTt": "ApTt"}
 
 # =============================================================================
 # Supporting: shared cell-type definitions and data paths

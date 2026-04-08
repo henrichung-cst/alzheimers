@@ -42,6 +42,7 @@ Steps (run individually or all at once with --run):
   §2 --phospho-match  Phosphosite-to-protein matching
   §3 --markers        Cell-type marker protein assessment (WMB atlas, data-driven)
   §4 --quality        Data quality (missingness, batch effects, PCA)
+  §5 --outliers       Statistical outlier detection (within-group z-scores)
 """
 
 import argparse
@@ -936,6 +937,170 @@ def step_quality():
 
 
 # ===========================================================================
+# §5  Sample outlier detection
+# ===========================================================================
+
+
+def step_outliers():
+    """§5: Detect statistical outliers using within-group z-scores.
+
+    For each animal, computes the mean stoichiometry across all non-missing
+    sites, then z-scores within its genotype×timepoint group (6 animals each).
+    Animals with |z| > config.OUTLIER_ZSCORE_THRESH are flagged for exclusion.
+
+    Requires kinase_attribution.py --normalize to have been run first (needs
+    stoichiometry_matrix.csv).  Falls back to total-proteome PCA if unavailable.
+
+    Outputs:
+      sample_exclusions.csv — per-animal metrics and exclusion flags
+      pca_plots/outlier_diagnostic.png — PCA + strip-plot diagnostic
+    """
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    print("\n=== §5: Sample Outlier Detection ===\n")
+
+    # Load sample mapping
+    sm_path = os.path.join(OUTPUT_DIR, "sample_mapping.csv")
+    if not os.path.exists(sm_path):
+        raise FileNotFoundError(
+            f"{sm_path} not found. Run --mapping first.")
+    mapping = pd.read_csv(sm_path)
+    bio_cols = mapping["column_name"].tolist()
+
+    # Try stoichiometry matrix first; fall back to total proteome
+    stoich_path = os.path.join(
+        config.KINASE_ATTRIBUTION_OUTPUT_DIR, "stoichiometry_matrix.csv")
+    if os.path.exists(stoich_path):
+        print(f"  Using stoichiometry matrix: {stoich_path}")
+        mat_df = pd.read_csv(stoich_path)
+        # Extract only biological sample columns
+        vals = mat_df[bio_cols].values.astype(float)  # (sites, 72)
+        source = "stoichiometry"
+    else:
+        print("  Stoichiometry matrix not found; falling back to total proteome")
+        quant = pd.read_excel(
+            config.TOTAL_PROTEOME_FILE, sheet_name="Protein quant")
+        vals = quant[bio_cols].values.astype(float)
+        vals[vals <= 0] = np.nan
+        with np.errstate(divide="ignore"):
+            vals = np.log2(vals)
+        source = "total_proteome_log2"
+
+    # Per-animal mean across all non-missing sites
+    animal_means = np.nanmean(vals, axis=0)  # (72,)
+
+    # Within-group robust z-scores (genotype × timepoint, 12 groups of 6)
+    # Uses median and MAD instead of mean and std to prevent the outlier
+    # from inflating its own group's spread (critical at n=6 per group).
+    mapping["mean_stoich"] = animal_means
+    mapping["group"] = mapping["genotype"] + "_" + mapping["timepoint"]
+
+    def _robust_stats(s):
+        med = s.median()
+        mad = np.median(np.abs(s - med))
+        # Scale MAD to be consistent with std for normal data
+        mad_scaled = mad * 1.4826
+        return pd.Series({"median": med, "mad_scaled": mad_scaled})
+
+    group_stats = mapping.groupby("group")["mean_stoich"].apply(_robust_stats)
+    group_stats = group_stats.unstack()
+    mapping["group_mean"] = mapping["group"].map(group_stats["median"])
+    mapping["group_std"] = mapping["group"].map(group_stats["mad_scaled"])
+    # Guard against zero MAD (all values identical)
+    mapping["z_score"] = np.where(
+        mapping["group_std"] > 0,
+        (mapping["mean_stoich"] - mapping["group_mean"]) / mapping["group_std"],
+        0.0,
+    )
+
+    # Flag outliers
+    thresh = config.OUTLIER_ZSCORE_THRESH
+    mapping["excluded"] = mapping["z_score"].abs() > thresh
+    mapping["reason"] = ""
+    mapping.loc[mapping["excluded"], "reason"] = (
+        f"within-group robust |z| > {thresh:.1f} on mean {source}"
+    )
+
+    n_excluded = mapping["excluded"].sum()
+    print(f"  Threshold: |z| > {thresh}")
+    print(f"  Flagged: {n_excluded} of {len(mapping)} animals")
+
+    if n_excluded > 0:
+        for _, row in mapping[mapping["excluded"]].iterrows():
+            print(f"    {row['mouse_id']} ({row['genotype']} {row['timepoint']} "
+                  f"{row['sex']}): z={row['z_score']:.2f}")
+
+    # Save exclusions table
+    out_cols = ["mouse_id", "animal_id", "sex", "timepoint", "genotype", "plex",
+                "mean_stoich", "group_mean", "group_std", "z_score",
+                "excluded", "reason"]
+    # animal_id may be named differently — use column_name as fallback
+    if "animal_id" not in mapping.columns:
+        mapping["animal_id"] = mapping["column_name"]
+    excl_path = os.path.join(OUTPUT_DIR, "sample_exclusions.csv")
+    mapping[out_cols].to_csv(excl_path, index=False)
+    print(f"\n  Saved: {excl_path}")
+
+    # --- Diagnostic plot ---
+    pca_dir = os.path.join(OUTPUT_DIR, "pca_plots")
+    os.makedirs(pca_dir, exist_ok=True)
+
+    # PCA for scatter panel (reuse total proteome approach)
+    pca_vals = vals.copy()
+    pca_vals[~np.isfinite(pca_vals)] = np.nan
+    pca_vals = config.minprob_impute(pca_vals)
+    X_pca = pca_vals.T  # (72, sites)
+    var = np.var(X_pca, axis=0)
+    X_pca = X_pca[:, var > 0]
+    pca = PCA(n_components=min(5, X_pca.shape[0], X_pca.shape[1]))
+    scores = pca.fit_transform(X_pca)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Panel 1: PCA scatter with outliers highlighted
+    ax = axes[0]
+    outlier_mask = mapping["excluded"].values
+    ax.scatter(scores[~outlier_mask, 0], scores[~outlier_mask, 1],
+               c="steelblue", s=40, alpha=0.6, edgecolors="k", linewidths=0.5,
+               label="Retained")
+    if outlier_mask.any():
+        ax.scatter(scores[outlier_mask, 0], scores[outlier_mask, 1],
+                   c="red", s=80, marker="X", edgecolors="k", linewidths=0.5,
+                   label="Excluded", zorder=5)
+        for idx in np.where(outlier_mask)[0]:
+            ax.annotate(mapping.iloc[idx]["mouse_id"],
+                        (scores[idx, 0], scores[idx, 1]),
+                        fontsize=8, ha="left", va="bottom")
+    ax.set_xlabel(f"PC1 ({100*pca.explained_variance_ratio_[0]:.1f}%)")
+    ax.set_ylabel(f"PC2 ({100*pca.explained_variance_ratio_[1]:.1f}%)")
+    ax.set_title("PCA — Outlier Detection")
+    ax.legend()
+
+    # Panel 2: within-group z-score strip plot
+    ax = axes[1]
+    groups = sorted(mapping["group"].unique())
+    for i, grp in enumerate(groups):
+        grp_mask = mapping["group"] == grp
+        z_vals = mapping.loc[grp_mask, "z_score"].values
+        excl = mapping.loc[grp_mask, "excluded"].values
+        ax.scatter(np.full_like(z_vals, i), z_vals,
+                   c=["red" if e else "steelblue" for e in excl],
+                   s=40, edgecolors="k", linewidths=0.5, zorder=3)
+    ax.axhline(thresh, color="red", linestyle="--", alpha=0.5, label=f"±{thresh}")
+    ax.axhline(-thresh, color="red", linestyle="--", alpha=0.5)
+    ax.set_xticks(range(len(groups)))
+    ax.set_xticklabels(groups, rotation=45, ha="right", fontsize=7)
+    ax.set_ylabel("Within-group z-score")
+    ax.set_title("Per-Animal Z-Scores by Group")
+    ax.legend()
+
+    fig.tight_layout()
+    diag_path = os.path.join(pca_dir, "outlier_diagnostic.png")
+    fig.savefig(diag_path, dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {diag_path}")
+
+
+# ===========================================================================
 # Summary
 # ===========================================================================
 
@@ -1047,6 +1212,10 @@ def main():
         help="§4: Data quality assessment (PCA, batch effects, missingness)",
     )
     group.add_argument(
+        "--outliers", action="store_true",
+        help="§5: Statistical outlier detection (within-group z-scores)",
+    )
+    group.add_argument(
         "--run", action="store_true",
         help="Run all steps in order",
     )
@@ -1072,6 +1241,9 @@ def main():
 
     if args.quality or args.run:
         step_quality()
+
+    if args.outliers or args.run:
+        step_outliers()
 
     if args.run:
         print("\n" + "=" * 70)

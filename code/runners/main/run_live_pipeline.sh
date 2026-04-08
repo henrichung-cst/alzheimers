@@ -46,6 +46,14 @@ if [[ ! -f "$WMB_KINASE" ]] || [[ ! -f "$WMB_PROTEOME" ]]; then
   bash code/runners/supporting/run_wmb_expression.sh 2>&1 | tee -a "$LOG"
 fi
 
+# 4. Song snRNA integration (within-cohort specificity + concordance)
+SONG_SPEC="outputs/reports/snrna_integration/song_expression_specificity.csv"
+SONG_CONC="outputs/reports/snrna_integration/song_concordance.csv"
+if [[ ! -f "$SONG_SPEC" ]] || [[ ! -f "$SONG_CONC" ]]; then
+  note "Song snRNA integration outputs missing — running snRNA integration"
+  bash code/runners/supporting/run_snrna_integration.sh 2>&1 | tee -a "$LOG"
+fi
+
 note "Running data ingestion"
 bash code/runners/main/run_data_ingest.sh 2>&1 | tee -a "$LOG"
 

@@ -65,13 +65,21 @@ GENOTYPE_CODING = {
 }
 
 # Contrast definitions: how to derive effective LFC from OLS coefficients
-# App: APP vs WT main effect
-# Tau: T22 vs WT main effect
-# ApTt: T22/APP vs WT (App + Tau + Int)
+# Time-resolved: disease effect at each timepoint (2mo is reference)
+# App_Xmo:  APP vs WT main effect at timepoint X
+# Tau_Xmo:  T22 vs WT main effect at timepoint X
+# ApTt_Xmo: T22/APP vs WT (full combined effect) at timepoint X
+# Note: Int (synergy) is assumed constant across timepoints.
 CONTRAST_COEFS = {
-    "App":  {"App": 1, "Tau": 0, "Int": 0},
-    "Tau":  {"App": 0, "Tau": 1, "Int": 0},
-    "ApTt": {"App": 1, "Tau": 1, "Int": 1},
+    "App_2mo":  {"App": 1},
+    "App_4mo":  {"App": 1, "App_x_time4": 1},
+    "App_6mo":  {"App": 1, "App_x_time6": 1},
+    "Tau_2mo":  {"Tau": 1},
+    "Tau_4mo":  {"Tau": 1, "Tau_x_time4": 1},
+    "Tau_6mo":  {"Tau": 1, "Tau_x_time6": 1},
+    "ApTt_2mo": {"App": 1, "Tau": 1, "Int": 1},
+    "ApTt_4mo": {"App": 1, "Tau": 1, "Int": 1, "App_x_time4": 1, "Tau_x_time4": 1},
+    "ApTt_6mo": {"App": 1, "Tau": 1, "Int": 1, "App_x_time6": 1, "Tau_x_time6": 1},
 }
 
 # Genes for stoichiometry QC spot-checks
@@ -98,6 +106,34 @@ def load_sample_mapping():
             f"Sample mapping not found at {path}. Run data_ingest.py --mapping first."
         )
     return pd.read_csv(path)
+
+
+def load_sample_exclusions():
+    """Load excluded mouse IDs from outlier analysis."""
+    path = os.path.join(DATA_INGEST_DIR, "sample_exclusions.csv")
+    if not os.path.exists(path):
+        return set()
+    df = pd.read_csv(path)
+    return set(df.loc[df["excluded"], "mouse_id"])
+
+
+def _filter_samples(mapping):
+    """Apply outlier exclusion + sex filter based on config.ANALYSIS_MODE.
+
+    Returns filtered mapping DataFrame.
+    """
+    excluded = load_sample_exclusions()
+    n0 = len(mapping)
+    # Step 1: outlier exclusion
+    filt = mapping[~mapping["mouse_id"].isin(excluded)].copy()
+    n_excl = n0 - len(filt)
+    # Step 2: sex filter
+    if config.ANALYSIS_MODE == "males_only":
+        filt = filt[filt["sex"] == "M"].copy()
+    n_final = len(filt)
+    print(f"  Sample filter ({config.ANALYSIS_MODE}): {n0} -> {n_final} "
+          f"({n_excl} outliers excluded, {n0 - n_excl - n_final} sex-filtered)")
+    return filt
 
 
 def _proteome_ref_col(plex):
@@ -500,9 +536,12 @@ def step_normalize():
 # ===========================================================================
 
 def _build_design_matrix(mapping, bio_cols):
-    """Build the factorial OLS design matrix (72 x 7).
+    """Build the factorial OLS design matrix.
 
-    Columns: const, App, Tau, Int, female, time_4mo, time_6mo
+    males_only mode:  N x 10 (const, App, Tau, Int, time_4mo, time_6mo,
+                               App_x_time4, App_x_time6, Tau_x_time4, Tau_x_time6)
+    full_cohort mode: N x 11 (adds 'female' column)
+
     Row order matches bio_cols.
     """
     # Align mapping to bio_cols order
@@ -513,9 +552,19 @@ def _build_design_matrix(mapping, bio_cols):
     for factor, val in [("App", None), ("Tau", None), ("Int", None)]:
         X[factor] = meta["genotype"].map(
             lambda g, f=factor: GENOTYPE_CODING[g][f]).astype(float)
-    X["female"] = (meta["sex"] == "F").astype(float)
+
+    # Only include sex covariate when both sexes are present
+    if config.ANALYSIS_MODE != "males_only":
+        X["female"] = (meta["sex"] == "F").astype(float)
+
     X["time_4mo"] = (meta["timepoint"] == "4mo").astype(float)
     X["time_6mo"] = (meta["timepoint"] == "6mo").astype(float)
+
+    # Disease × timepoint interactions (time-resolved contrasts)
+    X["App_x_time4"] = X["App"] * X["time_4mo"]
+    X["App_x_time6"] = X["App"] * X["time_6mo"]
+    X["Tau_x_time4"] = X["Tau"] * X["time_4mo"]
+    X["Tau_x_time6"] = X["Tau"] * X["time_6mo"]
 
     return X
 
@@ -595,15 +644,89 @@ def _run_ols_all_sites(Y, X):
     return betas, pvals, n_obs
 
 
-def _run_mea(motif_series, results_by_contrast, lfc_key):
-    """Run MEA (GSEA-based) kinase enrichment across contrasts."""
+def _winsorize_lfc(lfc_array, pct=None):
+    """Winsorize LFC values at the given percentile to limit outlier influence.
+
+    Returns (clipped_array, outlier_mask, lower_bound, upper_bound).
+    Sites beyond the bounds are clipped, not removed.
+    """
+    if pct is None:
+        pct = config.MEA_WINSORIZE_PERCENTILE
+    lower = np.nanpercentile(lfc_array, pct)
+    upper = np.nanpercentile(lfc_array, 100 - pct)
+    outlier_mask = (lfc_array < lower) | (lfc_array > upper)
+    clipped = np.clip(lfc_array, lower, upper)
+    return clipped, outlier_mask, lower, upper
+
+
+def _run_mea(motif_series, results_by_contrast, lfc_key,
+             site_ids=None, gene_symbols=None):
+    """Run MEA (GSEA-based) kinase enrichment across contrasts.
+
+    Preprocessing before GSEA ranking (applied per contrast):
+
+    1. **Median-centering** — Subtract the median LFC from all sites so
+       the ranked list is centered at zero.  Without this, a global shift
+       in stoichiometry (e.g., net increase in phosphorylation at a given
+       timepoint) propagates into every kinase substrate set, making NES
+       sign reflect the background shift rather than kinase-specific
+       activity.  Centering forces GSEA to test whether a kinase's
+       substrates are *specifically* enriched above/below the global
+       trend, which is the biologically meaningful question.
+
+    2. **Winsorization** — Clip the centered LFCs at the 1st/99th
+       percentile to prevent extreme outlier sites from inflating GSEA
+       enrichment scores.  Clipped sites are logged to
+       ``winsorized_sites.csv``.
+
+    The median offset removed in step 1 is recorded in
+    ``mea_global_shift.csv`` for transparency.
+    """
     from kinase_library import RankedPhosData
 
     enrichment_results = {}
+    outlier_records = []
+    shift_records = []
     for contrast_name, res in results_by_contrast.items():
+        raw_lfc = res[lfc_key].copy()
+
+        # ── Step 1: Median-center to remove global directional shift ──
+        median_shift = float(np.nanmedian(raw_lfc))
+        centered_lfc = raw_lfc - median_shift
+        shift_records.append({
+            "contrast": contrast_name,
+            "median_shift": median_shift,
+            "mean_before": float(np.nanmean(raw_lfc)),
+            "pct_pos_before": float(np.nanmean(raw_lfc > 0) * 100),
+            "pct_pos_after": float(np.nanmean(centered_lfc > 0) * 100),
+        })
+        if abs(median_shift) > 0.001:
+            print(f"  {contrast_name}: centered by {median_shift:+.4f} "
+                  f"(pos sites: {shift_records[-1]['pct_pos_before']:.0f}% "
+                  f"-> {shift_records[-1]['pct_pos_after']:.0f}%)")
+
+        # ── Step 2: Winsorize to limit outlier influence on ranking ──
+        clipped_lfc, outlier_mask, lo, hi = _winsorize_lfc(centered_lfc)
+        n_clipped = np.nansum(outlier_mask)
+        if n_clipped > 0:
+            print(f"  {contrast_name}: winsorized {int(n_clipped)} sites "
+                  f"to [{lo:.3f}, {hi:.3f}]")
+            # Record outliers for the diagnostic table
+            idxs = np.where(outlier_mask)[0]
+            for idx in idxs:
+                rec = {"contrast": contrast_name,
+                       "original_lfc": raw_lfc[idx],
+                       "clipped_lfc": clipped_lfc[idx],
+                       "lower_bound": lo, "upper_bound": hi}
+                if site_ids is not None:
+                    rec["site_id"] = site_ids[idx]
+                if gene_symbols is not None:
+                    rec["gene_symbol"] = gene_symbols[idx]
+                outlier_records.append(rec)
+
         enrich_df = pd.DataFrame({
             "motif": motif_series.values,
-            "log2_fold_change": res[lfc_key],
+            "log2_fold_change": clipped_lfc,
         })
         enrich_df = enrich_df.dropna(subset=["log2_fold_change"])
         enrich_df = enrich_df[enrich_df["motif"].notna() &
@@ -632,6 +755,21 @@ def _run_mea(motif_series, results_by_contrast, lfc_key):
         n_sig = (er["FDR"] < config.MEA_FDR_THRESH).sum()
         print(f"  {contrast_name}: {len(er)} kinases tested, "
               f"{n_sig} significant (FDR<{config.MEA_FDR_THRESH})")
+
+    # Save winsorized-site log
+    if outlier_records:
+        outlier_df = pd.DataFrame(outlier_records)
+        outlier_path = os.path.join(OUTPUT_DIR, "winsorized_sites.csv")
+        outlier_df.to_csv(outlier_path, index=False)
+        print(f"  Saved {outlier_path} ({len(outlier_df)} clipped sites)")
+
+    # Save global-shift log for transparency
+    if shift_records:
+        shift_df = pd.DataFrame(shift_records)
+        shift_path = os.path.join(OUTPUT_DIR, "mea_global_shift.csv")
+        shift_df.to_csv(shift_path, index=False)
+        print(f"  Saved {shift_path} (median offsets removed per contrast)")
+
     if enrichment_results:
         return pd.concat(enrichment_results.values(), ignore_index=True)
     return pd.DataFrame()
@@ -640,10 +778,12 @@ def _run_mea(motif_series, results_by_contrast, lfc_key):
 def step_enrich():
     """Stage 2: OLS models + kinase enrichment + classification."""
     _ensure_output_dir()
-    print("\n=== Stage 2: OLS Models + Kinase Enrichment ===\n")
+    print(f"\n=== Stage 2: OLS Models + Kinase Enrichment "
+          f"({config.ANALYSIS_MODE}) ===\n")
 
-    # Load data
-    mapping = load_sample_mapping()
+    # Load data — filter samples for outlier exclusion + sex subsetting
+    mapping_full = load_sample_mapping()
+    mapping = _filter_samples(mapping_full)
     bio_cols = mapping["column_name"].tolist()
 
     stoich_path = os.path.join(OUTPUT_DIR, "stoichiometry_matrix.csv")
@@ -673,30 +813,24 @@ def step_enrich():
     betas_r, pvals_r, nobs_r = _run_ols_all_sites(Y_raw, X_np)
 
     # BH FDR per contrast for each model
-    param_names = list(X.columns)  # const, App, Tau, Int, female, time_4mo, time_6mo
+    param_names = list(X.columns)
+    # const, App, Tau, Int, female, time_4mo, time_6mo,
+    # App_x_time4, App_x_time6, Tau_x_time4, Tau_x_time6
 
     # Compute effective LFC and p-values for each contrast
     print("\n--- 2.3 Computing contrast LFCs and running kinase enrichment ---")
+    XtX_inv = np.linalg.inv(X_np.T @ X_np)
     results_by_contrast = {}
     for contrast_name, coefs in CONTRAST_COEFS.items():
-        # Effective beta = weighted sum of App, Tau, Int coefficients
-        idx_app = param_names.index("App")
-        idx_tau = param_names.index("Tau")
-        idx_int = param_names.index("Int")
-
-        # Stoichiometry
-        lfc_s = (coefs["App"] * betas_s[:, idx_app] +
-                 coefs["Tau"] * betas_s[:, idx_tau] +
-                 coefs["Int"] * betas_s[:, idx_int])
-
-        # For p-value of a linear combination, compute Var(c'beta) = c' (X'X)^{-1} c * sigma2
+        # Build contrast vector from coefficient dict
         c_vec = np.zeros(len(param_names))
-        c_vec[idx_app] = coefs["App"]
-        c_vec[idx_tau] = coefs["Tau"]
-        c_vec[idx_int] = coefs["Int"]
+        for param, weight in coefs.items():
+            c_vec[param_names.index(param)] = weight
 
-        # Use complete-data XtX_inv for the fast path
-        XtX_inv = np.linalg.inv(X_np.T @ X_np)
+        # Stoichiometry: effective LFC = c' @ beta for each site
+        lfc_s = betas_s @ c_vec
+
+        # Var(c'beta) = c' (X'X)^{-1} c * sigma2
         var_c = c_vec @ XtX_inv @ c_vec  # scalar
 
         # sigma2 per site
@@ -711,9 +845,7 @@ def step_enrich():
         fdr_s = _bh_fdr(p_contrast_s)
 
         # Raw phospho
-        lfc_r = (coefs["App"] * betas_r[:, idx_app] +
-                 coefs["Tau"] * betas_r[:, idx_tau] +
-                 coefs["Int"] * betas_r[:, idx_int])
+        lfc_r = betas_r @ c_vec
         residuals_r = Y_raw - (X_np @ betas_r.T).T
         dof_r = nobs_r - len(param_names)
         dof_r[dof_r <= 0] = 1
@@ -736,7 +868,9 @@ def step_enrich():
 
     print("\n--- 2.4 Running MEA kinase enrichment (stoichiometry) ---")
     mea_stoich = _run_mea(
-        stoich_df["motif"], results_by_contrast, "stoich_lfc")
+        stoich_df["motif"], results_by_contrast, "stoich_lfc",
+        site_ids=stoich_df["site_id"].values,
+        gene_symbols=stoich_df["gene_symbol"].values)
     mea_path = os.path.join(OUTPUT_DIR, "mea_stoichiometry.csv")
     mea_stoich.to_csv(mea_path, index=False)
     n_sig_total = (mea_stoich["FDR"] < config.MEA_FDR_THRESH).sum() if len(mea_stoich) > 0 else 0
@@ -796,27 +930,88 @@ def _assign_evidence_basis(wmb_specificity, sea_ad_lfc):
     return "weak"
 
 
-def _assign_confidence_and_basis(concordance_score, wmb_specificity, sea_ad_lfc):
-    """Assign both confidence tier and evidence basis in one call."""
-    if concordance_score <= 0:
+def _compute_effective_concordance(nes, sea_ad_lfc, song_lfc):
+    """Compute weighted concordance from Song (primary) and SEA-AD (secondary).
+
+    Both references are evidence; Song is weighted significantly more heavily
+    (same-species, same-cohort) than SEA-AD (cross-species human proxy).
+    When both are available, they are combined with configurable weights
+    (default 3:1). Neither has absolute veto power.
+
+    Returns (effective_concordance, concordance_source).
+    """
+    w_song = config.SONG_CONCORDANCE_WEIGHT
+    w_sea_ad = config.SEA_AD_CONCORDANCE_WEIGHT
+
+    song_cs = (np.sign(nes) * song_lfc
+               if np.isfinite(song_lfc) else np.nan)
+    sea_ad_cs = (np.sign(nes) * sea_ad_lfc
+                 if np.isfinite(sea_ad_lfc) else np.nan)
+
+    has_song = np.isfinite(song_cs)
+    has_sea_ad = np.isfinite(sea_ad_cs)
+
+    if has_song and has_sea_ad:
+        eff = (w_song * song_cs + w_sea_ad * sea_ad_cs) / (w_song + w_sea_ad)
+        source = "both"
+    elif has_song:
+        eff = song_cs
+        source = "song"
+    elif has_sea_ad:
+        eff = sea_ad_cs
+        source = "sea_ad"
+    else:
+        eff = 0.0
+        source = "none"
+
+    return eff, source
+
+
+def _assign_confidence_and_basis(effective_concordance, wmb_specificity,
+                                 sea_ad_lfc, song_lfc, concordance_source):
+    """Assign confidence tier and evidence basis.
+
+    Weighted concordance model:
+    - Song is weighted 3× vs SEA-AD 1× (configurable in config.py)
+    - Song-supported concordance (source "song" or "both") can reach high
+    - SEA-AD-only concordance is capped at moderate (cross-species proxy)
+    - Neither reference has absolute veto power
+    """
+    if effective_concordance <= 0:
         return "none", "weak"
 
     has_wmb = wmb_specificity >= config.SPECIFICITY_LOW
     has_wmb_high = wmb_specificity >= config.SPECIFICITY_HIGH
     lfc_val = sea_ad_lfc if np.isfinite(sea_ad_lfc) else 0.0
     has_sea_ad = abs(lfc_val) > config.SEA_AD_LFC_MIN
+    song_val = song_lfc if np.isfinite(song_lfc) else 0.0
+    has_song = abs(song_val) > config.SONG_LFC_MIN
 
-    if has_wmb_high and has_sea_ad:
+    # Song contributed to concordance → high eligible
+    song_contributed = concordance_source in ("song", "both")
+
+    # Confidence tier
+    if song_contributed and has_wmb_high and (has_song or has_sea_ad):
         conf = "high"
-    elif has_wmb or has_sea_ad:
+    elif song_contributed and (has_wmb or has_sea_ad or has_song):
         conf = "moderate"
+    elif not song_contributed:
+        # SEA-AD-only concordance — capped at moderate
+        conf = "moderate" if (has_wmb or has_sea_ad) else "low"
     else:
         conf = "low"
 
-    if has_wmb and has_sea_ad:
+    # Evidence basis classification
+    if has_wmb and has_sea_ad and has_song:
+        basis = "three_way"
+    elif has_wmb and has_song:
+        basis = "within_cohort"
+    elif has_wmb and has_sea_ad:
         basis = "cross_species"
     elif has_wmb:
         basis = "mouse_expression_only"
+    elif has_song:
+        basis = "song_only"
     elif has_sea_ad:
         basis = "human_concordance_only"
     else:
@@ -848,22 +1043,63 @@ def step_attribute():
         lambda k: kinase_to_gene.get(k, k))
 
     # 3c. SEA-AD concordance (per kinase × cell type)
+    # Load pathway-matched effect sizes: App→early CPS (amyloid-dominant),
+    # Tau→late CPS (tau-dominant), ApTt→full CPS (combined pathology).
     sea_ad_rows = []
     try:
         import anndata as ad
-        sea_ad_path = os.path.join(config.SEA_AD_DIR, "effect_sizes.h5ad")
-        if not os.path.exists(sea_ad_path):
-            raise FileNotFoundError(sea_ad_path)
-        print("  Loading SEA-AD effect sizes...")
-        adata = ad.read_h5ad(sea_ad_path)
-        sea_ad_genes_upper = {g.upper(): g for g in adata.obs_names}
-        supertypes = list(adata.var_names)
 
-        # Build supertype → subclass mapping from SEA-AD metadata
-        st_to_subclass = dict(zip(adata.var_names, adata.var["Subclass"]))
+        # Map each contrast to its pathway-matched stratum
+        contrast_to_stratum = {}
+        for contrast in sig["contrast"].unique():
+            pathway = contrast.split("_")[0]
+            if pathway not in config.SEA_AD_PATHWAY_MAP:
+                raise ValueError(
+                    f"Unknown pathway prefix '{pathway}' in contrast "
+                    f"'{contrast}'. Expected one of "
+                    f"{list(config.SEA_AD_PATHWAY_MAP)}")
+            contrast_to_stratum[contrast] = config.SEA_AD_PATHWAY_MAP[pathway]
 
-        # Pre-build gene index for O(1) lookups
-        gene_to_idx = {g: i for i, g in enumerate(adata.obs_names)}
+        # Load each required stratum
+        needed_strata = set(contrast_to_stratum.values())
+        adata_by_stratum = {}
+        for stratum in needed_strata:
+            path = config.SEA_AD_EFFECT_SIZES[stratum]
+            if not os.path.exists(path):
+                raise FileNotFoundError(path)
+            adata_by_stratum[stratum] = ad.read_h5ad(path)
+        strata_label = ", ".join(sorted(needed_strata))
+        print(f"  Loading SEA-AD effect sizes ({strata_label})...")
+
+        # All strata share the same gene/supertype axes — use any for indexing
+        ref_adata = next(iter(adata_by_stratum.values()))
+        sea_ad_genes_upper = {g.upper(): g for g in ref_adata.obs_names}
+        supertypes = list(ref_adata.var_names)
+        st_to_subclass = dict(zip(ref_adata.var_names, ref_adata.var["Subclass"]))
+        gene_to_idx = {g: i for i, g in enumerate(ref_adata.obs_names)}
+
+        def _subclass_lfcs(adata, gene_idx):
+            """Aggregate supertype effects to subclass-level median LFCs."""
+            effects = adata.X[gene_idx, :]
+            if hasattr(effects, "toarray"):
+                effects = effects.toarray().flatten()
+            else:
+                effects = np.asarray(effects).flatten()
+            sc_vals, sc_counts = {}, {}
+            for i, st in enumerate(supertypes):
+                subclass = st_to_subclass[st]
+                val = effects[i]
+                if np.isfinite(val):
+                    sc_vals.setdefault(subclass, []).append(val)
+                    sc_counts[subclass] = sc_counts.get(subclass, 0) + 1
+            return (
+                {sc: float(np.median(v)) for sc, v in sc_vals.items()},
+                sc_counts,
+            )
+
+        # Cache (stratum, gene_idx) → (sc_lfcs, sc_counts) to avoid
+        # recomputing for the same gene across multiple contrasts
+        _lfc_cache = {}
 
         for _, row in sig.iterrows():
             kinase = row["kinase"]
@@ -876,28 +1112,16 @@ def step_attribute():
             if gene_upper not in sea_ad_genes_upper:
                 continue
 
-            sea_ad_gene = sea_ad_genes_upper[gene_upper]
-            gene_idx = gene_to_idx[sea_ad_gene]
+            gene_idx = gene_to_idx[sea_ad_genes_upper[gene_upper]]
+            stratum = contrast_to_stratum[contrast]
 
-            effects = adata.X[gene_idx, :]
-            if hasattr(effects, "toarray"):
-                effects = effects.toarray().flatten()
-            else:
-                effects = np.asarray(effects).flatten()
+            cache_key = (stratum, gene_idx)
+            if cache_key not in _lfc_cache:
+                _lfc_cache[cache_key] = _subclass_lfcs(
+                    adata_by_stratum[stratum], gene_idx)
+            sc_lfcs, sc_counts = _lfc_cache[cache_key]
 
-            # Aggregate to subclass level (24 subclasses)
-            sc_effects = {}
-            sc_counts = {}
-            for i, st in enumerate(supertypes):
-                subclass = st_to_subclass[st]
-                val = effects[i]
-                if not np.isfinite(val):
-                    continue
-                sc_effects.setdefault(subclass, []).append(val)
-                sc_counts[subclass] = sc_counts.get(subclass, 0) + 1
-
-            for subclass, vals in sc_effects.items():
-                median_lfc = float(np.median(vals))
+            for subclass, median_lfc in sc_lfcs.items():
                 concordance = np.sign(nes) * median_lfc
                 sea_ad_rows.append({
                     "kinase": kinase,
@@ -908,6 +1132,7 @@ def step_attribute():
                     "cell_type": subclass,
                     "sea_ad_lfc": median_lfc,
                     "sea_ad_n_supertypes": sc_counts[subclass],
+                    "sea_ad_stratum": stratum,
                     "concordance_score": concordance,
                 })
 
@@ -931,6 +1156,27 @@ def step_attribute():
     else:
         print(f"  WMB expression file not found at {WMB_EXPRESSION_FILE}")
 
+    # 3d′. Song within-cohort evidence (specificity + concordance)
+    song_spec = {}
+    if os.path.exists(config.SONG_EXPRESSION_FILE):
+        song_sp = pd.read_csv(config.SONG_EXPRESSION_FILE)
+        song_sp_grouped = song_sp.groupby(
+            [song_sp["gene_symbol"].str.upper(), "cell_type"]
+        )["specificity_score"].max()
+        song_spec = song_sp_grouped.to_dict()
+        print(f"  Song specificity: {len(song_spec)} (gene, cell_type) pairs loaded")
+
+    song_conc = {}
+    if os.path.exists(config.SONG_CONCORDANCE_FILE):
+        song_cd = pd.read_csv(config.SONG_CONCORDANCE_FILE)
+        song_cd["_key"] = list(zip(
+            song_cd["gene_symbol"].str.upper(),
+            song_cd["cell_type"],
+            song_cd["pathway"],
+        ))
+        song_conc = dict(zip(song_cd["_key"], song_cd["song_lfc"]))
+        print(f"  Song concordance: {len(song_conc)} (gene, cell_type, pathway) entries loaded")
+
     # 3e. Combine into unified attribution table
     if len(sea_ad_df) == 0:
         print("  No SEA-AD data available — building WMB-only attributions")
@@ -940,6 +1186,11 @@ def step_attribute():
                 row["gene_symbol"], str) else ""
             for subclass in config.SEA_AD_SUBCLASSES:
                 spec = wmb_spec.get((gene_upper, subclass), 0.0)
+                pathway = row["contrast"].split("_")[0]
+                s_lfc = song_conc.get(
+                    (gene_upper, subclass, pathway), np.nan)
+                eff_cs, cs_source = _compute_effective_concordance(
+                    row["NES"], np.nan, s_lfc)
                 attribution_rows.append({
                     "kinase": row["kinase"],
                     "gene_symbol": row["gene_symbol"],
@@ -950,23 +1201,81 @@ def step_attribute():
                     "sea_ad_lfc": np.nan,
                     "sea_ad_n_supertypes": 0,
                     "wmb_specificity": spec,
+                    "song_specificity": song_spec.get(
+                        (gene_upper, subclass), np.nan),
+                    "song_lfc": s_lfc,
+                    "song_concordance_score": (
+                        np.sign(row["NES"]) * s_lfc
+                        if np.isfinite(s_lfc) else np.nan),
                     "concordance_score": 0.0,
-                    "combined_score": 0.0,
-                    "combined_confidence": "none",
+                    "effective_concordance": eff_cs,
+                    "concordance_source": cs_source,
+                    "combined_score": eff_cs * (0.5 + spec),
+                    "combined_confidence": "none",  # reassigned below
                     "evidence_basis": "weak",
                 })
         unified = pd.DataFrame(attribution_rows)
+        # Re-assign confidence/basis using Song-primary logic
+        both = unified.apply(
+            lambda r: _assign_confidence_and_basis(
+                r["effective_concordance"], r["wmb_specificity"],
+                r["sea_ad_lfc"], r.get("song_lfc", np.nan),
+                r["concordance_source"]),
+            axis=1, result_type="expand")
+        unified["combined_confidence"] = both[0]
+        unified["evidence_basis"] = both[1]
     else:
         unified = sea_ad_df.copy()
         genes_upper = unified["gene_symbol"].fillna("").str.upper()
         keys = list(zip(genes_upper, unified["cell_type"]))
         unified["wmb_specificity"] = [wmb_spec.get(k, 0.0) for k in keys]
+
+        # Song within-cohort evidence
+        unified["song_specificity"] = [song_spec.get(k, np.nan) for k in keys]
+        # Song concordance: map contrast → pathway, then look up
+        def _get_song_lfc(gene_upper, cell_type, contrast):
+            pathway = contrast.split("_")[0]
+            return song_conc.get((gene_upper, cell_type, pathway), np.nan)
+        unified["song_lfc"] = [
+            _get_song_lfc(gu, ct, con)
+            for gu, ct, con in zip(genes_upper, unified["cell_type"],
+                                   unified["contrast"])
+        ]
+        unified["song_concordance_score"] = np.where(
+            np.isfinite(unified["song_lfc"]),
+            np.sign(unified["NES"]) * unified["song_lfc"],
+            np.nan,
+        )
+
+        # Weighted concordance: Song (3×) + SEA-AD (1×), neither has veto
+        w_song = config.SONG_CONCORDANCE_WEIGHT
+        w_sea_ad = config.SEA_AD_CONCORDANCE_WEIGHT
+        song_cs = unified["song_concordance_score"]
+        sea_ad_cs = unified["concordance_score"]
+        has_song_v = np.isfinite(song_cs)
+        has_sea_ad_v = np.isfinite(sea_ad_cs) & (sea_ad_cs != 0)
+        has_both = has_song_v & has_sea_ad_v
+        has_song_only = has_song_v & ~has_sea_ad_v
+        has_sea_ad_only = ~has_song_v & has_sea_ad_v
+        unified["effective_concordance"] = np.select(
+            [has_both, has_song_only, has_sea_ad_only],
+            [(w_song * song_cs + w_sea_ad * sea_ad_cs) / (w_song + w_sea_ad),
+             song_cs, sea_ad_cs],
+            default=0.0,
+        )
+        unified["concordance_source"] = np.select(
+            [has_both, has_song_only, has_sea_ad_only],
+            ["both", "song", "sea_ad"],
+            default="none",
+        )
+
         unified["combined_score"] = (
-            unified["concordance_score"] * (0.5 + unified["wmb_specificity"]))
+            unified["effective_concordance"] * (0.5 + unified["wmb_specificity"]))
         both = unified.apply(
             lambda r: _assign_confidence_and_basis(
-                r["concordance_score"], r["wmb_specificity"],
-                r["sea_ad_lfc"]),
+                r["effective_concordance"], r["wmb_specificity"],
+                r["sea_ad_lfc"], r.get("song_lfc", np.nan),
+                r["concordance_source"]),
             axis=1, result_type="expand")
         unified["combined_confidence"] = both[0]
         unified["evidence_basis"] = both[1]
@@ -1025,10 +1334,11 @@ def step_attribute():
 def step_mechanism_annotation():
     """Optional: Run raw phospho MEA and classify abundance/activity/both."""
     _ensure_output_dir()
-    print("\n=== Mechanism Annotation (supplementary) ===\n")
+    print(f"\n=== Mechanism Annotation ({config.ANALYSIS_MODE}) ===\n")
 
-    # Load data
-    mapping = load_sample_mapping()
+    # Load data — filter samples for outlier exclusion + sex subsetting
+    mapping_full = load_sample_mapping()
+    mapping = _filter_samples(mapping_full)
     bio_cols = mapping["column_name"].tolist()
     raw_path = os.path.join(OUTPUT_DIR, "raw_phospho_normalized.csv")
     if not os.path.exists(raw_path):
@@ -1048,17 +1358,17 @@ def step_mechanism_annotation():
     # Compute contrast LFCs for raw phospho
     results_by_contrast = {}
     for contrast_name, coefs in CONTRAST_COEFS.items():
-        idx_app = param_names.index("App")
-        idx_tau = param_names.index("Tau")
-        idx_int = param_names.index("Int")
-        lfc_r = (coefs["App"] * betas_r[:, idx_app] +
-                 coefs["Tau"] * betas_r[:, idx_tau] +
-                 coefs["Int"] * betas_r[:, idx_int])
+        c_vec = np.zeros(len(param_names))
+        for param, weight in coefs.items():
+            c_vec[param_names.index(param)] = weight
+        lfc_r = betas_r @ c_vec
         results_by_contrast[contrast_name] = {"raw_lfc": lfc_r}
 
     # Run MEA on raw phospho
     print("  Running MEA on raw phospho...")
-    mea_raw = _run_mea(raw_df["motif"], results_by_contrast, "raw_lfc")
+    mea_raw = _run_mea(raw_df["motif"], results_by_contrast, "raw_lfc",
+                       site_ids=raw_df["site_id"].values,
+                       gene_symbols=raw_df["gene_symbol"].values)
     mea_raw_path = os.path.join(OUTPUT_DIR, "mea_raw_phospho.csv")
     mea_raw.to_csv(mea_raw_path, index=False)
     print(f"  Saved {mea_raw_path} ({len(mea_raw)} rows)")
