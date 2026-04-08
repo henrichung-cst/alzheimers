@@ -1,9 +1,9 @@
 # Repository Surface Index
 
-This index makes the repository classification explicit without changing the
-high-level layout. Executable code remains under `code/` unless it is moved
-fully into `archive/`. The labels `main`, `supporting`, and `archived` are
-semantic classifications, not top-level directory names.
+> **Note (2026-04-08):** The `archive/` directory was purged from git history to reduce repo size from 3.6 GB to ~5 MB. References to `archive/` paths below are retained as a decision record, but those files no longer exist in the repository.
+
+This index makes the repository classification explicit. The labels `main`,
+`supporting`, and `archived` are semantic classifications.
 
 Generated caches such as `code/__pycache__/` are excluded from this index.
 

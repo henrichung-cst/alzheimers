@@ -1,5 +1,7 @@
 # Repository Retention Policy
 
+> **Note (2026-04-08):** The `archive/` directory was purged from git history to reduce repo size from 3.6 GB to ~5 MB. References to `archive/` paths below are retained as a decision record of what was archived and why, but those files no longer exist in the repository.
+
 This document defines what remains mainline, what remains as supporting evidence, what is archived for provenance, and which code paths should not be reopened for new work.
 
 It is administrative and reproducibility-focused. The live scientific program is defined by [`analysis_charter.md`](./analysis_charter.md), justified by [`analysis_rationale.md`](./analysis_rationale.md), bounded by [`statistical_constraints.md`](./statistical_constraints.md), and made file-explicit in [`repo_surface_index.md`](./repo_surface_index.md).

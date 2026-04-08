@@ -5,10 +5,8 @@
 !/code/**
 !README.md
 !CLAUDE.md
-!/archive/
-!/archive/**
 !/docs/
 !/docs/**
-# Ignore generated Python cache files inside code.
+# Ignore generated Python cache files.
 /code/__pycache__/
 /code/**/*.pyc

@@ -151,15 +151,6 @@ SUBCLASS_TO_TISSUE_CATEGORY = {
     "Other": "Other",
 }
 
-# Shared permutation parameters (attribution recovery)
-N_PERMS = 1000
-PERM_SEED = 42
-
-# Deprecated: DiffPhos parameters (retained for archived code only)
-PERCENT_RANK = "logFC"
-PERCENT_THRESH = 5
-LFF_THRESH = .01
-PVAL_SIG = .1
 
 # =============================================================================
 # Live pipeline: missing-value imputation (shared across PCA steps)
@@ -271,7 +262,6 @@ WMB_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_kinase_expres
 WMB_REGIONAL_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_regional_kinase_expression.csv")
 WMB_PROTEOME_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_proteome_expression.csv")
 PROTEOME_GENE_LIST_FILE = os.path.join(DATA_INGEST_OUTPUT_DIR, "total_proteome_genes.txt")
-TIER1_CONDITION_TO_CONTRAST = {"AppP": "App", "Ttau": "Tau", "ApTt": "Int"}
 
 # =============================================================================
 # Supporting: Song snRNA-seq integration (paired within-cohort evidence)

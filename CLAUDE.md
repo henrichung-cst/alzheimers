@@ -119,18 +119,9 @@ python code/supplementary/parent_protein_qc.py --run          # Q5: Activity-dri
 
 ```bash
 python code/map_kinases_to_genes.py       # Kinase→gene symbol mapping
+python code/build_viewer.py               # Interactive HTML viewer for attribution results
+python code/lucie_5xfad_manifest.py       # Lucie 5xFAD proteomics manifest builder
 ```
-
-### Archived Code (under `archive/`)
-
-All archived scripts have been moved to `archive/code/`. These represent closed paths that failed validation. See `docs/foundation/repo_surface_index.md` for the full classification. Key archived paths:
-
-- **Direct deconvolution**: `sap_data.py`, `sap_model.py`, `sap_validate.py` — cell-type-specific condition effects not identifiable from 24-group design
-- **Factor model**: `sap_preflight.py`, `sap_factor_model.py` — parameter reduction didn't overcome composition bottleneck
-- **Two-compartment**: `sap_model_2comp.py` — synthetic validation r ≈ 0
-- **Transcript-only rescue**: `sap_module1_de.py`, `sap_module2_triangulation.py` — concordance null (permutation p=0.56)
-- **Pre-stoichiometry concordance**: `sap_module5b_analysis.py`, `sap_module5c_correlation.py` — mixed abundance/activity signal diluted concordance
-- **Kinase enrichment discovery**: `kl_analysis_clusters.py`, `kl_analysis_bulk.py` — superseded by stoichiometry-corrected pipeline
 
 ## Architecture
 
@@ -229,6 +220,8 @@ config.py  ←  snrna_integration.py                              (Song within-c
 - `kinase_attribution.py` — IRS normalization (all 72 samples), sample filtering (outlier exclusion + sex filter), stoichiometry computation, factorial OLS with disease×timepoint interactions (9 contrasts), MEA kinase enrichment (median-centered + winsorized), unified cell-type attribution (SEA-AD concordance + WMB expression specificity). Outputs to `outputs/reports/kinase_attribution/`. Requires: `kinase-library`, `gseapy`, `scikit-learn`, `matplotlib`, `anndata`.
 - `attribution_recovery.py` — Cross-contrast consistency analysis, final unified attribution table. Outputs to `outputs/reports/attribution_recovery/`. Requires: `matplotlib`.
 - `plot_attribution_bubbles.py` — Per-tissue heatmaps, direction-over-time diverging bars, ApTt additivity scatter, winsorization diagnostic. Outputs to `outputs/reports/attribution_recovery/bubble_plots/`. Requires: `matplotlib`, `scipy`.
+- `build_viewer.py` — Generates a self-contained interactive HTML viewer for kinase attribution results. Reads hypothesis tables, MEA stoichiometry, and site-level OLS; embeds as JSON in a single HTML file. Requires: `kinase-library`, `scipy`.
+- `lucie_5xfad_manifest.py` — Builds a proteomics manifest for Lucie 5xFAD data integration.
 
 ### Supporting Code
 
