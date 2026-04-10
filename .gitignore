@@ -10,3 +10,4 @@
 # Ignore generated Python cache files.
 /code/__pycache__/
 /code/**/*.pyc
+code/integration/intermediates/
