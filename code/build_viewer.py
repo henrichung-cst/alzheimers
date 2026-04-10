@@ -401,33 +401,33 @@ th[title]::after { content: " \u24D8"; font-size: 9px; color: #90a4ae; vertical-
   <div class="score-builder-grid">
     <div class="score-dim">
       <label><span class="dim-dot" style="background:#1976d2;"></span>Sig. contrasts (of 9)</label>
-      <input type="range" id="sw-consistency" min="0" max="100" step="5" value="20">
-      <div class="dim-val" id="sv-consistency">20</div>
+      <input type="range" id="sw-consistency" min="0" max="100" step="5" value="15">
+      <div class="dim-val" id="sv-consistency">15</div>
     </div>
     <div class="score-dim">
       <label><span class="dim-dot" style="background:#d32f2f;"></span>Peak |NES|</label>
-      <input type="range" id="sw-magnitude" min="0" max="100" step="5" value="20">
-      <div class="dim-val" id="sv-magnitude">20</div>
+      <input type="range" id="sw-magnitude" min="0" max="100" step="5" value="15">
+      <div class="dim-val" id="sv-magnitude">15</div>
     </div>
     <div class="score-dim">
       <label><span class="dim-dot" style="background:#388e3c;"></span>Multi-timepoint signal</label>
-      <input type="range" id="sw-temporal" min="0" max="100" step="5" value="20">
-      <div class="dim-val" id="sv-temporal">20</div>
+      <input type="range" id="sw-temporal" min="0" max="100" step="5" value="15">
+      <div class="dim-val" id="sv-temporal">15</div>
     </div>
     <div class="score-dim">
       <label><span class="dim-dot" style="background:#f57c00;"></span>WMB fold (top cell type)</label>
-      <input type="range" id="sw-specificity" min="0" max="100" step="5" value="20">
-      <div class="dim-val" id="sv-specificity">20</div>
+      <input type="range" id="sw-specificity" min="0" max="100" step="5" value="15">
+      <div class="dim-val" id="sv-specificity">15</div>
     </div>
     <div class="score-dim">
       <label><span class="dim-dot" style="background:#7b1fa2;"></span>|SEA-AD LFC| (top cell type)</label>
-      <input type="range" id="sw-concordance" min="0" max="100" step="5" value="20">
-      <div class="dim-val" id="sv-concordance">20</div>
+      <input type="range" id="sw-concordance" min="0" max="100" step="5" value="10">
+      <div class="dim-val" id="sv-concordance">10</div>
     </div>
     <div class="score-dim">
       <label><span class="dim-dot" style="background:#00897b;"></span>|Song LFC| (within-cohort)</label>
-      <input type="range" id="sw-songConcordance" min="0" max="100" step="5" value="0">
-      <div class="dim-val" id="sv-songConcordance">0</div>
+      <input type="range" id="sw-songConcordance" min="0" max="100" step="5" value="30">
+      <div class="dim-val" id="sv-songConcordance">30</div>
     </div>
   </div>
   <div class="score-legend">
@@ -470,13 +470,9 @@ th[title]::after { content: " \u24D8"; font-size: 9px; color: #90a4ae; vertical-
           <dt>WMB Tier</dt>
           <dd><strong>HIGH</strong>: WMB specificity &ge; 2&times; uniform (&ge;8.3% of total expression in this cell type). <strong>Low</strong>: between 1&times; and 2&times; uniform &mdash; kinase is expressed above average but not strongly specific.</dd>
           <dt>Confidence (HIGH / low)</dt>
-          <dd><strong>HIGH</strong>: At least one cell type where WMB tier is "high" AND the SEA-AD signal shows |LFC| &gt; 0.1 &mdash; the kinase is both specifically expressed there (mouse) and differentially expressed in AD (human). <strong>Low</strong>: Has cell-type candidates but none meet both criteria simultaneously.</dd>
-          <dt>Concordance Direction</dt>
-          <dd>Whether the kinase gene's expression change in human AD (SEA-AD) matches the direction of kinase activity change in the mouse model. "Up" = SEA-AD LFC &gt; 0.1; "Down" = LFC &lt; &minus;0.1; "None" = |LFC| &le; 0.1.</dd>
+          <dd><strong>HIGH</strong>: At least one cell type where WMB tier is "high" AND concordance evidence from Song within-cohort snRNA-seq (|Song LFC| &gt; 0.1) or SEA-AD cross-species data (|SEA-AD LFC| &gt; 0.1). <strong>Low</strong>: Has cell-type candidates but none meet both criteria simultaneously.</dd>
           <dt>Song LFC (Within-Cohort)</dt>
           <dd>Differential expression of the kinase gene in the paired snRNA-seq data from the same mouse cohort. Computed via factorial OLS on pseudobulk (males only, pooled across timepoints). Unlike SEA-AD (cross-species human reference), this is same-species, same-cohort evidence. Direction is pathway-matched: App, Tau, or ApTt.</dd>
-          <dt>Song Concordance Direction</dt>
-          <dd>Same as SEA-AD concordance direction, but using within-cohort snRNA-seq. "Up" = Song LFC &gt; 0.1; "Down" = LFC &lt; &minus;0.1; "None" = |LFC| &le; 0.1.</dd>
           <dt>Tissue Category</dt>
           <dd>The 24 cell subclasses are grouped into 7 tissue categories: Excitatory neurons (9 subtypes, e.g., L2/3 IT, L5 ET), Interneurons (9 subtypes, e.g., Pvalb, Sst, Vip), Astrocytes, Oligodendrocytes, OPCs, Microglia, Endothelial cells.</dd>
         </dl>
@@ -558,8 +554,8 @@ th[title]::after { content: " \u24D8"; font-size: 9px; color: #90a4ae; vertical-
           <th title="Significance and direction at each timepoint per disease model. &#8593; = significant upregulated, &#8595; = significant downregulated, &#8212; = not significant. Positions: 2mo/4mo/6mo. Updates with FDR slider.">Significant in</th>
           <th data-col="top_celltype_1" title="The cell type where this kinase gene is most specifically expressed (highest WMB fold), among those passing the WMB expression gate.">Top cell type</th>
           <th data-col="top_celltype_1_wmb_fold" data-type="num" title="How many times more specifically this kinase is expressed in its top cell type vs. uniform distribution across all 24 types. Higher = more cell-type-specific expression.">WMB fold</th>
-          <th data-col="has_high_conf_attribution" title="Attribution confidence. HIGH = at least one cell type with strong WMB expression specificity (&#8805;2x uniform) AND differential expression in human AD (|SEA-AD LFC| > 0.1). Low = has cell-type candidates but evidence is weaker.">Conf.</th>
-          <th data-col="_score" data-type="num" title="Composite ranking score (0&ndash;100) combining 5 weighted dimensions: consistency, effect magnitude, temporal coherence, cell-type specificity, and human concordance. Configure weights in the Score Builder panel above.">Score</th>
+          <th data-col="has_high_conf_attribution" title="Attribution confidence. HIGH = at least one cell type with strong WMB expression specificity (&#8805;2x uniform) AND concordance evidence from Song within-cohort or SEA-AD cross-species data (|LFC| > 0.1). Low = has cell-type candidates but evidence is weaker.">Conf.</th>
+          <th data-col="_score" data-type="num" title="Composite ranking score (0&ndash;100) combining 6 weighted dimensions: consistency, effect magnitude, temporal coherence, cell-type specificity, SEA-AD concordance, and Song concordance. Configure weights in the Score Builder panel above.">Score</th>
         </tr></thead>
         <tbody></tbody>
       </table></div>
@@ -589,9 +585,7 @@ th[title]::after { content: " \u24D8"; font-size: 9px; color: #90a4ae; vertical-
           <th data-col="cell_type" title="Cell type (subclass) this row represents. Visible when viewing a tissue category." class="ct-col-celltype" style="display:none;">Cell type</th>
           <th data-col="wmb_fold_over_uniform" data-type="num" title="Expression specificity in the selected cell type: fold enrichment over uniform (1/24). Higher = more specifically expressed here vs. other cell types.">WMB fold</th>
           <th data-col="sea_ad_lfc" data-type="num" title="Log fold change of this kinase gene in human AD brain (SEA-AD snRNA-seq) in this specific cell type. Positive = upregulated in AD; negative = downregulated.">SEA-AD LFC</th>
-          <th data-col="concordance_direction" title="Whether the kinase gene is up- or down-regulated in human AD in this cell type. 'Up' = LFC > 0.1, 'Down' = LFC < -0.1, 'None' = |LFC| &#8804; 0.1.">Direction</th>
           <th data-col="song_lfc" data-type="num" title="Log fold change of this kinase gene in paired within-cohort snRNA-seq. Same-species, same-cohort evidence from factorial OLS on pseudobulk (males only).">Song LFC</th>
-          <th data-col="song_concordance_direction" title="Direction of within-cohort snRNA concordance. 'Up' = Song LFC > 0.1, 'Down' < -0.1, 'None' = |LFC| &#8804; 0.1.">Song Dir.</th>
           <th title="Significance and direction per disease model at each timepoint. &#8593;/&#8595;/&#8212; = up/down/not sig. Positions: 2mo/4mo/6mo.">Significant in</th>
           <th data-col="n_sig_contrasts" data-type="num" title="Number of the 9 disease-vs-WT comparisons where this kinase shows significant activity change at the current FDR threshold.">Sig. vs WT</th>
           <th title="Mini bar chart showing NES values across all 9 contrasts. Bar height = |NES|, color = disease model (red=APP, blue=Tau, purple=AxT). Opaque bars are significant; faded bars are not.">NES profile</th>
@@ -685,7 +679,7 @@ const state = {
   topN: 50,
   ctCellType: null,
   stale: {}, // track which tabs need re-render
-  scoreWeights: { consistency: 20, magnitude: 20, temporal: 20, specificity: 20, concordance: 20, songConcordance: 0 },
+  scoreWeights: { consistency: 15, magnitude: 15, temporal: 15, specificity: 15, concordance: 10, songConcordance: 30 },
   scorePreset: "balanced",
 };
 
@@ -993,6 +987,7 @@ function renderTemporalPattern(kinase) {
 // =========================================================================
 // Composite Score computation
 // =========================================================================
+const SCORE_DIMS = ["consistency", "magnitude", "temporal", "specificity", "concordance", "songConcordance"];
 const SCORE_DIM_COLORS = {
   consistency: "#1976d2", magnitude: "#d32f2f", temporal: "#388e3c",
   specificity: "#f57c00", concordance: "#7b1fa2", songConcordance: "#00897b"
@@ -1270,13 +1265,12 @@ scoreBtn.addEventListener("click", () => {
 });
 
 const SCORE_PRESETS = {
-  balanced:    { consistency: 20, magnitude: 20, temporal: 20, specificity: 20, concordance: 20 },
-  consistency: { consistency: 40, magnitude: 20, temporal: 20, specificity: 10, concordance: 10 },
-  effect:      { consistency: 10, magnitude: 40, temporal: 10, specificity: 20, concordance: 20 },
+  balanced:    { consistency: 15, magnitude: 15, temporal: 15, specificity: 15, concordance: 10, songConcordance: 30 },
+  consistency: { consistency: 30, magnitude: 15, temporal: 15, specificity: 10, concordance: 5, songConcordance: 25 },
+  effect:      { consistency: 10, magnitude: 30, temporal: 10, specificity: 15, concordance: 10, songConcordance: 25 },
 };
 
 const scorePresetSel = document.getElementById("score-preset");
-const SCORE_DIMS = ["consistency", "magnitude", "temporal", "specificity", "concordance", "songConcordance"];
 
 function applyScoreWeights(weights) {
   SCORE_DIMS.forEach(d => {
@@ -1576,15 +1570,14 @@ function renderKinaseDetail(kinase) {
 
   // Evidence table
   const evRows = t2ByKinase[kinase] || [];
-  let evHtml = "<table><thead><tr><th>Cell type</th><th>WMB fold</th><th>SEA-AD LFC</th><th>Direction</th><th>Song LFC</th><th>Song Dir.</th><th>Tier</th></tr></thead><tbody>";
+  let evHtml = "<table><thead><tr><th>Cell type</th><th>WMB fold</th><th>SEA-AD LFC</th><th>Song LFC</th><th>Tier</th></tr></thead><tbody>";
   evRows.sort((a, b) => (b.wmb_fold_over_uniform || 0) - (a.wmb_fold_over_uniform || 0));
   evRows.forEach(r => {
     const muted = r.wmb_fold_over_uniform < state.wmbFoldMin ? ' style="opacity:0.4;"' : "";
     const songLfc = r.song_lfc != null && isFinite(r.song_lfc) ? r.song_lfc.toFixed(2) : "\u2014";
-    const songDir = r.song_concordance_direction || "\u2014";
     evHtml += `<tr${muted}><td>${r.cell_type}</td><td>${(r.wmb_fold_over_uniform || 0).toFixed(1)}\u00d7</td>` +
-      `<td>${(r.sea_ad_lfc || 0).toFixed(2)}</td><td>${r.concordance_direction || ""}</td>` +
-      `<td>${songLfc}</td><td>${songDir}</td>` +
+      `<td>${(r.sea_ad_lfc || 0).toFixed(2)}</td>` +
+      `<td>${songLfc}</td>` +
       `<td>${r.wmb_tier === "high" ? '<span class="badge badge-high">high</span>' : "low"}</td></tr>`;
   });
   evHtml += "</tbody></table>";
@@ -1695,9 +1688,7 @@ function renderCelltypeExplorer() {
       ${ctCell}
       <td>${(r.wmb_fold_over_uniform || 0).toFixed(1)}\u00d7</td>
       <td>${(r.sea_ad_lfc || 0).toFixed(2)}</td>
-      <td>${r.concordance_direction || ""}</td>
       <td>${r.song_lfc != null && isFinite(r.song_lfc) ? r.song_lfc.toFixed(2) : "\u2014"}</td>
-      <td>${r.song_concordance_direction || "\u2014"}</td>
       <td style="font-family:monospace;font-size:11px;letter-spacing:-0.5px;">${renderTemporalPattern(r.kinase)}</td>
       <td>${r._nSig}</td>
       <td>${makeSparkline(r.kinase)}</td>
@@ -2003,6 +1994,7 @@ function renderHeatmap() {
   // Purge previous plot to guarantee clean re-render when dimensions change
   Plotly.purge(plotDiv);
 
+  let hmMarginR = familyAnnotations.length > 0 ? 120 : 80;
   if (state.heatmapMode === "heatmap") {
     const trace = {
       type: "heatmap",
@@ -2012,7 +2004,6 @@ function renderHeatmap() {
       hovertemplate: "%{y}<br>%{x}<br>NES: %{z:.2f}<extra></extra>",
       colorbar: { title: "NES", len: 0.5 },
     };
-    const hmMarginR = familyAnnotations.length > 0 ? 120 : 80;
     const layout = {
       height: hmHeight,
       margin: { l: 120, r: hmMarginR, t: 30, b: 60 },

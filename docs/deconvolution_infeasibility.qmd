@@ -1,0 +1,326 @@
+---
+title: "Can Cell-Type-Specific Effects Be Recovered from Bulk Phosphoproteomics via Deconvolution?"
+author: "Henri Chung"
+date: "2026-04-08"
+format:
+  pdf:
+    documentclass: article
+    geometry:
+      - margin=1in
+    fontsize: 11pt
+    number-sections: true
+    colorlinks: true
+    fig-pos: "H"
+---
+
+## The Question
+
+Brain tissue is made of many cell types --- neurons, astrocytes, microglia, and others. When we measure phosphorylation from a bulk tissue sample, the signal we see is a mixture of contributions from all of these cell types. A natural question arises: if we know the cell-type composition of each sample (from matched single-nucleus RNA-seq), can we work backward from the bulk measurement to figure out what each cell type is doing individually?
+
+This process is called **deconvolution**. It is widely used in genomics, and in principle, our experiment is set up to support it: the Song 2024 dataset has 72 animals with both bulk phosphoproteomics and matched snRNA-seq, organized into a full factorial design (2 sexes $\times$ 3 timepoints $\times$ 4 genotypes = 24 experimental groups).
+
+This analysis asks: **does deconvolution fail because we haven't found the right method, or because something about the data itself makes the problem unsolvable?**
+
+## The Deconvolution Problem, Concretely
+
+Consider a single phosphorylation site. For each of the 24 experimental groups, we observe a bulk measurement (how much that site is phosphorylated) and a composition vector (what fraction of cells are astrocytes, neurons, microglia, etc.). Deconvolution asks us to solve the equation:
+
+$$
+\mathbf{y} = \mathbf{A}\mathbf{b} + \boldsymbol{\varepsilon}
+$$
+
+where:
+
+- $\mathbf{y}$ is the vector of 24 bulk measurements (one per group),
+- $\mathbf{A}$ is the $24 \times 10$ composition matrix (each row gives the cell-type fractions for one group),
+- $\mathbf{b}$ is what we want to find: the 10 cell-type-specific effects, and
+- $\boldsymbol{\varepsilon}$ is measurement noise.
+
+This looks like an ordinary linear regression problem. We have 24 observations and 10 unknowns --- seemingly enough data. But the solvability of this system depends critically on the **information content** of $\mathbf{A}$: how much the cell-type composition actually varies from one group to the next.
+
+If all 24 groups have nearly identical cell-type compositions, then $\mathbf{A}$ does not give us enough leverage to separate the contributions of different cell types --- no matter how sophisticated our regression method is. This is analogous to trying to estimate the effect of two correlated predictors in a regression: if they always move together, you cannot tell their effects apart.
+
+All code for this analysis is in `code/supplementary/deconvolution_infeasibility.py`. Figures are in `outputs/reports/deconvolution_infeasibility/`.
+
+## How Much Does Composition Vary? {#sec-composition}
+
+### How Much Do Compositions Vary?
+
+Before any formal analysis, we can directly visualize how much cell-type composition varies across the 24 experimental groups.
+
+![Per-cell-type variation across all 24 factorial groups. **(A)** Each dot is one group's fraction for that cell type; the red line marks the mean. Excitatory neurons (~28%) and Interneurons (~25%) dominate, and their fractions cluster tightly. **(B)** Standard deviation and full range (max $-$ min) across the 24 groups. Even the most variable cell type (High MT) has a range of only ~0.07. Most cell types have SD $< 0.02$.](../outputs/reports/deconvolution_infeasibility/fig2_composition_variation.png){#fig-variation}
+
+@fig-variation makes the problem immediately visible. The two dominant cell types --- Excitatory neurons and Interneurons --- each have an SD of only ~0.025 around means of 0.28 and 0.24 respectively. That is a coefficient of variation under 12%. The deconvolution problem asks us to extract 10 separate cell-type-specific effects by exploiting these tiny differences in composition.
+
+### Quantifying Compositional Variation with SVD
+
+To make this precise, we use the **singular value decomposition** (SVD). SVD is a way to decompose a matrix into its principal axes of variation --- think of it as PCA applied to the composition matrix. Each axis (or "component") captures a direction along which the 24 groups differ from each other, and the corresponding **singular value** tells us how much variation exists along that direction. Larger singular values mean more variation; smaller ones mean less.
+
+One important detail: because the cell-type fractions in each row must sum to 1, one of the 10 columns is always determined by the other 9. This constraint forces one singular value to be exactly zero. We exclude this trivial zero from all analyses, leaving 9 effective components.
+
+![SVD of the centered composition matrix. **(A)** Singular value spectrum: the first value ($\sigma_1 = 0.183$) is about twice as large as the second ($\sigma_2 = 0.090$), and the remaining values decay to $\sigma_9 = 0.016$. **(B)** Cumulative variance: just two components account for 73.5% of all compositional variation; six are needed to reach 95%. **(C)** Noise amplification: when we invert the system to solve for $\mathbf{b}$, measurement noise gets multiplied by $1/\sigma$ for each component. For the weakest directions, this amplification reaches 62$\times$.](../outputs/reports/deconvolution_infeasibility/fig1_svd_spectrum.png){#fig-svd}
+
+@fig-svd tells us three things:
+
+1. **Most of the variation lives in just a few directions.** The first two components capture nearly three-quarters of all compositional variation. The remaining 7 components collectively account for only 26.5%.
+
+2. **Many directions have very little signal.** Only 4 of the 9 effective singular values are above 0.05. The bottom 5 components describe directions along which the 24 groups are nearly indistinguishable from each other.
+
+3. **Weak directions amplify noise.** When solving for $\mathbf{b}$, the math requires dividing by each singular value (this comes from the pseudoinverse, which is how least-squares solves underdetermined or poorly-conditioned systems). Panel C shows this amplification factor: for the weakest directions, any noise in the bulk measurement gets magnified by 30--60$\times$. This means that even small measurement errors in the bulk signal get blown up into enormous errors in the estimated cell-type effects along those directions.
+
+The **effective condition number** --- the ratio of the largest to the smallest nonzero singular value --- is $\kappa = 11.3$. In many settings, this would not be alarming. As we will see, however, the combination of this moderate condition number with a small matrix (only 24 rows) and realistic noise levels is enough to render deconvolution uninformative.
+
+### What Drives the Top Components?
+
+A natural question is whether the top SVD components correspond to the experimental factors (sex, timepoint, genotype). If they do, the composition variation is at least structured by the design. If not, it may be biological noise that the deconvolution cannot exploit.
+
+![The 24 groups projected onto PC1 (59.2% of variance) and PC2 (14.4%), colored by each experimental factor. No factor cleanly separates the groups. Genotype explains the most variance in each component ($R^2 = 0.19$ for PC1, $R^2 = 0.27$ for PC2), but leaves 70--80% unexplained. Sex explains almost nothing ($R^2 < 0.01$ for both).](../outputs/reports/deconvolution_infeasibility/fig2b_svd_factors.png){#fig-factors}
+
+@fig-factors reveals that the limited compositional variation is not well-structured by the experimental design. Genotype accounts for at most 27% of PC2's variance; timepoint accounts for ~16%. The remaining variation is biological noise --- individual differences in tissue dissection, cell survival during processing, and natural between-animal variability. For deconvolution to work, the composition matrix needs to carry structured, exploitable variation. Here, the composition varies, but not in a way that is strongly aligned with the experimental conditions we care about.
+
+### Why Dominant Variation Is Not Sufficient
+
+The SVD loadings reveal exactly what drives each component. PC1 (59.2% of variance) is dominated by the **Excitatory neurons vs. Interneurons seesaw**: loading $+0.60$ on excitatory neurons and $-0.76$ on interneurons. These two cell types are anticorrelated at $r = -0.70$ across the 24 groups --- when one goes up, the other goes down. PC2 (14.4%) is dominated by **High MT** (loading $+0.82$), a mitochondrial debris marker that varies with tissue processing quality.
+
+This creates a seeming paradox: if excitatory neurons and interneurons are the most variable cell types, why doesn't that variation help deconvolution? The answer lies in the difference between **relative** and **absolute** sufficiency:
+
+- **PCA says these types dominate *relative* to other cell types.** Excitatory neurons range from 22--34% (SD = 0.025) and interneurons from 17--29% (SD = 0.028). These are the widest ranges in the dataset, so they dominate the SVD.
+
+- **Deconvolution needs *independent* variation in *all* directions.** The excitatory--interneuron tradeoff provides variation along *one* axis. But because the two types are anticorrelated, they contribute a single degree of freedom, not two. The other 7 dimensions --- where the method would need to distinguish astrocytes from microglia from OPCs from oligodendrocytes --- have singular values from 0.08 down to 0.016, corresponding to cell types that vary by only 1--2 percentage points across all 24 groups.
+
+- **The dominant variation is technical, not biological.** The samples at opposite extremes of PC1 are not separated by genotype or timepoint --- they are a mix of all conditions. The excitatory/inhibitory ratio reflects *dissection geometry* (how much cortex vs. subcortex was captured), not disease state. Similarly, PC2's High MT variation reflects *tissue processing quality*. Deconvolution would amplify this technical noise into spurious cell-type-specific "effects."
+
+In summary: the composition matrix has one moderately strong axis of variation that is anticorrelated, technical, and provides one degree of freedom --- and 8 weak axes with almost no information. Deconvolution of 10 cell types requires useful variation in all 9 effective directions.
+
+## Testing Deconvolution with Known Answers {#sec-synthetic}
+
+The analysis above characterizes the composition matrix, but does not directly show whether deconvolution works or fails. To answer that, we need experiments where we **know the true answer** and can check whether any method recovers it.
+
+### How the Simulation Works
+
+The idea is straightforward:
+
+1. **Create ground truth.** For 500 simulated phosphosites, we assign known cell-type-specific effects. Each site has a nonzero effect in 1--3 randomly chosen cell types (reflecting the biological expectation that most sites are not active in every cell type), with effect sizes between 0.5 and 2.0 log$_2$-fold-change --- realistic for phosphoproteomics.
+
+2. **Generate synthetic bulk data.** For each site, we compute what the bulk measurement *would* look like, given the composition matrix and the true effects: $\mathbf{y} = \mathbf{A}\mathbf{b}_\text{true} + \text{noise}$. The noise level ($\sigma = 0.3$) matches the empirical variability in the real data.
+
+3. **Attempt recovery.** We try to solve the inverse problem --- given $\mathbf{y}$ and $\mathbf{A}$, estimate $\mathbf{b}$ --- using standard methods.
+
+4. **Score the result.** We compute the Pearson correlation between the true effects and the estimated effects. A correlation near 1 means faithful recovery; near 0 means the method returned noise.
+
+### The Critical Comparison: Positive vs. Negative Control
+
+The key insight of this analysis is that we run this simulation **twice**, changing only the composition matrix:
+
+- **Positive control:** We use a synthetic, well-conditioned composition matrix --- one designed so that the 24 groups have maximally diverse cell-type mixtures. This tells us: *can deconvolution ever work, even in principle, with this many samples and this noise level?*
+
+- **Negative control:** We use the actual observed composition matrix $\mathbf{A}_\text{obs}$ from the Song 2024 data. This tells us: *does it work with our data specifically?*
+
+Everything else --- the ground truth effects, the noise, the recovery method --- is identical between the two.
+
+![OLS deconvolution applied to the same 500 simulated phosphosites with the same noise, differing only in the composition matrix used. **(A)** Positive control: with a well-conditioned composition ($\kappa = 3$), recovered effects track the truth ($r = 0.52$). Points scatter around the diagonal. **(B)** Negative control: with the actual composition ($\kappa = 11$), the relationship between truth and recovery collapses ($r = 0.09$). Notice the y-axis scale: recovered values range from $-40$ to $+40$, while true effects only span $-4$ to $+4$. The method is amplifying noise, not recovering signal. **(C)** Per-site correlations: the well-conditioned case produces a distribution shifted to the right (median $r = 0.53$), while the actual composition produces a distribution centered near zero (median $r = 0.10$), indistinguishable from chance. **(D)** Per-cell-type correlations tell the same story: reasonable recovery across all cell types with good composition; no recovery with the actual data.](../outputs/reports/deconvolution_infeasibility/fig3_positive_negative_control.png){#fig-control}
+
+The result in @fig-control is stark. With a well-designed composition matrix, deconvolution works --- not perfectly (the positive control only reaches $r = 0.52$, because 24 samples and 10 unknowns is still a tight system), but meaningfully. With the actual composition matrix, recovery is indistinguishable from chance.
+
+The same ground truth. The same noise. The same method. **Only the composition matrix differs.** This is the core result: the composition matrix itself is the bottleneck.
+
+## Does the Choice of Method Matter? {#sec-methods}
+
+A reasonable objection at this point is: *maybe OLS is just a bad method for this problem. Perhaps a more sophisticated approach would succeed.*
+
+To test this, we apply six different deconvolution methods to the same synthetic data, all using the actual composition matrix:
+
+- **Ordinary least squares (OLS):** The standard, unregularized solution.
+- **Ridge regression** at four regularization strengths ($\alpha = 0.01, 0.1, 1.0, 10.0$): Ridge adds a penalty that shrinks the estimated effects toward zero, which can help when the system is ill-conditioned.
+- **Non-negative least squares (NNLS):** A constrained method that decomposes the problem into positive and negative components. Often used in deconvolution because cell-type fractions are non-negative.
+
+![Six deconvolution methods applied to the same synthetic data using the actual composition matrix.](../outputs/reports/deconvolution_infeasibility/fig4_multimethod_comparison.png){#fig-methods}
+
+@fig-methods shows two things:
+
+**Panel A** ranks the methods by overall correlation with the truth. OLS performs worst ($r = 0.06$), and Ridge at $\alpha = 1.0$ performs best ($r = 0.33$). This might seem like Ridge is making meaningful progress. But look at **Panel B**: the per-site correlation distributions for all methods are centered near zero. Ridge's apparent improvement in overall $r$ comes from the bias-variance tradeoff --- by shrinking all estimates toward zero, it avoids the wild noise amplification of OLS. But it achieves this by essentially *not estimating* cell-type-specific effects. It captures the sign of a few large effects while erasing smaller ones. This is regularization working as intended, but it is not deconvolution --- it is giving up on the hard part of the problem.
+
+No method tested --- unregularized, regularized, or constrained --- achieves meaningful per-site recovery. **The failure is not about the method.**
+
+## Is This Result Robust? {#sec-robustness}
+
+### Repeating the Experiment 200 Times
+
+The comparisons above used a single random seed. Could we have been unlucky?
+
+To rule this out, we repeat the entire positive-vs-negative-control experiment 200 times, each with a fresh random ground truth and fresh noise.
+
+![Distribution of overall Pearson $r$ across 200 independent trials. Each trial uses a different random ground truth and noise realization. The blue distribution (well-conditioned composition, $\mu = 0.480 \pm 0.011$) and the red distribution (actual composition, $\mu = 0.066 \pm 0.014$) do not overlap at all. 100% of well-conditioned trials produced a higher $r$ than the best trial using the actual composition.](../outputs/reports/deconvolution_infeasibility/fig6_monte_carlo.png){#fig-mc}
+
+@fig-mc makes the case definitively. The two distributions are completely separated. There is no trial --- out of 200 --- where the actual composition outperforms the well-conditioned one. This is not a matter of tuning or luck. The composition matrix determines the outcome.
+
+### What If the Data Were Less Noisy?
+
+Another natural question: perhaps the real data is just too noisy, and deconvolution would work with cleaner measurements.
+
+![Recovery (Pearson $r$) as a function of measurement noise $\sigma$. The dashed vertical line marks the empirical noise level ($\sigma = 0.3$). As noise decreases, the well-conditioned composition (blue) approaches perfect recovery ($r \to 1$). The actual composition (red) also improves at very low noise, but much more slowly --- even at $\sigma = 0.01$ (30$\times$ less noise than we observe), recovery with $\mathbf{A}_\text{obs}$ remains well below the well-conditioned case.](../outputs/reports/deconvolution_infeasibility/fig7_noise_sensitivity.png){#fig-noise}
+
+@fig-noise reveals an important asymmetry. With a well-conditioned composition, recovery degrades gracefully as noise increases --- exactly what we would expect. With the actual composition, the curve drops much faster. Even in a nearly noise-free scenario ($\sigma = 0.01$), the actual composition still cannot match the recovery that the well-conditioned matrix achieves at realistic noise levels.
+
+The gap between the two curves at low noise is particularly telling. It represents the **inherent information loss** from the composition geometry --- the part that no amount of noise reduction can fix.
+
+## The Transition is Gradual, Not a Cliff {#sec-sweep}
+
+One might wonder whether there is a sharp boundary between "deconvolution works" and "deconvolution fails." To test this, we construct a family of composition matrices that smoothly interpolate between the well-conditioned matrix and the actual one:
+
+$$
+\mathbf{A}(\alpha) = (1 - \alpha)\,\mathbf{A}_\text{good} + \alpha\,\mathbf{A}_\text{obs}
+$$
+
+At $\alpha = 0$, we have the well-conditioned matrix. At $\alpha = 1$, we have the actual data. In between, we get compositions that are progressively more like the real data.
+
+![Recovery as a function of interpolation parameter $\alpha$, which blends from the well-conditioned composition ($\alpha = 0$) to the actual composition ($\alpha = 1$). **(A)** Both overall and per-site $r$ decline monotonically. **(B)** The same data plotted against the effective condition number $\kappa$. There is no plateau or safe region --- recovery degrades continuously.](../outputs/reports/deconvolution_infeasibility/fig5_condition_sweep.png){#fig-sweep}
+
+@fig-sweep shows a smooth, monotonic decline. There is no "safe" regime where compositions similar to $\mathbf{A}_\text{obs}$ still support deconvolution. The transition is continuous, not a cliff --- but by the time we reach compositions resembling the actual data, recovery has already reached noise-floor levels.
+
+## What If We Used Fewer Cell Types? {#sec-reduction}
+
+A natural follow-up: if 10 cell types is too many for the composition matrix to support, what about fewer? If we collapse to just the most compositionally distinct types, does deconvolution become feasible?
+
+To test this, for each $k$ from 2 to 9 we find the subset of $k$ cell types whose compositions vary the most across groups (technically: the subset that maximizes the minimum singular value of the submatrix). We then re-normalize the composition to sum to 1 within the subset and run the same synthetic recovery experiment.
+
+![Recovery as a function of the number of cell types retained, using the maximally distinguishable subset at each size. **(A)** Recovery improves dramatically as we reduce the number of types. At $k = 2$ (the two most compositionally distinct types), recovery is near-perfect ($r = 0.99$). At $k = 4$, it is still good ($r = 0.64$). But by $k = 6$, we are back to marginal ($r = 0.30$), and at $k = 9$ (all types except the least variable), we are at noise-floor levels ($r = 0.09$). **(B)** The effective condition number $\kappa$ increases steadily with $k$. **(C)** Which cell types are selected at each $k$: the algorithm prefers rare, variable types (High MT, Microglia, Endothelial cells) and avoids the dominant types (Excitatory neurons, Interneurons) until forced to include them.](../outputs/reports/deconvolution_infeasibility/fig8_celltype_reduction.png){#fig-reduction}
+
+This result is informative in two directions:
+
+**It confirms the diagnosis.** The composition matrix *can* support deconvolution --- when the problem is small enough. With 2--4 cell types, the 24 groups provide sufficient compositional leverage. The mathematical machinery works fine.
+
+**It reveals the biological limitation.** The cell types selected for small $k$ --- High MT, OPCs, Microglia, Endothelial cells --- are the rare, variable ones. The dominant cell types that are most biologically interesting for AD (Excitatory neurons at ~28%, Interneurons at ~25%) are the *last* to be included, precisely because they dominate the composition so thoroughly that their fractions barely vary across groups. Any deconvolution that includes them inherits the ill-conditioning they introduce.
+
+In other words, we *could* deconvolve 2--3 rare cell types, but we cannot deconvolve the ones we most need to study.
+
+## How Many Samples Would We Need? {#sec-frontier}
+
+Given that the composition varies so little across groups, could we fix the problem by simply collecting more samples? And how much more compositional diversity would we need?
+
+![Recovery thresholds. **(A)** More samples, same composition structure: we bootstrap-resample from $\mathbf{A}_\text{obs}$ to simulate having more groups with the same kind of compositional variation. Even at $n = 500$ samples (21$\times$ our actual count), overall $r$ only reaches 0.40 --- still below the threshold for useful biological inference. Achieving $r > 0.3$ requires approximately 300 samples. $r > 0.5$ is not reached even at $n = 500$. **(B)** More diversity, same 24 samples: we interpolate from the actual composition (left) toward a well-conditioned one (right). With 24 samples, meaningful recovery ($r > 0.3$) requires the composition to be roughly 60% of the way from $\mathbf{A}_\text{obs}$ toward the ideal --- a much larger shift than any plausible biological perturbation would produce.](../outputs/reports/deconvolution_infeasibility/fig9_recovery_frontier.png){#fig-frontier}
+
+@fig-frontier delivers a sobering message on both axes:
+
+- **More samples alone is not sufficient.** The composition structure limits how much information each additional sample provides. Because new samples have the same narrow range of compositions (cell-type fractions shift by only a few percentage points), each additional sample contributes very little new information about the cell-type-specific effects. Even a 21-fold increase in sample count does not cross the $r = 0.5$ threshold.
+
+- **The diversity gap is large.** With only 24 samples, we would need the composition to be qualitatively different from what biology provides --- cell-type proportions would need to vary by tens of percentage points across groups rather than the ~5 points we observe. This is not a gap that a slightly different experimental design would close.
+
+## Would Published Deconvolution Packages Do Better? {#sec-packages}
+
+The analyses above use standard statistical methods (OLS, Ridge, NNLS). A reasonable concern is whether purpose-built deconvolution tools --- designed specifically for this kind of biological problem --- would fare better.
+
+To address this, we test methods that correspond to the mathematical cores of widely-used deconvolution packages:
+
+| Method tested | Published package(s) | Mathematical core |
+|:---|:---|:---|
+| OLS | Basic regression | $\hat{\mathbf{b}} = (\mathbf{A}^T\mathbf{A})^{-1}\mathbf{A}^T\mathbf{y}$ |
+| NNLS (signed) | CIBERSORTx, EPIC, quanTIseq | Non-negative least squares |
+| WLS | MuSiC | Weighted least squares with sample weights |
+| Scaled OLS | BisqueRNA | OLS after reference normalization |
+| Mixed-effects | BMIND | Empirical Bayes linear mixed model |
+| Ridge ($\alpha = 0.1$) | Bayesian deconvolution | $L_2$-penalized regression |
+| Ridge ($\alpha = 1.0$) | Strong Bayesian prior | Heavy $L_2$ penalty |
+
+: Methods tested and their corresponding published tools. {#tbl-packages}
+
+These are not re-implementations of the full software packages. Rather, they isolate the *mathematical operation* that each package performs on the composition matrix. CIBERSORTx, for example, uses $\nu$-SVR (support vector regression), but its core behavior on well-behaved data converges to constrained least squares --- which is what NNLS computes. MuSiC adds cell-type-specific variance weights from scRNA-seq, which we approximate with sample-level weights. BisqueRNA applies a reference-based normalization before regression. BMIND (Wang et al., 2024) treats cell-type effects as random effects in a Bayesian mixed model; the posterior mean is mathematically equivalent to Ridge regression with a data-driven regularization parameter. The differences between these packages lie in preprocessing and variance estimation, not in the fundamental linear algebra of the inverse problem.
+
+![Seven methods mapped to published deconvolution packages, all applied to the same synthetic data using the actual composition matrix. **(A)** Overall and per-site recovery by method. OLS, NNLS, WLS, BisqueRNA, and BMIND all cluster at $r \approx 0.08$--$0.10$ --- essentially identical. Ridge achieves $r \approx 0.32$ via shrinkage, but with near-zero median per-site recovery. **(B)** Per-site correlation distributions for four representative methods --- all centered at zero.](../outputs/reports/deconvolution_infeasibility/fig10_package_equivalence.png){#fig-packages}
+
+The result is clear: **all methods cluster at the same noise-floor performance.** The unregularized methods (OLS, NNLS, WLS, BisqueRNA) all produce $r \approx 0.08$. BMIND's empirical Bayes approach achieves $r = 0.10$ --- marginally better, but still at the noise floor. The regularized methods (Ridge) achieve modestly higher overall $r$ through shrinkage, but their per-site recovery remains near zero.
+
+This is expected from the theory. All of these methods ultimately solve a linear system involving $\mathbf{A}$. When $\mathbf{A}$ does not contain sufficient information to distinguish cell-type effects, no linear method --- regardless of its regularization strategy, weighting scheme, or constraint set --- can recover them. The packages differ in how they handle noise and edge cases, but they all share the same dependence on the information content of the composition matrix.
+
+**The implication is direct:** running CIBERSORTx, MuSiC, BisqueRNA, BMIND, EPIC, or quanTIseq on this dataset would not produce reliable cell-type-specific effect estimates. The bottleneck is upstream of all of them.
+
+## Does the Cell-Type Aggregation Matter? {#sec-aggregation}
+
+The 10 cell types in $\mathbf{A}_\text{obs}$ are user-defined aggregations of a finer-grained clustering. The original snRNA-seq data identified 46 clusters, which were pooled into 10 broad categories. Two of these categories --- Excitatory neurons (~28%) and Interneurons (~25%) --- each aggregate 8--10 distinct subtypes. An important question is whether this aggregation is itself the problem: perhaps the neuronal subtypes vary substantially across groups, but that variation is hidden when they are summed into a single "Excitatory neurons" category.
+
+To test this, we go back to the original 46-cluster count matrix and try multiple aggregation strategies:
+
+1. **Original 10 types**: The current $\mathbf{A}_\text{obs}$ (baseline).
+2. **Split neuronal**: Keep all excitatory and inhibitory subtypes separate (24 groups after dropping very rare clusters).
+3. **Full clusters**: Use all 29 clusters with mean fraction $\geq$ 0.5% (maximum resolution).
+4. **Optimized grouping**: At each target $k$, use a greedy algorithm to merge clusters in the way that *maximizes* the minimum singular value of the resulting composition matrix. This is the best-case scenario --- it asks: what is the most favorable aggregation of these clusters for deconvolution?
+
+![Recovery under different aggregation strategies. **(A)** Recovery by strategy. The original 10-type aggregation achieves $r = 0.06$. Splitting neuronal subtypes (24 types) makes things *worse* ($r = 0.003$) because it dramatically increases the number of unknowns without adding proportional information. Full 29-cluster resolution is similarly poor ($r = 0.007$). The optimized 5-group aggregation achieves $r = 0.25$ --- meaningful improvement, but still modest. **(B)** The same results plotted against the number of groups $k$. The optimized groupings (green) consistently outperform the biological groupings (red, blue) at each $k$, but all strategies converge toward zero as $k$ increases.](../outputs/reports/deconvolution_infeasibility/fig11_aggregation_analysis.png){#fig-aggregation}
+
+The key findings from @fig-aggregation:
+
+**Finer resolution makes things worse, not better.** Splitting Excitatory neurons into its 9 subtypes and Interneurons into its 10 subtypes increases the condition number from $\kappa = 11.3$ to $\kappa = 183$. The subtypes are compositionally similar to each other --- they co-occur in the same proportions across groups --- so separating them adds parameters without adding information. This is the opposite of what one might hope.
+
+**Optimized grouping helps, but has limits.** At $k = 5$, the greedy algorithm finds a grouping that achieves $r = 0.25$ and $\kappa = 2.8$ --- the best composition achievable from these 46 clusters. The five groups are:
+
+| Group | Mean fraction | Contents |
+|:---|:---|:---|
+| 1 | 13.1% | Erbb4-VIP-inhibitory-neurons (single subtype) |
+| 2 | 33.9% | 18 clusters merged: OPC, Inhibitory-Neurons, VIP-interneurons, several GABAergic subtypes, dentate gyrus excitatory, Rorb excitatory, endothelial, pericytes, and others |
+| 3 | 1.3% | cluster-27 (unnamed rare cluster) |
+| 4 | 22.0% | Excitatory-Pyramidal, Microglia, GABAergic-Basal-Ganglia, Erbb4-inhibitory, Oligodendrocytes |
+| 5 | 29.7% | Astrocytes, glutamatergic excitatory, Satb2-Cux2 pyramidal, striatal MSNs |
+
+: Composition of the SVD-optimized 5-group aggregation. {#tbl-opt5}
+
+These groupings are biologically incoherent --- Group 4 merges pyramidal neurons with microglia, Group 2 lumps 18 unrelated clusters. The algorithm chose them because they happen to vary independently across groups, not because they share biology. This illustrates the fundamental tension: the groupings that maximize statistical separability are not the ones that answer biological questions. And even this best case only reaches $r = 0.25$, which is below the threshold for reliable biological inference.
+
+**The compositional diversity is fundamentally limited.** The 46 clusters in this dataset come from the same tissue, the same animals, the same brain regions. No re-aggregation can create compositional variation that does not exist in the underlying data. The subtypes of Excitatory neurons are all abundant in the same samples and rare in the same samples --- merging or splitting them cannot change this.
+
+This answers the aggregation question directly: the 10-type grouping is not the bottleneck. The bottleneck is that brain tissue has a relatively stable cell-type composition, and the 2 $\times$ 3 $\times$ 4 factorial design does not perturb it enough to support an inverse problem with more than a handful of cell types.
+
+## Summary of Results
+
+| Property | Well-conditioned | Actual $\mathbf{A}_\text{obs}$ |
+|:---|:---|:---|
+| Effective condition number ($\kappa$) | 3 | 11.3 |
+| Components with $\sigma > 0.05$ | 9 | 4 |
+| Variance in top-2 components | --- | 73.5% |
+| Overall recovery $r$ (OLS) | 0.517 | 0.087 |
+| Median per-site $r$ (OLS) | 0.527 | 0.102 |
+| Best method $r$ on $\mathbf{A}_\text{obs}$ | --- | 0.330 (Ridge) |
+| Best method per-site $r$ on $\mathbf{A}_\text{obs}$ | --- | 0.130 (Ridge) |
+| Recovery at $k = 4$ cell types | --- | 0.642 |
+| Recovery at $k = 6$ cell types | --- | 0.301 |
+| Samples needed for $r > 0.3$ (same composition) | --- | ~300 |
+| Samples needed for $r > 0.5$ (same composition) | --- | >500 |
+| Split neuronal subtypes (24 types) | --- | 0.003 |
+| Optimized 5-group aggregation | --- | 0.254 |
+
+: Summary of deconvolution recovery results. {#tbl-summary}
+
+## Why Does This Happen? {#sec-interpretation}
+
+The composition matrix has three problems, and they compound each other:
+
+1. **Most compositional variation is concentrated in a few directions.** The SVD shows that two components capture 73.5% of the variance. This means the 24 groups differ from each other mainly along 2 axes in the 9-dimensional composition space. Along the other 7 axes, the groups are nearly identical --- so there is almost no information to constrain the cell-type-specific effects along those directions.
+
+2. **The absolute amount of variation is small.** Even the strongest axis of variation has a singular value of only 0.183. In practical terms, cell-type fractions shift by just a few percentage points between groups. The system is trying to infer 10 separate effects from these small differences, and measurement noise easily overwhelms the signal.
+
+3. **There are too few observations relative to unknowns.** With 24 groups and 9 effective composition dimensions, we have fewer than 3 observations per dimension. In regression, this ratio is often insufficient for reliable estimation even with well-conditioned predictors. Combined with the problems above, it becomes impossible. Even increasing to 500 samples does not fully overcome the limited compositional diversity (@fig-frontier).
+
+These are not method-specific issues. They are properties of the data: the experimental design produced a composition matrix that does not contain enough variation to support the inverse problem. A better deconvolution algorithm cannot create information that is not in the composition matrix. Reducing the number of cell types can restore recoverability (@fig-reduction), but only at the cost of excluding the biologically central types.
+
+## Relationship to Prior Work
+
+This analysis is consistent with the documented history of deconvolution attempts on this dataset:
+
+- An 8-phase synthetic validation campaign returned $r \approx 0$
+- Four different rescue strategies, each motivated by specific diagnostic findings, returned $r \approx 0$
+- A factor model that reduced the parameter count from 146,000 to 1,332 (using kinase-substrate structure) still returned $r \approx 0$
+- Collapsing from 10 cell types to just 2 compartments (neuronal vs. glial) did not restore recovery
+- Using matched transcriptomic data as an alternative basis did not exceed chance ($p = 0.556$)
+
+Notably, the Hurdle-Tweedie deconvolution model --- the most sophisticated estimator attempted --- passed all internal diagnostics, confirming it was correctly implemented. The model was coherent; the data simply did not support the inference it was asked to make.
+
+This analysis provides the unifying explanation: the composition geometry is the binding constraint, not the choice of estimator.
+
+## Reproducibility
+
+All results can be regenerated from the composition matrix alone:
+
+```bash
+python code/supplementary/deconvolution_infeasibility.py --run
+```
+
+The analysis uses a fixed random seed (42) and requires no external data beyond `A_obs_fractions.tsv`.

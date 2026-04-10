@@ -236,12 +236,19 @@ def _build_kinase_activity_matrix(mea, gene_map):
 def _build_kinase_hypothesis_table(t1, t2):
     """Build Table 3: kinase-first synthesis joining activity profile + top cell types.
 
-    Cell types ranked by wmb_fold_over_uniform desc, then |sea_ad_lfc| desc.
+    Cell types ranked by wmb_fold_over_uniform desc, then weighted concordance
+    desc (Song 3× + SEA-AD 1×, matching the pipeline's concordance model).
     """
     t2_work = t2.copy()
-    t2_work["_abs_lfc"] = t2_work["sea_ad_lfc"].abs()
+    w_song = config.SONG_CONCORDANCE_WEIGHT
+    w_sea_ad = config.SEA_AD_CONCORDANCE_WEIGHT
+    abs_sea_ad = t2_work["sea_ad_lfc"].abs().fillna(0)
+    abs_song = (t2_work["song_lfc"].abs().fillna(0)
+                if "song_lfc" in t2_work.columns else 0)
+    t2_work["_weighted_concordance"] = (
+        (w_song * abs_song + w_sea_ad * abs_sea_ad) / (w_song + w_sea_ad))
     t2_sorted = t2_work.sort_values(
-        ["kinase", "wmb_fold_over_uniform", "_abs_lfc"],
+        ["kinase", "wmb_fold_over_uniform", "_weighted_concordance"],
         ascending=[True, False, False],
     )
 
@@ -273,9 +280,11 @@ def _build_kinase_hypothesis_table(t1, t2):
                .apply(_top3, include_groups=False)
                .reset_index())
 
+    has_concordance = (t2["sea_ad_lfc"].abs().fillna(0) > config.SEA_AD_LFC_MIN)
+    if "song_lfc" in t2.columns:
+        has_concordance = has_concordance | (t2["song_lfc"].abs().fillna(0) > config.SONG_LFC_MIN)
     high_conf = (
-        t2[(t2["wmb_tier"] == "high") &
-           (t2["sea_ad_lfc"].abs() > config.SEA_AD_LFC_MIN)]
+        t2[(t2["wmb_tier"] == "high") & has_concordance]
         .groupby("kinase").size().gt(0).rename("has_high_conf_attribution")
     )
 
