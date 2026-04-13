@@ -126,14 +126,63 @@ Incytr's internal kinase channel is preserved for the ~99 kinases that pass the 
 
 **Deduplication rule:** When computing the external substrate score for a given pathway, kinases that are already pathway nodes (EM or Target) for that pathway are excluded. Their contribution is already captured by Incytr's internal channel. This prevents double-counting while preserving both evidence streams.
 
+### Kinase-imputed pathway expansion
+
+The expression detection threshold (50%) excludes genes whose mRNA is sparse in snRNA-seq. But some of these genes have direct protein-level evidence of activity: they appear in kldata as substrates of kinases with significant MEA enrichment (FDR < 0.25). The phosphoproteomic data is observing post-translational modification of these proteins regardless of mRNA detection rate.
+
+Kinase-imputed expansion adds these genes to the receiver gene list for pathway inference, alongside the expression-threshold genes. This allows Incytr to discover pathways where some nodes are supported by kinase-substrate evidence rather than expression evidence alone.
+
+**How it works:**
+
+1. `export_kinase_imputed_genes.py` identifies all genes in the expression matrix that are known substrates (via kldata) of at least one kinase with MEA FDR < 0.25 for the current contrast.
+2. `run_incytr.R` reads this list and unions it with the expression-threshold receiver genes. The sender gene list stays at 50% (unchanged).
+3. After `pathway_inference()`, every pathway is labeled:
+   - **expression-confirmed**: all 4 nodes (Ligand, Receptor, EM, Target) pass the 50% expression threshold in their respective cell type
+   - **kinase-imputed**: one or more receiver-side nodes were admitted via kinase-substrate evidence
+4. The `imputed_nodes` column records which specific positions were imputed (e.g., "Target", "EM;Target").
+
+**Properties of kinase-imputed genes:**
+
+The 2,537 additional receiver genes are not phantom genes --- they have real mRNA signal (median 16.2% detection rate in L5 IT), just below the 50% threshold. Kinase-substrate evidence provides an independent reason to include them: the protein is being phosphorylated by a disease-activated kinase, so it is present and post-translationally active regardless of its mRNA abundance.
+
+**Pathway expansion and SigProb filtering:**
+
+| Stage | Expression-confirmed | Kinase-imputed | Total |
+|---|---|---|---|
+| After pathway_inference | 3,544 | 10,284 | 13,828 |
+| After SigProb cutoff (0.01) | 3,544 | 2,217 | 5,761 |
+
+The SigProb cutoff naturally prunes kinase-imputed pathways where the imputed node has very low expression --- the Hill function products that drive SigProb are small when any node is weakly expressed. The 2,217 kinase-imputed pathways that survive have at least moderate signaling probability, typically because 3 of 4 nodes are strongly expressed and only the imputed node is sparse.
+
+**Imputed node positions:**
+
+| Imputed nodes | Count | Fraction |
+|---|---|---|
+| Target only | 1,808 | 81.5% |
+| EM only | 320 | 14.4% |
+| EM + Target | 89 | 4.0% |
+| Receptor | 0 | 0% |
+
+Targets dominate because Target is the most downstream position and draws from the largest gene pool. No Receptors or Ligands are imputed (receptors require expression in the receiver to form L1 edges, and the sender threshold is unchanged).
+
+**Interpretation:** Kinase-imputed pathways represent a lower evidence tier than expression-confirmed pathways. The expression-confirmed label means the entire signaling chain has direct transcriptomic support. The kinase-imputed label means the chain is plausible based on expression at most nodes plus protein-level kinase activity evidence at the imputed node(s). Both tiers flow through the same scoring pipeline (TPDS, PDS, kinase support reranking), and downstream analysis can filter or stratify by the `pathway_evidence` column.
+
 ### Coverage
 
-Of the 3,544 pathways identified by Incytr:
+Of the 5,761 pathways after SigProb filtering:
 
-- **2,405 pathways (67.9%)** have at least one EM or Target gene that is a known substrate of an attributed kinase with significant MEA evidence
-- **1,139 pathways (32.1%)** have no kinase-substrate connection and are unaffected by reranking
-- **23 pathways** have kinase node genes excluded from external scoring (deduplication active)
+- **4,548 pathways (78.9%)** have at least one EM or Target gene that is a known substrate of an attributed kinase with significant MEA evidence
+- **1,213 pathways (21.1%)** have no kinase-substrate connection and are unaffected by reranking
 - 134 kinases are both significant (FDR < 0.25) and attributed to sender or receiver
+
+By evidence tier:
+
+| Tier | Total | With kinase support | Coverage |
+|---|---|---|---|
+| Expression-confirmed | 3,544 | 2,405 | 67.9% |
+| Kinase-imputed | 2,217 | 2,143 | 96.7% |
+
+The near-complete kinase support coverage of kinase-imputed pathways is expected: these nodes were admitted specifically because they are substrates of significant kinases.
 
 ## Open questions for discussion
 
@@ -305,9 +354,11 @@ The null models draw from the **full MEA kinase universe** (311 kinases tested f
 
 **Null 2 (wiring null):** Reassign each pathway's edges to random kinases from the full MEA universe, keeping IDF coefficients from the original edges but sampling attribution weights from the observed distribution. Tests: **"Does the specific kinase-substrate wiring matter, or would random connections give a similar median?"**
 
-Empirical p-values with Benjamini-Hochberg correction across all 3,544 pathways.
+Empirical p-values with Benjamini-Hochberg correction across all 5,761 pathways.
 
 #### Permutation results (10,000 iterations)
+
+Permutation results below were computed on the pre-imputation pathway set (3,544 pathways). They should be re-run on the expanded set (5,761 pathways) for updated significance calls, but the framework and interpretation remain the same.
 
 - **Null 1 (enrichment):** 1,225 / 2,405 pathways significant at FDR < 0.25 (51%). Evenly distributed across degree buckets (34--56%), confirming median aggregation is not biased by hub size. These pathways are enriched for kinases that are specifically disease-activated and cell-type-attributed.
 
@@ -316,8 +367,8 @@ Empirical p-values with Benjamini-Hochberg correction across all 3,544 pathways.
 - **Both nulls:** 7 pathways pass both tests (all Null 2 significant pathways also pass Null 1). These form the highest-confidence set: Eea1, Tsc22d2, Rapgef5, Senp7, Satb2, Wdfy3 pathway targets with 4--21 contributing kinases. Five are concordant (kinase direction agrees with expression), two are discordant (potential inhibitory phosphorylation or compensatory feedback).
 
 The practical framework for downstream use:
-- **Null 1 FDR** gates which pathways receive a kinase boost (1,225 pathways)
-- **Null 2 FDR** identifies a high-confidence subset where specific kinase biology drives the signal (7 pathways)
+- **Null 1 FDR** gates which pathways receive a kinase boost
+- **Null 2 FDR** identifies a high-confidence subset where specific kinase biology drives the signal
 - `n_distinct_kinases` provides a third confidence dimension (convergent evidence from multiple independent kinases)
 
 Gated behind `--permutations` flag (or `RUN_PERMUTATIONS=1` in `run_phase1.sh`).
@@ -326,11 +377,11 @@ Gated behind `--permutations` flag (or `RUN_PERMUTATIONS=1` in `run_phase1.sh`).
 
 Computed alongside the main scoring:
 
-1. **PhPDS_ps redundancy:** Spearman correlation between Incytr's internal PhPDS_ps and the external kinase support score. Result: **rho = -0.246** (p = 1.6e-34), confirming the two signals are not redundant. The negative correlation suggests that pathways with high internal phospho scores tend to have lower external kinase support, and vice versa --- the two channels capture different aspects of the phosphoproteomic landscape.
+1. **PhPDS_ps redundancy:** Spearman correlation between Incytr's internal PhPDS_ps and the external kinase support score. Result: **rho = -0.185** (p = 2.8e-36), confirming the two signals are not redundant. The negative correlation suggests that pathways with high internal phospho scores tend to have lower external kinase support, and vice versa --- the two channels capture different aspects of the phosphoproteomic landscape.
 
-2. **IDF sensitivity:** Top-20 overlap between scores computed with and without IDF weighting. Result: **63.6% overlap** --- IDF changes about a third of the top pathways, confirming that hub substrate discounting has material impact.
+2. **IDF sensitivity:** Top-20 overlap between scores computed with and without IDF weighting. Result: **52.4% overlap** --- IDF changes about half of the top pathways, confirming that hub substrate discounting has material impact.
 
-3. **Lambda sensitivity:** Kendall tau-b between rankings at adjacent lambda values. Results show smooth degradation from tau = 0.96 (lambda 0.1 vs 0.25) to tau = 0.88 (lambda 1.0 vs 2.0), indicating rankings stabilize at higher lambda values as kinase evidence dominates.
+3. **Lambda sensitivity:** Kendall tau-b between rankings at adjacent lambda values. Results show smooth degradation from tau = 0.97 (lambda 0.1 vs 0.25) to tau = 0.88 (lambda 1.0 vs 2.0), indicating rankings stabilize at higher lambda values as kinase evidence dominates.
 
 4. **Rank divergence from TPDS:** Kendall tau between TPDS-only ranking and adjusted ranking at each lambda:
 
@@ -338,11 +389,11 @@ Computed alongside the main scoring:
    |--------|-------------|
    | 0.1 | 0.97 |
    | 0.25 | 0.93 |
-   | 0.5 | 0.87 |
-   | 1.0 | 0.78 |
-   | 2.0 | 0.66 |
+   | 0.5 | 0.89 |
+   | 1.0 | 0.81 |
+   | 2.0 | 0.70 |
 
-   Note: the median-aggregated score produces more conservative rank shifts than the sum-based score (compare tau = 0.66 at lambda = 2.0 vs tau = 0.27 under sum aggregation). This is expected: median values are smaller in magnitude than sums, so the lambda multiplier needs to be larger to achieve the same degree of reranking. The lambda sweep should be recalibrated for median aggregation if a specific target rank divergence is desired.
+   Note: the median-aggregated score produces more conservative rank shifts than the sum-based score. This is expected: median values are smaller in magnitude than sums, so the lambda multiplier needs to be larger to achieve the same degree of reranking. The lambda sweep should be recalibrated for median aggregation if a specific target rank divergence is desired.
 
 Additional sensitivity analyses requiring R/Incytr are implemented in `wrappers/bootstrap_sensitivity.R` (gated behind `RUN_BOOTSTRAP=1`):
 
@@ -355,13 +406,15 @@ The full pipeline is orchestrated by `run_phase1.sh`:
 
 ```
 1. Python adapters (alzheimers env)
-   export_expression.py     — snRNA-seq to sparse MTX + metadata
-   export_kldata.py         — kinase-substrate reference from kinase-library
-   export_kl_output.py      — MEA results as kinase-substrate pairs
-   export_phospho.py        — attribution-weighted phospho per cell type
+   export_expression.py          — snRNA-seq to sparse MTX + metadata
+   export_kldata.py              — kinase-substrate reference from kinase-library
+   export_kl_output.py           — MEA results as kinase-substrate pairs
+   export_phospho.py             — attribution-weighted phospho per cell type
+   export_kinase_imputed_genes.py — kinase-substrate-supported receiver genes
 
 2. R wrappers (incytr env)
-   run_incytr.R             — pathway inference, expression + phospho + kinase scoring
+   run_incytr.R             — pathway inference (with kinase-imputed expansion),
+                               expression + phospho + kinase scoring, pathway labeling
    postprocess.R            — sensitivity analysis, discordance detection, redundancy check
 
 3. Kinase support scoring (alzheimers env)
@@ -372,7 +425,7 @@ The full pipeline is orchestrated by `run_phase1.sh`:
    bootstrap_sensitivity.R  — L5 IT bootstrap + threshold sensitivity
 ```
 
-Steps 1--2 and the base scoring in step 3 always run. Permutation tests and bootstrap sensitivity are gated behind `RUN_PERMUTATIONS=1` and `RUN_BOOTSTRAP=1` environment variables.
+Steps 1--2 and the base scoring in step 3 always run. Kinase-imputed expansion runs by default (gated behind `ENABLE_KINASE_IMPUTATION=1`; set to `0` to disable). Permutation tests and bootstrap sensitivity are gated behind `RUN_PERMUTATIONS=1` and `RUN_BOOTSTRAP=1` environment variables.
 
 ### Key outputs
 
@@ -380,6 +433,8 @@ Steps 1--2 and the base scoring in step 3 always run. Permutation tests and boot
 |---|---|
 | `intermediates/results_expronly.csv` | Expression-only pathway rankings (TPDS baseline) |
 | `intermediates/results_full.csv` | Full Incytr integration (TPDS + phospho + kinase) |
+| `intermediates/kinase_imputed_genes.csv` | Receiver genes admitted via kinase-substrate evidence |
+| `intermediates/kinase_imputation_summary.csv` | Gene/pathway counts by evidence tier |
 | `intermediates/kinase_support_scores.csv` | Per-pathway substrate-based kinase support scores |
 | `intermediates/adjusted_rankings.csv` | Combined rankings at each lambda value |
 | `intermediates/reranking_summary.json` | Summary statistics and sensitivity results |
@@ -387,13 +442,16 @@ Steps 1--2 and the base scoring in step 3 always run. Permutation tests and boot
 | `intermediates/bootstrap_stability.csv` | Rank stability across L5 IT bootstrap (optional) |
 | `intermediates/ranking_correlation.json` | Spearman rho between expression-only and full rankings |
 
+Both `results_expronly.csv` and `results_full.csv` include `pathway_evidence` (expression-confirmed or kinase-imputed) and `imputed_nodes` (which positions were imputed) columns for downstream stratification.
+
 ## Summary
 
 | What we want | Why it's hard | Resolution |
 |---|---|---|
 | Kinase activity evidence to influence pathway rankings | Incytr's internal kinase channel requires kinase genes to be pathway nodes, which requires them to pass the expression threshold, which most fail | Dual-channel architecture: internal channel for node-kinases, external substrate-based reranking for the rest, with deduplication at the boundary |
 | An integration that respects both data types | Bulk kinase activity is tissue-level; Incytr expects cell-type-resolved data | Keep evidence types separate: expression inside Incytr, kinase evidence as external reranking layer weighted by cell-type attribution confidence |
+| Pathway discovery beyond expression limits | The 50% detection threshold excludes genes with real kinase-substrate evidence; lowering the threshold indiscriminately creates millions of pathways | Kinase-imputed expansion: add genes with protein-level kinase-substrate evidence to the receiver gene list, label pathways by evidence tier, let SigProb naturally filter weak candidates |
 | Statistical rigor for the combined ranking | Substrate promiscuity can inflate scores; two evidence layers share an upstream dataset | Median aggregation (hub-robust), IDF weighting, dual null model (enrichment null + wiring null against full MEA universe), redundancy check against PhPDS_ps (rho = -0.246, confirming complementarity) |
-| Honest interpretation | Convergent evidence at a target gene does not prove mechanistic pathway flow | Frame as convergent functional evidence, not mechanistic validation; present concordant and discordant pathways as separate categories (unsigned score + concordance flag) |
+| Honest interpretation | Convergent evidence at a target gene does not prove mechanistic pathway flow | Frame as convergent functional evidence, not mechanistic validation; present concordant and discordant pathways as separate categories (unsigned score + concordance flag); label kinase-imputed pathways as lower evidence tier |
 
 The core constraint: cell-type attributions of kinase activity are not precise, but they represent a reasonable assignment given available data (paired within-cohort snRNA-seq, cross-species SEA-AD concordance, WMB expression specificity). The integration is indirect but meaningful --- kinase evidence informs pathway interpretation through substrate relationships, weighted by attribution confidence and cell-type relevance, without being misrepresented as cell-type-resolved measurement.

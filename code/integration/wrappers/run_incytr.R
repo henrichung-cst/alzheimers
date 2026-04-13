@@ -128,8 +128,35 @@ expr_threshold <- as.numeric(Sys.getenv("EXPR_DETECTION_THRESHOLD", "0.50"))
 cat(sprintf("  Expression detection threshold: %.0f%%\n", expr_threshold * 100))
 sender_genes <- names(sender_expr[sender_expr >= expr_threshold])
 receiver_genes <- names(receiver_expr[receiver_expr >= expr_threshold])
-cat(sprintf("  Sender genes (>5%% cells): %d\n", length(sender_genes)))
-cat(sprintf("  Receiver genes (>5%% cells): %d\n", length(receiver_genes)))
+cat(sprintf("  Sender genes (>= %.0f%% cells): %d\n",
+            expr_threshold * 100, length(sender_genes)))
+cat(sprintf("  Receiver genes (>= %.0f%% cells): %d\n",
+            expr_threshold * 100, length(receiver_genes)))
+
+# Save expression-threshold gene lists for pathway labeling
+sender_genes_expr <- sender_genes
+receiver_genes_expr <- receiver_genes
+
+# --- Kinase-imputed gene expansion ---
+# If kinase_imputed_genes.csv exists (from export_kinase_imputed_genes.py),
+# add these genes to the receiver list. These are genes below the expression
+# threshold but with protein-level kinase-substrate evidence.
+imputed_path <- file.path(int_dir, "kinase_imputed_genes.csv")
+kinase_imputed_genes <- character(0)
+if (file.exists(imputed_path)) {
+  imputed_df <- read.csv(imputed_path)
+  kinase_imputed_genes <- imputed_df$gene
+  # Only keep genes in the expression matrix
+  kinase_imputed_genes <- kinase_imputed_genes[kinase_imputed_genes %in% all_genes]
+  # Remove genes already in expression-threshold receiver set
+  kinase_imputed_genes <- setdiff(kinase_imputed_genes, receiver_genes)
+  cat(sprintf("  Kinase-imputed receiver genes: %d (new additions)\n",
+              length(kinase_imputed_genes)))
+  receiver_genes <- union(receiver_genes, kinase_imputed_genes)
+  cat(sprintf("  Expanded receiver gene list: %d total\n", length(receiver_genes)))
+} else {
+  cat("  No kinase_imputed_genes.csv found, using expression-only receiver genes.\n")
+}
 
 # ---------------------------------------------------------------------------
 # 5. Pathway inference and expression scoring
@@ -144,6 +171,43 @@ cat(sprintf("  %d pathways inferred\n", n_pathways))
 if (n_pathways == 0) {
   cat("ERROR: No pathways found. Check sender/receiver gene expression.\n")
   quit(status = 1)
+}
+
+# --- Label pathways: expression-confirmed vs kinase-imputed ---
+pw <- inc@pathways
+ligand_ok <- pw$Ligand %in% sender_genes_expr
+receptor_ok <- pw$Receptor %in% receiver_genes_expr
+em_ok <- pw$EM %in% receiver_genes_expr
+target_ok <- pw$Target %in% receiver_genes_expr
+
+pw$pathway_evidence <- ifelse(
+  ligand_ok & receptor_ok & em_ok & target_ok,
+  "expression-confirmed",
+  "kinase-imputed"
+)
+
+# Track which specific nodes were kinase-imputed (vectorized)
+parts <- cbind(
+  ifelse(!ligand_ok, "Ligand", ""),
+  ifelse(!receptor_ok, "Receptor", ""),
+  ifelse(!em_ok, "EM", ""),
+  ifelse(!target_ok, "Target", "")
+)
+pw$imputed_nodes <- apply(parts, 1, function(x) paste(x[x != ""], collapse = ";"))
+inc@pathways <- pw
+
+n_expr_conf <- sum(pw$pathway_evidence == "expression-confirmed")
+n_kin_imp <- sum(pw$pathway_evidence == "kinase-imputed")
+cat(sprintf("  Labeled: %d expression-confirmed, %d kinase-imputed\n",
+            n_expr_conf, n_kin_imp))
+
+# Helper: ensure pathway labels survive Export_results()
+pw_labels <- pw[, c("Path", "pathway_evidence", "imputed_nodes")]
+ensure_labels <- function(df) {
+  if (!"pathway_evidence" %in% names(df)) {
+    df <- merge(df, pw_labels, by = "Path", all.x = TRUE)
+  }
+  df
 }
 
 cat("Computing expression by group...\n")
@@ -165,6 +229,7 @@ inc <- Cal_scFC(inc)
 cat("\n=== Expression-only evaluation (baseline) ===\n")
 inc_base <- Pathway_evaluation(inc, score.weight = rep(0, 6))
 results_expronly <- Export_results(inc_base)
+results_expronly <- ensure_labels(results_expronly)
 expronly_path <- file.path(int_dir, "results_expronly.csv")
 write.csv(results_expronly, expronly_path, row.names = FALSE)
 cat(sprintf("  Wrote %s (%d pathways)\n", expronly_path, nrow(results_expronly)))
@@ -324,6 +389,7 @@ for (seed in 1:3) {
 # ---------------------------------------------------------------------------
 cat("\n=== Exporting results ===\n")
 results_full <- Export_results(inc, indicator = TRUE)
+results_full <- ensure_labels(results_full)
 full_path <- file.path(int_dir, "results_full.csv")
 write.csv(results_full, full_path, row.names = FALSE)
 cat(sprintf("  Wrote %s (%d pathways)\n", full_path, nrow(results_full)))
@@ -332,5 +398,20 @@ cat(sprintf("  Wrote %s (%d pathways)\n", full_path, nrow(results_full)))
 rds_path <- file.path(int_dir, "incytr_object.rds")
 saveRDS(inc, rds_path)
 cat(sprintf("  Wrote %s\n", rds_path))
+
+# Kinase-imputation summary
+if (length(kinase_imputed_genes) > 0) {
+  summary_df <- data.frame(
+    metric = c("expression_receiver_genes", "kinase_imputed_genes",
+               "total_receiver_genes", "expression_confirmed_pathways",
+               "kinase_imputed_pathways", "total_pathways"),
+    value = c(length(receiver_genes_expr), length(kinase_imputed_genes),
+              length(receiver_genes), n_expr_conf, n_kin_imp,
+              n_expr_conf + n_kin_imp)
+  )
+  summary_path <- file.path(int_dir, "kinase_imputation_summary.csv")
+  write.csv(summary_df, summary_path, row.names = FALSE)
+  cat(sprintf("  Wrote %s\n", summary_path))
+}
 
 cat("\nR wrapper complete.\n")

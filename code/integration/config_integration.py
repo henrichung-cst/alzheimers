@@ -40,6 +40,13 @@ DISCORDANCE_RANK_QUARTILE = 0.25
 # Currently 0.50; lower values include more genes but explode pathway count.
 EXPRESSION_DETECTION_THRESHOLD = 0.50
 
+# Kinase-imputed pathway expansion
+# When enabled, receiver genes that are substrates of MEA-significant kinases
+# are added to the receiver gene list even if they fail the expression threshold.
+# These pathways are labeled "kinase-imputed" vs "expression-confirmed".
+ENABLE_KINASE_IMPUTATION = True
+KINASE_IMPUTATION_FDR = 0.25   # MEA FDR threshold for "significant" kinases
+
 # Substrate-based reranking parameters
 LAMBDA_VALUES = [0.1, 0.25, 0.5, 1.0, 2.0]
 N_PERMUTATIONS = 10_000

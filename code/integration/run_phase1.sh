@@ -39,6 +39,11 @@ run_adapter "export_kldata"
 run_adapter "export_kl_output"
 run_adapter "export_phospho"
 
+# Kinase-imputed gene expansion (depends on kldata + expression_genes)
+if [ "${ENABLE_KINASE_IMPUTATION:-1}" = "1" ]; then
+  run_adapter "export_kinase_imputed_genes"
+fi
+
 # ---------------------------------------------------------------
 # R wrappers (incytr conda env)
 # ---------------------------------------------------------------
