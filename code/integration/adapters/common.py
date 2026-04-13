@@ -49,6 +49,27 @@ def load_kinase_to_mouse_gene_mapping() -> dict:
     return {k: to_mouse_gene_symbol(v) for k, v in human_map.items()}
 
 
+def load_mouse_gene_to_kinase_mapping() -> dict:
+    """Load mouse gene symbol -> set of kinase abbreviations.
+
+    Reverse of load_kinase_to_mouse_gene_mapping(). Multiple abbreviations
+    can map to the same gene, so values are sets.
+    """
+    abbrev_to_mouse = load_kinase_to_mouse_gene_mapping()
+    gene_to_kins = {}
+    for abbrev, gene in abbrev_to_mouse.items():
+        gene_to_kins.setdefault(gene, set()).add(abbrev)
+    return gene_to_kins
+
+
+def build_substrate_kinase_map(kldata) -> dict:
+    """Build substrate_gene -> set(kinase_mouse_genes) from kldata DataFrame.
+
+    kldata must have 'gene' (substrate) and 'motif.geneName' (kinase) columns.
+    """
+    return kldata.groupby("gene")["motif.geneName"].apply(set).to_dict()
+
+
 def load_sample_mapping() -> pd.DataFrame:
     """Load the TMT channel-to-animal sample mapping."""
     return pd.read_csv(icfg.SAMPLE_MAPPING_CSV)

@@ -52,6 +52,30 @@ micromamba run -n incytr Rscript "$WRAPPERS_DIR/postprocess.R"
 echo
 
 # ---------------------------------------------------------------
+# Substrate-based kinase support (always runs, fast)
+# ---------------------------------------------------------------
+echo "=== Kinase Support Scoring ==="
+echo "[compute_kinase_support.py]"
+micromamba run -n alzheimers python3 "$ADAPTERS_DIR/compute_kinase_support.py"
+echo
+
+# Permutation tests (optional, slow)
+if [ "${RUN_PERMUTATIONS:-0}" = "1" ]; then
+  echo "[compute_kinase_support.py --permutations]"
+  micromamba run -n alzheimers python3 "$ADAPTERS_DIR/compute_kinase_support.py" \
+    --permutations
+  echo
+fi
+
+# Bootstrap sensitivity (optional, slow)
+if [ "${RUN_BOOTSTRAP:-0}" = "1" ]; then
+  echo "=== Bootstrap Sensitivity ==="
+  echo "[bootstrap_sensitivity.R]"
+  micromamba run -n incytr Rscript "$WRAPPERS_DIR/bootstrap_sensitivity.R"
+  echo
+fi
+
+# ---------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------
 echo "============================================================"
@@ -65,4 +89,7 @@ echo "  Discordant A:     $OUT_DIR/results_discordant_A.csv"
 echo "  Discordant B:     $OUT_DIR/results_discordant_B.csv"
 echo "  Sensitivity:      $OUT_DIR/sensitivity_report.csv"
 echo "  Ranking corr:     $OUT_DIR/ranking_correlation.json"
+echo "  Kinase support:   $OUT_DIR/kinase_support_scores.csv"
+echo "  Adjusted ranks:   $OUT_DIR/adjusted_rankings.csv"
+echo "  Reranking summary:$OUT_DIR/reranking_summary.json"
 echo "============================================================"

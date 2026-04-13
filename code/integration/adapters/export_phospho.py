@@ -1,11 +1,16 @@
-"""Adapter 5.4: Export tiered per-cell-type phospho data for Incytr.
+"""Adapter 5.4: Export per-cell-type phospho data for Incytr.
 
-Implements the tiered phospho integration scheme:
-  - High confidence (Project tier): Winner-take-all, full stoichiometry
-    assigned to top-ranked cell type
-  - Moderate confidence (Filter tier): No phospho magnitudes passed
-    (enters only through kl_output)
-  - Low confidence (Exclude): Nothing
+Distributes bulk tissue stoichiometry across cell types using
+attribution-proportional weighting:
+
+  For each substrate gene:
+    1. Find all kinases that phosphorylate it (via kldata)
+    2. Sum their attribution scores per cell type
+    3. Normalize to proportions → cell-type weights
+    4. phospho_celltype = bulk_phospho × proportion
+
+  Genes with no kinase in the attribution pipeline get uniform
+  assignment (equal weight to all cell types).
 
 Incytr's Integr_multiomics() expects per-condition data frames with
 gene_symbol + {celltype}_ps columns containing RAW ABUNDANCE values
@@ -21,7 +26,8 @@ import os
 import numpy as np
 import pandas as pd
 
-from common import load_sample_mapping, ensure_intermediates_dir
+from common import (load_sample_mapping, ensure_intermediates_dir,
+                    load_mouse_gene_to_kinase_mapping, build_substrate_kinase_map)
 from config import SEA_AD_SUBCLASSES
 import config_integration as icfg
 
@@ -35,6 +41,43 @@ def _get_animal_columns(genotype_code, timepoint, sex="M"):
         & (sm["sex"] == sex)
     )
     return list(sm[mask]["column_name"])
+
+
+def _build_attribution_weights(ac, kldata, subclasses, gene_to_kins):
+    """Build per-gene per-cell-type attribution weights.
+
+    For each substrate gene, find its kinases via kldata, look up their
+    attribution scores per cell type, and normalize to proportions.
+
+    Returns dict: gene -> {cell_type: proportion, ...}
+    Genes with no attributed kinases are absent from the dict.
+    """
+    sub_to_kinases = build_substrate_kinase_map(kldata)
+
+    # Precompute kinase -> [(cell_type, combined_score)] for O(1) lookup
+    kinase_ct_scores = {}
+    for _, r in ac.iterrows():
+        kin = r["kinase"]
+        ct = r["cell_type"]
+        if ct in subclasses:
+            kinase_ct_scores.setdefault(kin, []).append((ct, r["combined_score"]))
+
+    gene_weights = {}
+    for sub_gene, kinase_genes in sub_to_kinases.items():
+        ct_scores = {}
+        for kin_gene in kinase_genes:
+            for abbrev in gene_to_kins.get(kin_gene, set()):
+                for ct, score in kinase_ct_scores.get(abbrev, []):
+                    ct_scores[ct] = ct_scores.get(ct, 0) + score
+
+        if ct_scores:
+            total = sum(ct_scores.values())
+            if total > 0:
+                gene_weights[sub_gene] = {
+                    ct: score / total for ct, score in ct_scores.items()
+                }
+
+    return gene_weights
 
 
 def main():
@@ -60,9 +103,6 @@ def main():
     # ------------------------------------------------------------------
     # 2. Aggregate to gene level (max-abs stoichiometry per gene)
     # ------------------------------------------------------------------
-    # Multiple phosphosites map to the same gene. For Incytr's per-gene
-    # phospho input, keep the site with the largest absolute stoichiometry
-    # difference (this is the site that drives MEA ranking).
     stoich["abs_diff"] = (stoich["stoich_app"] - stoich["stoich_wt"]).abs()
     stoich_valid = stoich.dropna(subset=["gene_symbol", "stoich_wt", "stoich_app"])
     idx_max = stoich_valid.groupby("gene_symbol")["abs_diff"].idxmax()
@@ -72,105 +112,70 @@ def main():
 
     # ------------------------------------------------------------------
     # 3. Convert to linear scale for Incytr
-    #
-    # Incytr's Cal_foldchange() computes log2(cond1/cond2).
-    # If we pass 2^stoich, Incytr computes:
-    #   log2(2^stoich_app / 2^stoich_wt) = stoich_app - stoich_wt
-    # which is exactly the stoichiometry LFC we want.
     # ------------------------------------------------------------------
     gene_stoich["linear_wt"] = np.power(2.0, gene_stoich["stoich_wt"])
     gene_stoich["linear_app"] = np.power(2.0, gene_stoich["stoich_app"])
 
     # ------------------------------------------------------------------
-    # 4. Load unified attribution and kldata for tiered assignment
-    #
-    # The stoichiometry matrix contains SUBSTRATE genes (phosphosites).
-    # Attribution is per KINASE. To assign a substrate's phospho to a
-    # cell type, we need: substrate -> kinase (from kldata) -> cell type
-    # (from attribution). Winner-take-all: assign to the top cell type
-    # of the kinase that phosphorylates this substrate.
+    # 4. Build attribution-proportional cell-type weights
     # ------------------------------------------------------------------
+    print("\nBuilding attribution-proportional weights...")
     attr = pd.read_csv(icfg.UNIFIED_ATTRIBUTION_CSV)
     attr_contrast = attr[attr["contrast"] == icfg.CONTRAST].copy()
 
-    # Get high-confidence attributions: top cell type per kinase
-    high_conf = attr_contrast[attr_contrast["combined_confidence"] == "high"]
-    kinase_to_celltype = {}
-    if not high_conf.empty:
-        top_ct = (
-            high_conf.sort_values("combined_score", ascending=False)
-            .groupby("kinase")
-            .first()
-            .reset_index()[["kinase", "gene_symbol", "cell_type"]]
-        )
-        # Map kinase abbreviation -> top cell type
-        kinase_to_celltype = dict(zip(top_ct["kinase"], top_ct["cell_type"]))
-        print(f"\n  High-confidence attributions: {len(top_ct)} kinases")
-        print(f"  Unique top cell types: {top_ct['cell_type'].nunique()}")
-    else:
-        print("\n  WARNING: No high-confidence attributions found")
-
-    # Load kldata to get substrate -> kinase mapping
     kldata_path = os.path.join(icfg.INTERMEDIATES_DIR, "kldata.csv")
     if os.path.exists(kldata_path):
         kldata = pd.read_csv(kldata_path)
-        # Build substrate gene -> set of kinase gene symbols
-        sub_to_kinases = kldata.groupby("gene")["motif.geneName"].apply(set).to_dict()
-        print(f"  kldata: {len(sub_to_kinases)} substrate genes")
     else:
-        sub_to_kinases = {}
-        print("  WARNING: kldata.csv not found")
+        print("  WARNING: kldata.csv not found, using uniform assignment for all genes")
+        kldata = pd.DataFrame(columns=["gene", "site_pos", "motif.geneName"])
 
-    # Load kinase-to-gene mapping for abbreviation -> mouse gene symbol
-    from common import load_kinase_to_mouse_gene_mapping
-    kin_to_gene = load_kinase_to_mouse_gene_mapping()
-    # Invert: mouse gene symbol -> set of kinase abbreviations
-    gene_to_kin_abbrevs = {}
-    for abbrev, gene in kin_to_gene.items():
-        gene_to_kin_abbrevs.setdefault(gene, set()).add(abbrev)
+    gene_to_kins = load_mouse_gene_to_kinase_mapping()
 
-    # Build substrate gene -> top cell type mapping (via kinase attribution)
-    substrate_to_celltype = {}
-    for sub_gene, kinase_genes in sub_to_kinases.items():
-        for kin_gene in kinase_genes:
-            # Find kinase abbreviations for this gene symbol
-            abbrevs = gene_to_kin_abbrevs.get(kin_gene, set())
-            for abbrev in abbrevs:
-                ct = kinase_to_celltype.get(abbrev)
-                if ct is not None:
-                    substrate_to_celltype[sub_gene] = ct
-                    break  # winner-take-all: first high-conf kinase wins
-            if sub_gene in substrate_to_celltype:
-                break
+    subclasses = [sc for sc in SEA_AD_SUBCLASSES
+                  if sc not in ("Pax6", "L6 IT Car3")]
 
-    print(f"  Substrates with cell-type assignment: {len(substrate_to_celltype)}")
+    gene_weights = _build_attribution_weights(
+        attr_contrast, kldata, set(subclasses), gene_to_kins
+    )
+
+    n_attributed = sum(1 for g in gene_stoich.index if g in gene_weights)
+    n_uniform = len(gene_stoich) - n_attributed
+    print(f"  Attributed genes: {n_attributed} (proportional weights)")
+    print(f"  Unattributed genes: {n_uniform} (uniform fallback)")
 
     # ------------------------------------------------------------------
     # 5. Build per-condition phospho DataFrames
-    #
-    # Columns: gene_symbol, {subclass}_ps for each of 22 subclasses
-    # Values: linear-scale stoichiometry for winner cell type, NA elsewhere
     # ------------------------------------------------------------------
-    subclasses = [sc for sc in SEA_AD_SUBCLASSES
-                  if sc not in ("Pax6", "L6 IT Car3")]
     ps_cols = [f"{sc}_ps" for sc in subclasses]
+    uniform_prop = 1.0 / len(subclasses)
 
     def build_ps_df(value_col):
         """Build a per-condition phospho DataFrame."""
         rows = []
-        assigned = 0
+        n_attributed_assigned = 0
+        n_uniform_assigned = 0
         for gene, row in gene_stoich.iterrows():
             rec = {"gene_symbol": gene}
-            # Look up cell type via substrate -> kinase -> attribution
-            # Use case-insensitive match (stoich has mixed case gene symbols)
-            top_ct = substrate_to_celltype.get(gene)
-            if top_ct is None:
-                # Try mouse-style capitalization
-                mouse_gene = gene[0].upper() + gene[1:].lower() if gene else gene
-                top_ct = substrate_to_celltype.get(mouse_gene)
-            if top_ct is not None and top_ct in subclasses:
-                rec[f"{top_ct}_ps"] = row[value_col]
-                assigned += 1
+            val = row[value_col]
+
+            weights = gene_weights.get(gene)
+            if weights is not None:
+                # Attribution-proportional: distribute by attribution scores.
+                # Cell types with attribution get proportional values.
+                # Cell types without attribution for this gene get the
+                # uniform fallback (tissue average), not NA — Incytr's
+                # Cal_foldchange cannot handle NA values.
+                for sc in subclasses:
+                    prop = weights.get(sc, uniform_prop)
+                    rec[f"{sc}_ps"] = val * prop
+                n_attributed_assigned += 1
+            else:
+                # Uniform fallback: equal weight to all cell types
+                for sc in subclasses:
+                    rec[f"{sc}_ps"] = val * uniform_prop
+                n_uniform_assigned += 1
+
             rows.append(rec)
 
         df = pd.DataFrame(rows)
@@ -178,8 +183,9 @@ def main():
             if col not in df.columns:
                 df[col] = np.nan
         df = df[["gene_symbol"] + ps_cols]
-        print(f"  {value_col}: {assigned} genes assigned to cell types "
-              f"({len(df)} total genes)")
+
+        print(f"  {value_col}: {n_attributed_assigned} proportional, "
+              f"{n_uniform_assigned} uniform")
         return df
 
     ps_wt = build_ps_df("linear_wt")
@@ -195,10 +201,21 @@ def main():
     print(f"\n  Wrote {wt_path}")
     print(f"  Wrote {app_path}")
 
-    # Summary: non-NA entries
-    n_nonna = ps_wt[ps_cols].notna().sum().sum()
-    print(f"  Non-NA phospho entries (WT): {n_nonna} "
-          f"(of {len(ps_wt) * len(ps_cols)} possible)")
+    # Summary statistics
+    for label, df in [("WT", ps_wt), ("App", ps_app)]:
+        n_total = df[ps_cols].size
+        n_nonna = df[ps_cols].notna().sum().sum()
+        n_zero = (df[ps_cols] == 0).sum().sum()
+        print(f"  {label}: {n_nonna}/{n_total} non-NA "
+              f"({100*n_nonna/n_total:.1f}%), {n_zero} zeros")
+
+    # Per-cell-type coverage
+    print("\n  Per-cell-type non-NA counts:")
+    for col in ps_cols:
+        n = ps_wt[col].notna().sum()
+        if n > 0:
+            ct = col.replace("_ps", "")
+            print(f"    {ct:20s}: {n:5d}")
 
     print("\nAdapter 5.4 complete.")
 

@@ -120,11 +120,14 @@ sender_cells <- which(meta$labels == sender)
 receiver_cells <- which(meta$labels == receiver)
 sender_expr <- Matrix::rowMeans(mat[, sender_cells] > 0)
 receiver_expr <- Matrix::rowMeans(mat[, receiver_cells] > 0)
-# Use 50% expression threshold: gene must be detected in >=50% of cells
-# in the cell type. This produces a manageable pathway count (~10-50K).
+# Expression detection threshold: fraction of cells with nonzero UMI.
+# Default 50% produces a manageable pathway count (~10-50K).
 # Lower thresholds (5%: 9.5M pathways, 20%: 788K) cause OOM downstream.
-sender_genes <- names(sender_expr[sender_expr >= 0.50])
-receiver_genes <- names(receiver_expr[receiver_expr >= 0.50])
+# Configurable via EXPR_DETECTION_THRESHOLD env var for sensitivity analysis.
+expr_threshold <- as.numeric(Sys.getenv("EXPR_DETECTION_THRESHOLD", "0.50"))
+cat(sprintf("  Expression detection threshold: %.0f%%\n", expr_threshold * 100))
+sender_genes <- names(sender_expr[sender_expr >= expr_threshold])
+receiver_genes <- names(receiver_expr[receiver_expr >= expr_threshold])
 cat(sprintf("  Sender genes (>5%% cells): %d\n", length(sender_genes)))
 cat(sprintf("  Receiver genes (>5%% cells): %d\n", length(receiver_genes)))
 

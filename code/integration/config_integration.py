@@ -35,6 +35,20 @@ MUTANT_TO_CONDITION = {
 PHOSPHO_FDR_GATE = 0.25        # MEA FDR for discordance and filter tier
 DISCORDANCE_RANK_QUARTILE = 0.25
 
+# Expression detection threshold (fraction of cells with nonzero UMI)
+# Used by run_incytr.R for gene filtering before pathway_inference().
+# Currently 0.50; lower values include more genes but explode pathway count.
+EXPRESSION_DETECTION_THRESHOLD = 0.50
+
+# Substrate-based reranking parameters
+LAMBDA_VALUES = [0.1, 0.25, 0.5, 1.0, 2.0]
+N_PERMUTATIONS = 10_000
+SENDER_ATTRIBUTION_DISCOUNT = 0.25
+
+# Sensitivity analysis parameters
+DETECTION_THRESHOLD_SENSITIVITY = 0.20   # alternative threshold for comparison run
+N_BOOTSTRAP_ITERATIONS = 500             # L5 IT bootstrap resampling iterations
+
 # ---------------------------------------------------------------------------
 # Paths: pipeline outputs (read-only)
 # ---------------------------------------------------------------------------

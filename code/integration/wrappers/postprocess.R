@@ -90,6 +90,37 @@ writeLines(
 cat(sprintf("Wrote %s\n", basename(json_path)))
 
 # ---------------------------------------------------------------------------
+# 2b. PhPDS_ps vs kinase_support_score redundancy check
+# ---------------------------------------------------------------------------
+ks_path <- file.path(int_dir, "kinase_support_scores.csv")
+if (file.exists(ks_path)) {
+  cat("\n--- PhPDS_ps vs Kinase Support Redundancy ---\n")
+  ks <- fread(ks_path)
+  ks_merged <- merge(
+    full[, .(Path, PhPDS_ps)],
+    ks[, .(Path, kinase_support_score)],
+    by = "Path"
+  )
+  # Filter to pathways with nonzero external score
+  ks_nz <- ks_merged[kinase_support_score > 0 & !is.na(PhPDS_ps)]
+  if (nrow(ks_nz) > 10) {
+    rho_ks <- cor(ks_nz$PhPDS_ps, ks_nz$kinase_support_score,
+                  method = "spearman", use = "complete.obs")
+    cat(sprintf("Spearman rho (PhPDS_ps vs kinase_support_score): %.4f (n=%d)\n",
+                rho_ks, nrow(ks_nz)))
+
+    # Append to ranking_correlation.json
+    json_data <- jsonlite::fromJSON(json_path)
+    json_data$spearman_rho_phPDS_vs_kscore <- round(rho_ks, 4)
+    writeLines(jsonlite::toJSON(json_data, auto_unbox = TRUE, pretty = TRUE),
+               json_path)
+    cat(sprintf("Updated %s\n", basename(json_path)))
+  }
+} else {
+  cat("\n  kinase_support_scores.csv not found, skipping redundancy check.\n")
+}
+
+# ---------------------------------------------------------------------------
 # 3. Permutation stability (Tier 2 check)
 # ---------------------------------------------------------------------------
 cat("\n--- Permutation Stability ---\n")
