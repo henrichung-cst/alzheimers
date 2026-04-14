@@ -7,8 +7,13 @@ evidence in Incytr's kl_output format.
 The kl_output tells Incytr which kinases are *active* in disease (from our
 MEA analysis). The kldata (adapter 5.3) provides the static kinase-substrate
 reference. Together they drive Incytr's Cal_activity_score().
+
+Flags:
+  --all-pairs   Include kinases attributed at moderate+ confidence to ANY
+                cell type (for all-pairs pipeline). Default: sender/receiver only.
 """
 
+import argparse
 import os
 
 import pandas as pd
@@ -17,7 +22,7 @@ from common import load_kinase_to_mouse_gene_mapping, ensure_intermediates_dir
 import config_integration as icfg
 
 
-def main():
+def main(all_pairs: bool = False):
     ensure_intermediates_dir()
 
     # ------------------------------------------------------------------
@@ -33,24 +38,31 @@ def main():
     attr = pd.read_csv(icfg.UNIFIED_ATTRIBUTION_CSV)
     attr_contrast = attr[attr["contrast"] == icfg.CONTRAST].copy()
 
-    # For kl_output, keep kinases attributed at moderate+ confidence to the
-    # receiver cell type. Incytr's Cal_activity_score gates by the receiver's
-    # EI (Exclusiveness Index), so attributions to the receiver are most relevant.
-    receiver_attr = attr_contrast[
-        (attr_contrast["cell_type"] == icfg.RECEIVER)
-        & (attr_contrast["combined_confidence"].isin(["high", "moderate"]))
-    ]
-    # Also include sender attributions (kinases in sender can appear in pathways)
-    sender_attr = attr_contrast[
-        (attr_contrast["cell_type"] == icfg.SENDER)
-        & (attr_contrast["combined_confidence"].isin(["high", "moderate"]))
-    ]
-    attributed_kinases = set(receiver_attr["kinase"]) | set(sender_attr["kinase"])
-    print(f"Kinases attributed at moderate+ to {icfg.RECEIVER}: "
-          f"{len(receiver_attr)}")
-    print(f"Kinases attributed at moderate+ to {icfg.SENDER}: "
-          f"{len(sender_attr)}")
-    print(f"Total unique attributed kinases: {len(attributed_kinases)}")
+    if all_pairs:
+        # All-pairs mode: include kinases attributed at moderate+ to ANY
+        # cell type, so every sender-receiver pair has full kinase coverage.
+        all_attr = attr_contrast[
+            attr_contrast["combined_confidence"].isin(["high", "moderate"])
+        ]
+        attributed_kinases = set(all_attr["kinase"])
+        print(f"All-pairs mode: {len(attributed_kinases)} kinases attributed "
+              f"at moderate+ to any cell type")
+    else:
+        # Single-pair mode: only sender/receiver attributions.
+        receiver_attr = attr_contrast[
+            (attr_contrast["cell_type"] == icfg.RECEIVER)
+            & (attr_contrast["combined_confidence"].isin(["high", "moderate"]))
+        ]
+        sender_attr = attr_contrast[
+            (attr_contrast["cell_type"] == icfg.SENDER)
+            & (attr_contrast["combined_confidence"].isin(["high", "moderate"]))
+        ]
+        attributed_kinases = set(receiver_attr["kinase"]) | set(sender_attr["kinase"])
+        print(f"Kinases attributed at moderate+ to {icfg.RECEIVER}: "
+              f"{len(receiver_attr)}")
+        print(f"Kinases attributed at moderate+ to {icfg.SENDER}: "
+              f"{len(sender_attr)}")
+        print(f"Total unique attributed kinases: {len(attributed_kinases)}")
 
     # ------------------------------------------------------------------
     # 3. Filter MEA to attributed kinases
@@ -124,4 +136,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Export kl_output for Incytr")
+    parser.add_argument("--all-pairs", action="store_true",
+                        help="Include kinases attributed to any cell type")
+    args = parser.parse_args()
+    main(all_pairs=args.all_pairs)

@@ -14,6 +14,8 @@
 suppressPackageStartupMessages({
   library(Matrix)
   library(data.table)
+  library(duckdb)
+  library(DBI)
 })
 
 # ---------------------------------------------------------------------------
@@ -29,6 +31,7 @@ get_script_dir <- function() {
   return(file.path(getwd(), "code", "integration", "wrappers"))
 }
 script_dir <- get_script_dir()
+source(file.path(script_dir, "duckdb_enumeration.R"))
 repo_root <- normalizePath(file.path(script_dir, "..", "..", ".."))
 int_dir <- file.path(repo_root, "code", "integration", "intermediates")
 incytr_root <- normalizePath(file.path(repo_root, "..", "incytr"))
@@ -121,10 +124,10 @@ receiver_cells <- which(meta$labels == receiver)
 sender_expr <- Matrix::rowMeans(mat[, sender_cells] > 0)
 receiver_expr <- Matrix::rowMeans(mat[, receiver_cells] > 0)
 # Expression detection threshold: fraction of cells with nonzero UMI.
-# Default 50% produces a manageable pathway count (~10-50K).
-# Lower thresholds (5%: 9.5M pathways, 20%: 788K) cause OOM downstream.
-# Configurable via EXPR_DETECTION_THRESHOLD env var for sensitivity analysis.
-expr_threshold <- as.numeric(Sys.getenv("EXPR_DETECTION_THRESHOLD", "0.50"))
+# Default 10%. Pathway count converges from 10% through 0% (extra genes all
+# fail SigProb), but 10% is faster because edge pruning operates on ~800K
+# edges instead of ~6.5M. Configurable via EXPR_DETECTION_THRESHOLD env var.
+expr_threshold <- as.numeric(Sys.getenv("EXPR_DETECTION_THRESHOLD", "0.10"))
 cat(sprintf("  Expression detection threshold: %.0f%%\n", expr_threshold * 100))
 sender_genes <- names(sender_expr[sender_expr >= expr_threshold])
 receiver_genes <- names(receiver_expr[receiver_expr >= expr_threshold])
@@ -161,10 +164,35 @@ if (file.exists(imputed_path)) {
 # ---------------------------------------------------------------------------
 # 5. Pathway inference and expression scoring
 # ---------------------------------------------------------------------------
-cat("\nRunning pathway inference...\n")
-inc <- pathway_inference(inc, DB = DB.M,
-                         gene.use_Sender = sender_genes,
-                         gene.use_Receiver = receiver_genes)
+cat("\nRunning DuckDB pathway enumeration (with in-query SigProb pre-filter)...\n")
+duck_result <- duckdb_enumerate_pathways(
+  mat = mat, meta = meta, DB = DB.M,
+  sender = sender, receiver = receiver,
+  conditions = conditions,
+  gene.use_Sender = sender_genes,
+  gene.use_Receiver = receiver_genes,
+  kinase_imputed_genes = kinase_imputed_genes,
+  K = 0.5, N = 2, cutoff_SigProb = 0.01,
+  return_edges = TRUE)
+
+inc@pathways <- as.data.frame(duck_result$pathways)
+inc@options$em_degree <- duck_result$em_degree
+inc@options$edge_source_count <- duck_result$edge_source_count
+
+# Save compact edge lists for future graph visualization
+if (!is.null(duck_result$edges)) {
+  write.csv(duck_result$edges$l1,
+            file.path(int_dir, "edge_list_l1.csv"), row.names = FALSE)
+  write.csv(duck_result$edges$l2,
+            file.path(int_dir, "edge_list_l2.csv"), row.names = FALSE)
+  write.csv(duck_result$edges$l3,
+            file.path(int_dir, "edge_list_l3.csv"), row.names = FALSE)
+  cat(sprintf("  Edge lists saved: L1=%d, L2=%d, L3=%d unique edges\n",
+              nrow(duck_result$edges$l1), nrow(duck_result$edges$l2),
+              nrow(duck_result$edges$l3)))
+}
+rm(duck_result)
+gc(verbose = FALSE)
 n_pathways <- nrow(inc@pathways)
 cat(sprintf("  %d pathways inferred\n", n_pathways))
 
@@ -187,13 +215,12 @@ pw$pathway_evidence <- ifelse(
 )
 
 # Track which specific nodes were kinase-imputed (vectorized)
-parts <- cbind(
+pw$imputed_nodes <- gsub("^;+|;+$", "", gsub(";{2,}", ";", paste(
   ifelse(!ligand_ok, "Ligand", ""),
   ifelse(!receptor_ok, "Receptor", ""),
   ifelse(!em_ok, "EM", ""),
-  ifelse(!target_ok, "Target", "")
-)
-pw$imputed_nodes <- apply(parts, 1, function(x) paste(x[x != ""], collapse = ";"))
+  ifelse(!target_ok, "Target", ""),
+  sep = ";")))
 inc@pathways <- pw
 
 n_expr_conf <- sum(pw$pathway_evidence == "expression-confirmed")
@@ -213,8 +240,33 @@ ensure_labels <- function(df) {
 cat("Computing expression by group...\n")
 inc <- Expr_bygroup(inc)
 
+# Patch Expr_bygroup for kinase-imputed genes: Expr_bygroup uses a weighted
+# quantile (0.25*Q1 + 0.5*median + 0.25*Q3) which zeros out genes below ~50%
+# detection. For kinase-imputed genes (included for protein-level evidence
+# despite low RNA), replace zero values with rowMeans so they can form pathways.
+if (length(kinase_imputed_genes) > 0) {
+  r_cells_c1 <- which(meta$labels == receiver & meta$condition == conditions[1])
+  r_cells_c2 <- which(meta$labels == receiver & meta$condition == conditions[2])
+  n_patched <- 0L
+  for (ci in 1:2) {
+    if (nrow(inc@expr.bygroup[[ci]]) == 0) next
+    eg <- inc@expr.bygroup[[ci]]
+    ki_in_eg <- intersect(kinase_imputed_genes, eg$Gene)
+    if (length(ki_in_eg) == 0) next
+    rcol <- receiver
+    zero_ki <- ki_in_eg[eg[match(ki_in_eg, eg$Gene), rcol] == 0]
+    if (length(zero_ki) > 0) {
+      cells <- if (ci == 1) r_cells_c1 else r_cells_c2
+      rm_vals <- Matrix::rowMeans(mat[zero_ki, cells, drop = FALSE])
+      idx <- match(zero_ki, eg$Gene)
+      inc@expr.bygroup[[ci]][idx, rcol] <- rm_vals
+      n_patched <- n_patched + length(zero_ki)
+    }
+  }
+  if (n_patched > 0) cat(sprintf("  Patched %d kinase-imputed gene expr values\n", n_patched))
+}
+
 # Use cutoff_SigProb to filter pathways with negligible signaling probability.
-# Without this, 788K pathways survive and OOM downstream steps.
 cat("Computing signaling probability (cutoff=0.01)...\n")
 inc <- Cal_SigProb(inc, K = 0.5, N = 2, cutoff_SigProb = 0.01,
                    correction = 0.001)
