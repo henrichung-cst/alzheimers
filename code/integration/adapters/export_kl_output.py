@@ -91,6 +91,12 @@ def main(all_pairs: bool = False):
         )
     kldata = pd.read_csv(kldata_path)
 
+    # Pre-group kldata by kinase gene name for O(1) lookup
+    kl_grouped = dict(list(kldata.groupby("motif.geneName")))
+    kl_lower_map = {}
+    for name in kldata["motif.geneName"].unique():
+        kl_lower_map.setdefault(name.lower(), name)
+
     rows = []
     for _, mea_row in mea_filtered.iterrows():
         kin_abbrev = mea_row["kinase"]
@@ -98,13 +104,14 @@ def main(all_pairs: bool = False):
         nes = mea_row["NES"]
         fdr = mea_row["FDR"]
 
-        # Find substrates for this kinase in kldata
-        kin_subs = kldata[kldata["motif.geneName"] == kin_gene]
-        if kin_subs.empty:
-            # Try case-insensitive match
-            kin_subs = kldata[
-                kldata["motif.geneName"].str.lower() == kin_gene.lower()
-            ]
+        kin_subs = kl_grouped.get(kin_gene)
+        if kin_subs is None:
+            canonical = kl_lower_map.get(kin_gene.lower())
+            if canonical is not None:
+                kin_subs = kl_grouped.get(canonical)
+
+        if kin_subs is None:
+            continue
 
         for _, sub_row in kin_subs.iterrows():
             rows.append({

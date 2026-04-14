@@ -91,3 +91,4 @@ KINASE_TO_GENE_CSV = os.path.join(
 INTERMEDIATES_DIR = os.path.join(
     REPO_ROOT, "code", "integration", "intermediates"
 )
+ALL_PAIRS_DIR = os.path.join(INTERMEDIATES_DIR, "all_pairs")

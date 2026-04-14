@@ -8,14 +8,14 @@ We have two independent lines of evidence about kinase signaling in an Alzheimer
 
 2. **Single-cell transcriptomics** — From paired snRNA-seq of 28 animals in the same cohort (63K nuclei, Allen Cell Type Mapper annotations), we have cell-type-resolved gene expression. Incytr uses this to infer intercellular signaling pathways between specific cell-type pairs.
 
-The goal is to integrate these two evidence types: use Incytr's cell-type-resolved expression to identify active signaling pathways between Microglia-PVM (sender) and L5 IT cortical neurons (receiver), then use our bulk kinase activity evidence to assess which pathways have additional phosphoproteomic support.
+The goal is to integrate these two evidence types: use Incytr's cell-type-resolved expression to identify active signaling pathways between cell-type pairs, then use our bulk kinase activity evidence to assess which pathways have additional phosphoproteomic support.
 
-## Phase 1 scope
+## Scope
 
-- **Sender:** Microglia-PVM (brain-resident immune cells)
-- **Receiver:** L5 IT (layer 5 intratelencephalic-projecting excitatory neurons)
+- **Cell types:** 22 subclasses (all SEA-AD-mapped subclasses with snRNA-seq coverage)
+- **Pairs:** 462 sender-receiver combinations (22 x 21, excluding self-pairs)
 - **Contrast:** WT vs App knock-in, 4 months, males only
-- **Cell counts:** 185 Microglia-PVM nuclei (113 WT, 72 App), 37 L5 IT nuclei (16 WT, 21 App)
+- **Phase 1 reference pair:** Microglia-PVM (sender, 185 nuclei) -> L5 IT (receiver, 37 nuclei)
 
 ## How Incytr models signaling pathways
 
@@ -57,31 +57,25 @@ The threshold also controls computational feasibility. Pathway count scales comb
 | Detection threshold | Sender genes | Receiver genes | Estimated pathways |
 |---|---|---|---|
 | 5% | 4,064 | 10,027 | ~9.5 million |
-| 10% | 2,357 | 7,464 | ~44,000 |
+| 10% | 2,357 | 7,464 | ~26,400 (actual, after SigProb) |
 | 20% | 1,127 | 4,994 | ~20,000 |
 | 50% | 210 | 2,114 | 3,544 (actual) |
 
-The current implementation uses 50% to fit within available memory (~30 GB). Note that the receiver gene list supplies three of the four node positions (Receptor, EM, and Target), which is why receiver gene count has a disproportionate effect on pathway count.
+The current implementation uses **10%** with DuckDB-based enumeration and in-query SigProb filtering. At 10%, the raw pathway count is much larger than at 50%, but the SigProb cutoff (0.01) prunes pathways where any node has negligible expression, producing a similar final count. The 10% threshold admits more biologically relevant genes while DuckDB handles the combinatorial explosion efficiently (see "DuckDB pathway enumeration" below).
 
-## What happened in Phase 1
+Note that the receiver gene list supplies three of the four node positions (Receptor, EM, and Target), which is why receiver gene count has a disproportionate effect on pathway count.
 
-### Phospho fold changes enter the model but are small
+## What happened in Phase 1 (50% threshold, single pair)
 
-The stoichiometry-corrected phosphorylation data enters Incytr's scoring through the phosphoserine (PhPDS_ps) channel. For each pathway, Incytr computes the phospho fold change at each of the four node positions, transforms them through a logistic function, and averages them. This produces a per-pathway phospho score in the range [-0.21, +0.26].
+The initial Phase 1 run used a 50% expression detection threshold and the single Microglia-PVM -> L5 IT pair. The key findings that motivated the current architecture:
 
-However, TPDS (the expression score) ranges from [-1.0, +1.0] with a standard deviation of 0.45, while PhPDS_ps has a standard deviation of 0.035 --- roughly 13 times smaller. At the median pathway, the phospho contribution is ~2.4% of the total PDS. The phospho data is real and correctly propagated, but it's a minor perturbation on an expression-dominated score.
+### Kinase activity evidence was disconnected at 50% threshold
 
-### Kinase activity evidence is completely disconnected
+At 50% detection, only 14 kinase genes survived in the sender and 99 in the receiver. We have 114 kinases with significant MEA results attributed to Microglia-PVM or L5 IT at moderate-or-higher confidence. Most kinases were excluded from the gene pool, never became pathway nodes, and their activity evidence had nowhere to attach. Activity scores were zero for all 3,544 pathways.
 
-This is the central problem. Incytr's kinase activity channel works by checking whether any of the four pathway node genes are kinases with significant enrichment evidence. If a pathway contains `Kinase X` as its EM or Target node, and our MEA results show Kinase X has NES = 2.3 at FDR = 0.08, then Incytr incorporates that activity score into the pathway's PDS.
+### The integration barely changed rankings
 
-But for a kinase gene to be a pathway node, it must first pass the expression detection threshold. At 50%, only 14 kinase genes survive in the sender and 99 in the receiver. We have 114 kinases with significant MEA results attributed to Microglia-PVM or L5 IT at moderate-or-higher confidence. Most of these kinases are not detected in >= 50% of cells, so they are excluded from the gene pool, never become pathway nodes, and their activity evidence has nowhere to attach.
-
-The result: **activity scores are zero for all 3,544 pathways.** Only 13 pathways have any kinase structural scores at all (all sharing the Sirpa-Ptprd ligand-receptor pair). The kinase activity channel is architecturally intact but effectively severed by the expression filter.
-
-### The integration barely changes rankings
-
-Spearman rho between expression-only and full-integration pathway rankings: **0.9984**. The phospho and kinase evidence combined shift the median pathway score by 2.4%. The integration is operationally working but not meaningfully contributing.
+Spearman rho between expression-only and full-integration pathway rankings: **0.9984**. The phospho and kinase evidence combined shifted the median pathway score by 2.4%. This motivated (1) lowering the threshold to 10%, (2) kinase-imputed pathway expansion, and (3) DuckDB enumeration to handle the resulting combinatorial increase.
 
 ## The fundamental mismatch
 
@@ -135,54 +129,36 @@ Kinase-imputed expansion adds these genes to the receiver gene list for pathway 
 **How it works:**
 
 1. `export_kinase_imputed_genes.py` identifies all genes in the expression matrix that are known substrates (via kldata) of at least one kinase with MEA FDR < 0.25 for the current contrast.
-2. `run_incytr.R` reads this list and unions it with the expression-threshold receiver genes. The sender gene list stays at 50% (unchanged).
-3. After `pathway_inference()`, every pathway is labeled:
-   - **expression-confirmed**: all 4 nodes (Ligand, Receptor, EM, Target) pass the 50% expression threshold in their respective cell type
+2. The R pipeline reads this list and unions it with the expression-threshold receiver genes. The sender gene list stays at 10% (unchanged).
+3. After enumeration, every pathway is labeled:
+   - **expression-confirmed**: all 4 nodes (Ligand, Receptor, EM, Target) pass the 10% expression threshold in their respective cell type
    - **kinase-imputed**: one or more receiver-side nodes were admitted via kinase-substrate evidence
 4. The `imputed_nodes` column records which specific positions were imputed (e.g., "Target", "EM;Target").
 
 **Properties of kinase-imputed genes:**
 
-The 2,537 additional receiver genes are not phantom genes --- they have real mRNA signal (median 16.2% detection rate in L5 IT), just below the 50% threshold. Kinase-substrate evidence provides an independent reason to include them: the protein is being phosphorylated by a disease-activated kinase, so it is present and post-translationally active regardless of its mRNA abundance.
+The 986 additional receiver genes (at 10% threshold) are not phantom genes --- they have real mRNA signal, just below the detection threshold. Kinase-substrate evidence provides an independent reason to include them: the protein is being phosphorylated by a disease-activated kinase, so it is present and post-translationally active regardless of its mRNA abundance.
 
-**Pathway expansion and SigProb filtering:**
+**Kinase-imputed pathway prevalence across all pairs:**
 
-| Stage | Expression-confirmed | Kinase-imputed | Total |
-|---|---|---|---|
-| After pathway_inference | 3,544 | 10,284 | 13,828 |
-| After SigProb cutoff (0.01) | 3,544 | 2,217 | 5,761 |
+With DuckDB SigProb pre-filtering at 10% threshold, kinase-imputed pathways are rare: 0.33% of all pathways across 462 pairs. Most pairs have a small number (median 42 per pair), concentrated in specific receiver types (Microglia-PVM, VLMC, Endothelial). The SigProb cutoff naturally prunes kinase-imputed pathways where the imputed node has very low expression.
 
-The SigProb cutoff naturally prunes kinase-imputed pathways where the imputed node has very low expression --- the Hill function products that drive SigProb are small when any node is weakly expressed. The 2,217 kinase-imputed pathways that survive have at least moderate signaling probability, typically because 3 of 4 nodes are strongly expressed and only the imputed node is sparse.
+**Interpretation:** Kinase-imputed pathways represent a lower evidence tier than expression-confirmed pathways. The expression-confirmed label means the entire signaling chain has direct transcriptomic support. The kinase-imputed label means the chain is plausible based on expression at most nodes plus protein-level kinase activity evidence at the imputed node(s). Both tiers flow through the same scoring pipeline (TPDS, PDS, kinase integration), and downstream analysis can filter or stratify by the `pathway_evidence` column.
 
-**Imputed node positions:**
+### Coverage (reference pair: Microglia-PVM -> L5 IT)
 
-| Imputed nodes | Count | Fraction |
-|---|---|---|
-| Target only | 1,808 | 81.5% |
-| EM only | 320 | 14.4% |
-| EM + Target | 89 | 4.0% |
-| Receptor | 0 | 0% |
+Of the 26,399 pathways after SigProb filtering (10% threshold):
 
-Targets dominate because Target is the most downstream position and draws from the largest gene pool. No Receptors or Ligands are imputed (receptors require expression in the receiver to form L1 edges, and the sender threshold is unchanged).
-
-**Interpretation:** Kinase-imputed pathways represent a lower evidence tier than expression-confirmed pathways. The expression-confirmed label means the entire signaling chain has direct transcriptomic support. The kinase-imputed label means the chain is plausible based on expression at most nodes plus protein-level kinase activity evidence at the imputed node(s). Both tiers flow through the same scoring pipeline (TPDS, PDS, kinase support reranking), and downstream analysis can filter or stratify by the `pathway_evidence` column.
-
-### Coverage
-
-Of the 5,761 pathways after SigProb filtering:
-
-- **4,548 pathways (78.9%)** have at least one EM or Target gene that is a known substrate of an attributed kinase with significant MEA evidence
-- **1,213 pathways (21.1%)** have no kinase-substrate connection and are unaffected by reranking
-- 134 kinases are both significant (FDR < 0.25) and attributed to sender or receiver
+- **21,199 pathways (80.3%)** have kinase evidence sources
+- **5,200 pathways (19.7%)** have no kinase-substrate connection
+- 114 kinases are attributed at moderate+ confidence to any cell type (all-pairs mode)
 
 By evidence tier:
 
-| Tier | Total | With kinase support | Coverage |
+| Tier | Total | With kinase evidence | Coverage |
 |---|---|---|---|
-| Expression-confirmed | 3,544 | 2,405 | 67.9% |
-| Kinase-imputed | 2,217 | 2,143 | 96.7% |
-
-The near-complete kinase support coverage of kinase-imputed pathways is expected: these nodes were admitted specifically because they are substrates of significant kinases.
+| Expression-confirmed | 26,392 | 21,192 | 80.3% |
+| Kinase-imputed | 7 | 7 | 100% |
 
 ## Open questions for discussion
 
@@ -293,9 +269,97 @@ The orthogonality between expression and kinase signals (rho = 0.179) was noted 
 
 **Kinase-substrate prediction confidence.** The kldata substrate predictions are motif-based (from kinase-library) and have non-trivial false positive rates. If the kinase-substrate mapping includes a confidence score, it should be incorporated as an additional weight in the kinase support score, or at minimum used in a sensitivity analysis restricted to high-confidence substrate assignments.
 
-## Implementation
+## DuckDB pathway enumeration
 
-Based on the consultation, the substrate-based external reranking was implemented as `adapters/compute_kinase_support.py` (Adapter 5.5). All configurable parameters are centralized in `config_integration.py`.
+Incytr's built-in `pathway_inference()` uses data.table cartesian joins, which OOM at large gene counts. DuckDB-based enumeration (`wrappers/duckdb_enumeration.R`) replaces this with R-side edge pre-pruning + DuckDB 3-way join + inline SigProb filtering.
+
+### How it works
+
+1. **Edge pre-pruning**: For each edge layer (L1: Ligand-Receptor, L2: Receptor-EM, L3: EM-Target), compute per-condition Hill function values from the weighted-quantile expression. Discard edges where `max(Hill_WT, Hill_App) < cutoff_SigProb` (0.01). This reduces millions of edges to ~20K (L3), ~500 (L2), ~200 (L1).
+
+2. **DuckDB 3-way join**: Register pruned edge tables in DuckDB. A single SQL query joins L1-L2-L3 with a WHERE clause requiring `SigProb_WT >= 0.01 OR SigProb_App >= 0.01`. DuckDB handles the join combinatorics in-process with disk spilling.
+
+3. **EM promiscuity weighting**: Each pathway's SigProb includes an EM degree weight `1/log2(1+degree)` via LEFT JOIN, penalizing promiscuous effector molecules.
+
+### Performance
+
+For the reference pair (Microglia-PVM -> L5 IT at 10% threshold):
+- Raw edge counts: L1=330, L2=685, L3=20,464
+- After pre-pruning: L1=30, L2=202, L3=12,144
+- DuckDB query: 26,399 pathways in ~2 seconds
+
+### All-pairs nested loop
+
+The all-pairs pipeline (`wrappers/run_incytr_all_pairs.R`) uses a nested loop optimized for shared work:
+
+- **Outer loop (22 receivers)**: Prune L2/L3 edges once per receiver (receiver expression doesn't change across senders). Precompute kinase-imputed expression patches.
+- **Inner loop (21 senders)**: Prune L1 edges, register in DuckDB, run SQL query, full downstream pipeline.
+
+This shares L2/L3 pruning across senders, achieving **64x speedup** over independent single-pair calls.
+
+### All-pairs results (462 pairs)
+
+| Metric | Value |
+|---|---|
+| Pairs processed | 462 |
+| Total pathways (pre-SigProb) | 42,207,765 |
+| Pathways per pair (median) | 93,167 |
+| Pathways per pair (range) | 3,682 -- 252,699 |
+| Pairs with 0 pathways | 0 |
+| Total runtime | 318 minutes |
+
+#### Edge weight distributions
+
+| Layer | Mean edges/pair | Median weight | Max weight |
+|---|---|---|---|
+| L1 (Ligand->Receptor) | 192 | 138 pathways | 10,198 |
+| L2 (Receptor->EM) | 486 | 30 | 12,168 |
+| L3 (EM->Target) | 19,106 | 3.4 | 73 |
+
+L3 generates the combinatorial explosion (19K edges x 3-5 pathways each). L1 edges are fewer but heavier (hub ligand-receptor pairs carry thousands of pathways).
+
+#### SigProb and score distributions
+
+Most pathways have low SigProb (80% below 0.05, only 0.5% above 0.5). The SigProb cutoff at 0.01 is permissive --- essentially passing everything with non-zero expression at all four nodes.
+
+PDS scores are bimodal with peaks at -0.75 and +0.75. 71% of pathways have |PDS| > 0.5 (strong directionality).
+
+### kinase_boost column
+
+Each `results_full.csv` includes a `kinase_boost` column: `PDS - TPDS`. This directly measures how much kinase and phospho evidence changed the pathway score relative to expression alone. Across all pairs:
+
+- 31% of pathways: kinase_boost = 0 (no kinase effect)
+- 42% have |kinase_boost| > 0.01 (moderate shift)
+- 1.6% have |kinase_boost| > 0.1 (strong shift)
+- Top boosted pathways route through kinase-node EMs (e.g., Mapk8), with boosts up to +0.27
+
+### Checkpoint/restart and operational features
+
+- **Checkpoint**: Pairs with existing `results_full.csv` are skipped. Set `FORCE_RERUN=1` to override.
+- **Memory guard**: R memory is checked after each receiver. Aborts cleanly if > `MEMORY_LIMIT_GB` (default 10).
+- **Pair filter**: `PAIR_FILTER="Microglia-PVM:L5 IT"` for single-pair testing; `PAIR_FILTER="*:L5 IT"` for single-receiver.
+- **Shell runner**: `run_all_pairs.sh` runs Python adapters then R pipeline under `systemd-run --user --scope -p MemoryMax=12G`. Use `--skip-adapters` on checkpoint-resume.
+
+### Output structure
+
+```
+intermediates/all_pairs/
+  {sender}__{receiver}/           (462 subdirectories)
+    results_expronly.csv          expression-only scores (TPDS)
+    results_full.csv              full integrated scores (PDS + kinase_boost)
+    edge_list_l1.csv              Ligand-Receptor edges with pathway counts
+    edge_list_l2.csv              Receptor-EM edges
+    edge_list_l3.csv              EM-Target edges
+    kinase_support_scores.csv     substrate-based kinase support scores (per pathway)
+    adjusted_rankings.csv         lambda-sweep adjusted rankings
+    reranking_summary.json        per-pair scoring statistics
+  pair_summary.csv                462-row summary (n_pathways, timing, status)
+  kinase_support_summary.csv      462-row kinase support summary
+```
+
+## Substrate-based external reranking
+
+Based on the consultation, the substrate-based external reranking was implemented as `adapters/compute_kinase_support.py` (single-pair) and `adapters/compute_kinase_support_all_pairs.py` (all-pairs orchestrator). All configurable parameters are centralized in `config_integration.py`.
 
 ### Kinase support score per pathway
 
@@ -309,13 +373,15 @@ For each pathway P with nodes (Ligand, Receptor, EM, Target):
    edge_weight = |NES_K| x IDF_G x attribution_weight_K
 
    where:
-     IDF_G              = 1 / log(N), N = #significant attributed kinases targeting G
-                          (returns 1.0 when N <= 1)
+     IDF_G              = 1 / log(N), N = #significant kinases targeting G
+                          (pair-independent: counts all MEA-significant kinases,
+                           not just those attributed to the pair's cell types;
+                           returns 1.0 when N <= 1)
      attribution_weight = max over relevant cell types of:
                           combined_score x cell_type_relevance
      cell_type_relevance:
-       = 1.0   if K attributed to receiver (L5 IT)
-       = 0.25  if K attributed only to sender (Microglia-PVM)
+       = 1.0   if K attributed to receiver
+       = 0.25  if K attributed only to sender (SENDER_ATTRIBUTION_DISCOUNT)
    ```
 
 3. **Aggregate per pathway.** Take the **median** of edge weights = `kinase_support_score` (unsigned --- magnitude only, per reviewer recommendation). Median aggregation is robust to both hub-substrate inflation (many weak edges from promiscuous substrates like Srrm2 with 80+ kinases) and single-outlier dominance (one strong edge in a low-degree pathway). The sum is retained as `kinase_support_score_sum` for reference. Each pathway is annotated with:
@@ -358,7 +424,7 @@ Empirical p-values with Benjamini-Hochberg correction across all 5,761 pathways.
 
 #### Permutation results (10,000 iterations)
 
-Permutation results below were computed on the pre-imputation pathway set (3,544 pathways). They should be re-run on the expanded set (5,761 pathways) for updated significance calls, but the framework and interpretation remain the same.
+Permutation results below were computed on the original Phase 1 pathway set (3,544 pathways at 50% threshold). They should be re-run on the current expanded set (26,399 pathways at 10% threshold for the reference pair, or across all 462 pairs) for updated significance calls. The framework and interpretation remain the same.
 
 - **Null 1 (enrichment):** 1,225 / 2,405 pathways significant at FDR < 0.25 (51%). Evenly distributed across degree buckets (34--56%), confirming median aggregation is not biased by hub size. These pathways are enriched for kinases that are specifically disease-activated and cell-type-attributed.
 
@@ -402,7 +468,7 @@ Additional sensitivity analyses requiring R/Incytr are implemented in `wrappers/
 
 ## Pipeline structure
 
-The full pipeline is orchestrated by `run_phase1.sh`:
+### Single-pair pipeline (`run_phase1.sh`)
 
 ```
 1. Python adapters (alzheimers env)
@@ -413,8 +479,7 @@ The full pipeline is orchestrated by `run_phase1.sh`:
    export_kinase_imputed_genes.py — kinase-substrate-supported receiver genes
 
 2. R wrappers (incytr env)
-   run_incytr.R             — pathway inference (with kinase-imputed expansion),
-                               expression + phospho + kinase scoring, pathway labeling
+   run_incytr.R             — DuckDB enumeration, expression + phospho + kinase scoring
    postprocess.R            — sensitivity analysis, discordance detection, redundancy check
 
 3. Kinase support scoring (alzheimers env)
@@ -425,24 +490,53 @@ The full pipeline is orchestrated by `run_phase1.sh`:
    bootstrap_sensitivity.R  — L5 IT bootstrap + threshold sensitivity
 ```
 
-Steps 1--2 and the base scoring in step 3 always run. Kinase-imputed expansion runs by default (gated behind `ENABLE_KINASE_IMPUTATION=1`; set to `0` to disable). Permutation tests and bootstrap sensitivity are gated behind `RUN_PERMUTATIONS=1` and `RUN_BOOTSTRAP=1` environment variables.
+### All-pairs pipeline (`run_all_pairs.sh`)
+
+```
+1. Python adapters (alzheimers env) — same as single-pair, but:
+   export_kl_output.py --all-pairs  — include kinases attributed to ANY cell type
+
+2. R all-pairs orchestrator (incytr env)
+   run_incytr_all_pairs.R   — nested DuckDB loop over 462 pairs with checkpoint/restart
+                               Full downstream per pair: Expr_bygroup, Cal_SigProb, Cal_scFC,
+                               Pathway_evaluation, Integr_multiomics, Integr_kinasedata,
+                               Integr_kinase_enrichment, Cal_PDS, Export_results + kinase_boost
+   Runs under: systemd-run --user --scope -p MemoryMax=12G
+
+3. Kinase support scoring (alzheimers env)
+   compute_kinase_support_all_pairs.py — substrate-based reranking across all 462 pairs (~8 min)
+                                          Precomputed edge table + pair-independent IDF,
+                                          per-pair attribution weights, checkpoint/restart
+```
+
+Use `--skip-adapters` to skip Python adapters on checkpoint-resume. Kinase-imputed expansion runs by default (gated behind `ENABLE_KINASE_IMPUTATION=1`; set to `0` to disable). Permutation tests and bootstrap sensitivity are gated behind `RUN_PERMUTATIONS=1` and `RUN_BOOTSTRAP=1` environment variables. The kinase support step forwards `PAIR_FILTER` and `FORCE_RERUN` env vars from the shell runner.
 
 ### Key outputs
 
+**Single-pair** (`intermediates/`):
+
 | File | Description |
 |---|---|
-| `intermediates/results_expronly.csv` | Expression-only pathway rankings (TPDS baseline) |
-| `intermediates/results_full.csv` | Full Incytr integration (TPDS + phospho + kinase) |
-| `intermediates/kinase_imputed_genes.csv` | Receiver genes admitted via kinase-substrate evidence |
-| `intermediates/kinase_imputation_summary.csv` | Gene/pathway counts by evidence tier |
-| `intermediates/kinase_support_scores.csv` | Per-pathway substrate-based kinase support scores |
-| `intermediates/adjusted_rankings.csv` | Combined rankings at each lambda value |
-| `intermediates/reranking_summary.json` | Summary statistics and sensitivity results |
-| `intermediates/permutation_pvalues.csv` | Empirical p-values under dual null models (optional) |
-| `intermediates/bootstrap_stability.csv` | Rank stability across L5 IT bootstrap (optional) |
-| `intermediates/ranking_correlation.json` | Spearman rho between expression-only and full rankings |
+| `results_expronly.csv` | Expression-only pathway rankings (TPDS baseline) |
+| `results_full.csv` | Full Incytr integration (TPDS + phospho + kinase + kinase_boost) |
+| `kinase_imputed_genes.csv` | Receiver genes admitted via kinase-substrate evidence |
+| `kinase_support_scores.csv` | Per-pathway substrate-based kinase support scores |
+| `edge_list_l1.csv`, `l2`, `l3` | Per-layer edge lists with pathway counts |
 
-Both `results_expronly.csv` and `results_full.csv` include `pathway_evidence` (expression-confirmed or kinase-imputed) and `imputed_nodes` (which positions were imputed) columns for downstream stratification.
+**All-pairs** (`intermediates/all_pairs/`):
+
+| File | Description |
+|---|---|
+| `{sender}__{receiver}/results_full.csv` | Per-pair full integration with kinase_boost column |
+| `{sender}__{receiver}/results_expronly.csv` | Per-pair expression-only scores |
+| `{sender}__{receiver}/edge_list_l{1,2,3}.csv` | Per-pair edge lists |
+| `{sender}__{receiver}/kinase_support_scores.csv` | Per-pathway substrate-based kinase support scores |
+| `{sender}__{receiver}/adjusted_rankings.csv` | Lambda-sweep adjusted rankings (TPDS + λ × score) |
+| `{sender}__{receiver}/reranking_summary.json` | Per-pair scoring statistics and timing |
+| `pair_summary.csv` | 462-row summary: sender, receiver, n_pre, n_post, time_sec, status |
+| `kinase_support_summary.csv` | 462-row kinase support summary (n_pathways, n_nonzero, median_score) |
+
+All results include `pathway_evidence` (expression-confirmed or kinase-imputed), `imputed_nodes` (which positions were imputed), and `kinase_boost` (PDS - TPDS) columns for downstream stratification.
 
 ## Summary
 
@@ -450,8 +544,99 @@ Both `results_expronly.csv` and `results_full.csv` include `pathway_evidence` (e
 |---|---|---|
 | Kinase activity evidence to influence pathway rankings | Incytr's internal kinase channel requires kinase genes to be pathway nodes, which requires them to pass the expression threshold, which most fail | Dual-channel architecture: internal channel for node-kinases, external substrate-based reranking for the rest, with deduplication at the boundary |
 | An integration that respects both data types | Bulk kinase activity is tissue-level; Incytr expects cell-type-resolved data | Keep evidence types separate: expression inside Incytr, kinase evidence as external reranking layer weighted by cell-type attribution confidence |
-| Pathway discovery beyond expression limits | The 50% detection threshold excludes genes with real kinase-substrate evidence; lowering the threshold indiscriminately creates millions of pathways | Kinase-imputed expansion: add genes with protein-level kinase-substrate evidence to the receiver gene list, label pathways by evidence tier, let SigProb naturally filter weak candidates |
-| Statistical rigor for the combined ranking | Substrate promiscuity can inflate scores; two evidence layers share an upstream dataset | Median aggregation (hub-robust), IDF weighting, dual null model (enrichment null + wiring null against full MEA universe), redundancy check against PhPDS_ps (rho = -0.246, confirming complementarity) |
+| Pathway discovery beyond expression limits | High detection thresholds exclude genes with real kinase-substrate evidence; lowering the threshold indiscriminately creates millions of pathways | DuckDB enumeration with in-query SigProb filtering handles the combinatorial explosion at 10% threshold; kinase-imputed expansion adds genes with protein-level evidence; SigProb naturally filters weak candidates |
+| Scale to all cell-type pairs | Single-pair processing is ~3 min but doesn't share work across pairs; 462 independent runs would take ~23 hours with redundant computation | Nested DuckDB loop shares L2/L3 pruning per receiver (64x speedup), checkpoint/restart for fault tolerance, memory guard under systemd-run 12GB cap |
+| Statistical rigor for the combined ranking | Substrate promiscuity can inflate scores; two evidence layers share an upstream dataset | Median aggregation (hub-robust), pair-independent IDF weighting (computed once, reused across pairs), dual null model (enrichment null + wiring null against full MEA universe), redundancy check against PhPDS_ps (rho = -0.246, confirming complementarity) |
+| Transparent kinase contribution | PDS integrates multiple evidence types opaquely | `kinase_boost` column (PDS - TPDS) directly measures the kinase/phospho contribution per pathway |
 | Honest interpretation | Convergent evidence at a target gene does not prove mechanistic pathway flow | Frame as convergent functional evidence, not mechanistic validation; present concordant and discordant pathways as separate categories (unsigned score + concordance flag); label kinase-imputed pathways as lower evidence tier |
 
 The core constraint: cell-type attributions of kinase activity are not precise, but they represent a reasonable assignment given available data (paired within-cohort snRNA-seq, cross-species SEA-AD concordance, WMB expression specificity). The integration is indirect but meaningful --- kinase evidence informs pathway interpretation through substrate relationships, weighted by attribution confidence and cell-type relevance, without being misrepresented as cell-type-resolved measurement.
+
+## Next steps
+
+### 1. All-pairs substrate-based reranking --- DONE
+
+The external substrate-based kinase support scoring has been extended to all 462 sender-receiver pairs via `compute_kinase_support_all_pairs.py`. This is integrated into `run_all_pairs.sh` as a third stage after the R pipeline.
+
+**Key optimizations over the single-pair implementation:**
+
+- **Pair-independent IDF:** The IDF term (`1/log(N_sig)` where N_sig = number of significant kinases targeting each substrate) is computed once from the full MEA universe and reused across all pairs. Substrate promiscuity is an intrinsic property, not a pair-dependent one --- the old pair-dependent IDF conflated promiscuity with cell-type relevance (already handled by the multiplicative `attribution_weight` term).
+
+- **Precomputed edge table:** Pair-independent substrate→kinase edge arrays (|NES|×IDF products, NES signs, kinase identities) are built once from kldata + MEA results. Per-pair processing applies attribution weights via `apply_pair_weights()` without recomputing the substrate-kinase graph.
+
+- **Fast/slow path split:** 95%+ of pathways have no kinase-gene nodes, so the deduplication check (excluding kinases already scored by Incytr's internal channel) is skipped entirely for the fast path. Only pathways with kinase-gene nodes (EM or Target) take the slow path.
+
+- **Python-native median:** `sorted()` + index for 6--10 element arrays is 47x faster than `np.median` due to numpy's per-call type-checking and nan-handling overhead on small arrays.
+
+- **Profiled performance:** Reference pair (26K pathways): 0.15s scoring, 0.5s total. Estimated full run: ~8 minutes for all 462 pairs (vs ~135 min with the naive iterrows approach).
+
+**Per-pair outputs** (written to each `{sender}__{receiver}/` directory):
+- `kinase_support_scores.csv` --- per-pathway substrate-based kinase support scores
+- `adjusted_rankings.csv` --- lambda-sweep adjusted rankings (TPDS + λ × kinase_support)
+- `reranking_summary.json` --- per-pair statistics (n_pathways, n_nonzero, median_score, timing)
+
+**Cross-pair output:** `kinase_support_summary.csv` (462-row summary, one row per pair).
+
+**CLI:** `python compute_kinase_support_all_pairs.py [--profile-pair DIRNAME] [--force] [--no-sensitivity] [--pair-filter PATTERN]`
+
+Checkpoint/restart is supported: pairs with existing `kinase_support_scores.csv` are skipped unless `--force` is passed.
+
+### 2. Cross-pair aggregation and analysis
+
+The 462 directories of scored pathways are unusable without aggregation. Several analytical angles:
+
+- **Pathway recurrence:** The same four-gene chain (Ligand→Receptor→EM→Target) can appear across many sender-receiver pairs sharing a receiver. Pathways consistently upregulated across many senders communicating with a given receiver are stronger findings than single-pair results. Conversely, pathways specific to one sender-receiver pair point to cell-type-specific signaling.
+
+- **Cell-type hub analysis:** Aggregate mean |PDS|, mean kinase_boost, or pathway count per sender and receiver to identify which cell types drive the most disease-altered signaling. Build a 22×22 matrix (sender × receiver) summarizing each pair's signaling activity.
+
+- **Gene-level convergence:** Which target genes appear most frequently across pairs as endpoints of disease-altered pathways? This is distinct from substrate promiscuity (kinase connectivity) --- it identifies genes at the convergence point of multiple cell-type signaling routes.
+
+### 3. Updated permutation tests
+
+The permutation results in this document are from Phase 1 (3,544 pathways, 50% threshold, single pair). They need re-running:
+
+- The current reference pair has 26,399 pathways at 10% threshold. Degree distributions, IDF values, and null distributions will differ. The 51% enrichment-null significance rate from Phase 1 may not hold.
+
+- At all-pairs scale (462 pairs), running independent permutations per pair creates a massive multiple testing burden. An alternative is to run permutations on the aggregated cross-pair results (e.g., recurrence-weighted scores), which is a different statistical question but potentially more defensible.
+
+The framework is implemented and ready; it needs re-execution on the current data.
+
+### 4. Nested experimental design: beyond a single contrast
+
+The all-pairs pipeline currently runs on a single contrast: WT vs App knock-in, 4-month males. This is one cell of a factorial design that spans 3 genotypes (WT, App, Tau, plus the App×Tau interaction), 3 timepoints (2mo, 4mo, 6mo), and 2 sexes (with males as primary). The bulk phosphoproteomics pipeline produces 9 time-resolved contrasts from the full design.
+
+Running Incytr on a single contrast means:
+
+- **42 million pathways describe one comparison.** The 462 sender-receiver pairs × ~93K pathways/pair represent a single snapshot (App_4mo). Extending to all 9 contrasts would produce ~380 million pathway evaluations, each requiring snRNA-seq expression estimates stratified by condition --- which may not be available for all contrast arms given the snRNA-seq sample composition (28 animals, not all genotype×timepoint cells equally populated).
+
+- **The contrasts are not independent.** The 9 contrasts share animals (the WT baseline is the same across App, Tau, and interaction contrasts at each timepoint), share the same snRNA-seq expression data (Incytr's TPDS is computed from the same nuclei), and share the same kinase-substrate reference. Treating each contrast's Incytr results as independent observations would overstate the evidence.
+
+- **Temporal and genotype structure is informative.** A pathway that is active in App_4mo but not App_2mo or App_6mo tells a different biological story than one that is consistently active across all timepoints. Similarly, pathways active in both App and Tau contrasts vs. those specific to one genotype have different implications for disease mechanism. The current single-contrast approach cannot capture these dynamics.
+
+Addressing this requires thinking about how to either (a) run Incytr across multiple contrasts and handle the non-independence in downstream analysis, or (b) define a summary statistic across contrasts that the Incytr integration can target. This is an architectural question that interacts with snRNA-seq sample availability and the factorial OLS structure in the bulk pipeline.
+
+## Known limitations and future robustness checks
+
+The pipeline is explicitly hypothesis-generating. Cell-type attribution of kinase activity is correlational (SEA-AD concordance, WMB specificity, within-cohort snRNA-seq concordance), and we accept this. The following concerns go beyond attribution and affect the biological inference at other stages. They are ranked by a combination of impact on conclusions and practical addressability.
+
+### Tier 1: Significant and addressable
+
+**SigProb cutoff is nearly vacuous.** The SigProb threshold of 0.01 passes essentially everything with non-zero expression at all four nodes --- 80% of pathways have SigProb below 0.05. This means ~93K pathways per pair are carried forward with minimal biological filtering, and every downstream score (TPDS, kinase support, permutation tests) operates on a set that is mostly combinatorial noise. The permutation tests are also computed against this inflated background, diluting statistical power. *Action:* Sweep SigProb cutoffs (0.01, 0.05, 0.10, 0.20) and report how the significant pathway set and top-ranked results change. Consider adding a secondary filter (minimum |TPDS| magnitude) to reduce the pathway set before kinase support scoring.
+
+**Small per-condition cell counts in many receiver types.** The 37 L5 IT nuclei (16 WT, 21 App) problem generalizes --- many receiver subclasses have thin per-condition representation, and TPDS inherits that noise at every pathway node. Dropout noise at small n produces spurious differential expression that propagates into pathway rankings. *Action:* Run the bootstrap sensitivity analysis (already implemented in `bootstrap_sensitivity.R`) at scale across receiver types. Flag or exclude receiver types below a minimum per-condition nuclei threshold rather than treating all 22 subclasses as equal-confidence results. Report rank stability (cv_rank, frac_in_top20) per receiver type.
+
+**Shared animals between the two evidence streams.** The 28 snRNA-seq animals are a subset of the 72 TMT proteomics animals. Song concordance scores (used for kinase attribution weights) are derived from the same biological samples generating the TPDS rankings being reranked. This is not full circularity --- the measurements are different modalities (mRNA vs phosphoprotein) --- but it means the two streams are not statistically independent. *Action:* Report results with and without Song concordance contributing to attribution weights (SEA-AD + WMB only). If kinase support scores are materially unchanged, the dependence is immaterial. If they change, the circularity should be disclosed and the Song-excluded results treated as the conservative estimate.
+
+### Tier 2: Significant but inherent to the approach
+
+**Unsigned kinase support score obscures mechanistic interpretation.** The score is unsigned by design (per molecular biology reviewer recommendation, to avoid discarding inhibitory phosphorylation). But this means the primary ranking conflates opposite biology: a pathway boosted by concordant kinases (activated kinase, upregulated pathway) and one boosted by discordant kinases (activated kinase, downregulated pathway) receive the same score magnitude. The concordance flag exists as metadata but is not reflected in the ranking. *Mitigation:* Downstream analyses that use ranked pathways (top-N lists, cross-pair aggregation, cell-type hub summaries) must condition on the concordance flag. Any summary that does not stratify by concordance direction mixes biologically opposite signals.
+
+**IncytrDB constrains discoverable biology.** Pathway enumeration is limited to four-gene chains present in IncytrDB's curated interaction catalog. Non-canonical interactions, recently discovered pathways, and chains with different architecture (longer, branching, or shorter than four genes) are invisible. This is the same constraint as using any curated gene set database (GO, KEGG, Reactome) for enrichment --- the pipeline prioritizes known templates, it does not discover novel signaling architectures. *Mitigation:* State explicitly in any manuscript that the integration identifies convergent evidence within known signaling frameworks, not novel pathway discovery.
+
+### Tier 3: Real but acceptable on current merits
+
+**Motif-based substrate predictions (kldata).** The external reranking channel rests on kinase-library motif predictions, which have non-trivial false positive rates. However, kldata is the best available kinase-substrate resource at this scale, and the pipeline includes structural mitigations (IDF weighting, median aggregation, dual permutation nulls) that limit the influence of individual false edges. *Optional future check:* If kldata provides a per-prediction confidence score, run a sensitivity analysis restricted to high-confidence substrate assignments and report whether top pathways are stable.
+
+**Sender attribution discount (0.25x) is a point estimate.** The discount for sender-attributed kinases is based on reviewer judgment (0.2--0.3x range), not derived from data. The biological logic is sound (intracellular kinases in the sender rarely phosphorylate receiver-side substrates), and most kinase evidence connects through receiver-attributed kinases anyway, limiting the parameter's influence. *Optional future check:* Sweep sender discount (0.1--0.5x) and report which pathways are sensitive to this parameter.
+
+**Median aggregation for low-degree pathways.** For pathways with 1--3 contributing kinases, the median has no robustness advantage over other aggregation methods and is dominated by a single edge. However, these are also the pathways where any aggregation method carries minimal information --- a single contributing kinase is a single contributing kinase regardless of how it is summarized. The practical impact is limited to interpretation: low-degree pathways with one strong kinase edge are boosted proportionally, which is reasonable for hypothesis generation.

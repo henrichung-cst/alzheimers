@@ -8,7 +8,6 @@ kinases present in our MEA results.
 """
 
 import os
-import shutil
 
 import pandas as pd
 

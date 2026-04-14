@@ -99,26 +99,48 @@ def _load_attribution_weights(contrast, sender, receiver, sender_discount):
 # Core scoring
 # ---------------------------------------------------------------------------
 
-def _compute_idf_map(sub_to_kins, mouse_to_abbrevs, sig_kinases, attr_weights):
+def _compute_idf_map(sub_to_kins, mouse_to_abbrevs, sig_kinases,
+                     attr_weights=None, pair_independent=True):
     """Pre-compute per-substrate IDF values.
 
-    IDF(substrate) = 1/log(N) where N = number of significant attributed
-    kinases targeting that substrate.  Returns 1.0 when N <= 1.
+    IDF(substrate) = 1/log(N) where N = number of significant kinases
+    targeting that substrate.  Returns 1.0 when N <= 1.
+
+    When ``pair_independent=True`` (default), N counts all significant
+    kinases regardless of attribution.  Promiscuity is a property of
+    the substrate, not the cell-type pair; attribution relevance is
+    already captured by the multiplicative ``attribution_weight`` in the
+    edge weight formula.
+
+    When ``pair_independent=False``, N counts only kinases that are both
+    significant AND present in ``attr_weights`` (the original behavior,
+    preserved for backward comparison).
     """
+    if not pair_independent and attr_weights is None:
+        raise ValueError("attr_weights required when pair_independent=False")
+
+    sig_set = set(sig_kinases)
+    attr_set = set(attr_weights) if attr_weights else set()
+
     idf_map = {}
     for sub_gene, kin_genes in sub_to_kins.items():
         n_sig = 0
         for kin_gene in kin_genes:
-            for abbrev in mouse_to_abbrevs.get(kin_gene, set()):
-                if abbrev in sig_kinases and abbrev in attr_weights:
-                    n_sig += 1
+            abbrevs = mouse_to_abbrevs.get(kin_gene, set())
+            if pair_independent:
+                n_sig += len(abbrevs & sig_set)
+            else:
+                n_sig += len(abbrevs & sig_set & attr_set)
         idf_map[sub_gene] = 1.0 / math.log(n_sig) if n_sig > 1 else 1.0
     return idf_map
 
 
 def compute_scores(pathways, sub_to_kins, idf_map, sig_kinases, attr_weights,
                    mouse_to_abbrevs):
-    """Compute kinase support scores for all pathways.
+    """Compute kinase support scores for all pathways (validation-only).
+
+    Retained for correctness validation in profile_single_pair().
+    Production code should use compute_scores_fast() instead.
 
     Uses median edge weight as the per-pathway score.  The median is robust
     to both hub-substrate inflation (many weak edges) and single-outlier
@@ -206,6 +228,243 @@ def compute_scores(pathways, sub_to_kins, idf_map, sig_kinases, attr_weights,
 
 
 # ---------------------------------------------------------------------------
+# Vectorized scoring (for all-pairs pipeline)
+# ---------------------------------------------------------------------------
+
+def build_substrate_edge_table(sub_to_kins, idf_map, sig_kinases,
+                               mouse_to_abbrevs):
+    """Build pair-independent edge lookup: substrate -> edge arrays.
+
+    Precomputes |NES|*IDF and |NES| per (substrate, kinase) edge for all
+    significant kinases.  Attribution weights are NOT included — they are
+    applied per-pair via :func:`apply_pair_weights`.
+
+    Also returns ``all_kinase_genes``, the set of kinase mouse gene symbols
+    that appear in any edge.  Used to identify pathways that need per-edge
+    deduplication (the slow path).
+    """
+    sub_raw_edges = {}
+    all_kinase_genes = set()
+
+    for sub_gene, kin_genes in sub_to_kins.items():
+        sub_idf = idf_map.get(sub_gene, 1.0)
+        seen = set()
+        abbrevs = []
+        kgenes = []
+        abs_nes_idf_vals = []
+        abs_nes_vals = []
+        nes_sign_vals = []
+
+        for kin_gene in kin_genes:
+            for abbrev in mouse_to_abbrevs.get(kin_gene, set()):
+                if abbrev not in sig_kinases:
+                    continue
+                if (abbrev, sub_gene) in seen:
+                    continue
+                seen.add((abbrev, sub_gene))
+
+                abbrevs.append(abbrev)
+                kgenes.append(kin_gene)
+                abs_nes_idf_vals.append(abs(sig_kinases[abbrev]) * sub_idf)
+                abs_nes_vals.append(abs(sig_kinases[abbrev]))
+                nes_sign_vals.append(int(np.sign(sig_kinases[abbrev])))
+
+        if abbrevs:
+            sub_raw_edges[sub_gene] = {
+                "abbrevs": abbrevs,
+                "kgenes": kgenes,
+                "abs_nes_idf": np.array(abs_nes_idf_vals),
+                "abs_nes": np.array(abs_nes_vals),
+                "nes_sign": np.array(nes_sign_vals, dtype=np.int8),
+            }
+            all_kinase_genes.update(kgenes)
+
+    return sub_raw_edges, all_kinase_genes
+
+
+def apply_pair_weights(sub_raw_edges, attr_weights):
+    """Apply pair-specific attribution weights to the shared edge table.
+
+    Filters edges to kinases present in ``attr_weights`` and multiplies
+    edge values by the attribution weight.  Returns Python lists (not numpy
+    arrays) for downstream median computation, since Python's ``sorted()``
+    is ~47x faster than ``np.median`` on 6-10 element arrays.
+    """
+    sub_pair = {}
+    for sub_gene, raw in sub_raw_edges.items():
+        aw = np.array([attr_weights.get(a, 0.0) for a in raw["abbrevs"]])
+        mask = aw > 0
+        if not mask.any():
+            continue
+        idx = np.where(mask)[0]
+        sub_pair[sub_gene] = {
+            "ew_idf": (raw["abs_nes_idf"][mask] * aw[mask]).tolist(),
+            "ew_no_idf": (raw["abs_nes"][mask] * aw[mask]).tolist(),
+            "nes_sign": raw["nes_sign"][mask].tolist(),
+            "kgenes": [raw["kgenes"][j] for j in idx],
+            "abbrevs": [raw["abbrevs"][j] for j in idx],
+            "abbrev_set": {raw["abbrevs"][j] for j in idx},
+        }
+    return sub_pair
+
+
+def _list_median(vals):
+    """Median of a Python list.  Faster than np.median for small lists."""
+    s = sorted(vals)
+    n = len(s)
+    mid = n // 2
+    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) * 0.5
+
+
+def compute_scores_fast(pathways, sub_pair, all_kinase_genes):
+    """Optimized pathway scoring using precomputed edge tables.
+
+    ~4-10x faster than :func:`compute_scores` by:
+    1. Precomputing edge arrays per substrate (avoiding repeated dict lookups).
+    2. Splitting into a fast path (95%+ of pathways) where no per-edge
+       deduplication is needed, and a slow path for the rest.
+    3. Using Python-native median on small lists (avoids numpy's per-call
+       overhead which dominates at 6-10 element arrays).
+
+    Parameters
+    ----------
+    pathways : DataFrame
+        Must contain Path, EM, Target, Receptor, Ligand, TPDS, PDS columns.
+    sub_pair : dict
+        Output of :func:`apply_pair_weights`.
+    all_kinase_genes : set
+        Kinase gene symbols from :func:`build_substrate_edge_table`.
+
+    Returns
+    -------
+    DataFrame with same schema as :func:`compute_scores`.
+    """
+    n_pw = len(pathways)
+    em_arr = pathways["EM"].values
+    tg_arr = pathways["Target"].values
+    lig_arr = pathways["Ligand"].values
+    rec_arr = pathways["Receptor"].values
+    tpds_arr = pathways["TPDS"].values
+    pds_arr = pathways["PDS"].values
+    path_arr = pathways["Path"].values
+
+    # Vectorized identification of pathways needing per-edge deduplication
+    # (only ~5% of pathways have a kinase gene as a node)
+    kin_gene_list = list(all_kinase_genes)
+    node_is_kinase = (np.isin(em_arr, kin_gene_list)
+                      | np.isin(tg_arr, kin_gene_list)
+                      | np.isin(lig_arr, kin_gene_list)
+                      | np.isin(rec_arr, kin_gene_list))
+
+    scores = np.zeros(n_pw)
+    scores_sum = np.zeros(n_pw)
+    scores_no_idf = np.zeros(n_pw)
+    n_kin = np.zeros(n_pw, dtype=np.int16)
+    n_excl = np.zeros(n_pw, dtype=np.int16)
+    conc_flags = np.empty(n_pw, dtype="U11")
+    conc_flags[:] = "none"
+    top_kin_list = [""] * n_pw
+
+    _get = sub_pair.get
+
+    for i in range(n_pw):
+        em = em_arr[i]
+        tg = tg_arr[i]
+        em_data = _get(em)
+        tg_data = _get(tg)
+
+        if em_data is None and tg_data is None:
+            continue
+
+        if not node_is_kinase[i]:
+            # Fast path: no kinase gene is a pathway node, skip deduplication
+            # Concatenate Python lists directly
+            if em_data and tg_data:
+                ew = em_data["ew_idf"] + tg_data["ew_idf"]
+                ew_no = em_data["ew_no_idf"] + tg_data["ew_no_idf"]
+                signs = em_data["nes_sign"] + tg_data["nes_sign"]
+                all_abbrevs = em_data["abbrev_set"] | tg_data["abbrev_set"]
+            elif em_data:
+                ew = em_data["ew_idf"]
+                ew_no = em_data["ew_no_idf"]
+                signs = em_data["nes_sign"]
+                all_abbrevs = em_data["abbrev_set"]
+            else:
+                ew = tg_data["ew_idf"]
+                ew_no = tg_data["ew_no_idf"]
+                signs = tg_data["nes_sign"]
+                all_abbrevs = tg_data["abbrev_set"]
+
+            if not ew:
+                continue
+
+            scores[i] = _list_median(ew)
+            scores_sum[i] = sum(ew)
+            scores_no_idf[i] = _list_median(ew_no)
+
+            n_kin[i] = len(all_abbrevs)
+            top_kin_list[i] = ";".join(sorted(all_abbrevs)[:10])
+
+        else:
+            # Slow path: exclude kinases that are pathway nodes
+            node_set = {em, tg, lig_arr[i], rec_arr[i]}
+            ew = []
+            ew_no = []
+            signs = []
+            all_abbrevs = set()
+            excl = 0
+
+            for data in (em_data, tg_data):
+                if data is None:
+                    continue
+                for j in range(len(data["ew_idf"])):
+                    if data["kgenes"][j] in node_set:
+                        excl += 1
+                        continue
+                    ew.append(data["ew_idf"][j])
+                    ew_no.append(data["ew_no_idf"][j])
+                    signs.append(data["nes_sign"][j])
+                    all_abbrevs.add(data["abbrevs"][j])
+
+            n_excl[i] = excl
+            if not ew:
+                continue
+
+            scores[i] = _list_median(ew)
+            scores_sum[i] = sum(ew)
+            scores_no_idf[i] = _list_median(ew_no)
+
+            n_kin[i] = len(all_abbrevs)
+            top_kin_list[i] = ";".join(sorted(all_abbrevs)[:10])
+
+        # Concordance flag
+        mean_sign = sum(signs) / len(signs)
+        tpds_val = tpds_arr[i]
+        if tpds_val == 0:
+            conc_flags[i] = "mixed"
+        elif abs(mean_sign) >= 0.5:
+            if (mean_sign > 0) == (tpds_val > 0):
+                conc_flags[i] = "concordant"
+            else:
+                conc_flags[i] = "discordant"
+        else:
+            conc_flags[i] = "mixed"
+
+    return pd.DataFrame({
+        "Path": path_arr,
+        "kinase_support_score": scores,
+        "kinase_support_score_sum": scores_sum,
+        "kinase_support_score_no_idf": scores_no_idf,
+        "n_distinct_kinases": n_kin,
+        "n_node_kinases_excluded": n_excl,
+        "top_kinases": top_kin_list,
+        "concordance_flag": conc_flags,
+        "TPDS": tpds_arr,
+        "PDS": pds_arr,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Adjusted rankings
 # ---------------------------------------------------------------------------
 
@@ -227,8 +486,13 @@ def compute_adjusted_rankings(scores_df, lambda_values):
 # Sensitivity analyses
 # ---------------------------------------------------------------------------
 
-def run_sensitivity_analyses(scores_df, results_full, lambda_values):
-    """PhPDS_ps redundancy, IDF sensitivity, lambda sensitivity."""
+def run_sensitivity_analyses(scores_df, results_full, lambda_values,
+                             adj_df=None):
+    """PhPDS_ps redundancy, IDF sensitivity, lambda sensitivity.
+
+    If ``adj_df`` is provided, reuses it for lambda sensitivity instead of
+    recomputing adjusted rankings.
+    """
     summary = {}
 
     # 1. PhPDS_ps redundancy
@@ -258,12 +522,13 @@ def run_sensitivity_analyses(scores_df, results_full, lambda_values):
         print(f"  IDF top-20 overlap: {overlap:.1%}")
 
     # 3. Lambda sensitivity: Kendall tau-b across adjacent values
-    adj = compute_adjusted_rankings(scores_df, lambda_values)
+    if adj_df is None:
+        adj_df = compute_adjusted_rankings(scores_df, lambda_values)
     tau_pairs = {}
     for i in range(len(lambda_values) - 1):
         l1, l2 = lambda_values[i], lambda_values[i + 1]
-        r1 = adj[f"adjusted_rank_lam{l1}"]
-        r2 = adj[f"adjusted_rank_lam{l2}"]
+        r1 = adj_df[f"adjusted_rank_lam{l1}"]
+        r2 = adj_df[f"adjusted_rank_lam{l2}"]
         tau, _ = stats.kendalltau(r1, r2)
         tau_pairs[f"tau_lam{l1}_vs_lam{l2}"] = round(tau, 4)
     summary["lambda_kendall_tau"] = tau_pairs
@@ -503,15 +768,18 @@ def main():
     # ------------------------------------------------------------------
     sub_to_kins = build_substrate_kinase_map(kldata)
     idf_map = _compute_idf_map(sub_to_kins, mouse_to_abbrevs,
-                               sig_kinases, attr_weights)
+                               sig_kinases, attr_weights,
+                               pair_independent=False)
+
+    sub_raw_edges, all_kinase_genes = build_substrate_edge_table(
+        sub_to_kins, idf_map, sig_kinases, mouse_to_abbrevs)
+    sub_pair = apply_pair_weights(sub_raw_edges, attr_weights)
 
     # ------------------------------------------------------------------
     # 5. Compute scores
     # ------------------------------------------------------------------
     print("\nComputing kinase support scores...")
-    scores_df = compute_scores(
-        pathways, sub_to_kins, idf_map, sig_kinases, attr_weights,
-        mouse_to_abbrevs)
+    scores_df = compute_scores_fast(pathways, sub_pair, all_kinase_genes)
 
     n_nonzero = (scores_df["kinase_support_score"] > 0).sum()
     n_zero = (scores_df["kinase_support_score"] == 0).sum()
@@ -519,7 +787,7 @@ def main():
     print(f"  Zero scores: {n_zero}")
 
     # ------------------------------------------------------------------
-    # 5. Adjusted rankings
+    # 6. Adjusted rankings
     # ------------------------------------------------------------------
     print("\nComputing adjusted rankings...")
     adj_df = compute_adjusted_rankings(scores_df, icfg.LAMBDA_VALUES)
@@ -535,7 +803,7 @@ def main():
     # ------------------------------------------------------------------
     print("\nRunning sensitivity analyses...")
     summary = run_sensitivity_analyses(
-        scores_df, results_full, icfg.LAMBDA_VALUES)
+        scores_df, results_full, icfg.LAMBDA_VALUES, adj_df=adj_df)
 
     # ------------------------------------------------------------------
     # 7. Write outputs

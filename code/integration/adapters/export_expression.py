@@ -13,12 +13,9 @@ import pandas as pd
 import scipy.io
 import scipy.sparse
 
-from common import (
-    SONG_SUBCLASS_MAP,
-    SONG_MIN_SUBCLASS_PROB,
-    ensure_intermediates_dir,
-)
-import config_integration as icfg
+from config import SONG_SUBCLASS_MAP, SONG_MIN_SUBCLASS_PROB  # noqa: E402
+from common import ensure_intermediates_dir  # noqa: E402
+import config_integration as icfg  # noqa: E402
 
 
 def main():

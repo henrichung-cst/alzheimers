@@ -89,11 +89,29 @@ systemd-run --user --scope -p MemoryMax=12G \
   micromamba run -n incytr "${ENV_ARGS[@]}" \
   Rscript "$WRAPPERS_DIR/run_incytr_all_pairs.R"
 
+# ---------------------------------------------------------------
+# Kinase support scoring (alzheimers conda env)
+# ---------------------------------------------------------------
+echo "=== Kinase Support Scoring (all pairs) ==="
+echo "[compute_kinase_support_all_pairs.py]"
+KSCORE_ARGS=()
+if [ -n "${PAIR_FILTER:-}" ]; then
+  # Convert colon-separated "Sender:Receiver" to glob "Sender__Receiver"
+  KSCORE_ARGS+=(--pair-filter "$(echo "$PAIR_FILTER" | sed 's/ /_/g; s/\//-/g; s/:/__/')")
+fi
+if [ "${FORCE_RERUN:-}" = "1" ]; then
+  KSCORE_ARGS+=(--force)
+fi
+micromamba run -n alzheimers python3 \
+  "$ADAPTERS_DIR/compute_kinase_support_all_pairs.py" "${KSCORE_ARGS[@]}"
+
 echo
 echo "============================================================"
 echo "All-pairs pipeline complete."
 echo
 echo "Key outputs:"
 echo "  Per-pair results: $OUT_DIR/all_pairs/{sender}__{receiver}/results_full.csv"
+echo "  Kinase support:   $OUT_DIR/all_pairs/{sender}__{receiver}/kinase_support_scores.csv"
 echo "  Pair summary:     $OUT_DIR/all_pairs/pair_summary.csv"
+echo "  Kinase summary:   $OUT_DIR/all_pairs/kinase_support_summary.csv"
 echo "============================================================"

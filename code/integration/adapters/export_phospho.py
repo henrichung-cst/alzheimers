@@ -26,7 +26,7 @@ import os
 import numpy as np
 import pandas as pd
 
-from common import (load_sample_mapping, ensure_intermediates_dir,
+from common import (ensure_intermediates_dir,
                     load_mouse_gene_to_kinase_mapping, build_substrate_kinase_map)
 from config import SEA_AD_SUBCLASSES
 import config_integration as icfg
@@ -34,7 +34,7 @@ import config_integration as icfg
 
 def _get_animal_columns(genotype_code, timepoint, sex="M"):
     """Get stoichiometry matrix column names for matching animals."""
-    sm = load_sample_mapping()
+    sm = pd.read_csv(icfg.SAMPLE_MAPPING_CSV)
     mask = (
         (sm["genotype"] == genotype_code)
         & (sm["timepoint"] == timepoint)
@@ -55,12 +55,13 @@ def _build_attribution_weights(ac, kldata, subclasses, gene_to_kins):
     sub_to_kinases = build_substrate_kinase_map(kldata)
 
     # Precompute kinase -> [(cell_type, combined_score)] for O(1) lookup
-    kinase_ct_scores = {}
-    for _, r in ac.iterrows():
-        kin = r["kinase"]
-        ct = r["cell_type"]
-        if ct in subclasses:
-            kinase_ct_scores.setdefault(kin, []).append((ct, r["combined_score"]))
+    ac_filt = ac[ac["cell_type"].isin(subclasses)]
+    kinase_ct_scores = (
+        ac_filt.groupby("kinase")
+        .apply(lambda g: list(zip(g["cell_type"], g["combined_score"])),
+               include_groups=False)
+        .to_dict()
+    )
 
     gene_weights = {}
     for sub_gene, kinase_genes in sub_to_kinases.items():
@@ -150,42 +151,27 @@ def main():
     ps_cols = [f"{sc}_ps" for sc in subclasses]
     uniform_prop = 1.0 / len(subclasses)
 
+    # Build weights matrix (genes x cell_types) for vectorized multiply
+    weights_df = pd.DataFrame(
+        uniform_prop, index=gene_stoich.index, columns=subclasses)
+    for gene, w in gene_weights.items():
+        if gene in weights_df.index:
+            for ct, prop in w.items():
+                if ct in weights_df.columns:
+                    weights_df.loc[gene, ct] = prop
+
+    n_attributed_local = sum(1 for g in gene_stoich.index if g in gene_weights)
+    n_uniform_local = len(gene_stoich) - n_attributed_local
+
     def build_ps_df(value_col):
-        """Build a per-condition phospho DataFrame."""
-        rows = []
-        n_attributed_assigned = 0
-        n_uniform_assigned = 0
-        for gene, row in gene_stoich.iterrows():
-            rec = {"gene_symbol": gene}
-            val = row[value_col]
-
-            weights = gene_weights.get(gene)
-            if weights is not None:
-                # Attribution-proportional: distribute by attribution scores.
-                # Cell types with attribution get proportional values.
-                # Cell types without attribution for this gene get the
-                # uniform fallback (tissue average), not NA — Incytr's
-                # Cal_foldchange cannot handle NA values.
-                for sc in subclasses:
-                    prop = weights.get(sc, uniform_prop)
-                    rec[f"{sc}_ps"] = val * prop
-                n_attributed_assigned += 1
-            else:
-                # Uniform fallback: equal weight to all cell types
-                for sc in subclasses:
-                    rec[f"{sc}_ps"] = val * uniform_prop
-                n_uniform_assigned += 1
-
-            rows.append(rec)
-
-        df = pd.DataFrame(rows)
-        for col in ps_cols:
-            if col not in df.columns:
-                df[col] = np.nan
-        df = df[["gene_symbol"] + ps_cols]
-
-        print(f"  {value_col}: {n_attributed_assigned} proportional, "
-              f"{n_uniform_assigned} uniform")
+        """Build a per-condition phospho DataFrame via vectorized multiply."""
+        vals = gene_stoich[value_col].values[:, np.newaxis]
+        ps_matrix = vals * weights_df.values
+        df = pd.DataFrame(ps_matrix, index=gene_stoich.index, columns=ps_cols)
+        df.insert(0, "gene_symbol", gene_stoich.index)
+        df = df.reset_index(drop=True)
+        print(f"  {value_col}: {n_attributed_local} proportional, "
+              f"{n_uniform_local} uniform")
         return df
 
     ps_wt = build_ps_df("linear_wt")

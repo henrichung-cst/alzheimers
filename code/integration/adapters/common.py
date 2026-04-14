@@ -12,7 +12,6 @@ _REPO_ROOT = os.path.dirname(
 sys.path.insert(0, os.path.join(_REPO_ROOT, "code"))
 sys.path.insert(0, os.path.join(_REPO_ROOT, "code", "integration"))
 
-from config import SONG_SUBCLASS_MAP, SONG_MIN_SUBCLASS_PROB  # noqa: E402
 import config_integration as icfg  # noqa: E402
 
 
@@ -70,24 +69,13 @@ def build_substrate_kinase_map(kldata) -> dict:
     return kldata.groupby("gene")["motif.geneName"].apply(set).to_dict()
 
 
-def load_sample_mapping() -> pd.DataFrame:
-    """Load the TMT channel-to-animal sample mapping."""
-    return pd.read_csv(icfg.SAMPLE_MAPPING_CSV)
+def sanitize_celltype_name(name: str) -> str:
+    """Convert canonical cell-type name to directory-safe form.
 
-
-def get_stoichiometry_columns(genotype: str, timepoint: str, sex: str = "M"):
-    """Return stoichiometry matrix column names for animals matching filters.
-
-    Returns list of (column_name, mouse_id) tuples.
+    Matches the R pipeline convention: spaces to underscores, slashes to
+    hyphens.  E.g. ``"L2/3 IT"`` -> ``"L2-3_IT"``.
     """
-    sm = load_sample_mapping()
-    mask = (
-        (sm["genotype"] == genotype)
-        & (sm["timepoint"] == timepoint)
-        & (sm["sex"] == sex)
-    )
-    matched = sm[mask][["column_name", "mouse_id"]].values.tolist()
-    return [(col, mid) for col, mid in matched]
+    return name.replace(" ", "_").replace("/", "-")
 
 
 def ensure_intermediates_dir():
