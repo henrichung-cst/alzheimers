@@ -35,14 +35,10 @@ CONTRASTS = [
     "ApTt_2mo", "ApTt_4mo", "ApTt_6mo",
 ]
 
-DISEASE_GROUPS = ["App", "Tau", "ApTt"]
-TIMEPOINTS = ["2mo", "4mo", "6mo"]
-DISEASE_COLORS = {"App": "#c62828", "Tau": "#1565c0", "ApTt": "#6a1b9a"}
-
-TISSUE_ORDER = [
-    "Excitatory neurons", "Interneurons", "Astrocytes",
-    "Oligodendrocytes", "OPCs", "Microglia", "Endothelial cells",
-]
+DISEASE_GROUPS = config.DISEASE_GROUPS
+TIMEPOINTS = config.TIMEPOINTS
+DISEASE_COLORS = config.DISEASE_COLORS
+TISSUE_ORDER = config.TISSUE_ORDER
 
 
 # ---------------------------------------------------------------------------

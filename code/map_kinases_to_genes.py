@@ -57,8 +57,8 @@ def resolve_kinase_symbol(kinase_name, cache):
             symbol = hits[0]['symbol']
             cache[kinase_name] = symbol
             return symbol
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  Warning: MyGene.info lookup failed for {kinase_name}: {e}")
 
     # Default to itself if all else fails
     cache[kinase_name] = kinase_name

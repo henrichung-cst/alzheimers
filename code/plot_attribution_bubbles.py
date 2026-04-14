@@ -37,8 +37,8 @@ import config
 # Constants
 # ---------------------------------------------------------------------------
 
-DISEASE_GROUPS = ["App", "Tau", "ApTt"]
-TIMEPOINTS = ["2mo", "4mo", "6mo"]
+DISEASE_GROUPS = config.DISEASE_GROUPS
+TIMEPOINTS = config.TIMEPOINTS
 
 X_ORDER = []
 X_LABELS = []
@@ -56,12 +56,9 @@ for disease in DISEASE_GROUPS:
 FAMILY_ORDER = ["AGC", "CAMK", "CMGC", "STE", "TKL", "CK1", "Alpha",
                 "PIKK", "FAM20", "PDHK", "Other"]
 
-TISSUE_ORDER = [
-    "Excitatory neurons", "Interneurons", "Astrocytes",
-    "Oligodendrocytes", "OPCs", "Microglia", "Endothelial cells",
-]
+TISSUE_ORDER = config.TISSUE_ORDER
 
-_DISEASE_COLORS = {"App": "#c62828", "Tau": "#1565c0", "ApTt": "#6a1b9a"}
+_DISEASE_COLORS = config.DISEASE_COLORS
 
 MEA_FDR_THRESH = config.MEA_FDR_THRESH  # 0.25
 

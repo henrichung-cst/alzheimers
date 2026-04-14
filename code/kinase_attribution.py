@@ -406,25 +406,39 @@ def step_normalize():
         if tp_col and tp_col in bio_cols:
             ph_col_to_tp_col_idx[j] = bio_cols.index(tp_col)
 
-    # Compute stoichiometry matrix
+    # Compute stoichiometry matrix (vectorized)
     stoich_matrix = np.full((n_sites, len(bio_cols)), np.nan)
     site_matched = np.zeros(n_sites, dtype=bool)
     site_protein_gene = [""] * n_sites
 
+    # Build per-site protein row index (-1 = unmatched)
+    tp_row_for_site = np.full(n_sites, -1, dtype=int)
     for i in range(n_sites):
         gene_upper = sq_genes.iloc[i]
-        if gene_upper not in gene_to_tp_idx:
-            continue
-        tp_row = gene_to_tp_idx[gene_upper][0]  # first matching protein
-        site_matched[i] = True
-        site_protein_gene[i] = gene_upper
-        n_matched += 1
+        if gene_upper in gene_to_tp_idx:
+            tp_row_for_site[i] = gene_to_tp_idx[gene_upper][0]
+            site_matched[i] = True
+            site_protein_gene[i] = gene_upper
+    n_matched = int(site_matched.sum())
 
-        for ph_j, tp_j in ph_col_to_tp_col_idx.items():
-            ph_val = sq_norm_vals[i, ph_j]
-            tp_val = tp_norm_vals[tp_row, tp_j]
-            if ph_val > 0 and tp_val > 0 and np.isfinite(ph_val) and np.isfinite(tp_val):
-                stoich_matrix[i, tp_j] = np.log2(ph_val) - np.log2(tp_val)
+    # Vectorized stoichiometry for matched sites
+    matched_idx = np.where(site_matched)[0]
+    if len(matched_idx) > 0 and ph_col_to_tp_col_idx:
+        ph_js = np.array(list(ph_col_to_tp_col_idx.keys()))
+        tp_js = np.array(list(ph_col_to_tp_col_idx.values()))
+
+        # Extract phospho and proteome sub-matrices for matched sites
+        ph_vals = sq_norm_vals[np.ix_(matched_idx, ph_js)]       # (n_matched, n_pairs)
+        tp_rows = tp_row_for_site[matched_idx]
+        tp_vals = tp_norm_vals[tp_rows][:, tp_js]                 # (n_matched, n_pairs)
+
+        valid = (ph_vals > 0) & (tp_vals > 0) & np.isfinite(ph_vals) & np.isfinite(tp_vals)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            stoich_vals = np.where(valid, np.log2(ph_vals) - np.log2(tp_vals), np.nan)
+
+        # Scatter results into output matrix
+        for k, tp_j in enumerate(tp_js):
+            stoich_matrix[matched_idx, tp_j] = stoich_vals[:, k]
 
     pct_matched = n_matched / n_sites * 100
     n_total_values = stoich_matrix.size
@@ -775,6 +789,19 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
     return pd.DataFrame()
 
 
+def _prepare_raw_ols(mapping, bio_cols, raw_df):
+    """Shared OLS preparation for raw phospho data: log2-transform + run OLS."""
+    X = _build_design_matrix(mapping, bio_cols)
+    X_np = X.values
+    param_names = list(X.columns)
+    raw_vals = raw_df[bio_cols].values.copy()
+    raw_vals[raw_vals <= 0] = np.nan
+    with np.errstate(divide="ignore"):
+        Y_raw = np.log2(raw_vals)
+    betas_r, pvals_r, nobs_r = _run_ols_all_sites(Y_raw, X_np)
+    return X, X_np, param_names, Y_raw, betas_r, pvals_r, nobs_r
+
+
 def step_enrich():
     """Stage 2: OLS models + kinase enrichment + classification."""
     _ensure_output_dir()
@@ -901,35 +928,6 @@ def step_enrich():
 # Stage 3: Unified cell-type attribution (SEA-AD concordance + WMB expression)
 # ===========================================================================
 
-def _assign_confidence(concordance_score, wmb_specificity, sea_ad_lfc):
-    """Assign attribution confidence from combined evidence."""
-    if concordance_score <= 0:
-        return "none"
-    if wmb_specificity >= config.SPECIFICITY_HIGH and abs(sea_ad_lfc) > config.SEA_AD_LFC_MIN:
-        return "high"
-    if wmb_specificity >= config.SPECIFICITY_LOW or abs(sea_ad_lfc) > config.SEA_AD_LFC_MIN:
-        return "moderate"
-    return "low"
-
-
-def _assign_evidence_basis(wmb_specificity, sea_ad_lfc):
-    """Classify which evidence sources support an attribution.
-
-    Returns one of: cross_species, mouse_expression_only,
-    human_concordance_only, weak.
-    """
-    has_wmb = wmb_specificity >= config.SPECIFICITY_LOW
-    lfc_finite = np.isfinite(sea_ad_lfc) if not isinstance(sea_ad_lfc, (int, float)) else not np.isnan(sea_ad_lfc)
-    has_sea_ad = lfc_finite and abs(sea_ad_lfc) > config.SEA_AD_LFC_MIN
-    if has_wmb and has_sea_ad:
-        return "cross_species"
-    if has_wmb:
-        return "mouse_expression_only"
-    if has_sea_ad:
-        return "human_concordance_only"
-    return "weak"
-
-
 def _compute_effective_concordance(nes, sea_ad_lfc, song_lfc):
     """Compute weighted concordance from Song (primary) and SEA-AD (secondary).
 
@@ -1016,6 +1014,46 @@ def _assign_confidence_and_basis(effective_concordance, wmb_specificity,
         basis = "human_concordance_only"
     else:
         basis = "weak"
+
+    return conf, basis
+
+
+def _assign_confidence_and_basis_vectorized(unified):
+    """Vectorized version of _assign_confidence_and_basis for DataFrames."""
+    eff = unified["effective_concordance"]
+    wmb = unified["wmb_specificity"]
+    sea_lfc = unified["sea_ad_lfc"].fillna(0.0)
+    song_lfc_col = (unified["song_lfc"].fillna(0.0)
+                    if "song_lfc" in unified.columns
+                    else pd.Series(0.0, index=unified.index))
+    cs_source = unified["concordance_source"]
+
+    has_wmb = wmb >= config.SPECIFICITY_LOW
+    has_wmb_high = wmb >= config.SPECIFICITY_HIGH
+    has_sea_ad = sea_lfc.abs() > config.SEA_AD_LFC_MIN
+    has_song = song_lfc_col.abs() > config.SONG_LFC_MIN
+    song_contributed = cs_source.isin(("song", "both"))
+    positive_eff = eff > 0
+
+    # Confidence: start from "none", layer conditions (last match wins)
+    conf = pd.Series("none", index=unified.index)
+    mask_low = positive_eff & ~song_contributed & ~(has_wmb | has_sea_ad)
+    mask_mod_sea_ad = positive_eff & ~song_contributed & (has_wmb | has_sea_ad)
+    mask_mod_song = positive_eff & song_contributed & (has_wmb | has_sea_ad | has_song)
+    mask_high = positive_eff & song_contributed & has_wmb_high & (has_song | has_sea_ad)
+    conf[mask_low] = "low"
+    conf[mask_mod_sea_ad] = "moderate"
+    conf[mask_mod_song] = "moderate"
+    conf[mask_high] = "high"
+
+    # Evidence basis
+    basis = pd.Series("weak", index=unified.index)
+    basis[positive_eff & has_sea_ad & ~has_wmb & ~has_song] = "human_concordance_only"
+    basis[positive_eff & has_song & ~has_wmb & ~has_sea_ad] = "song_only"
+    basis[positive_eff & has_wmb & ~has_sea_ad & ~has_song] = "mouse_expression_only"
+    basis[positive_eff & has_wmb & has_sea_ad & ~has_song] = "cross_species"
+    basis[positive_eff & has_wmb & has_song & ~has_sea_ad] = "within_cohort"
+    basis[positive_eff & has_wmb & has_sea_ad & has_song] = "three_way"
 
     return conf, basis
 
@@ -1216,14 +1254,9 @@ def step_attribute():
                 })
         unified = pd.DataFrame(attribution_rows)
         # Re-assign confidence/basis using Song-primary logic
-        both = unified.apply(
-            lambda r: _assign_confidence_and_basis(
-                r["effective_concordance"], r["wmb_specificity"],
-                r["sea_ad_lfc"], r.get("song_lfc", np.nan),
-                r["concordance_source"]),
-            axis=1, result_type="expand")
-        unified["combined_confidence"] = both[0]
-        unified["evidence_basis"] = both[1]
+        conf, basis = _assign_confidence_and_basis_vectorized(unified)
+        unified["combined_confidence"] = conf
+        unified["evidence_basis"] = basis
     else:
         unified = sea_ad_df.copy()
         genes_upper = unified["gene_symbol"].fillna("").str.upper()
@@ -1271,14 +1304,9 @@ def step_attribute():
 
         unified["combined_score"] = (
             unified["effective_concordance"] * (0.5 + unified["wmb_specificity"]))
-        both = unified.apply(
-            lambda r: _assign_confidence_and_basis(
-                r["effective_concordance"], r["wmb_specificity"],
-                r["sea_ad_lfc"], r.get("song_lfc", np.nan),
-                r["concordance_source"]),
-            axis=1, result_type="expand")
-        unified["combined_confidence"] = both[0]
-        unified["evidence_basis"] = both[1]
+        conf, basis = _assign_confidence_and_basis_vectorized(unified)
+        unified["combined_confidence"] = conf
+        unified["evidence_basis"] = basis
 
     # Filter to attributed rows (confidence != none)
     attributed = unified[unified["combined_confidence"] != "none"].copy()
@@ -1346,14 +1374,8 @@ def step_mechanism_annotation():
     raw_df = pd.read_csv(raw_path)
 
     # Build design matrix and run OLS on raw phospho
-    X = _build_design_matrix(mapping, bio_cols)
-    X_np = X.values
-    param_names = list(X.columns)
-    raw_vals = raw_df[bio_cols].values.copy()
-    raw_vals[raw_vals <= 0] = np.nan
-    with np.errstate(divide="ignore"):
-        Y_raw = np.log2(raw_vals)
-    betas_r, pvals_r, nobs_r = _run_ols_all_sites(Y_raw, X_np)
+    X, X_np, param_names, Y_raw, betas_r, pvals_r, nobs_r = _prepare_raw_ols(
+        mapping, bio_cols, raw_df)
 
     # Compute contrast LFCs for raw phospho
     results_by_contrast = {}

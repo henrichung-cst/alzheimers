@@ -779,60 +779,48 @@ def step_quality():
     # Combined mask for plex-level and structured missingness reporting
     is_missing = quant.isna() | (quant == 0)
 
-    # Missingness by plex
-    plex_missing = {}
+    # Pre-compute plex->column-index mapping once
+    col_to_idx = {col: i for i, col in enumerate(quant.columns)}
+    plex_indices = {}
     for plex in sorted(mapping["plex"].unique()):
         plex_cols = mapping[mapping["plex"] == plex]["column_name"].tolist()
-        plex_idx = [
-            list(quant.columns).index(c) for c in plex_cols
-            if c in quant.columns
-        ]
+        plex_indices[int(plex)] = [col_to_idx[c] for c in plex_cols
+                                   if c in col_to_idx]
+
+    plex_missing = {}
+    for plex, plex_idx in plex_indices.items():
         if plex_idx:
             plex_miss = is_missing.iloc[:, plex_idx].sum().sum()
             plex_total = n_proteins * len(plex_idx)
             plex_frac = plex_miss / plex_total
-            plex_missing[int(plex)] = {
+            plex_missing[plex] = {
                 "n_samples": len(plex_idx),
                 "missing_fraction": round(float(plex_frac), 4),
             }
             print(f"    Plex {plex}: {100*plex_frac:.1f}% missing "
                   f"({len(plex_idx)} samples)")
 
-    # Proteins with structured missingness (entire plex missing)
+    is_missing_arr = is_missing.values
     n_plex_structured = 0
     for i in range(n_proteins):
-        row = is_missing.iloc[i]
-        for plex in mapping["plex"].unique():
-            plex_cols = mapping[mapping["plex"] == plex]["column_name"].tolist()
-            plex_idx = [
-                list(quant.columns).index(c) for c in plex_cols
-                if c in quant.columns
-            ]
-            if plex_idx and row.iloc[plex_idx].all():
+        for plex_idx in plex_indices.values():
+            if plex_idx and all(is_missing_arr[i, j] for j in plex_idx):
                 n_plex_structured += 1
                 break
     print(f"    Proteins missing from at least one full plex: "
           f"{n_plex_structured}")
 
-    # 2. Batch effects — median intensity per plex
     print(f"\n  Batch effects:")
     plex_medians = {}
-    for plex in sorted(mapping["plex"].unique()):
-        plex_cols = mapping[mapping["plex"] == plex]["column_name"].tolist()
-        plex_idx = [
-            list(quant.columns).index(c) for c in plex_cols
-            if c in quant.columns
-        ]
+    for plex, plex_idx in plex_indices.items():
         vals = quant.iloc[:, plex_idx].values.flatten()
         vals = vals[~np.isnan(vals)]
         vals = vals[vals > 0]
         med = float(np.median(vals)) if len(vals) > 0 else np.nan
-        plex_medians[int(plex)] = med
+        plex_medians[plex] = med
         print(f"    Plex {plex} median intensity: {med:.0f}")
 
-    # 3. PCA
     print(f"\n  Computing PCA...")
-    # Prepare matrix: mark zeros as missing, log2 transform, MinProb impute
     mat = quant.values.astype(float).copy()
     mat[mat <= 0] = np.nan
     with np.errstate(divide="ignore"):
@@ -841,14 +829,8 @@ def step_quality():
     log_mat = config.minprob_impute(log_mat)
     print(f"  MinProb imputed {n_imputed} missing values for PCA")
 
-    # Median-center per plex to reduce batch effects for PCA
     log_mat_centered = log_mat.copy()
-    for plex in sorted(mapping["plex"].unique()):
-        plex_cols = mapping[mapping["plex"] == plex]["column_name"].tolist()
-        plex_idx = [
-            list(quant.columns).index(c) for c in plex_cols
-            if c in quant.columns
-        ]
+    for plex_idx in plex_indices.values():
         if plex_idx:
             plex_median = np.median(log_mat_centered[:, plex_idx], axis=1,
                                      keepdims=True)
