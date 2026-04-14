@@ -288,14 +288,15 @@ For the reference pair (Microglia-PVM -> L5 IT at 10% threshold):
 - After pre-pruning: L1=30, L2=202, L3=12,144
 - DuckDB query: 26,399 pathways in ~2 seconds
 
-### All-pairs nested loop
+### All-pairs receiver-centric pipeline
 
-The all-pairs pipeline (`wrappers/run_incytr_all_pairs.R`) uses a nested loop optimized for shared work:
+The all-pairs pipeline (`wrappers/run_incytr_all_pairs.R`) uses a two-phase architecture that exploits the receiver-centric structure of Incytr pathways (3 of 4 nodes — Receptor, EM, Target — are receiver-determined):
 
-- **Outer loop (22 receivers)**: Prune L2/L3 edges once per receiver (receiver expression doesn't change across senders). Precompute kinase-imputed expression patches.
-- **Inner loop (21 senders)**: Prune L1 edges, register in DuckDB, run SQL query, full downstream pipeline.
+- **Phase A+B (DuckDB enumeration)**: Outer loop over 22 receivers prunes L2/L3 edges once per receiver, then inner loop over 21 senders prunes L1 edges and runs the DuckDB 3-way join. This produces a unified `all_pathways_df` data.table with `sender` as a column.
 
-This shares L2/L3 pruning across senders, achieving **64x speedup** over independent single-pair calls.
+- **Phase C (vectorized scoring)**: All senders for a given receiver are scored in a single vectorized pass (`wrappers/receiver_scoring.R`). Receiver-side computations (expression lookups, fold changes, phospho normalization, SiK/EI, kinase activity) are computed once and shared across all 21 senders. Only sender-side computations (Ligand expression, Ligand fold change, per-sender SigProb threshold) vary. This eliminates 440 redundant receiver-side computations and avoids creating 462 Incytr S4 objects.
+
+Output is 22 receiver-indexed Parquet files (`recv_{receiver}.parquet`) with `sender` as a column, replacing the previous 462 per-pair CSV structure. Backward-compatible per-pair CSV export is available via `EXPORT_CSV=1`.
 
 ### All-pairs results (462 pairs)
 
@@ -335,27 +336,30 @@ Each `results_full.csv` includes a `kinase_boost` column: `PDS - TPDS`. This dir
 
 ### Checkpoint/restart and operational features
 
-- **Checkpoint**: Pairs with existing `results_full.csv` are skipped. Set `FORCE_RERUN=1` to override.
+- **Checkpoint**: Receivers with existing `recv_{receiver}.parquet` are skipped. Set `FORCE_RERUN=1` to override.
 - **Memory guard**: R memory is checked after each receiver. Aborts cleanly if > `MEMORY_LIMIT_GB` (default 10).
 - **Pair filter**: `PAIR_FILTER="Microglia-PVM:L5 IT"` for single-pair testing; `PAIR_FILTER="*:L5 IT"` for single-receiver.
 - **Shell runner**: `run_all_pairs.sh` runs Python adapters then R pipeline under `systemd-run --user --scope -p MemoryMax=12G`. Use `--skip-adapters` on checkpoint-resume.
+- **CSV export**: `EXPORT_CSV=1` (default) writes backward-compatible per-pair CSVs alongside Parquet files.
 
 ### Output structure
 
 ```
 intermediates/all_pairs/
-  {sender}__{receiver}/           (462 subdirectories)
-    results_expronly.csv          expression-only scores (TPDS)
-    results_full.csv              full integrated scores (PDS + kinase_boost)
-    edge_list_l1.csv              Ligand-Receptor edges with pathway counts
-    edge_list_l2.csv              Receptor-EM edges
-    edge_list_l3.csv              EM-Target edges
-    kinase_support_scores.csv     substrate-based kinase support scores (per pathway)
-    adjusted_rankings.csv         lambda-sweep adjusted rankings
-    reranking_summary.json        per-pair scoring statistics
-  pair_summary.csv                462-row summary (n_pathways, timing, status)
-  kinase_support_summary.csv      462-row kinase support summary
+  recv_{receiver}.parquet          (22 files, sender as column, all scores included)
+  {sender}__{receiver}/            (462 subdirectories, written when EXPORT_CSV=1)
+    results_full.csv               full integrated scores (PDS + kinase_boost)
+    edge_list_l1.csv               Ligand-Receptor edges with pathway counts
+    edge_list_l2.csv               Receptor-EM edges
+    edge_list_l3.csv               EM-Target edges
+    kinase_support_scores.csv      substrate-based kinase support scores (per pathway)
+    adjusted_rankings.csv          lambda-sweep adjusted rankings
+    reranking_summary.json         per-pair scoring statistics
+  pair_summary.csv                 462-row summary (n_pathways, timing, status)
+  kinase_support_summary.csv       462-row kinase support summary
 ```
+
+The Parquet files are the primary output format. Each contains all pathways for one receiver with `sender` as a column, enabling predicate pushdown for efficient per-pair queries. File-level metadata includes receiver name, pipeline version, and timestamp. The kinase support scoring adapter (`compute_kinase_support_all_pairs.py`) auto-detects Parquet files and reads them with predicate pushdown, falling back to per-pair CSVs if Parquet is unavailable.
 
 ## Substrate-based external reranking
 
@@ -497,15 +501,15 @@ Additional sensitivity analyses requiring R/Incytr are implemented in `wrappers/
    export_kl_output.py --all-pairs  — include kinases attributed to ANY cell type
 
 2. R all-pairs orchestrator (incytr env)
-   run_incytr_all_pairs.R   — nested DuckDB loop over 462 pairs with checkpoint/restart
-                               Full downstream per pair: Expr_bygroup, Cal_SigProb, Cal_scFC,
-                               Pathway_evaluation, Integr_multiomics, Integr_kinasedata,
-                               Integr_kinase_enrichment, Cal_PDS, Export_results + kinase_boost
+   run_incytr_all_pairs.R   — Phase A+B: DuckDB backbone enumeration per receiver
+                               Phase C: vectorized scoring via receiver_scoring.R
+                               Output: 22 receiver Parquet files + optional per-pair CSVs
    Runs under: systemd-run --user --scope -p MemoryMax=12G
 
 3. Kinase support scoring (alzheimers env)
    compute_kinase_support_all_pairs.py — substrate-based reranking across all 462 pairs (~8 min)
-                                          Precomputed edge table + pair-independent IDF,
+                                          Auto-detects Parquet (predicate pushdown) or CSV input,
+                                          precomputed edge table + pair-independent IDF,
                                           per-pair attribution weights, checkpoint/restart
 ```
 
@@ -527,8 +531,8 @@ Use `--skip-adapters` to skip Python adapters on checkpoint-resume. Kinase-imput
 
 | File | Description |
 |---|---|
-| `{sender}__{receiver}/results_full.csv` | Per-pair full integration with kinase_boost column |
-| `{sender}__{receiver}/results_expronly.csv` | Per-pair expression-only scores |
+| `recv_{receiver}.parquet` | Receiver-indexed Parquet (sender as column, all scores + kinase_boost) |
+| `{sender}__{receiver}/results_full.csv` | Per-pair CSV (backward-compatible, EXPORT_CSV=1) |
 | `{sender}__{receiver}/edge_list_l{1,2,3}.csv` | Per-pair edge lists |
 | `{sender}__{receiver}/kinase_support_scores.csv` | Per-pathway substrate-based kinase support scores |
 | `{sender}__{receiver}/adjusted_rankings.csv` | Lambda-sweep adjusted rankings (TPDS + λ × score) |
@@ -545,7 +549,7 @@ All results include `pathway_evidence` (expression-confirmed or kinase-imputed),
 | Kinase activity evidence to influence pathway rankings | Incytr's internal kinase channel requires kinase genes to be pathway nodes, which requires them to pass the expression threshold, which most fail | Dual-channel architecture: internal channel for node-kinases, external substrate-based reranking for the rest, with deduplication at the boundary |
 | An integration that respects both data types | Bulk kinase activity is tissue-level; Incytr expects cell-type-resolved data | Keep evidence types separate: expression inside Incytr, kinase evidence as external reranking layer weighted by cell-type attribution confidence |
 | Pathway discovery beyond expression limits | High detection thresholds exclude genes with real kinase-substrate evidence; lowering the threshold indiscriminately creates millions of pathways | DuckDB enumeration with in-query SigProb filtering handles the combinatorial explosion at 10% threshold; kinase-imputed expansion adds genes with protein-level evidence; SigProb naturally filters weak candidates |
-| Scale to all cell-type pairs | Single-pair processing is ~3 min but doesn't share work across pairs; 462 independent runs would take ~23 hours with redundant computation | Nested DuckDB loop shares L2/L3 pruning per receiver (64x speedup), checkpoint/restart for fault tolerance, memory guard under systemd-run 12GB cap |
+| Scale to all cell-type pairs | Single-pair processing is ~3 min but doesn't share work across pairs; 462 independent runs would take ~23 hours with redundant computation | Two-phase receiver-centric architecture: DuckDB enumeration shares L2/L3 pruning per receiver, vectorized scoring eliminates 440 redundant receiver-side computations and 462 S4 object copies. Output as 22 receiver-indexed Parquet files with predicate pushdown. Checkpoint/restart per receiver, memory guard under systemd-run 12GB cap |
 | Statistical rigor for the combined ranking | Substrate promiscuity can inflate scores; two evidence layers share an upstream dataset | Median aggregation (hub-robust), pair-independent IDF weighting (computed once, reused across pairs), dual null model (enrichment null + wiring null against full MEA universe), redundancy check against PhPDS_ps (rho = -0.246, confirming complementarity) |
 | Transparent kinase contribution | PDS integrates multiple evidence types opaquely | `kinase_boost` column (PDS - TPDS) directly measures the kinase/phospho contribution per pathway |
 | Honest interpretation | Convergent evidence at a target gene does not prove mechanistic pathway flow | Frame as convergent functional evidence, not mechanistic validation; present concordant and discordant pathways as separate categories (unsigned score + concordance flag); label kinase-imputed pathways as lower evidence tier |
