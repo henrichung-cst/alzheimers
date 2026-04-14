@@ -48,6 +48,22 @@ source(file.path(script_dir, "duckdb_enumeration.R"))
 
 sanitize_name <- function(x) gsub("/", "-", gsub(" ", "_", x))
 
+# Record all senders as skipped and unregister receiver-scoped DuckDB tables.
+# Called from early-exit paths (NO_EDGES, NO_BACKBONES, NO_L1).
+# Uses <<- to update counters in the enclosing for-loop scope.
+skip_recv_senders <- function(senders, recv, status, con) {
+  for (send in senders) {
+    n_done <<- n_done + 1
+    summary_rows[[length(summary_rows) + 1]] <<- data.frame(
+      sender = send, receiver = recv,
+      n_pre = 0L, n_post = 0L, time_sec = 0,
+      status = status, stringsAsFactors = FALSE)
+  }
+  duckdb_unregister(con, "L2")
+  duckdb_unregister(con, "L3")
+  duckdb_unregister(con, "receiver_expr")
+}
+
 repo_root  <- normalizePath(file.path(script_dir, "..", "..", ".."))
 int_dir    <- file.path(repo_root, "code", "integration", "intermediates")
 
@@ -274,10 +290,8 @@ em_deg_df <- data.frame(gene = names(em_degree), degree = as.numeric(em_degree),
 duckdb_register(con, "em_degree_tbl", em_deg_df)
 rm(em_deg_df)
 
-# --- Build SQL template ---
-h_l1_c1 <- build_hill_sql("se.c1",  "r1.c1", N, KN)
+# --- Build SQL templates ---
 h_l2_c1 <- build_hill_sql("r1.c1",  "r2.c1", N, KN)
-h_l1_c2 <- build_hill_sql("se.c2",  "r1.c2", N, KN)
 h_l2_c2 <- build_hill_sql("r1.c2",  "r2.c2", N, KN)
 
 em_w <- "(1.0 / LOG2(CAST(1 + COALESCE(ed.degree, 1) AS DOUBLE)))"
@@ -286,33 +300,64 @@ l3_prod_c2 <- sprintf("(r2.c2 * r3.c2 * %s)", em_w)
 h_l3_c1 <- sprintf("POWER(%s, %d) / (POWER(%s, %d) + %f)", l3_prod_c1, N, l3_prod_c1, N, KN)
 h_l3_c2 <- sprintf("POWER(%s, %d) / (POWER(%s, %d) + %f)", l3_prod_c2, N, l3_prod_c2, N, KN)
 
-sql <- sprintf('
+# Phase A: Backbone enumeration (receiver-only, L2 x L3)
+# Produces all R-EM-T triples with pre-computed receiver-side SigProb components.
+# Filter: receiver component >= cutoff (lossless, since Hill_L1 <= 1).
+sql_backbone <- sprintf('
   SELECT DISTINCT
-    L1."from" AS Ligand,
-    L1."to"   AS Receptor,
+    L2."from" AS Receptor,
     L2."to"   AS EM,
-    L3."to"   AS Target
-  FROM L1
-  JOIN L2 ON L1."to" = L2."from"
+    L3."to"   AS Target,
+    %s AS h_l2_c1,
+    %s AS h_l2_c2,
+    %s AS h_l3_c1,
+    %s AS h_l3_c2
+  FROM L2
   JOIN L3 ON L2."to" = L3."from"
-  JOIN sender_expr   se ON L1."from" = se.gene
-  JOIN receiver_expr r1 ON L1."to"  = r1.gene
+  JOIN receiver_expr r1 ON L2."from" = r1.gene
   JOIN receiver_expr r2 ON L2."to"  = r2.gene
   JOIN receiver_expr r3 ON L3."to"  = r3.gene
   LEFT JOIN em_degree_tbl ed ON L2."to" = ed.gene
-  WHERE L1."from" != L1."to"
-    AND L1."from" != L2."to"
-    AND L1."from" != L3."to"
-    AND L1."to"   != L2."to"
-    AND L1."to"   != L3."to"
+  WHERE L2."from" != L2."to"
+    AND L2."from" != L3."to"
     AND L2."to"   != L3."to"
     AND (
-      (%s * %s * %s) >= %f
+      (%s * %s) >= %f
       OR
-      (%s * %s * %s) >= %f
+      (%s * %s) >= %f
     )
-', h_l1_c1, h_l2_c1, h_l3_c1, cutoff_SigProb,
-   h_l1_c2, h_l2_c2, h_l3_c2, cutoff_SigProb)
+', h_l2_c1, h_l2_c2, h_l3_c1, h_l3_c2,
+   h_l2_c1, h_l3_c1, cutoff_SigProb,
+   h_l2_c2, h_l3_c2, cutoff_SigProb)
+
+# Phase B: All-sender ligand attachment
+# Joins L1 edges from ALL senders against pre-enumerated backbones in one query.
+# sender_all_expr is a long-format table: (gene, cell_type, c1, c2).
+# Full SigProb filter applied here (Hill_L1 * receiver component >= cutoff).
+# L1 Hill uses raw receiver R expression (from receiver_expr r1) × sender L expression.
+# The backbone's h_l2/h_l3 carry the receiver-only SigProb components.
+sql_attach <- sprintf('
+  SELECT DISTINCT
+    se.cell_type AS sender,
+    L1."from" AS Ligand,
+    bb.Receptor,
+    bb.EM,
+    bb.Target
+  FROM sender_all_expr se
+  JOIN L1 ON L1."from" = se.gene
+  JOIN backbones bb ON L1."to" = bb.Receptor
+  JOIN receiver_expr r1 ON bb.Receptor = r1.gene
+  WHERE se.cell_type != ?
+    AND L1."from" != bb.Receptor
+    AND L1."from" != bb.EM
+    AND L1."from" != bb.Target
+    AND (
+      (%s * bb.h_l2_c1 * bb.h_l3_c1) >= %f
+      OR
+      (%s * bb.h_l2_c2 * bb.h_l3_c2) >= %f
+    )
+', build_hill_sql("se.c1", "r1.c1", N, KN), cutoff_SigProb,
+   build_hill_sql("se.c2", "r1.c2", N, KN), cutoff_SigProb)
 
 # --- Summary tracking ---
 summary_rows <- list()
@@ -385,20 +430,98 @@ for (recv in receivers_in_order) {
   cat(sprintf("\n--- Receiver: %s  (L2=%d, L3=%d, %d senders) ---\n",
               recv, n_l2, n_l3, length(senders)))
 
+  # Pre-check checkpoints: skip backbone + attachment if all senders are done
+  if (!force_rerun) {
+    senders_todo <- senders[!vapply(senders, function(s) {
+      pd <- file.path(out_base, paste0(sanitize_name(s), "__", sanitize_name(recv)))
+      file.exists(file.path(pd, "results_full.csv"))
+    }, logical(1))]
+    if (length(senders_todo) == 0) {
+      cat(sprintf("  All %d senders checkpointed, skipping.\n", length(senders)))
+      for (send in senders) {
+        n_done <- n_done + 1
+        n_skipped <- n_skipped + 1
+        summary_rows[[length(summary_rows) + 1]] <- data.frame(
+          sender = send, receiver = recv,
+          n_pre = NA_integer_, n_post = NA_integer_, time_sec = 0,
+          status = "CHECKPOINT", stringsAsFactors = FALSE)
+      }
+      duckdb_unregister(con, "L2")
+      duckdb_unregister(con, "L3")
+      duckdb_unregister(con, "receiver_expr")
+      next
+    }
+  }
+
   if (n_l2 == 0 || n_l3 == 0) {
     cat("  No surviving L2/L3 edges, skipping all senders.\n")
-    for (send in senders) {
-      n_done <- n_done + 1
-      summary_rows[[length(summary_rows) + 1]] <- data.frame(
-        sender = send, receiver = recv,
-        n_pre = 0L, n_post = 0L, time_sec = 0,
-        status = "NO_EDGES", stringsAsFactors = FALSE)
-    }
-    duckdb_unregister(con, "L2")
-    duckdb_unregister(con, "L3")
-    duckdb_unregister(con, "receiver_expr")
+    skip_recv_senders(senders, recv, "NO_EDGES", con)
     next
   }
+
+  # --- Phase A: Backbone enumeration (one query per receiver) ---
+  t0_bb <- proc.time()
+  backbone_df <- dbGetQuery(con, sql_backbone)
+  t_bb <- (proc.time() - t0_bb)["elapsed"]
+  cat(sprintf("  Backbone enumeration: %s R-EM-T triples (%.1fs)\n",
+              format(nrow(backbone_df), big.mark = ","), t_bb))
+
+  if (nrow(backbone_df) == 0) {
+    cat("  No backbones survived receiver-side SigProb filter.\n")
+    skip_recv_senders(senders, recv, "NO_BACKBONES", con)
+    next
+  }
+
+  # --- Phase B: All-sender ligand attachment (one query per receiver) ---
+  # Build long-format sender expression table (all senders for this receiver)
+  t0_attach <- proc.time()
+  sender_rows <- list()
+  for (send in senders) {
+    s_genes <- gene_lists[[send]]
+    # Only include genes that appear as L1 "from" and are in this sender's gene list
+    l1_sender_genes <- intersect(s_genes, l1_raw$from)
+    if (length(l1_sender_genes) == 0) next
+    sender_rows[[length(sender_rows) + 1]] <- data.frame(
+      gene = l1_sender_genes,
+      cell_type = send,
+      c1 = unname(wq_expr[[send]][[conditions[1]]][l1_sender_genes]),
+      c2 = unname(wq_expr[[send]][[conditions[2]]][l1_sender_genes]),
+      stringsAsFactors = FALSE)
+  }
+
+  if (length(sender_rows) > 0) {
+    sender_all_df <- rbindlist(sender_rows)
+    rm(sender_rows)
+  } else {
+    cat("  No senders have L1 ligand genes.\n")
+    skip_recv_senders(senders, recv, "NO_L1", con)
+    next
+  }
+
+  # Prune L1 edges: keep only edges where from is any sender gene and to is a
+  # backbone receptor. R-side Hill pre-pruning uses receiver expression.
+  backbone_receptors <- unique(backbone_df$Receptor)
+  dt1_all <- l1_raw[l1_raw$from %in% sender_all_df$gene &
+                     l1_raw$to %in% backbone_receptors]
+
+  # Register tables for attachment query
+  duckdb_register(con, "backbones", backbone_df)
+  duckdb_register(con, "sender_all_expr", sender_all_df)
+  duckdb_register(con, "L1", dt1_all)
+  rm(sender_all_df, dt1_all)
+
+  all_pathways_df <- as.data.table(dbGetQuery(con, sql_attach, params = list(recv)))
+
+  duckdb_unregister(con, "backbones")
+  duckdb_unregister(con, "sender_all_expr")
+  duckdb_unregister(con, "L1")
+  rm(backbone_df)
+
+  t_attach <- (proc.time() - t0_attach)["elapsed"]
+  n_senders_with_pw <- length(unique(all_pathways_df$sender))
+  cat(sprintf("  Sender attachment: %s pathways across %d senders (%.1fs)\n",
+              format(nrow(all_pathways_df), big.mark = ","),
+              n_senders_with_pw, t_attach))
 
   for (send in senders) {
     n_done <- n_done + 1
@@ -423,42 +546,10 @@ for (recv in receivers_in_order) {
     t0_pair <- proc.time()
     n_pre <- 0L; n_post <- 0L; status <- "OK"
 
-    # --- Sender expression + L1 pruning ---
+    # --- Filter pre-enumerated pathways for this sender ---
     send_genes <- gene_lists[[send]]
-    s_c1 <- wq_expr[[send]][[conditions[1]]]
-    s_c2 <- wq_expr[[send]][[conditions[2]]]
-
-    dt1 <- l1_raw[l1_raw$from %in% send_genes & l1_raw$to %in% recv_genes]
-    if (nrow(dt1) > 0) {
-      h1 <- hill(s_c1[dt1$from] * r_c1_patched[dt1$to], K, N)
-      h2 <- hill(s_c2[dt1$from] * r_c2_patched[dt1$to], K, N)
-      dt1 <- dt1[(h1 >= cutoff_SigProb) | (h2 >= cutoff_SigProb)]
-      rm(h1, h2)
-    }
-
-    if (nrow(dt1) == 0) {
-      t_pair <- (proc.time() - t0_pair)["elapsed"]
-      cat(sprintf("  [%d/%d] %s: 0 L1 edges (%.1fs)\n",
-                  n_done, n_total, pair_label, t_pair))
-      summary_rows[[length(summary_rows) + 1]] <- data.frame(
-        sender = send, receiver = recv,
-        n_pre = 0L, n_post = 0L, time_sec = round(t_pair, 1),
-        status = "NO_L1", stringsAsFactors = FALSE)
-      next
-    }
-
-    # --- DuckDB query ---
-    duckdb_register(con, "L1", as.data.frame(dt1))
-    sender_expr_df <- data.frame(gene = all_genes,
-                                 c1 = unname(s_c1), c2 = unname(s_c2),
-                                 stringsAsFactors = FALSE)
-    duckdb_register(con, "sender_expr", sender_expr_df)
-    rm(dt1, sender_expr_df)
-
-    pathways_df <- dbGetQuery(con, sql)
-
-    duckdb_unregister(con, "L1")
-    duckdb_unregister(con, "sender_expr")
+    pathways_df <- as.data.frame(all_pathways_df[sender == send,
+                                                  .(Ligand, Receptor, EM, Target)])
 
     n_pre <- nrow(pathways_df)
 
@@ -627,6 +718,9 @@ for (recv in receivers_in_order) {
       time_sec = round(t_pair, 1),
       status = status, stringsAsFactors = FALSE)
   }  # end sender loop
+
+  # Free pre-enumerated pathways for this receiver
+  rm(all_pathways_df)
 
   # Unregister receiver tables
   duckdb_unregister(con, "L2")
