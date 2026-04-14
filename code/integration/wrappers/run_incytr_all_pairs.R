@@ -2,8 +2,10 @@
 # All-pairs Incytr pipeline: enumerate and run downstream for all 462
 # sender-receiver pairs (22 cell types x 21 non-self).
 #
-# Uses a nested loop with shared L2/L3 pruning per receiver for efficient
-# DuckDB enumeration. Full downstream pipeline per pair (no permutation tests).
+# Phase 2: Receiver-centric vectorized scoring. Enumerates backbones and
+# attaches senders via DuckDB (Phase A+B), then scores all senders for each
+# receiver in a single vectorized pass (Phase C) without creating Incytr S4
+# objects. Produces receiver-indexed Parquet files.
 #
 # Environment variables:
 #   PAIR_FILTER       - Filter pairs, e.g. "Microglia-PVM:L5 IT", "*:L5 IT"
@@ -11,12 +13,15 @@
 #   MEMORY_LIMIT_GB   - Abort if R memory exceeds this (default 10)
 #   EXPR_DETECTION_THRESHOLD - Gene detection threshold (default 0.10)
 #   SKIP_EXPRONLY     - Set to 1 to skip expression-only evaluation
+#   EXPORT_CSV        - Set to 1 (default) for backward-compatible per-pair CSVs
 #
-# Outputs per pair:
-#   all_pairs/{sender}__{receiver}/results_full.csv
-#   all_pairs/{sender}__{receiver}/results_expronly.csv  (unless SKIP_EXPRONLY=1)
-#   all_pairs/{sender}__{receiver}/edge_list_l{1,2,3}.csv
+# Primary output:
+#   all_pairs/recv_{receiver}.parquet   (22 files, sender as column)
 #   all_pairs/pair_summary.csv
+#
+# Backward-compatible output (EXPORT_CSV=1):
+#   all_pairs/{sender}__{receiver}/results_full.csv
+#   all_pairs/{sender}__{receiver}/edge_list_l{1,2,3}.csv
 #
 # Usage:
 #   systemd-run --user --scope -p MemoryMax=12G \
@@ -28,6 +33,7 @@ suppressPackageStartupMessages({
   library(duckdb)
   library(DBI)
   library(matrixStats)
+  library(arrow)
 })
 
 # =========================================================================
@@ -45,6 +51,8 @@ script_dir <- get_script_dir()
 
 # Source shared helpers: hill(), build_hill_sql(), weighted_quantile_expr()
 source(file.path(script_dir, "duckdb_enumeration.R"))
+# Source Phase 2 vectorized scoring
+source(file.path(script_dir, "receiver_scoring.R"))
 
 sanitize_name <- function(x) gsub("/", "-", gsub(" ", "_", x))
 
@@ -78,11 +86,12 @@ force_rerun     <- Sys.getenv("FORCE_RERUN", "0") == "1"
 memory_limit_gb <- as.numeric(Sys.getenv("MEMORY_LIMIT_GB", "10"))
 pair_filter     <- Sys.getenv("PAIR_FILTER", "")
 skip_expronly   <- Sys.getenv("SKIP_EXPRONLY", "0") == "1"
+export_csv      <- Sys.getenv("EXPORT_CSV", "1") == "1"
 K <- 0.5; N <- 2; KN <- K^N; cutoff_SigProb <- 0.01
 conditions <- c("WT", "App")
 
-cat(sprintf("Config: threshold=%.0f%%, memory_limit=%dGB, force=%s, skip_expronly=%s\n",
-            expr_threshold * 100, memory_limit_gb, force_rerun, skip_expronly))
+cat(sprintf("Config: threshold=%.0f%%, memory_limit=%dGB, force=%s, skip_expronly=%s, export_csv=%s\n",
+            expr_threshold * 100, memory_limit_gb, force_rerun, skip_expronly, export_csv))
 if (pair_filter != "") cat(sprintf("Pair filter: %s\n", pair_filter))
 cat("\n")
 
@@ -91,7 +100,7 @@ cat("\n")
 # =========================================================================
 cat("=== Section 1: Loading shared data ===\n")
 
-cat("Loading Incytr...\n")
+cat("Loading Incytr (for DB layers)...\n")
 library(Incytr)
 
 cat("Loading expression matrix...\n")
@@ -430,27 +439,22 @@ for (recv in receivers_in_order) {
   cat(sprintf("\n--- Receiver: %s  (L2=%d, L3=%d, %d senders) ---\n",
               recv, n_l2, n_l3, length(senders)))
 
-  # Pre-check checkpoints: skip backbone + attachment if all senders are done
-  if (!force_rerun) {
-    senders_todo <- senders[!vapply(senders, function(s) {
-      pd <- file.path(out_base, paste0(sanitize_name(s), "__", sanitize_name(recv)))
-      file.exists(file.path(pd, "results_full.csv"))
-    }, logical(1))]
-    if (length(senders_todo) == 0) {
-      cat(sprintf("  All %d senders checkpointed, skipping.\n", length(senders)))
-      for (send in senders) {
-        n_done <- n_done + 1
-        n_skipped <- n_skipped + 1
-        summary_rows[[length(summary_rows) + 1]] <- data.frame(
-          sender = send, receiver = recv,
-          n_pre = NA_integer_, n_post = NA_integer_, time_sec = 0,
-          status = "CHECKPOINT", stringsAsFactors = FALSE)
-      }
-      duckdb_unregister(con, "L2")
-      duckdb_unregister(con, "L3")
-      duckdb_unregister(con, "receiver_expr")
-      next
+  # Pre-check checkpoint: skip if receiver Parquet exists
+  recv_parquet <- file.path(out_base, paste0("recv_", sanitize_name(recv), ".parquet"))
+  if (!force_rerun && file.exists(recv_parquet)) {
+    cat(sprintf("  Receiver %s checkpointed (Parquet), skipping.\n", recv))
+    for (send in senders) {
+      n_done <- n_done + 1
+      n_skipped <- n_skipped + 1
+      summary_rows[[length(summary_rows) + 1]] <- data.frame(
+        sender = send, receiver = recv,
+        n_pre = NA_integer_, n_post = NA_integer_, time_sec = 0,
+        status = "CHECKPOINT", stringsAsFactors = FALSE)
     }
+    duckdb_unregister(con, "L2")
+    duckdb_unregister(con, "L3")
+    duckdb_unregister(con, "receiver_expr")
+    next
   }
 
   if (n_l2 == 0 || n_l3 == 0) {
@@ -523,201 +527,45 @@ for (recv in receivers_in_order) {
               format(nrow(all_pathways_df), big.mark = ","),
               n_senders_with_pw, t_attach))
 
-  for (send in senders) {
-    n_done <- n_done + 1
-    pair_label <- sprintf("%s -> %s", send, recv)
+  # --- Phase C: Vectorized scoring (replaces per-sender loop) ---
+  recv_pathways_total <- nrow(all_pathways_df)
 
-    # --- Checkpoint ---
-    pair_dir <- file.path(out_base,
-                          paste0(sanitize_name(send), "__", sanitize_name(recv)))
-    dir.create(pair_dir, showWarnings = FALSE, recursive = TRUE)
-    results_path <- file.path(pair_dir, "results_full.csv")
+  tryCatch({
+    recv_summary <- score_receiver_all_senders(
+      all_pathways_df = all_pathways_df,
+      recv = recv,
+      wq_expr = wq_expr,
+      gene_lists = gene_lists,
+      recv_genes_expr = recv_genes_expr,
+      recv_c1 = r_c1_patched, recv_c2 = r_c2_patched,
+      em_degree = em_degree,
+      edge_source_count = edge_source_count,
+      ps1 = ps1, ps2 = ps2,
+      kldata = kldata, kl_out = kl_out,
+      cell_types = cell_types,
+      conditions = conditions,
+      K = K, N = N,
+      cutoff_SigProb = cutoff_SigProb,
+      output_dir = out_base,
+      export_csv = export_csv,
+      sanitize_name_fn = sanitize_name
+    )
 
-    if (!force_rerun && file.exists(results_path)) {
-      n_skipped <- n_skipped + 1
-      cat(sprintf("  [%d/%d] %s: SKIP (checkpoint)\n", n_done, n_total, pair_label))
-      summary_rows[[length(summary_rows) + 1]] <- data.frame(
-        sender = send, receiver = recv,
-        n_pre = NA_integer_, n_post = NA_integer_, time_sec = 0,
-        status = "CHECKPOINT", stringsAsFactors = FALSE)
-      next
+    for (i in seq_len(nrow(recv_summary))) {
+      n_done <- n_done + 1
+      summary_rows[[length(summary_rows) + 1]] <- recv_summary[i, , drop = FALSE]
     }
-
-    t0_pair <- proc.time()
-    n_pre <- 0L; n_post <- 0L; status <- "OK"
-
-    # --- Filter pre-enumerated pathways for this sender ---
-    send_genes <- gene_lists[[send]]
-    pathways_df <- as.data.frame(all_pathways_df[sender == send,
-                                                  .(Ligand, Receptor, EM, Target)])
-
-    n_pre <- nrow(pathways_df)
-
-    if (n_pre == 0) {
-      t_pair <- (proc.time() - t0_pair)["elapsed"]
-      cat(sprintf("  [%d/%d] %s: 0 pathways (%.1fs)\n",
-                  n_done, n_total, pair_label, t_pair))
-      summary_rows[[length(summary_rows) + 1]] <- data.frame(
-        sender = send, receiver = recv,
-        n_pre = 0L, n_post = 0L, time_sec = round(t_pair, 1),
-        status = "NO_PATHWAYS", stringsAsFactors = FALSE)
-      next
-    }
-
-    # Build Path column
-    pathways_df$Path <- paste(pathways_df$Ligand, pathways_df$Receptor,
-                              pathways_df$EM, pathways_df$Target, sep = "*")
-    recv_pathways_total <- recv_pathways_total + n_pre
-
-    # --- Downstream (tryCatch) ---
-    tryCatch({
-      # Create Incytr object
-      inc <- create_Incytr(object = mat, meta = meta,
-                           sender = send, receiver = recv,
-                           group.by = "labels", conditions = conditions)
-      inc@pathways <- as.data.frame(pathways_df)
-      inc@options$em_degree <- em_degree
-      inc@options$edge_source_count <- edge_source_count
-
-      # Label pathways: expression-confirmed vs kinase-imputed
-      pw <- inc@pathways
-      pw$pathway_evidence <- ifelse(
-        pw$Ligand %in% send_genes & pw$Receptor %in% recv_genes_expr &
-        pw$EM %in% recv_genes_expr & pw$Target %in% recv_genes_expr,
-        "expression-confirmed", "kinase-imputed")
-      # Vectorized imputed_nodes (avoids row-wise apply over potentially 100K+ rows)
-      imp_l <- ifelse(!pw$Ligand %in% send_genes, "Ligand", "")
-      imp_r <- ifelse(!pw$Receptor %in% recv_genes_expr, "Receptor", "")
-      imp_e <- ifelse(!pw$EM %in% recv_genes_expr, "EM", "")
-      imp_t <- ifelse(!pw$Target %in% recv_genes_expr, "Target", "")
-      pw$imputed_nodes <- gsub("^;+|;+$", "", gsub(";{2,}", ";",
-        paste(imp_l, imp_r, imp_e, imp_t, sep = ";")))
-      inc@pathways <- pw
-      pw_labels <- pw[, c("Path", "pathway_evidence", "imputed_nodes")]
-      ensure_labels <- function(df) {
-        if (!"pathway_evidence" %in% names(df))
-          df <- merge(df, pw_labels, by = "Path", all.x = TRUE)
-        df
-      }
-
-      # Expr_bygroup
-      inc <- Expr_bygroup(inc)
-
-      # Patch kinase-imputed gene expression (use cached rowMeans from outer loop)
-      if (length(ki_for_recv) > 0 && !is.null(ki_rm_c1)) {
-        for (ci in 1:2) {
-          if (nrow(inc@expr.bygroup[[ci]]) == 0) next
-          eg <- inc@expr.bygroup[[ci]]
-          ki_in_eg <- intersect(names(ki_rm_c1), eg$Gene)
-          if (length(ki_in_eg) == 0) next
-          zero_ki <- ki_in_eg[eg[match(ki_in_eg, eg$Gene), recv] == 0]
-          if (length(zero_ki) > 0) {
-            rm_vals <- if (ci == 1) ki_rm_c1[zero_ki] else ki_rm_c2[zero_ki]
-            idx <- match(zero_ki, eg$Gene)
-            inc@expr.bygroup[[ci]][idx, recv] <- rm_vals
-          }
-        }
-      }
-
-      # Cal_SigProb
-      inc <- Cal_SigProb(inc, K = K, N = N, cutoff_SigProb = cutoff_SigProb,
-                         correction = 0.001)
-      n_post <- nrow(inc@SigProb)
-
-      # Cal_scFC
-      inc <- Cal_scFC(inc)
-
-      # Expression-only evaluation
-      if (!skip_expronly) {
-        inc_base <- Pathway_evaluation(inc, score.weight = rep(0, 6))
-        results_expronly <- Export_results(inc_base)
-        results_expronly <- ensure_labels(results_expronly)
-        write.csv(results_expronly, file.path(pair_dir, "results_expronly.csv"),
-                  row.names = FALSE)
-        rm(inc_base, results_expronly)
-      }
-
-      # Phospho integration
-      if (!is.null(ps1) && !is.null(ps2)) {
-        sender_col <- paste0(send, "_ps")
-        receiver_col <- paste0(recv, "_ps")
-        ps_cols <- setdiff(colnames(ps1), "gene_symbol")
-        sender_has <- sender_col %in% ps_cols && sum(!is.na(ps1[[sender_col]])) > 0
-        receiver_has <- receiver_col %in% ps_cols && sum(!is.na(ps1[[receiver_col]])) > 0
-        if (sender_has || receiver_has) {
-          inc <- tryCatch(
-            Integr_multiomics(inc,
-                              ps.data_condition1 = ps1,
-                              ps.data_condition2 = ps2),
-            error = function(e) inc)
-        }
-      }
-
-      # Full evaluation
-      inc <- Pathway_evaluation(inc)
-
-      # Kinase integration
-      if (!is.null(kldata)) {
-        pathway_genes <- unique(c(inc@pathways$Receptor, inc@pathways$EM,
-                                  inc@pathways$Target))
-        kl_filtered <- kldata[kldata$gene %in% pathway_genes |
-                              kldata[["motif.geneName"]] %in% pathway_genes, ]
-        inc <- Integr_kinasedata(inc, kldata = kl_filtered,
-                                 cell_group = cell_types)
-
-        if (!is.null(kl_out) && nrow(kl_out) > 0) {
-          klo_filtered <- kl_out[kl_out$substrate %in% pathway_genes |
-                                 kl_out$kinase %in% pathway_genes, ]
-          if (nrow(klo_filtered) > 0) {
-            inc <- Integr_kinase_enrichment(inc, kl_output = klo_filtered,
-                                            kldata = kl_filtered,
-                                            cell_group = cell_types)
-          }
-        }
-      }
-
-      # PDS
-      inc <- Cal_PDS(inc, KPDS.weight = 0.5, AKPDS.weight = 0.25)
-
-      # Export results
-      results_full <- Export_results(inc, indicator = TRUE)
-      results_full <- ensure_labels(results_full)
-
-      # Kinase boost: difference between final PDS and expression-only TPDS
-      if ("PDS" %in% names(results_full) && "TPDS" %in% names(results_full)) {
-        results_full$kinase_boost <- results_full$PDS - results_full$TPDS
-      }
-
-      write.csv(results_full, results_path, row.names = FALSE)
-
-      # Edge lists
-      pw_dt <- as.data.table(pathways_df)
-      write.csv(as.data.frame(pw_dt[, .(n_pathways = .N),
-                by = .(from = Ligand, to = Receptor)]),
-                file.path(pair_dir, "edge_list_l1.csv"), row.names = FALSE)
-      write.csv(as.data.frame(pw_dt[, .(n_pathways = .N),
-                by = .(from = Receptor, to = EM)]),
-                file.path(pair_dir, "edge_list_l2.csv"), row.names = FALSE)
-      write.csv(as.data.frame(pw_dt[, .(n_pathways = .N),
-                by = .(from = EM, to = Target)]),
-                file.path(pair_dir, "edge_list_l3.csv"), row.names = FALSE)
-
-      rm(inc, results_full, pw_dt)
-    }, error = function(e) {
-      status <<- paste0("ERROR: ", e$message)
+  }, error = function(e) {
+    cat(sprintf("  ERROR scoring receiver %s: %s\n", recv, e$message))
+    for (send in senders) {
+      n_done <<- n_done + 1
       n_errors <<- n_errors + 1
-    })
-
-    t_pair <- (proc.time() - t0_pair)["elapsed"]
-    cat(sprintf("  [%d/%d] %s: %d -> %d pathways (%.1fs) %s\n",
-                n_done, n_total, pair_label, n_pre, n_post, t_pair, status))
-
-    summary_rows[[length(summary_rows) + 1]] <- data.frame(
-      sender = send, receiver = recv,
-      n_pre = n_pre, n_post = n_post,
-      time_sec = round(t_pair, 1),
-      status = status, stringsAsFactors = FALSE)
-  }  # end sender loop
+      summary_rows[[length(summary_rows) + 1]] <<- data.frame(
+        sender = send, receiver = recv,
+        n_pre = 0L, n_post = 0L, time_sec = 0,
+        status = paste0("ERROR: ", e$message), stringsAsFactors = FALSE)
+    }
+  })
 
   # Free pre-enumerated pathways for this receiver
   rm(all_pathways_df)
