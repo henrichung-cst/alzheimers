@@ -518,9 +518,10 @@ Additional sensitivity analyses requiring R/Incytr are implemented in `wrappers/
                                3a: backbone recurrence (R-EM-T triples across senders)
                                3b: 22x22 cell-type hub matrix
                                3c: target gene convergence
+                               --permutations: backbone-level dual null models
 ```
 
-Use `--skip-adapters` to skip Python adapters on checkpoint-resume. Kinase-imputed expansion runs by default (gated behind `ENABLE_KINASE_IMPUTATION=1`; set to `0` to disable). Permutation tests and bootstrap sensitivity are gated behind `RUN_PERMUTATIONS=1` and `RUN_BOOTSTRAP=1` environment variables. The kinase support step forwards `PAIR_FILTER` and `FORCE_RERUN` env vars from the shell runner.
+Use `--skip-adapters` to skip Python adapters on checkpoint-resume. Kinase-imputed expansion runs by default (gated behind `ENABLE_KINASE_IMPUTATION=1`; set to `0` to disable). `RUN_PERMUTATIONS=1` runs backbone-level permutation tests during the aggregation step. `RUN_BOOTSTRAP=1` runs L5 IT bootstrap sensitivity analysis. The kinase support step forwards `PAIR_FILTER` and `FORCE_RERUN` env vars from the shell runner.
 
 ### Key outputs
 
@@ -549,6 +550,7 @@ Use `--skip-adapters` to skip Python adapters on checkpoint-resume. Kinase-imput
 | `aggregation/hub_matrix_wide.csv` | 22×22 pivoted hub matrix (mean |PDS|) |
 | `aggregation/target_convergence.csv` | Per-receiver target genes with sender/route convergence |
 | `aggregation/aggregation_metadata.json` | Aggregation parameters, row counts, timestamp |
+| `aggregation/backbone_permutation_pvalues.csv` | Backbone-level permutation p-values (--permutations) |
 
 All results include `pathway_evidence` (expression-confirmed or kinase-imputed), `imputed_nodes` (which positions were imputed), and `kinase_boost` (PDS - TPDS) columns for downstream stratification.
 
@@ -609,15 +611,24 @@ Implemented as `aggregate_cross_pair.py`, which reads all 22 `recv_*.parquet` fi
 
 Configurable via `config_integration.py`: `PDS_SIGNIFICANCE_THRESHOLD` (default 0.1) and `AGGREGATION_DIR`. Integrated into `run_all_pairs.sh` as stage 4.
 
-### 3. Updated permutation tests
+### 3. Updated permutation tests --- DONE
 
-The permutation results in this document are from Phase 1 (3,544 pathways, 50% threshold, single pair). They need re-running:
+The Phase 1 permutation results (3,544 pathways, 50% threshold, single pair) have been superseded by a two-tier permutation strategy:
 
-- The current reference pair has 26,399 pathways at 10% threshold. Degree distributions, IDF values, and null distributions will differ. The 51% enrichment-null significance rate from Phase 1 may not hold.
+**Tier 1 (primary): Backbone-level permutation tests.** Implemented in `aggregate_cross_pair.py --permutations`. For each unique (receiver, EM, Target) backbone (509K unique triples), computes a substrate-based kinase support score using receiver-only attribution weights, then runs dual null models:
 
-- At all-pairs scale (462 pairs), running independent permutations per pair creates a massive multiple testing burden. An alternative is to run permutations on the aggregated cross-pair results (e.g., recurrence-weighted scores), which is a different statistical question but potentially more defensible.
+- **Null 1 (enrichment null):** Samples kinases from the full 311-kinase MEA universe with uniform attribution weight. Tests whether backbone kinase support reflects concentration of disease-significant, receiver-attributed kinases.
+- **Null 2 (wiring null):** Reassigns kinase-substrate edges to random MEA kinases, keeping IDF coefficients fixed. Tests whether specific kinase-substrate wiring matters.
 
-The framework is implemented and ready; it needs re-execution on the current data.
+Degree-bucketed vectorized permutation (10,000 iterations, batches of 500). p-values with Efron correction and BH FDR across all active backbones. Output: `aggregation/backbone_permutation_pvalues.csv`, joinable with `backbone_recurrence.csv` on (receiver, Receptor, EM, Target).
+
+**Key design decisions:**
+
+- **Receiver-only attribution weights:** Backbone identity is receiver-determined (3 of 4 nodes are receiver-side). Using receiver-only weights provides a clean hypothesis: "does kinase evidence attributed to this receiver cell type concentrate in specific signaling backbones?" Sender-attributed kinases (0.25x discount) are excluded from the backbone-level test but are captured in the per-pair diagnostic.
+- **(EM, Target) deduplication:** Many backbones share the same (EM, Target) pair (differing only in Receptor). Edge structures are computed once per unique (receiver, EM, Target) and cached, reducing 509K backbones to ~125K unique edge computations.
+- **Why backbone-level instead of per-pair:** At 462 pairs, per-pair permutations create a massive multiple testing burden. Backbone-level testing answers the downstream question directly ("does kinase evidence concentrate in recurrent backbones?") with a single FDR correction.
+
+**Tier 2 (diagnostic): Per-pair permutation tests.** Available via `compute_kinase_support_all_pairs.py --permutations`. Reuses the existing `run_permutation_tests()` from the single-pair module. Intended for targeted use with `--pair-filter` (e.g., deep-dive on the Microglia-PVM -> L5 IT reference pair). Expensive at full scale (~2.5 hours for all 462 pairs).
 
 ### 4. Nested experimental design: beyond a single contrast
 

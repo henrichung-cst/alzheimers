@@ -31,6 +31,7 @@ from compute_kinase_support import (
     _load_mea_kinases, _compute_idf_map,
     build_substrate_edge_table, apply_pair_weights, compute_scores_fast,
     compute_scores, compute_adjusted_rankings, run_sensitivity_analyses,
+    run_permutation_tests,
 )
 import config_integration as icfg
 
@@ -383,6 +384,8 @@ def main():
                         help="Skip per-pair sensitivity analyses")
     parser.add_argument("--pair-filter", metavar="PATTERN",
                         help="Filter pairs by glob (e.g. 'Astrocyte__*')")
+    parser.add_argument("--permutations", action="store_true",
+                        help="Run per-pair permutation tests (diagnostic; use with --pair-filter)")
     args = parser.parse_args()
 
     ensure_intermediates_dir()
@@ -407,19 +410,23 @@ def main():
 
     # 4. Process all pairs
     run_sensitivity = not args.no_sensitivity
+    run_perms = args.permutations
     summaries = []
     n_skipped = 0
     n_total = len(pairs)
 
     for i, (pq_path, sender, receiver) in enumerate(pairs, 1):
-        # Checkpoint: skip if output exists
         pair_dir = os.path.join(
             os.path.dirname(pq_path),
             f"{sanitize_celltype_name(sender)}__{sanitize_celltype_name(receiver)}")
         scores_path = os.path.join(pair_dir, "kinase_support_scores.csv")
+        perm_path = os.path.join(pair_dir, "permutation_pvalues.csv")
+
+        # Checkpoint: skip if outputs exist (scores always, perms if requested)
         if os.path.exists(scores_path) and not args.force:
-            n_skipped += 1
-            continue
+            if not run_perms or os.path.exists(perm_path):
+                n_skipped += 1
+                continue
 
         result = process_one_pair(shared, pq_path, sender, receiver,
                                   run_sensitivity=run_sensitivity)
@@ -429,6 +436,24 @@ def main():
               f"{result['n_pathways']} pathways, "
               f"{result['n_nonzero_score']} nonzero, "
               f"{result['time_sec']}s")
+
+        # Per-pair permutation tests (diagnostic mode)
+        if run_perms and not (os.path.exists(perm_path) and not args.force):
+            import pyarrow.parquet as pq_mod
+            filters = [("sender", "=", sender)]
+            table = pq_mod.read_table(pq_path, columns=SCORING_COLS + ["sender"],
+                                      filters=filters)
+            pathways = table.drop("sender").to_pandas()
+            attr_weights = compute_pair_attr_weights(
+                shared["attr_by_celltype"], sender, receiver,
+                icfg.SENDER_ATTRIBUTION_DISCOUNT)
+            perm_results = run_permutation_tests(
+                pathways, shared["sub_to_kins"], shared["idf_map"],
+                shared["sig_kinases"], attr_weights,
+                shared["mouse_to_abbrevs"], shared["all_mea_nes"],
+                icfg.N_PERMUTATIONS)
+            perm_results.to_csv(perm_path, index=False)
+            print(f"    Permutation p-values -> {perm_path}")
 
     if n_skipped:
         print(f"\nSkipped {n_skipped} pairs with existing output "

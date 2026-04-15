@@ -96,3 +96,6 @@ ALL_PAIRS_DIR = os.path.join(INTERMEDIATES_DIR, "all_pairs")
 # Phase 3: Cross-pair aggregation
 PDS_SIGNIFICANCE_THRESHOLD = 0.1   # |PDS| threshold for "disease-altered"
 AGGREGATION_DIR = os.path.join(ALL_PAIRS_DIR, "aggregation")
+
+# Backbone-level permutation tests (aggregate_cross_pair.py --permutations)
+N_PERMUTATIONS_AGGREGATE = 10_000

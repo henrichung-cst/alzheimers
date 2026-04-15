@@ -111,6 +111,9 @@ micromamba run -n alzheimers python3 \
 echo "=== Cross-Pair Aggregation ==="
 echo "[aggregate_cross_pair.py]"
 AGG_ARGS=()
+if [ "${RUN_PERMUTATIONS:-}" = "1" ]; then
+  AGG_ARGS+=(--permutations)
+fi
 if [ "${FORCE_RERUN:-}" = "1" ]; then
   AGG_ARGS+=(--force)
 fi
@@ -127,4 +130,7 @@ echo "  Kinase support:   $OUT_DIR/all_pairs/{sender}__{receiver}/kinase_support
 echo "  Pair summary:     $OUT_DIR/all_pairs/pair_summary.csv"
 echo "  Kinase summary:   $OUT_DIR/all_pairs/kinase_support_summary.csv"
 echo "  Aggregation:      $OUT_DIR/all_pairs/aggregation/"
+if [ "${RUN_PERMUTATIONS:-}" = "1" ]; then
+  echo "  Permutations:     $OUT_DIR/all_pairs/aggregation/backbone_permutation_pvalues.csv"
+fi
 echo "============================================================"
