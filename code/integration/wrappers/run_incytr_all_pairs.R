@@ -13,15 +13,10 @@
 #   MEMORY_LIMIT_GB   - Abort if R memory exceeds this (default 10)
 #   EXPR_DETECTION_THRESHOLD - Gene detection threshold (default 0.10)
 #   SKIP_EXPRONLY     - Set to 1 to skip expression-only evaluation
-#   EXPORT_CSV        - Set to 1 (default) for backward-compatible per-pair CSVs
 #
-# Primary output:
+# Output:
 #   all_pairs/recv_{receiver}.parquet   (22 files, sender as column)
 #   all_pairs/pair_summary.csv
-#
-# Backward-compatible output (EXPORT_CSV=1):
-#   all_pairs/{sender}__{receiver}/results_full.csv
-#   all_pairs/{sender}__{receiver}/edge_list_l{1,2,3}.csv
 #
 # Usage:
 #   systemd-run --user --scope -p MemoryMax=12G \
@@ -86,12 +81,11 @@ force_rerun     <- Sys.getenv("FORCE_RERUN", "0") == "1"
 memory_limit_gb <- as.numeric(Sys.getenv("MEMORY_LIMIT_GB", "10"))
 pair_filter     <- Sys.getenv("PAIR_FILTER", "")
 skip_expronly   <- Sys.getenv("SKIP_EXPRONLY", "0") == "1"
-export_csv      <- Sys.getenv("EXPORT_CSV", "1") == "1"
 K <- 0.5; N <- 2; KN <- K^N; cutoff_SigProb <- 0.01
 conditions <- c("WT", "App")
 
-cat(sprintf("Config: threshold=%.0f%%, memory_limit=%dGB, force=%s, skip_expronly=%s, export_csv=%s\n",
-            expr_threshold * 100, memory_limit_gb, force_rerun, skip_expronly, export_csv))
+cat(sprintf("Config: threshold=%.0f%%, memory_limit=%dGB, force=%s, skip_expronly=%s\n",
+            expr_threshold * 100, memory_limit_gb, force_rerun, skip_expronly))
 if (pair_filter != "") cat(sprintf("Pair filter: %s\n", pair_filter))
 cat("\n")
 
@@ -547,7 +541,6 @@ for (recv in receivers_in_order) {
       K = K, N = N,
       cutoff_SigProb = cutoff_SigProb,
       output_dir = out_base,
-      export_csv = export_csv,
       sanitize_name_fn = sanitize_name
     )
 

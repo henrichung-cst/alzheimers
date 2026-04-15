@@ -1,9 +1,9 @@
 """All-pairs substrate-based kinase support scoring.
 
 Extends compute_kinase_support.py to process all 462 sender-receiver pairs.
-Loads shared data (kldata, MEA, attribution, IDF) once, then iterates over
-pair directories writing per-pair kinase_support_scores.csv and a cross-pair
-summary.
+Reads pathway data from receiver-indexed Parquet files (recv_*.parquet),
+loads shared data (kldata, MEA, attribution, IDF) once, then iterates over
+pairs writing per-pair kinase_support_scores.csv and a cross-pair summary.
 
 Uses pair-independent IDF (promiscuity is a substrate property, not a pair
 property).  Attribution relevance is captured by the per-pair multiplicative
@@ -99,12 +99,10 @@ def load_shared_data():
 # Pair discovery
 # ---------------------------------------------------------------------------
 
-def _discover_pairs_parquet(pair_filter=None, profile_pair=None):
-    """Discover pairs from receiver-indexed Parquet files (Phase 2 output).
+def discover_pairs(pair_filter=None, profile_pair=None):
+    """Discover pairs from receiver-indexed Parquet files.
 
-    Returns list of (parquet_path, sender, receiver) tuples. The first element
-    is the Parquet file path (not a per-pair directory), which process_one_pair
-    handles via predicate pushdown.
+    Returns list of (parquet_path, sender, receiver) tuples.
     """
     import glob as globmod
     import pyarrow.parquet as pq
@@ -112,17 +110,20 @@ def _discover_pairs_parquet(pair_filter=None, profile_pair=None):
     parquet_files = sorted(globmod.glob(
         os.path.join(icfg.ALL_PAIRS_DIR, "recv_*.parquet")))
 
+    if not parquet_files:
+        raise FileNotFoundError(
+            f"No recv_*.parquet files in {icfg.ALL_PAIRS_DIR}. "
+            "Run the R pipeline first to produce Parquet output.")
+
     pairs = []
     for pq_path in parquet_files:
         meta = pq.read_metadata(pq_path)
         file_meta = meta.metadata or {}
         receiver = file_meta.get(b"receiver", b"").decode()
         if not receiver:
-            # Fallback: extract from filename
             base = os.path.basename(pq_path).replace("recv_", "").replace(".parquet", "")
             receiver = base.replace("_", " ")
 
-        # Read just the sender column to discover senders
         table = pq.read_table(pq_path, columns=["sender"])
         senders = sorted(set(table.column("sender").to_pylist()))
 
@@ -130,7 +131,8 @@ def _discover_pairs_parquet(pair_filter=None, profile_pair=None):
             dir_name = f"{sanitize_celltype_name(sender)}__{sanitize_celltype_name(receiver)}"
             pairs.append((pq_path, sender, receiver, dir_name))
 
-    # Apply filters (match on dir_name for backward compat with filter syntax)
+    print(f"  {len(parquet_files)} Parquet files, {len(pairs)} pairs")
+
     if profile_pair:
         pairs = [(p, s, r, d) for p, s, r, d in pairs if d == profile_pair]
         if not pairs:
@@ -139,55 +141,7 @@ def _discover_pairs_parquet(pair_filter=None, profile_pair=None):
         pairs = [(p, s, r, d) for p, s, r, d in pairs
                  if fnmatch.fnmatch(d, pair_filter)]
 
-    # Return as (path, sender, receiver) — path is Parquet file path
     return [(p, s, r) for p, s, r, _ in pairs]
-
-
-def discover_pairs(pair_filter=None, profile_pair=None):
-    """Discover pairs from Parquet (Phase 2) or CSV directories (Phase 1).
-
-    Auto-detects: if recv_*.parquet files exist, uses Parquet path.
-    Otherwise falls back to pair_summary.csv + per-pair directories.
-
-    Returns list of (source_path, sender, receiver) tuples.
-    """
-    import glob as globmod
-    parquet_files = globmod.glob(
-        os.path.join(icfg.ALL_PAIRS_DIR, "recv_*.parquet"))
-
-    if parquet_files:
-        print(f"  Detected {len(parquet_files)} Parquet files (Phase 2 mode)")
-        return _discover_pairs_parquet(pair_filter, profile_pair)
-
-    # Phase 1 fallback: CSV directories
-    summary_path = os.path.join(icfg.ALL_PAIRS_DIR, "pair_summary.csv")
-    ps = pd.read_csv(summary_path)
-
-    pairs = []
-    for _, row in ps.iterrows():
-        sender = row["sender"]
-        receiver = row["receiver"]
-        dir_name = f"{sanitize_celltype_name(sender)}__{sanitize_celltype_name(receiver)}"
-        dir_path = os.path.join(icfg.ALL_PAIRS_DIR, dir_name)
-
-        results_csv = os.path.join(dir_path, "results_full.csv")
-        if not os.path.exists(results_csv):
-            continue
-
-        pairs.append((dir_path, sender, receiver))
-
-    # Apply filters
-    if profile_pair:
-        pairs = [(d, s, r) for d, s, r in pairs
-                 if os.path.basename(d) == profile_pair]
-        if not pairs:
-            raise ValueError(f"No pair matching --profile-pair '{profile_pair}'. "
-                             f"Expected directory name like 'Microglia-PVM__L5_IT'.")
-    elif pair_filter:
-        pairs = [(d, s, r) for d, s, r in pairs
-                 if fnmatch.fnmatch(os.path.basename(d), pair_filter)]
-
-    return pairs
 
 
 # ---------------------------------------------------------------------------
@@ -220,39 +174,28 @@ SCORING_COLS = ["Path", "EM", "Target", "Receptor", "Ligand", "TPDS", "PDS"]
 SENSITIVITY_COLS = SCORING_COLS + ["PhPDS_ps"]
 
 
-def process_one_pair(shared, dir_path, sender, receiver, run_sensitivity=True):
-    """Score one pair and write outputs.  Returns summary dict.
+def process_one_pair(shared, pq_path, sender, receiver, run_sensitivity=True):
+    """Score one pair from a receiver Parquet file.  Returns summary dict."""
+    import pyarrow.parquet as pq
 
-    dir_path can be either a per-pair directory (Phase 1 CSV mode) or a
-    receiver Parquet file (Phase 2 mode). Auto-detected by extension.
-    """
     t0 = time.monotonic()
-
-    # Read pathway data — Parquet or CSV
-    is_parquet = dir_path.endswith(".parquet")
     usecols = SENSITIVITY_COLS if run_sensitivity else SCORING_COLS
+    filters = [("sender", "=", sender)]
 
-    if is_parquet:
-        import pyarrow.parquet as pq
-        filters = [("sender", "=", sender)]
-        try:
-            table = pq.read_table(dir_path, columns=usecols + ["sender"],
-                                  filters=filters)
-            results_full = table.drop("sender").to_pandas()
-        except Exception:
-            table = pq.read_table(dir_path, columns=SCORING_COLS + ["sender"],
-                                  filters=filters)
-            results_full = table.drop("sender").to_pandas()
-        # Create output directory for per-pair results
-        dir_name = f"{sanitize_celltype_name(sender)}__{sanitize_celltype_name(receiver)}"
-        dir_path = os.path.join(os.path.dirname(dir_path), dir_name)
-        os.makedirs(dir_path, exist_ok=True)
-    else:
-        results_csv = os.path.join(dir_path, "results_full.csv")
-        try:
-            results_full = pd.read_csv(results_csv, usecols=usecols)
-        except ValueError:
-            results_full = pd.read_csv(results_csv, usecols=SCORING_COLS)
+    try:
+        table = pq.read_table(pq_path, columns=usecols + ["sender"],
+                              filters=filters)
+        results_full = table.drop("sender").to_pandas()
+    except Exception:
+        table = pq.read_table(pq_path, columns=SCORING_COLS + ["sender"],
+                              filters=filters)
+        results_full = table.drop("sender").to_pandas()
+
+    # Output goes to per-pair directory
+    dir_path = os.path.join(
+        os.path.dirname(pq_path),
+        f"{sanitize_celltype_name(sender)}__{sanitize_celltype_name(receiver)}")
+    os.makedirs(dir_path, exist_ok=True)
 
     pathways = results_full[SCORING_COLS].copy()
     t_read = time.monotonic() - t0
@@ -324,15 +267,20 @@ def process_one_pair(shared, dir_path, sender, receiver, run_sensitivity=True):
 # Profiling mode
 # ---------------------------------------------------------------------------
 
-def profile_single_pair(shared, dir_path, sender, receiver):
+def profile_single_pair(shared, pq_path, sender, receiver):
     """Profile a single pair with detailed timing and memory tracking."""
+    pair_dir = os.path.join(
+        os.path.dirname(pq_path),
+        f"{sanitize_celltype_name(sender)}__{sanitize_celltype_name(receiver)}")
+
     print(f"\n{'='*60}")
     print(f"PROFILING: {sender} -> {receiver}")
-    print(f"Directory: {dir_path}")
+    print(f"Parquet: {pq_path}")
+    print(f"Output:  {pair_dir}")
     print(f"{'='*60}\n")
 
     # Run scoring WITHOUT tracemalloc (it adds 10-30x overhead)
-    result = process_one_pair(shared, dir_path, sender, receiver,
+    result = process_one_pair(shared, pq_path, sender, receiver,
                               run_sensitivity=True)
 
     # Measure memory separately with a lightweight estimate
@@ -364,8 +312,10 @@ def profile_single_pair(shared, dir_path, sender, receiver):
 
     # Validation: compare vectorized vs original iterrows scoring
     print(f"\n--- Vectorized vs original validation ---")
-    results_csv = os.path.join(dir_path, "results_full.csv")
-    pathways = pd.read_csv(results_csv, usecols=SCORING_COLS)
+    import pyarrow.parquet as pq_mod
+    _tbl = pq_mod.read_table(pq_path, columns=SCORING_COLS + ["sender"],
+                              filters=[("sender", "=", sender)])
+    pathways = _tbl.drop("sender").to_pandas()
     attr_weights = compute_pair_attr_weights(
         shared["attr_by_celltype"], sender, receiver,
         icfg.SENDER_ATTRIBUTION_DISCOUNT)
@@ -376,7 +326,7 @@ def profile_single_pair(shared, dir_path, sender, receiver):
         shared["sig_kinases"], attr_weights, shared["mouse_to_abbrevs"])
     t_orig = time.monotonic() - t0
 
-    new_scores = pd.read_csv(os.path.join(dir_path, "kinase_support_scores.csv"))
+    new_scores = pd.read_csv(os.path.join(pair_dir, "kinase_support_scores.csv"))
 
     import numpy as np
     diff = np.abs(
@@ -415,7 +365,7 @@ def profile_single_pair(shared, dir_path, sender, receiver):
             merged.loc[mask, "kinase_support_score_new"])
         print(f"  Spearman rho (nonzero scores): {rho:.4f}")
 
-    print(f"\nProfile complete. Outputs written to {dir_path}/")
+    print(f"\nProfile complete. Outputs written to {pair_dir}/")
 
 
 # ---------------------------------------------------------------------------
@@ -451,8 +401,8 @@ def main():
 
     # 3. Profile mode
     if args.profile_pair:
-        dir_path, sender, receiver = pairs[0]
-        profile_single_pair(shared, dir_path, sender, receiver)
+        pq_path, sender, receiver = pairs[0]
+        profile_single_pair(shared, pq_path, sender, receiver)
         return
 
     # 4. Process all pairs
@@ -461,21 +411,17 @@ def main():
     n_skipped = 0
     n_total = len(pairs)
 
-    for i, (dir_path, sender, receiver) in enumerate(pairs, 1):
+    for i, (pq_path, sender, receiver) in enumerate(pairs, 1):
         # Checkpoint: skip if output exists
-        # In Parquet mode, dir_path is a .parquet file; derive the per-pair dir
-        if dir_path.endswith(".parquet"):
-            pair_dir = os.path.join(
-                os.path.dirname(dir_path),
-                f"{sanitize_celltype_name(sender)}__{sanitize_celltype_name(receiver)}")
-        else:
-            pair_dir = dir_path
+        pair_dir = os.path.join(
+            os.path.dirname(pq_path),
+            f"{sanitize_celltype_name(sender)}__{sanitize_celltype_name(receiver)}")
         scores_path = os.path.join(pair_dir, "kinase_support_scores.csv")
         if os.path.exists(scores_path) and not args.force:
             n_skipped += 1
             continue
 
-        result = process_one_pair(shared, dir_path, sender, receiver,
+        result = process_one_pair(shared, pq_path, sender, receiver,
                                   run_sensitivity=run_sensitivity)
         summaries.append(result)
 

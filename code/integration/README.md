@@ -296,7 +296,7 @@ The all-pairs pipeline (`wrappers/run_incytr_all_pairs.R`) uses a two-phase arch
 
 - **Phase C (vectorized scoring)**: All senders for a given receiver are scored in a single vectorized pass (`wrappers/receiver_scoring.R`). Receiver-side computations (expression lookups, fold changes, phospho normalization, SiK/EI, kinase activity) are computed once and shared across all 21 senders. Only sender-side computations (Ligand expression, Ligand fold change, per-sender SigProb threshold) vary. This eliminates 440 redundant receiver-side computations and avoids creating 462 Incytr S4 objects.
 
-Output is 22 receiver-indexed Parquet files (`recv_{receiver}.parquet`) with `sender` as a column, replacing the previous 462 per-pair CSV structure. Backward-compatible per-pair CSV export is available via `EXPORT_CSV=1`.
+Output is 22 receiver-indexed Parquet files (`recv_{receiver}.parquet`) with `sender` as a column, replacing the previous 462 per-pair CSV structure.
 
 ### All-pairs results (462 pairs)
 
@@ -327,7 +327,7 @@ PDS scores are bimodal with peaks at -0.75 and +0.75. 71% of pathways have |PDS|
 
 ### kinase_boost column
 
-Each `results_full.csv` includes a `kinase_boost` column: `PDS - TPDS`. This directly measures how much kinase and phospho evidence changed the pathway score relative to expression alone. Across all pairs:
+Each receiver Parquet file includes a `kinase_boost` column: `PDS - TPDS`. This directly measures how much kinase and phospho evidence changed the pathway score relative to expression alone. Across all pairs:
 
 - 31% of pathways: kinase_boost = 0 (no kinase effect)
 - 42% have |kinase_boost| > 0.01 (moderate shift)
@@ -339,27 +339,28 @@ Each `results_full.csv` includes a `kinase_boost` column: `PDS - TPDS`. This dir
 - **Checkpoint**: Receivers with existing `recv_{receiver}.parquet` are skipped. Set `FORCE_RERUN=1` to override.
 - **Memory guard**: R memory is checked after each receiver. Aborts cleanly if > `MEMORY_LIMIT_GB` (default 10).
 - **Pair filter**: `PAIR_FILTER="Microglia-PVM:L5 IT"` for single-pair testing; `PAIR_FILTER="*:L5 IT"` for single-receiver.
-- **Shell runner**: `run_all_pairs.sh` runs Python adapters then R pipeline under `systemd-run --user --scope -p MemoryMax=12G`. Use `--skip-adapters` on checkpoint-resume.
-- **CSV export**: `EXPORT_CSV=1` (default) writes backward-compatible per-pair CSVs alongside Parquet files.
+- **Shell runner**: `run_all_pairs.sh` runs Python adapters, R pipeline under `systemd-run --user --scope -p MemoryMax=12G`, kinase support scoring, and cross-pair aggregation. Use `--skip-adapters` on checkpoint-resume.
 
 ### Output structure
 
 ```
 intermediates/all_pairs/
   recv_{receiver}.parquet          (22 files, sender as column, all scores included)
-  {sender}__{receiver}/            (462 subdirectories, written when EXPORT_CSV=1)
-    results_full.csv               full integrated scores (PDS + kinase_boost)
-    edge_list_l1.csv               Ligand-Receptor edges with pathway counts
-    edge_list_l2.csv               Receptor-EM edges
-    edge_list_l3.csv               EM-Target edges
+  {sender}__{receiver}/            (462 subdirectories)
     kinase_support_scores.csv      substrate-based kinase support scores (per pathway)
     adjusted_rankings.csv          lambda-sweep adjusted rankings
     reranking_summary.json         per-pair scoring statistics
   pair_summary.csv                 462-row summary (n_pathways, timing, status)
   kinase_support_summary.csv       462-row kinase support summary
+  aggregation/
+    backbone_recurrence.csv        R-EM-T triples shared across senders
+    hub_matrix.csv                 22x22 sender x receiver signaling summary (long format)
+    hub_matrix_wide.csv            22x22 pivoted (mean_abs_pds)
+    target_convergence.csv         genes targeted by multiple senders/routes
+    aggregation_metadata.json      params, thresholds, row counts, timestamp
 ```
 
-The Parquet files are the primary output format. Each contains all pathways for one receiver with `sender` as a column, enabling predicate pushdown for efficient per-pair queries. File-level metadata includes receiver name, pipeline version, and timestamp. The kinase support scoring adapter (`compute_kinase_support_all_pairs.py`) auto-detects Parquet files and reads them with predicate pushdown, falling back to per-pair CSVs if Parquet is unavailable.
+The Parquet files are the sole data format for pathway results. Each contains all pathways for one receiver with `sender` as a column, enabling predicate pushdown for efficient per-pair queries. File-level metadata includes receiver name, pipeline version, and timestamp. The kinase support scoring adapter (`compute_kinase_support_all_pairs.py`) reads Parquet files with predicate pushdown. The cross-pair aggregation (`aggregate_cross_pair.py`) reads all 22 Parquet files via DuckDB glob into a single view for SQL-based analysis.
 
 ## Substrate-based external reranking
 
@@ -503,14 +504,20 @@ Additional sensitivity analyses requiring R/Incytr are implemented in `wrappers/
 2. R all-pairs orchestrator (incytr env)
    run_incytr_all_pairs.R   — Phase A+B: DuckDB backbone enumeration per receiver
                                Phase C: vectorized scoring via receiver_scoring.R
-                               Output: 22 receiver Parquet files + optional per-pair CSVs
+                               Output: 22 receiver Parquet files
    Runs under: systemd-run --user --scope -p MemoryMax=12G
 
 3. Kinase support scoring (alzheimers env)
    compute_kinase_support_all_pairs.py — substrate-based reranking across all 462 pairs (~8 min)
-                                          Auto-detects Parquet (predicate pushdown) or CSV input,
+                                          Parquet input with predicate pushdown,
                                           precomputed edge table + pair-independent IDF,
                                           per-pair attribution weights, checkpoint/restart
+
+4. Cross-pair aggregation (alzheimers env)
+   aggregate_cross_pair.py  — DuckDB aggregation over 22 receiver Parquet files
+                               3a: backbone recurrence (R-EM-T triples across senders)
+                               3b: 22x22 cell-type hub matrix
+                               3c: target gene convergence
 ```
 
 Use `--skip-adapters` to skip Python adapters on checkpoint-resume. Kinase-imputed expansion runs by default (gated behind `ENABLE_KINASE_IMPUTATION=1`; set to `0` to disable). Permutation tests and bootstrap sensitivity are gated behind `RUN_PERMUTATIONS=1` and `RUN_BOOTSTRAP=1` environment variables. The kinase support step forwards `PAIR_FILTER` and `FORCE_RERUN` env vars from the shell runner.
@@ -532,13 +539,16 @@ Use `--skip-adapters` to skip Python adapters on checkpoint-resume. Kinase-imput
 | File | Description |
 |---|---|
 | `recv_{receiver}.parquet` | Receiver-indexed Parquet (sender as column, all scores + kinase_boost) |
-| `{sender}__{receiver}/results_full.csv` | Per-pair CSV (backward-compatible, EXPORT_CSV=1) |
-| `{sender}__{receiver}/edge_list_l{1,2,3}.csv` | Per-pair edge lists |
 | `{sender}__{receiver}/kinase_support_scores.csv` | Per-pathway substrate-based kinase support scores |
 | `{sender}__{receiver}/adjusted_rankings.csv` | Lambda-sweep adjusted rankings (TPDS + λ × score) |
 | `{sender}__{receiver}/reranking_summary.json` | Per-pair scoring statistics and timing |
 | `pair_summary.csv` | 462-row summary: sender, receiver, n_pre, n_post, time_sec, status |
 | `kinase_support_summary.csv` | 462-row kinase support summary (n_pathways, n_nonzero, median_score) |
+| `aggregation/backbone_recurrence.csv` | R-EM-T triples shared across senders, with direction consistency |
+| `aggregation/hub_matrix.csv` | 22×22 sender × receiver signaling summary (long format) |
+| `aggregation/hub_matrix_wide.csv` | 22×22 pivoted hub matrix (mean |PDS|) |
+| `aggregation/target_convergence.csv` | Per-receiver target genes with sender/route convergence |
+| `aggregation/aggregation_metadata.json` | Aggregation parameters, row counts, timestamp |
 
 All results include `pathway_evidence` (expression-confirmed or kinase-imputed), `imputed_nodes` (which positions were imputed), and `kinase_boost` (PDS - TPDS) columns for downstream stratification.
 
@@ -549,7 +559,7 @@ All results include `pathway_evidence` (expression-confirmed or kinase-imputed),
 | Kinase activity evidence to influence pathway rankings | Incytr's internal kinase channel requires kinase genes to be pathway nodes, which requires them to pass the expression threshold, which most fail | Dual-channel architecture: internal channel for node-kinases, external substrate-based reranking for the rest, with deduplication at the boundary |
 | An integration that respects both data types | Bulk kinase activity is tissue-level; Incytr expects cell-type-resolved data | Keep evidence types separate: expression inside Incytr, kinase evidence as external reranking layer weighted by cell-type attribution confidence |
 | Pathway discovery beyond expression limits | High detection thresholds exclude genes with real kinase-substrate evidence; lowering the threshold indiscriminately creates millions of pathways | DuckDB enumeration with in-query SigProb filtering handles the combinatorial explosion at 10% threshold; kinase-imputed expansion adds genes with protein-level evidence; SigProb naturally filters weak candidates |
-| Scale to all cell-type pairs | Single-pair processing is ~3 min but doesn't share work across pairs; 462 independent runs would take ~23 hours with redundant computation | Two-phase receiver-centric architecture: DuckDB enumeration shares L2/L3 pruning per receiver, vectorized scoring eliminates 440 redundant receiver-side computations and 462 S4 object copies. Output as 22 receiver-indexed Parquet files with predicate pushdown. Checkpoint/restart per receiver, memory guard under systemd-run 12GB cap |
+| Scale to all cell-type pairs | Single-pair processing is ~3 min but doesn't share work across pairs; 462 independent runs would take ~23 hours with redundant computation | Two-phase receiver-centric architecture: DuckDB enumeration shares L2/L3 pruning per receiver, vectorized scoring eliminates 440 redundant receiver-side computations and 462 S4 object copies. Output as 22 receiver-indexed Parquet files with predicate pushdown. Cross-pair aggregation via DuckDB over Parquet (backbone recurrence, hub matrix, target convergence). Checkpoint/restart per receiver, memory guard under systemd-run 12GB cap |
 | Statistical rigor for the combined ranking | Substrate promiscuity can inflate scores; two evidence layers share an upstream dataset | Median aggregation (hub-robust), pair-independent IDF weighting (computed once, reused across pairs), dual null model (enrichment null + wiring null against full MEA universe), redundancy check against PhPDS_ps (rho = -0.246, confirming complementarity) |
 | Transparent kinase contribution | PDS integrates multiple evidence types opaquely | `kinase_boost` column (PDS - TPDS) directly measures the kinase/phospho contribution per pathway |
 | Honest interpretation | Convergent evidence at a target gene does not prove mechanistic pathway flow | Frame as convergent functional evidence, not mechanistic validation; present concordant and discordant pathways as separate categories (unsigned score + concordance flag); label kinase-imputed pathways as lower evidence tier |
@@ -585,15 +595,19 @@ The external substrate-based kinase support scoring has been extended to all 462
 
 Checkpoint/restart is supported: pairs with existing `kinase_support_scores.csv` are skipped unless `--force` is passed.
 
-### 2. Cross-pair aggregation and analysis
+### 2. Cross-pair aggregation and analysis --- DONE
 
-The 462 directories of scored pathways are unusable without aggregation. Several analytical angles:
+Implemented as `aggregate_cross_pair.py`, which reads all 22 `recv_*.parquet` files via DuckDB glob into a single view and produces three aggregation outputs:
 
-- **Pathway recurrence:** The same four-gene chain (Ligand→Receptor→EM→Target) can appear across many sender-receiver pairs sharing a receiver. Pathways consistently upregulated across many senders communicating with a given receiver are stronger findings than single-pair results. Conversely, pathways specific to one sender-receiver pair point to cell-type-specific signaling.
+- **3a. Backbone recurrence** (`backbone_recurrence.csv`): Groups pathways by receiver × Receptor × EM × Target triple and counts how many senders contribute each backbone. Includes `n_senders_significant` (senders where |PDS| exceeds threshold), direction consistency (fraction of senders agreeing with the group mean PDS sign), and mean kinase_boost. Pathways consistently altered across many senders are stronger findings than single-pair results.
 
-- **Cell-type hub analysis:** Aggregate mean |PDS|, mean kinase_boost, or pathway count per sender and receiver to identify which cell types drive the most disease-altered signaling. Build a 22×22 matrix (sender × receiver) summarizing each pair's signaling activity.
+- **3b. Cell-type hub matrix** (`hub_matrix.csv`, `hub_matrix_wide.csv`): 22×22 sender × receiver signaling summary. Per pair: pathway count, number/fraction significant, mean |PDS|, mean PDS (signed), mean kinase_boost, and up/down-regulated counts. The wide-format pivot provides a heatmap-ready matrix of mean |PDS| across all cell-type pairs.
 
-- **Gene-level convergence:** Which target genes appear most frequently across pairs as endpoints of disease-altered pathways? This is distinct from substrate promiscuity (kinase connectivity) --- it identifies genes at the convergence point of multiple cell-type signaling routes.
+- **3c. Target gene convergence** (`target_convergence.csv`): Per-receiver target genes ranked by how many senders and distinct signaling routes (Receptor::EM combinations) converge on each target. Includes per-sender mean PDS aggregated to gene level, identifying genes at the convergence point of multiple cell-type signaling routes.
+
+**CLI:** `python aggregate_cross_pair.py [--pds-threshold 0.1] [--receiver NAME] [--force]`
+
+Configurable via `config_integration.py`: `PDS_SIGNIFICANCE_THRESHOLD` (default 0.1) and `AGGREGATION_DIR`. Integrated into `run_all_pairs.sh` as stage 4.
 
 ### 3. Updated permutation tests
 

@@ -79,7 +79,7 @@ echo "[run_incytr_all_pairs.R]"
 
 # Build env var forwarding for systemd-run (use array for safe word splitting)
 ENV_ARGS=()
-for var in PAIR_FILTER FORCE_RERUN MEMORY_LIMIT_GB SKIP_EXPRONLY EXPR_DETECTION_THRESHOLD EXPORT_CSV; do
+for var in PAIR_FILTER FORCE_RERUN MEMORY_LIMIT_GB SKIP_EXPRONLY EXPR_DETECTION_THRESHOLD; do
   if [ -n "${!var:-}" ]; then
     ENV_ARGS+=(-E "$var=${!var}")
   fi
@@ -105,14 +105,26 @@ fi
 micromamba run -n alzheimers python3 \
   "$ADAPTERS_DIR/compute_kinase_support_all_pairs.py" "${KSCORE_ARGS[@]}"
 
+# ---------------------------------------------------------------
+# Cross-pair aggregation (alzheimers conda env)
+# ---------------------------------------------------------------
+echo "=== Cross-Pair Aggregation ==="
+echo "[aggregate_cross_pair.py]"
+AGG_ARGS=()
+if [ "${FORCE_RERUN:-}" = "1" ]; then
+  AGG_ARGS+=(--force)
+fi
+micromamba run -n alzheimers python3 \
+  "$ADAPTERS_DIR/aggregate_cross_pair.py" "${AGG_ARGS[@]}"
+
 echo
 echo "============================================================"
 echo "All-pairs pipeline complete."
 echo
 echo "Key outputs:"
 echo "  Receiver Parquet: $OUT_DIR/all_pairs/recv_{receiver}.parquet"
-echo "  Per-pair CSVs:    $OUT_DIR/all_pairs/{sender}__{receiver}/results_full.csv (EXPORT_CSV=1)"
 echo "  Kinase support:   $OUT_DIR/all_pairs/{sender}__{receiver}/kinase_support_scores.csv"
 echo "  Pair summary:     $OUT_DIR/all_pairs/pair_summary.csv"
 echo "  Kinase summary:   $OUT_DIR/all_pairs/kinase_support_summary.csv"
+echo "  Aggregation:      $OUT_DIR/all_pairs/aggregation/"
 echo "============================================================"

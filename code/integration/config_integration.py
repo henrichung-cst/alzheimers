@@ -92,3 +92,7 @@ INTERMEDIATES_DIR = os.path.join(
     REPO_ROOT, "code", "integration", "intermediates"
 )
 ALL_PAIRS_DIR = os.path.join(INTERMEDIATES_DIR, "all_pairs")
+
+# Phase 3: Cross-pair aggregation
+PDS_SIGNIFICANCE_THRESHOLD = 0.1   # |PDS| threshold for "disease-altered"
+AGGREGATION_DIR = os.path.join(ALL_PAIRS_DIR, "aggregation")

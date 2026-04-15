@@ -14,6 +14,9 @@ suppressPackageStartupMessages({
   library(limma)
 })
 
+# Incytr internal (not exported); replicate here to avoid :::
+em_weight_log <- function(degree) 1 / log2(1 + degree)
+
 # =========================================================================
 # Helpers
 # =========================================================================
@@ -852,7 +855,6 @@ format_export_columns <- function(dt, recv, conditions) {
 #' @param cutoff_SigProb numeric
 #' @param skip_expronly logical
 #' @param output_dir character: path for Parquet output
-#' @param export_csv logical: write backward-compatible per-pair CSVs
 #' @param sanitize_name function for path sanitization
 #'
 #' @return data.frame of pair_summary rows
@@ -865,7 +867,7 @@ score_receiver_all_senders <- function(all_pathways_df, recv,
                                        cell_types, conditions,
                                        K = 0.5, N = 2,
                                        cutoff_SigProb = 0.01,
-                                       output_dir, export_csv = FALSE,
+                                       output_dir,
                                        sanitize_name_fn) {
   t0 <- proc.time()
   dt <- copy(all_pathways_df)
@@ -968,39 +970,19 @@ score_receiver_all_senders <- function(all_pathways_df, recv,
   # --- Write Parquet (atomic) ---
   recv_parquet <- file.path(output_dir, paste0("recv_", sanitize_name_fn(recv), ".parquet"))
   tmp_path <- paste0(recv_parquet, ".tmp")
-  write_parquet(dt, tmp_path,
-                key_value_metadata = list(
-                  receiver = recv,
-                  pipeline_version = "phase2",
-                  n_senders = as.character(length(senders)),
-                  timestamp = format(Sys.time(), "%Y-%m-%dT%H:%M:%S")))
+  tbl <- arrow_table(dt)
+  tbl$metadata <- c(tbl$metadata, list(
+    receiver = recv,
+    pipeline_version = "phase2",
+    n_senders = as.character(length(senders)),
+    timestamp = format(Sys.time(), "%Y-%m-%dT%H:%M:%S")))
+  write_parquet(tbl, tmp_path)
   file.rename(tmp_path, recv_parquet)
   cat(sprintf("    Wrote %s (%s rows)\n", basename(recv_parquet),
               format(nrow(dt), big.mark = ",")))
 
   # --- Optional CSV export (backward-compatible) ---
-  if (export_csv) {
-    for (send in senders) {
-      pair_dir <- file.path(output_dir,
-                            paste0(sanitize_name_fn(send), "__", sanitize_name_fn(recv)))
-      dir.create(pair_dir, showWarnings = FALSE, recursive = TRUE)
-      pair_dt <- dt[sender == send]
 
-      # results_full.csv (drop 'sender' column for backward compat)
-      export_dt <- pair_dt[, !c("sender"), with = FALSE]
-      fwrite(export_dt, file.path(pair_dir, "results_full.csv"))
-
-      # Edge lists
-      pw_dt <- pair_dt[, .(Ligand, Receptor, EM, Target)]
-      fwrite(pw_dt[, .(n_pathways = .N), by = .(from = Ligand, to = Receptor)],
-             file.path(pair_dir, "edge_list_l1.csv"))
-      fwrite(pw_dt[, .(n_pathways = .N), by = .(from = Receptor, to = EM)],
-             file.path(pair_dir, "edge_list_l2.csv"))
-      fwrite(pw_dt[, .(n_pathways = .N), by = .(from = EM, to = Target)],
-             file.path(pair_dir, "edge_list_l3.csv"))
-    }
-    cat(sprintf("    Wrote CSV for %d pairs\n", length(senders)))
-  }
 
   t_total <- (proc.time() - t0)["elapsed"]
   cat(sprintf("    Total scoring: %.1fs\n", t_total))
