@@ -97,6 +97,27 @@ alzheimers/
 └── README.md
 ```
 
+## External Data Compression
+
+The Allen Brain Atlas and SEA-AD reference data under `data/external/` is zstd-compressed at rest to reduce disk usage. The live pipeline reads only small pre-computed outputs (effect-size h5ad files + CSV expression matrices), not the raw atlas h5ad files.
+
+| Tier | Contents | Uncompressed | Compressed | Notes |
+|---|---|---|---|---|
+| 1 | WMB full regional h5ad (13 regions) | 89 GB | ~24 GB | Redundant when subsets exist |
+| 2 | Unused SEA-AD cell-level h5ad | 23.5 GB | ~5 GB | Not referenced by any pipeline code |
+| 3 | WMB gene-subset h5ad (13 regions) | 51 GB | ~14 GB | Auto-decompressed by `wmb_expression.py` |
+
+**Kept uncompressed** (runtime dependencies): `effect_sizes.h5ad`, `effect_sizes_early.h5ad`, `effect_sizes_late.h5ad` (read by `kinase_attribution.py`), and `cell_metadata_with_cluster_annotation.csv` (read by ABC cache API).
+
+**Auto-decompress:** `wmb_expression.py --run` and `--proteome` transparently decompress tier 3 subset files before computation and recompress them afterward. A sentinel file ensures cleanup even after interruption.
+
+**Manual control:**
+
+```bash
+bash code/runners/supporting/compress_atlas_cache.sh [tier1|tier2|tier3|WMB|sea_ad|subset]
+bash code/runners/supporting/decompress_atlas_cache.sh [WMB|subset|sea_ad|Aging]
+```
+
 ## Environment Setup
 
 Create and activate the Python environment:
@@ -118,55 +139,27 @@ bash scripts/setup_gdrive_mounts.sh
 
 ## Running the Analysis
 
-All scripts run from the repo root.
+All scripts run from the repo root. See [`docs/foundation/live_pipeline_contract.md`](docs/foundation/live_pipeline_contract.md) for the full stage-by-stage spec (inputs, outputs, flags, failure modes).
 
 ### Bulk Pipeline
 
-The bundled front door runs all three stages in order:
-
 ```bash
-bash code/runners/main/run_live_pipeline.sh
+bash code/runners/main/run_live_pipeline.sh     # all three stages in order
+bash code/runners/main/run_dual_analysis.sh     # males-only (primary) + full-cohort (sensitivity)
 ```
 
-The **dual-track runner** runs males-only (primary) and full-cohort (sensitivity) analyses sequentially:
+Individual stages (`run_data_ingest.sh`, `run_kinase_attribution.sh`, `run_attribution_recovery.sh`) and module-level flags (`--run`, `--summary`, per-step flags) are documented in `CLAUDE.md`.
 
-```bash
-bash code/runners/main/run_dual_analysis.sh
-```
-
-Or run individual stages:
-
-```bash
-bash code/runners/main/run_data_ingest.sh          # data ingestion
-bash code/runners/main/run_kinase_attribution.sh    # kinase attribution
-bash code/runners/main/run_attribution_recovery.sh  # attribution recovery
-```
-
-Or run modules directly with `--run` (all stages) or individual flags:
-
-```bash
-python code/data_ingest.py --run          # all ingestion steps
-python code/kinase_attribution.py --run   # normalize + enrich + attribute
-python code/attribution_recovery.py --run # hypothesis tables
-```
-
-Use `--summary` on any module to print cached results without recomputing.
-
-The `ANALYSIS_MODE` environment variable controls sample filtering (default: `males_only`). Set `ANALYSIS_MODE=full_cohort` for sensitivity analysis with both sexes. This affects `--enrich`, `--attribute`, and `--mechanism-annotation` but NOT `--normalize` (which always uses all 72 samples).
+The `ANALYSIS_MODE` environment variable controls sample filtering (default: `males_only`). Set `ANALYSIS_MODE=full_cohort` for sensitivity analysis with both sexes.
 
 ### Supporting Prerequisites
 
-These must be run before the bulk pipeline if their outputs don't exist:
+Run these before the bulk pipeline if their outputs don't exist:
 
 ```bash
-# External Atlas Data Acquisition (SEA-AD + WMB + Aging Mouse)
-bash code/runners/supporting/run_atlas_reference.sh
-
-# WMB Expression Export (required for unified attribution + marker assessment)
-bash code/runners/supporting/run_wmb_expression.sh
-
-# Song snRNA-seq Integration (within-cohort evidence from paired animals)
-bash code/runners/supporting/run_snrna_integration.sh
+bash code/runners/supporting/run_atlas_reference.sh   # SEA-AD + WMB + Aging Mouse
+bash code/runners/supporting/run_wmb_expression.sh     # WMB expression export
+bash code/runners/supporting/run_snrna_integration.sh  # Song within-cohort snRNA-seq
 ```
 
 ### Incytr Integration Pipeline
@@ -224,25 +217,7 @@ bash code/runners/supplementary/run_reviewer_diagnostics.sh
 
 ### Incytr Integration (`code/integration/intermediates/`)
 
-**Per pair** (`all_pairs/{sender}__{receiver}/`, 462 subdirectories):
-
-| File | Description |
-|---|---|
-| `results_full.csv` | Full integrated scores (PDS + kinase_boost) |
-| `results_expronly.csv` | Expression-only scores (TPDS baseline) |
-| `kinase_support_scores.csv` | Per-pathway substrate-based kinase support scores |
-| `adjusted_rankings.csv` | Lambda-sweep adjusted rankings (TPDS + lambda x kinase_support) |
-| `edge_list_l{1,2,3}.csv` | Per-layer edge lists with pathway counts |
-| `reranking_summary.json` | Per-pair scoring statistics |
-
-**Cross-pair** (`all_pairs/`):
-
-| File | Description |
-|---|---|
-| `pair_summary.csv` | 462-row summary: sender, receiver, n_pathways, timing, status |
-| `kinase_support_summary.csv` | 462-row kinase support summary |
-
-All results include `pathway_evidence` (expression-confirmed or kinase-imputed), `imputed_nodes`, and `kinase_boost` (PDS - TPDS) columns.
+Primary outputs: 22 receiver-indexed Parquet files (`recv_{receiver}.parquet`) with all pathway scores, plus per-pair kinase support scores and cross-pair aggregation (backbone recurrence, hub matrix, target convergence). See [`code/integration/README.md`](code/integration/README.md#output-structure) for the full file inventory.
 
 ## Data Surfaces
 

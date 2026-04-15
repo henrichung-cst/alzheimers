@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
-# Decompress zstd-compressed files in the Allen Brain Cell Atlas cache.
+# Decompress zstd-compressed files in the external atlas data cache.
 #
-# Use this if you need to re-run wmb_expression.py against the raw h5ad data
-# (e.g., to regenerate expression CSVs with different parameters).
+# Filters:
+#   WMB      — WMB full regional h5ad (expression_matrices/WMB-10Xv3/)
+#   subset   — WMB gene-subset h5ad (expression_matrices/WMB-10Xv3-subset/)
+#   Aging    — Aging Mouse h5ad (expression_matrices/Zeng-Aging-Mouse-10Xv3/)
+#   sea_ad   — SEA-AD cell-level h5ad (data/external/sea_ad/)
+#   (empty)  — All compressed files in both directories
 #
 # Usage:
 #   bash code/runners/supporting/decompress_atlas_cache.sh          # all files
-#   bash code/runners/supporting/decompress_atlas_cache.sh WMB      # only WMB files
-#   bash code/runners/supporting/decompress_atlas_cache.sh Aging    # only Aging files
+#   bash code/runners/supporting/decompress_atlas_cache.sh WMB      # only WMB fulls
+#   bash code/runners/supporting/decompress_atlas_cache.sh subset   # only WMB subsets
+#   bash code/runners/supporting/decompress_atlas_cache.sh sea_ad   # only SEA-AD
+#   bash code/runners/supporting/decompress_atlas_cache.sh Aging    # only Aging Mouse
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,49 +21,83 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT"
 
 CACHE_DIR="data/external/allen_abc"
+SEA_AD_DIR="data/external/sea_ad"
 FILTER="${1:-}"
-
-if [[ ! -d "$CACHE_DIR" ]]; then
-    echo "ERROR: Atlas cache not found at $CACHE_DIR"
-    exit 1
-fi
 
 if ! command -v zstd &>/dev/null; then
     echo "ERROR: zstd not found. Install with: sudo dnf install zstd"
     exit 1
 fi
 
-# Apply optional filter
-FIND_ARGS=(-name "*.zst" -type f)
-if [[ "$FILTER" == "WMB" ]]; then
-    FIND_ARGS=(-path "*/WMB-*" -name "*.zst" -type f)
-    echo "Decompressing WMB files only..."
-elif [[ "$FILTER" == "Aging" ]]; then
-    FIND_ARGS=(-path "*/Zeng-Aging*" -name "*.zst" -type f)
-    echo "Decompressing Aging files only..."
-else
-    echo "Decompressing all compressed files..."
-fi
+# ---------------------------------------------------------------------------
+# Helper: decompress a list of .zst files found by the caller
+# ---------------------------------------------------------------------------
+decompress_found() {
+    local search_dir="$1"
+    shift
+    local find_args=("$@")
 
-N_FILES=$(find "$CACHE_DIR" "${FIND_ARGS[@]}" | wc -l)
-if [[ "$N_FILES" -eq 0 ]]; then
-    echo "No compressed files found."
-    exit 0
-fi
+    local n_files
+    n_files=$(find "$search_dir" "${find_args[@]}" 2>/dev/null | wc -l)
+    if [[ "$n_files" -eq 0 ]]; then
+        echo "No compressed files found."
+        return
+    fi
 
-echo "Found $N_FILES compressed files."
-echo ""
+    echo "Found $n_files compressed files."
+    echo ""
 
-find "$CACHE_DIR" "${FIND_ARGS[@]}" | sort | while read -r f; do
-    relpath="${f#$CACHE_DIR/}"
-    size=$(du -h "$f" | cut -f1)
-    echo -n "  $relpath ($size) ... "
-    zstd -d -f --rm -q "$f"
-    orig="${f%.zst}"
-    origsize=$(du -h "$orig" | cut -f1)
-    echo "done ($origsize)"
-done
+    find "$search_dir" "${find_args[@]}" | sort | while read -r f; do
+        relpath="${f#$REPO_ROOT/}"
+        size=$(du -h "$f" | cut -f1)
+        echo -n "  $relpath ($size) ... "
+        zstd -d -f -T0 --rm -q "$f"
+        orig="${f%.zst}"
+        origsize=$(du -h "$orig" | cut -f1)
+        echo "done ($origsize)"
+    done
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+case "$FILTER" in
+    WMB)
+        echo "Decompressing WMB full regional files..."
+        decompress_found "$CACHE_DIR" -path "*/WMB-10Xv3/2*" -name "*.zst" -type f
+        ;;
+    subset)
+        echo "Decompressing WMB subset files..."
+        decompress_found "$CACHE_DIR" -path "*/WMB-10Xv3-subset/*" -name "*.zst" -type f
+        ;;
+    Aging)
+        echo "Decompressing Aging Mouse files..."
+        decompress_found "$CACHE_DIR" -path "*/Zeng-Aging*" -name "*.zst" -type f
+        ;;
+    sea_ad)
+        if [[ ! -d "$SEA_AD_DIR" ]]; then
+            echo "ERROR: SEA-AD directory not found at $SEA_AD_DIR"
+            exit 1
+        fi
+        echo "Decompressing SEA-AD files..."
+        decompress_found "$SEA_AD_DIR" -name "*.zst" -type f
+        ;;
+    "")
+        echo "Decompressing all compressed files..."
+        if [[ -d "$CACHE_DIR" ]]; then
+            decompress_found "$CACHE_DIR" -name "*.zst" -type f
+        fi
+        if [[ -d "$SEA_AD_DIR" ]]; then
+            decompress_found "$SEA_AD_DIR" -name "*.zst" -type f
+        fi
+        ;;
+    *)
+        echo "ERROR: Unknown filter '$FILTER'"
+        echo "Usage: $0 [WMB|subset|Aging|sea_ad]"
+        exit 1
+        ;;
+esac
 
 echo ""
 echo "Decompression complete."
-du -sh "$CACHE_DIR"
+du -sh "$CACHE_DIR" "$SEA_AD_DIR" 2>/dev/null

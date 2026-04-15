@@ -28,7 +28,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import glob
 import os
+import shutil
+import subprocess
 from typing import Dict, Optional
 
 import numpy as np
@@ -82,6 +86,72 @@ _SEA_AD_SUBCLASS_PATTERNS = [
     ("Endothelial", ["endo"]),
     ("VLMC", ["vlmc"]),
 ]
+
+# ---------------------------------------------------------------------------
+# Auto-decompress / recompress for compressed subset files
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _ensure_subsets_decompressed():
+    """Decompress WMB subset .zst files if needed; recompress on exit.
+
+    On entry, if subset h5ad files are zstd-compressed, decompresses them.
+    On exit (including exceptions), recompresses them.  If a previous run
+    was killed (stale .h5ad files coexist with .h5ad.zst), recompresses
+    the stale files before proceeding.
+    """
+    subset_dir = config.WMB_SUBSET_DIR
+
+    if not shutil.which("zstd"):
+        raise RuntimeError(
+            "zstd not found — required for auto-decompression. "
+            "Install with: sudo dnf install zstd"
+        )
+
+    # Crash recovery: if .h5ad files exist alongside .zst, a prior run
+    # was interrupted — recompress the stale files before proceeding.
+    stale = sorted(glob.glob(os.path.join(subset_dir, "*.h5ad")))
+    zst_files = sorted(glob.glob(os.path.join(subset_dir, "*.h5ad.zst")))
+    if stale and zst_files:
+        print("  Detected stale decompressed subsets from a previous run, "
+              "recompressing first...")
+        for f in stale:
+            subprocess.run(["zstd", "-3", "-T0", "--rm", "-q", f], check=True)
+        zst_files = sorted(glob.glob(os.path.join(subset_dir, "*.h5ad.zst")))
+
+    # One-time metadata CSV decompression (left uncompressed afterward)
+    meta_csv = config.WMB_METADATA_CSV
+    meta_zst = meta_csv + ".zst"
+    if not os.path.exists(meta_csv) and os.path.exists(meta_zst):
+        print("  Auto-decompressing WMB metadata CSV (one-time)...")
+        subprocess.run(["zstd", "-d", "-f", "-T0", "--rm", "-q", meta_zst],
+                       check=True)
+
+    if not zst_files:
+        yield
+        return
+
+    # Decompress subsets — track paths for recompression
+    print(f"  Auto-decompressing {len(zst_files)} subset files "
+          f"(~51 GB temporarily)...")
+    decompressed = []
+    for zst in zst_files:
+        subprocess.run(["zstd", "-d", "-f", "-T0", "--rm", "-q", zst],
+                       check=True)
+        decompressed.append(zst[:-4])  # strip .zst suffix
+    print("  Decompression complete.")
+
+    try:
+        yield
+    finally:
+        to_compress = [f for f in decompressed if os.path.exists(f)]
+        if to_compress:
+            print(f"  Re-compressing {len(to_compress)} subset files...")
+            for f in to_compress:
+                subprocess.run(["zstd", "-3", "-T0", "--rm", "-q", f],
+                               check=True)
+            print("  Subsets re-compressed.")
 
 
 def _match_sea_ad_subclass(label: str) -> str:
@@ -438,66 +508,67 @@ def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
             print(f"  (use --force to recompute)")
             return pd.read_csv(WMB_EXPR_FILE)
 
-    atlas_genes, gene_to_idx, gene_fmt = _build_gene_index()
-    print(f"  Gene format: {gene_fmt}")
+    with _ensure_subsets_decompressed():
+        atlas_genes, gene_to_idx, gene_fmt = _build_gene_index()
+        print(f"  Gene format: {gene_fmt}")
 
-    mouse_kinases, _ = get_all_kinase_genes()
-    phosphatases = get_phosphatase_genes_from_genelist(atlas_genes)
-    all_kp = mouse_kinases | phosphatases
+        mouse_kinases, _ = get_all_kinase_genes()
+        phosphatases = get_phosphatase_genes_from_genelist(atlas_genes)
+        all_kp = mouse_kinases | phosphatases
 
-    kinase_genes = sorted(all_kp & set(gene_to_idx.keys()))
-    kinase_idx = np.array([gene_to_idx[g] for g in kinase_genes])
+        kinase_genes = sorted(all_kp & set(gene_to_idx.keys()))
+        kinase_idx = np.array([gene_to_idx[g] for g in kinase_genes])
 
-    accum, regional_rows = _stream_wmb_expression(
-        kinase_genes, kinase_idx, label="kinase/phosphatase",
-    )
+        accum, regional_rows = _stream_wmb_expression(
+            kinase_genes, kinase_idx, label="kinase/phosphatase",
+        )
 
-    # Compute global whole-brain means
-    print("\n  Computing whole-brain aggregates ...")
-    rows = []
-    for ct in config.SEA_AD_SUBCLASSES:
-        n_total = accum[ct]["n_cells"]
-        if n_total == 0:
-            continue
-        mean_expr = accum[ct]["expr_sum"] / n_total
-        frac_expr = accum[ct]["nonzero_count"] / n_total
+        # Compute global whole-brain means
+        print("\n  Computing whole-brain aggregates ...")
+        rows = []
+        for ct in config.SEA_AD_SUBCLASSES:
+            n_total = accum[ct]["n_cells"]
+            if n_total == 0:
+                continue
+            mean_expr = accum[ct]["expr_sum"] / n_total
+            frac_expr = accum[ct]["nonzero_count"] / n_total
 
-        print(f"    {ct}: {n_total:,} cells across all regions")
+            print(f"    {ct}: {n_total:,} cells across all regions")
 
-        for i, gene in enumerate(kinase_genes):
-            rows.append({
-                "kinase_id": _mouse_to_human(gene),
-                "gene_symbol": gene,
-                "cell_type": ct,
-                "mean_log2_expression": round(float(mean_expr[i]), 6),
-                "fraction_cells_expressing": round(float(frac_expr[i]), 6),
-                "specificity_score": np.nan,
-                "binary_expressed": bool(mean_expr[i] > 1 and frac_expr[i] > 0.10),
-            })
+            for i, gene in enumerate(kinase_genes):
+                rows.append({
+                    "kinase_id": _mouse_to_human(gene),
+                    "gene_symbol": gene,
+                    "cell_type": ct,
+                    "mean_log2_expression": round(float(mean_expr[i]), 6),
+                    "fraction_cells_expressing": round(float(frac_expr[i]), 6),
+                    "specificity_score": np.nan,
+                    "binary_expressed": bool(mean_expr[i] > 1 and frac_expr[i] > 0.10),
+                })
 
-    df = pd.DataFrame(rows)
+        df = pd.DataFrame(rows)
 
-    # Compute specificity scores (across all 24 subclasses per gene)
-    for gene in kinase_genes:
-        gene_mask = df["gene_symbol"] == gene
-        gene_df = df.loc[gene_mask]
-        total_expr = gene_df["mean_log2_expression"].sum()
-        if total_expr > 0:
-            spec = (gene_df["mean_log2_expression"] / total_expr).round(6)
-            df.loc[gene_mask, "specificity_score"] = spec.values
-        else:
-            df.loc[gene_mask, "specificity_score"] = 0.0
+        # Compute specificity scores (across all 24 subclasses per gene)
+        for gene in kinase_genes:
+            gene_mask = df["gene_symbol"] == gene
+            gene_df = df.loc[gene_mask]
+            total_expr = gene_df["mean_log2_expression"].sum()
+            if total_expr > 0:
+                spec = (gene_df["mean_log2_expression"] / total_expr).round(6)
+                df.loc[gene_mask, "specificity_score"] = spec.values
+            else:
+                df.loc[gene_mask, "specificity_score"] = 0.0
 
-    df.to_csv(WMB_EXPR_FILE, index=False)
-    print(f"\n  Saved {len(df)} rows to {WMB_EXPR_FILE}")
+        df.to_csv(WMB_EXPR_FILE, index=False)
+        print(f"\n  Saved {len(df)} rows to {WMB_EXPR_FILE}")
 
-    # Save per-region breakdown
-    if regional_rows:
-        regional_df = pd.DataFrame(regional_rows)
-        regional_df["kinase_id"] = regional_df["gene_symbol"].apply(_mouse_to_human)
-        regional_df.to_csv(config.WMB_REGIONAL_EXPRESSION_FILE, index=False)
-        print(f"  Saved {len(regional_df)} regional rows to "
-              f"{config.WMB_REGIONAL_EXPRESSION_FILE}")
+        # Save per-region breakdown
+        if regional_rows:
+            regional_df = pd.DataFrame(regional_rows)
+            regional_df["kinase_id"] = regional_df["gene_symbol"].apply(_mouse_to_human)
+            regional_df.to_csv(config.WMB_REGIONAL_EXPRESSION_FILE, index=False)
+            print(f"  Saved {len(regional_df)} regional rows to "
+                  f"{config.WMB_REGIONAL_EXPRESSION_FILE}")
 
     # Summary
     for ct in config.SEA_AD_SUBCLASSES:
@@ -548,65 +619,66 @@ def compute_wmb_proteome_expression(force: bool = False) -> pd.DataFrame:
     # Convert to mouse case for atlas matching
     proteome_genes_mouse = [_human_to_mouse(g) for g in proteome_genes_upper]
 
-    _, gene_to_idx, gene_fmt = _build_gene_index()
-    print(f"  Gene format: {gene_fmt}")
+    with _ensure_subsets_decompressed():
+        _, gene_to_idx, gene_fmt = _build_gene_index()
+        print(f"  Gene format: {gene_fmt}")
 
-    # Intersect with atlas
-    matched_genes = []
-    matched_indices = []
-    for g in proteome_genes_mouse:
-        if g in gene_to_idx:
-            matched_genes.append(g)
-            matched_indices.append(gene_to_idx[g])
+        # Intersect with atlas
+        matched_genes = []
+        matched_indices = []
+        for g in proteome_genes_mouse:
+            if g in gene_to_idx:
+                matched_genes.append(g)
+                matched_indices.append(gene_to_idx[g])
 
-    print(f"  Proteome genes found in atlas: {len(matched_genes)}/{len(proteome_genes_upper)}")
-    gene_indices = np.array(matched_indices)
+        print(f"  Proteome genes found in atlas: {len(matched_genes)}/{len(proteome_genes_upper)}")
+        gene_indices = np.array(matched_indices)
 
-    accum, _ = _stream_wmb_expression(
-        matched_genes, gene_indices, label="proteome", chunk_size=5000,
-        skip_regional=True,
-    )
+        accum, _ = _stream_wmb_expression(
+            matched_genes, gene_indices, label="proteome", chunk_size=5000,
+            skip_regional=True,
+        )
 
-    # Build output DataFrame
-    print("\n  Computing whole-brain aggregates ...")
-    rows = []
-    for ct in config.SEA_AD_SUBCLASSES:
-        n_total = accum[ct]["n_cells"]
-        if n_total == 0:
-            continue
-        mean_expr = accum[ct]["expr_sum"] / n_total
-        frac_expr = accum[ct]["nonzero_count"] / n_total
+        # Build output DataFrame
+        print("\n  Computing whole-brain aggregates ...")
+        rows = []
+        for ct in config.SEA_AD_SUBCLASSES:
+            n_total = accum[ct]["n_cells"]
+            if n_total == 0:
+                continue
+            mean_expr = accum[ct]["expr_sum"] / n_total
+            frac_expr = accum[ct]["nonzero_count"] / n_total
 
-        print(f"    {ct}: {n_total:,} cells across all regions")
+            print(f"    {ct}: {n_total:,} cells across all regions")
 
-        for i, gene in enumerate(matched_genes):
-            rows.append({
-                "gene_symbol_mouse": gene,
-                "gene_symbol_human": _mouse_to_human(gene),
-                "cell_type": ct,
-                "mean_log2_expression": round(float(mean_expr[i]), 6),
-                "fraction_cells_expressing": round(float(frac_expr[i]), 6),
-                "specificity_score": np.nan,
-                "binary_expressed": bool(mean_expr[i] > 1 and frac_expr[i] > 0.10),
-                "n_cells": n_total,
-            })
+            for i, gene in enumerate(matched_genes):
+                rows.append({
+                    "gene_symbol_mouse": gene,
+                    "gene_symbol_human": _mouse_to_human(gene),
+                    "cell_type": ct,
+                    "mean_log2_expression": round(float(mean_expr[i]), 6),
+                    "fraction_cells_expressing": round(float(frac_expr[i]), 6),
+                    "specificity_score": np.nan,
+                    "binary_expressed": bool(mean_expr[i] > 1 and frac_expr[i] > 0.10),
+                    "n_cells": n_total,
+                })
 
-    df = pd.DataFrame(rows)
+        df = pd.DataFrame(rows)
 
-    # Compute specificity scores
-    for gene in matched_genes:
-        gene_mask = df["gene_symbol_mouse"] == gene
-        gene_df = df.loc[gene_mask]
-        total_expr = gene_df["mean_log2_expression"].sum()
-        if total_expr > 0:
-            spec = (gene_df["mean_log2_expression"] / total_expr).round(6)
-            df.loc[gene_mask, "specificity_score"] = spec.values
-        else:
-            df.loc[gene_mask, "specificity_score"] = 0.0
+        # Compute specificity scores
+        for gene in matched_genes:
+            gene_mask = df["gene_symbol_mouse"] == gene
+            gene_df = df.loc[gene_mask]
+            total_expr = gene_df["mean_log2_expression"].sum()
+            if total_expr > 0:
+                spec = (gene_df["mean_log2_expression"] / total_expr).round(6)
+                df.loc[gene_mask, "specificity_score"] = spec.values
+            else:
+                df.loc[gene_mask, "specificity_score"] = 0.0
 
-    out_path = config.WMB_PROTEOME_EXPRESSION_FILE
-    df.to_csv(out_path, index=False)
-    print(f"\n  Saved {len(df)} rows to {out_path}")
+        out_path = config.WMB_PROTEOME_EXPRESSION_FILE
+        df.to_csv(out_path, index=False)
+        print(f"\n  Saved {len(df)} rows to {out_path}")
 
     # Summary: top-5 most specific genes per cell type
     for ct in config.SEA_AD_SUBCLASSES:

@@ -182,6 +182,12 @@ WMB_SUBSET_DIR = os.path.join(
 )
 WMB_SUBSET_FILENAME_FMT = "{region}-log2-subset.h5ad"
 
+WMB_METADATA_VERSION = "20241115"
+WMB_METADATA_CSV = os.path.join(
+    ALLEN_ABC_CACHE_DIR, "metadata", "WMB-10X", WMB_METADATA_VERSION, "views",
+    "cell_metadata_with_cluster_annotation.csv",
+)
+
 SEA_AD_S3_BUCKET = "sea-ad-single-cell-profiling"
 
 WMB_EXPRESSION_OUTPUT_DIR = os.path.join("outputs", "reports", "wmb_expression")
