@@ -421,24 +421,24 @@ def main():
             f"{sanitize_celltype_name(sender)}__{sanitize_celltype_name(receiver)}")
         scores_path = os.path.join(pair_dir, "kinase_support_scores.csv")
         perm_path = os.path.join(pair_dir, "permutation_pvalues.csv")
+        scores_exist = os.path.exists(scores_path) and not args.force
+        perms_exist = os.path.exists(perm_path) and not args.force
+        need_perms = run_perms and not perms_exist
 
-        # Checkpoint: skip if outputs exist (scores always, perms if requested)
-        if os.path.exists(scores_path) and not args.force:
-            if not run_perms or os.path.exists(perm_path):
-                n_skipped += 1
-                continue
+        if scores_exist and (not run_perms or perms_exist):
+            n_skipped += 1
+            continue
 
-        result = process_one_pair(shared, pq_path, sender, receiver,
-                                  run_sensitivity=run_sensitivity)
-        summaries.append(result)
+        if not scores_exist:
+            result = process_one_pair(shared, pq_path, sender, receiver,
+                                      run_sensitivity=run_sensitivity)
+            summaries.append(result)
+            print(f"  [{i}/{n_total}] {sender} -> {receiver}: "
+                  f"{result['n_pathways']} pathways, "
+                  f"{result['n_nonzero_score']} nonzero, "
+                  f"{result['time_sec']}s")
 
-        print(f"  [{i}/{n_total}] {sender} -> {receiver}: "
-              f"{result['n_pathways']} pathways, "
-              f"{result['n_nonzero_score']} nonzero, "
-              f"{result['time_sec']}s")
-
-        # Per-pair permutation tests (diagnostic mode)
-        if run_perms and not (os.path.exists(perm_path) and not args.force):
+        if need_perms:
             import pyarrow.parquet as pq_mod
             filters = [("sender", "=", sender)]
             table = pq_mod.read_table(pq_path, columns=SCORING_COLS + ["sender"],
@@ -452,8 +452,10 @@ def main():
                 shared["sig_kinases"], attr_weights,
                 shared["mouse_to_abbrevs"], shared["all_mea_nes"],
                 icfg.N_PERMUTATIONS)
+            os.makedirs(pair_dir, exist_ok=True)
             perm_results.to_csv(perm_path, index=False)
-            print(f"    Permutation p-values -> {perm_path}")
+            print(f"    [{i}/{n_total}] {sender} -> {receiver}: "
+                  f"permutation p-values -> {perm_path}")
 
     if n_skipped:
         print(f"\nSkipped {n_skipped} pairs with existing output "

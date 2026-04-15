@@ -39,21 +39,16 @@ import pandas as pd
 import config_integration as icfg
 
 
-def _build_filter(receiver_filter, pds_threshold):
-    """Build WHERE clause and parameter lists for optional receiver filter.
+def _receiver_where(receiver_filter):
+    """Build WHERE clause and parameter list for optional receiver filter.
 
-    Returns (where_clause, pre_params, post_params) where pre_params go
-    before threshold params in the SQL parameter binding order, and
-    post_params go after.  DuckDB binds ``?`` marks in left-to-right
-    textual order, and SELECT-clause ``?`` marks appear before
-    FROM/WHERE ``?`` marks in the query text.
+    Returns (where_clause, params) where params is a list that should be
+    placed at the position matching the ``?`` mark in the SQL text.
+    DuckDB binds ``?`` marks in left-to-right textual order.
     """
-    where = ""
-    post_params = []
     if receiver_filter:
-        where = "WHERE receiver = ?"
-        post_params.append(receiver_filter)
-    return where, pds_threshold, post_params
+        return "WHERE receiver = ?", [receiver_filter]
+    return "", []
 
 
 def create_connection(data_dir):
@@ -81,9 +76,9 @@ def create_connection(data_dir):
 
 def aggregate_backbone_recurrence(con, pds_threshold, receiver_filter=None):
     """3a. Backbone recurrence: R-EM-T triples shared across senders."""
-    where, threshold, post_params = _build_filter(receiver_filter, pds_threshold)
-    # SQL ? order: WHERE receiver (in CTE), then n_senders_significant threshold
-    params = post_params + [threshold]
+    where, recv_params = _receiver_where(receiver_filter)
+    # SQL ? order: WHERE receiver (in CTE), then threshold in outer SELECT
+    params = recv_params + [pds_threshold]
 
     sql = f"""
     WITH base AS (
@@ -128,9 +123,9 @@ def aggregate_backbone_recurrence(con, pds_threshold, receiver_filter=None):
 
 def aggregate_hub_matrix(con, pds_threshold, receiver_filter=None):
     """3b. Cell-type hub analysis: 22x22 sender x receiver matrix."""
-    where, threshold, post_params = _build_filter(receiver_filter, pds_threshold)
-    # SQL ? order: 4 threshold refs in SELECT, then WHERE receiver
-    params = [threshold, threshold, threshold, -threshold] + post_params
+    where, recv_params = _receiver_where(receiver_filter)
+    # SELECT ?s come first textually, then WHERE receiver
+    params = [pds_threshold] * 3 + [-pds_threshold] + recv_params
 
     sql = f"""
     SELECT
@@ -162,9 +157,9 @@ def pivot_hub_matrix(hub_df, metric="mean_abs_pds"):
 
 def aggregate_target_convergence(con, pds_threshold, receiver_filter=None):
     """3c. Gene-level convergence per receiver."""
-    where, threshold, post_params = _build_filter(receiver_filter, pds_threshold)
-    # SQL ? order: WHERE receiver (in CTE), then n_senders_significant threshold
-    params = post_params + [threshold]
+    where, recv_params = _receiver_where(receiver_filter)
+    # WHERE receiver (in CTE) before threshold in outer SELECT
+    params = recv_params + [pds_threshold]
 
     sql = f"""
     WITH base AS (
@@ -224,20 +219,16 @@ def _build_backbone_edges(backbone_df, sub_raw_edges, attr_by_celltype):
         Per-backbone weighted edge values (|NES| * IDF * attr_weight).
     bb_idf_coeffs : list[np.ndarray]
         Per-backbone IDF coefficients (for null models that keep IDF fixed).
-    kin_list : list[str]
-        Ordered list of all kinase abbreviations that appear in any edge.
     """
     receivers = backbone_df["receiver"].values
     em_arr = backbone_df["EM"].values
     tg_arr = backbone_df["Target"].values
     n_bb = len(backbone_df)
 
-    # Build receiver-only attribution weights per receiver
     recv_weights = {}
     for recv in backbone_df["receiver"].unique():
         recv_weights[recv] = attr_by_celltype.get(recv, {})
 
-    # Cache per (receiver, EM, Target) to avoid recomputing
     cache = {}
 
     bb_edge_weights = []
@@ -274,7 +265,6 @@ def _build_backbone_edges(backbone_df, sub_raw_edges, attr_by_celltype):
                 seen.add(edge_key)
 
                 edge_ws.append(raw["abs_nes_idf"][j] * aw)
-                # IDF = abs_nes_idf / abs_nes (the IDF multiplier)
                 idf_cs.append(raw["abs_nes_idf"][j] / raw["abs_nes"][j]
                               if raw["abs_nes"][j] > 0 else 1.0)
 
@@ -289,6 +279,15 @@ def _build_backbone_edges(backbone_df, sub_raw_edges, attr_by_celltype):
           f"(of {n_bb:,} backbones)")
 
     return bb_edge_weights, bb_idf_coeffs
+
+
+def _degree_median(ews, d):
+    """Median along axis=2 with short-circuits for small degree."""
+    if d == 1:
+        return ews[:, :, 0]
+    if d == 2:
+        return (ews[:, :, 0] + ews[:, :, 1]) * 0.5
+    return np.median(ews, axis=2)
 
 
 def run_backbone_permutations(backbone_df, shared, n_permutations):
@@ -311,29 +310,24 @@ def run_backbone_permutations(backbone_df, shared, n_permutations):
 
     print(f"\n=== Backbone-Level Permutation Tests ({n_permutations:,} iterations) ===")
 
-    # Background kinase pool (full MEA universe)
     all_mea_nes = shared["all_mea_nes"]
     bg_kinases = sorted(all_mea_nes.keys())
     n_bg = len(bg_kinases)
     bg_nes_vec = np.array([all_mea_nes[k] for k in bg_kinases])
     print(f"  Background kinase pool: {n_bg} (full MEA universe)")
 
-    # Build per-backbone edge arrays
     print("  Building backbone edge structures...")
     bb_edge_weights, bb_idf_coeffs = _build_backbone_edges(
         backbone_df, shared["sub_raw_edges"], shared["attr_by_celltype"])
 
-    # Compute observed scores (median of edge weights per backbone)
     n_bb = len(backbone_df)
+    n_edges = np.array([len(ew) for ew in bb_edge_weights])
     observed = np.zeros(n_bb)
     for i in range(n_bb):
-        ew = bb_edge_weights[i]
-        if len(ew) > 0:
-            observed[i] = np.median(ew)
+        if n_edges[i] > 0:
+            observed[i] = np.median(bb_edge_weights[i])
 
-    # Identify active backbones (those with at least one edge)
-    has_edges = np.array([len(ew) > 0 for ew in bb_edge_weights])
-    active_idx = np.where(has_edges)[0]
+    active_idx = np.where(n_edges > 0)[0]
     n_active = len(active_idx)
     print(f"  {n_active:,} active backbones with edges (of {n_bb:,} total)")
 
@@ -341,7 +335,6 @@ def run_backbone_permutations(backbone_df, shared, n_permutations):
         print("  No active backbones — skipping permutation tests")
         return _empty_permutation_result(backbone_df)
 
-    # Collect attribution weights across all receivers for Null 2 sampling
     all_attr_weights = []
     for recv_dict in shared["attr_by_celltype"].values():
         all_attr_weights.extend(recv_dict.values())
@@ -350,8 +343,7 @@ def run_backbone_permutations(backbone_df, shared, n_permutations):
     print(f"  Uniform attribution weight (Null 1): {median_attr_weight:.4f}")
     print(f"  Attribution weight pool (Null 2): {len(attr_weight_arr)} values")
 
-    # Degree-bucketed vectorization
-    pw_degrees = np.array([len(bb_edge_weights[i]) for i in active_idx])
+    pw_degrees = n_edges[active_idx]
     pw_idf = [bb_idf_coeffs[i] for i in active_idx]
     obs_active = observed[active_idx]
 
@@ -362,12 +354,11 @@ def run_backbone_permutations(backbone_df, shared, n_permutations):
     degree_group_data = {}
     for d, members in degree_groups.items():
         local_indices = np.array([m[0] for m in members], dtype=np.intp)
-        idf_arrays = np.array([m[1] for m in members])  # (n_members, d)
+        idf_arrays = np.array([m[1] for m in members])
         obs_slice = obs_active[local_indices]
         degree_group_data[d] = (local_indices, idf_arrays, obs_slice)
 
-    n_degree_groups = len(degree_group_data)
-    print(f"  {n_degree_groups} degree groups "
+    print(f"  {len(degree_group_data)} degree groups "
           f"(range {min(degree_groups)}-{max(degree_groups)})")
 
     batch_size = min(500, n_permutations)
@@ -385,7 +376,7 @@ def run_backbone_permutations(backbone_df, shared, n_permutations):
                 nes_drawn = bg_nes_vec[drawn]
                 aw = make_aw(b, n_members, d)
                 ews = idf_arr[np.newaxis, :, :] * nes_drawn * aw
-                perm_medians = np.median(ews, axis=2)
+                perm_medians = _degree_median(ews, d)
                 ge[idx] += (perm_medians >= obs_sl[np.newaxis, :]).sum(axis=0)
             n_done += b
             if n_done % 2000 == 0 or n_done == n_permutations:
@@ -394,7 +385,7 @@ def run_backbone_permutations(backbone_df, shared, n_permutations):
 
     null1_ge = _run_null(
         "Null 1 (enrichment null)",
-        lambda b, nm, d: median_attr_weight,  # scalar broadcasts
+        lambda _b, _nm, _d: median_attr_weight,
     )
     null2_ge = _run_null(
         "Null 2 (wiring null)",
@@ -402,7 +393,6 @@ def run_backbone_permutations(backbone_df, shared, n_permutations):
             rng.integers(0, len(attr_weight_arr), size=(b, nm, d))],
     )
 
-    # Assemble p-values
     pval_null1 = np.ones(n_bb)
     pval_null2 = np.ones(n_bb)
     pval_null1[active_idx] = (null1_ge + 1) / (n_permutations + 1)
@@ -419,7 +409,7 @@ def run_backbone_permutations(backbone_df, shared, n_permutations):
         "EM": backbone_df["EM"].values,
         "Target": backbone_df["Target"].values,
         "observed_score": np.round(observed, 6),
-        "n_edges": np.array([len(bb_edge_weights[i]) for i in range(n_bb)]),
+        "n_edges": n_edges,
         "pval_null1": pval_null1,
         "pval_null2": pval_null2,
         "fdr_null1": fdr_null1,
@@ -437,6 +427,13 @@ def run_backbone_permutations(backbone_df, shared, n_permutations):
     print(f"  Significant under both: {n_both:,}")
 
     return results
+
+
+PERM_COLUMNS = [
+    "receiver", "Receptor", "EM", "Target", "observed_score", "n_edges",
+    "pval_null1", "pval_null2", "fdr_null1", "fdr_null2",
+    "significant_null1", "significant_null2", "significant_both",
+]
 
 
 def _empty_permutation_result(backbone_df):
@@ -498,7 +495,6 @@ def main():
     output_dir = icfg.AGGREGATION_DIR
     perm_path = os.path.join(output_dir, "backbone_permutation_pvalues.csv")
 
-    # Check for existing outputs (aggregation and permutations separately)
     agg_exists = os.path.exists(
         os.path.join(output_dir, "aggregation_metadata.json"))
     perm_exists = os.path.exists(perm_path)
@@ -518,9 +514,7 @@ def main():
 
     t0 = time.monotonic()
 
-    # Run aggregation (or reload if it exists and we're only doing perms)
     if agg_exists and not args.force and args.permutations:
-        # Aggregation already done -- just load backbone_recurrence for perms
         print("\nAggregation outputs exist; loading for permutation tests...")
         backbone_df = pd.read_csv(
             os.path.join(output_dir, "backbone_recurrence.csv"))
@@ -530,7 +524,6 @@ def main():
         con = create_connection(icfg.ALL_PAIRS_DIR)
 
         try:
-            # Hub matrix first -- derives data_stats without extra scans
             print("\n3b. Cell-type hub matrix...")
             t2 = time.monotonic()
             hub_df = aggregate_hub_matrix(con, args.pds_threshold, args.receiver)
@@ -565,11 +558,10 @@ def main():
             "pds_threshold": args.pds_threshold,
             "receiver_filter": args.receiver,
             "n_backbones": len(backbone_df),
-            "n_hub_pairs": n_pairs,
+            "n_pairs": n_pairs,
             "n_target_genes": len(target_df),
             "total_pathways": total_pathways,
             "n_receivers": n_receivers,
-            "n_pairs": n_pairs,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "total_time_sec": round(total_time, 1),
         }
@@ -583,7 +575,6 @@ def main():
         print(f"  Hub matrix:      {hub_wide.shape[0]}x{hub_wide.shape[1]}")
         print(f"  Target genes:    {len(target_df):,}")
 
-    # Run permutation tests if requested
     if args.permutations:
         from compute_kinase_support_all_pairs import load_shared_data
 
