@@ -148,7 +148,7 @@ Six design questions were resolved through molecular biology consultation (April
 | **Causal interpretation** | Frame as convergent functional evidence, not mechanistic pathway validation | Convergence at a target gene does not prove phosphorylation flows through the modeled chain, but multi-modal convergence is biologically meaningful |
 | **Directionality** | Unsigned score + concordance flag annotation (concordant / discordant / mixed) | Discordant pairs (kinase activated, pathway downregulated) are signatures of inhibitory phosphorylation or compensatory feedback; filtering them discards valuable biology |
 | **Attribution confidence** | Continuous weights; receiver-attributed kinases at full weight, sender-only at 0.25x discount | Receiver attribution is a direct claim (kinase active where substrate resides); sender attribution requires an additional biological leap |
-| **Null model** | Dual permutation: enrichment null (shuffle kinase significance) + wiring null (shuffle kinase-substrate assignments); 10,000 iterations with BH correction | If significant under both nulls, evidence is robust; significant only under wiring null suggests hub artifact |
+| **Null model** | Dual permutation: enrichment null (shuffle kinase significance, fixed median attr) + wiring null (shuffle kinase identity + within-receiver attr); 10,000 iterations. Single-contrast: BH correction. Factorial: Storey's q-value (active backbones only) | If significant under both nulls, evidence is robust; significant only under wiring null suggests hub artifact |
 
 Additional reviewer concerns (L5 IT cell count, detection threshold sensitivity, kldata prediction confidence) are addressed under "Sensitivity analyses" and "Known limitations."
 
@@ -413,6 +413,25 @@ Additional sensitivity analyses requiring R/Incytr are implemented in `wrappers/
 
 Use `--skip-adapters` to skip Python adapters on checkpoint-resume. Kinase-imputed expansion runs by default (gated behind `ENABLE_KINASE_IMPUTATION=1`; set to `0` to disable). `RUN_PERMUTATIONS=1` runs backbone-level permutation tests during the aggregation step. `RUN_BOOTSTRAP=1` runs L5 IT bootstrap sensitivity analysis. The kinase support step forwards `PAIR_FILTER` and `FORCE_RERUN` env vars from the shell runner.
 
+### Factorial all-pairs pipeline (`run_factorial_all_pairs.sh`)
+
+```
+1. Python adapters (alzheimers env)
+   export_expression_factorial.py — snRNA-seq for all genotypes x timepoints (males only)
+   export_kldata.py               — reused from single-contrast
+   export_kl_output_factorial.py  — MEA results for all 9 contrasts
+
+2. R factorial pipeline (incytr env)
+   run_incytr_factorial_all_pairs.R — per-animal expression, per-animal SigProb,
+                                       OLS contrast estimation (9 contrasts)
+                                       Output: 22 receiver Parquet files
+   Runs under: systemd-run --user --scope -p MemoryMax=12G
+
+3-4. Kinase support + aggregation — deferred to second PR
+```
+
+Intermediates go to `intermediates/factorial/` (separate from single-contrast outputs). Same `PAIR_FILTER`, `FORCE_RERUN`, `MEMORY_LIMIT_GB` env vars are supported.
+
 ## Summary
 
 | What we want | Why it's hard | Resolution |
@@ -427,21 +446,130 @@ Use `--skip-adapters` to skip Python adapters on checkpoint-resume. Kinase-imput
 
 The core constraint: cell-type attributions of kinase activity are not precise, but they represent a reasonable assignment given available data (paired within-cohort snRNA-seq, cross-species SEA-AD concordance, WMB expression specificity). The integration is indirect but meaningful --- kinase evidence informs pathway interpretation through substrate relationships, weighted by attribution confidence and cell-type relevance, without being misrepresented as cell-type-resolved measurement.
 
+## Factorial mode (multiconditional)
+
+The factorial pipeline extends the single-contrast integration to all 9 genotype × timepoint contrasts using Incytr's factorial mode. It uses per-animal biological replicates and OLS contrast estimation instead of condition-level averaging and permutation testing.
+
+### Experimental design
+
+15 male animals with snRNA-seq across 4 genotypes × 3 timepoints:
+
+| Genotype | 2mo | 4mo | 6mo | Total |
+|---|---|---|---|---|
+| WT | 2 | 1 | 1 | 4 |
+| App | 2 | 1 | 1 | 4 |
+| Tau | 2 | 1 | 1 | 4 |
+| ApTt | 1 | 1 | 1 | 3 |
+
+Design matrix (10 parameters, matching `kinase_attribution.py` OLS): const, App, Tau, Int, time_4mo, time_6mo, App×time4, App×time6, Tau×time4, Tau×time6. df_resid = 5.
+
+9 contrasts: App_2mo, App_4mo, App_6mo, Tau_2mo, Tau_4mo, Tau_6mo, ApTt_2mo, ApTt_4mo, ApTt_6mo.
+
+### Pipeline
+
+```bash
+bash code/integration/run_factorial_all_pairs.sh
+bash code/integration/run_factorial_all_pairs.sh --skip-adapters  # checkpoint resume
+PAIR_FILTER="Microglia-PVM:L5 IT" bash code/integration/run_factorial_all_pairs.sh
+```
+
+**Python adapters** (alzheimers env):
+- `export_expression_factorial.py` — exports h5ad for all genotypes × timepoints (males only), with `animal_id` column and `animal_metadata.csv` design matrix
+- `export_kldata.py` — reused from single-contrast pipeline
+- `export_kl_output_factorial.py` — MEA results for all 9 contrasts
+
+**R wrapper** (incytr env):
+- `run_incytr_factorial_all_pairs.R` — receiver-centric architecture adapted for factorial mode:
+  1. Per-animal weighted quantile expression (15 vectors per cell type, not 2)
+  2. DuckDB backbone enumeration using max-across-animals expression for pruning
+  3. Per-animal SigProb computation for each pathway
+  4. OLS: `sigprob ~ design_matrix` per pathway, producing per-contrast TPDS (beta), SE, and p-value
+
+### Output
+
+```
+intermediates/factorial/
+  expression_matrix.mtx              all males, all genotypes/timepoints
+  expression_metadata.csv            labels, animal_id, genotype, timepoint
+  animal_metadata.csv                animal_id → design matrix row
+  kl_output_all_contrasts.csv        MEA results for 9 contrasts
+  all_pairs/
+    recv_{receiver}.parquet          22 files, per-contrast TPDS/SE/pvalue
+    pair_summary.csv
+    {sender}__{receiver}/
+      kinase_support_scores.csv      per-contrast kinase support (462 pairs)
+      reranking_summary.json
+    aggregation/
+      hub_matrix_by_contrast.csv     sender × receiver × contrast summaries
+      backbone_recurrence_by_contrast.csv   backbone-level recurrence (1.46M rows)
+      target_convergence_by_contrast.csv    target gene convergence
+      kinase_tpds_integration.csv           kinase coverage/concordance per contrast
+      backbone_permutation_pvalues_by_contrast.csv  dual null p-values (Storey q)
+      backbone_significant_both_nulls.csv   55,934 rows passing both nulls (q < 0.25)
+      examination/                          downstream analysis outputs
+```
+
+Parquet columns: `sender`, `Ligand`, `Receptor`, `EM`, `Target`, `Path`, `pathway_evidence`, `n_animals`, `df_resid`, plus per-contrast `TPDS_{contrast}`, `SE_{contrast}`, `pvalue_{contrast}`.
+
+### Statistical caveats
+
+- **df_resid = 5**: with 15 animals and 10 parameters, the t-distribution has heavy tails. P-values are conservative and standard errors on interaction terms are large.
+- **ApTt contrasts**: only 1 animal per timepoint (3 total) contributes to the App×Tau interaction estimate. These contrasts have the highest variance.
+- **Non-independence**: the 9 contrasts share animals and expression data. Per-contrast p-values are valid marginally but cross-contrast inference requires care.
+
+### Backbone-level permutation tests (10,000 iterations, 9 contrasts)
+
+Backbone-level permutation tests (`run_factorial_permutations.sh`) test whether kinase-substrate evidence concentrates in specific signaling backbones (receiver × Receptor × EM × Target) beyond what chance wiring or chance enrichment would produce. Uses the same dual null model as the single-contrast pipeline but run independently per contrast with per-contrast MEA backgrounds and attribution weights.
+
+**Null models:**
+- **Null 1 (enrichment):** Shuffles which kinases are drawn from the MEA-significant pool, holding attribution weights at their median. Tests whether disease-significant kinases concentrate in specific backbones.
+- **Null 2 (wiring, within-receiver):** Shuffles kinase identity from the full MEA pool and attribution weights within each backbone's receiver cell type. Tests whether the specific kinase-substrate-to-cell-type wiring is non-random, conditioned on receiver identity. The within-receiver attr shuffle avoids cross-cell-type attribution variance that inflates null scores for contrasts with few significant kinases (see design rationale below).
+
+**Multiple testing correction:** Storey's q-value (fixed λ = 0.5), computed on active backbones only (those with ≥1 kinase-substrate edge). Storey's estimates π₀ (true null proportion) from the p-value distribution to provide tighter FDR control than BH when a substantial fraction of tests are true alternatives. With 69K–135K active tests per contrast, π₀ estimation is stable.
+
+**Results (FDR < 0.25):**
+
+| Contrast | Active | π₀ (Null2) | Null1 sig | Null2 sig | Both |
+|---|---|---|---|---|---|
+| App_2mo | 68,863 | 1.000 | 31,525 | 7,644 | 7,618 |
+| App_4mo | 112,227 | 1.000 | 55,527 | 11,104 | 10,995 |
+| App_6mo | 105,375 | 0.967 | 63,233 | 8,896 | 8,895 |
+| Tau_2mo | 116,222 | 1.000 | 53,669 | 11,271 | 11,271 |
+| Tau_4mo | 88,635 | 1.000 | 39,641 | 3,376 | 3,376 |
+| Tau_6mo | 110,776 | 1.000 | 49,370 | 2,991 | 2,991 |
+| ApTt_2mo | 125,184 | 0.994 | 65,932 | 16,462 | 16,453 |
+| ApTt_4mo | 123,605 | 1.000 | 56,630 | 11,046 | 11,012 |
+| ApTt_6mo | 134,701 | 1.000 | 71,670 | 9,516 | 9,516 |
+
+**Overall: 82,127 / 985,588 active backbones (8.3%) pass both nulls.** Null 2 (wiring) remains the binding constraint. Signal is now detected across all 9 contrasts including ApTt_2mo (16,453), which was previously underpowered with the global attr shuffle (0 significant). The 2mo timepoints show the strongest wiring signal per genotype, consistent with early disease-stage specificity.
+
+**Null 2 design rationale:** The initial implementation shuffled attribution weights from a global pool of all kinase-cell-type scores (203–2063 entries). For contrasts with few MEA-significant kinases (e.g., ApTt_2mo: 20), random draws from this pool included extreme outlier weights from unrelated cell types. With degree 1–2 backbones, a single extreme draw dominated the median score, inflating null variance and drowning real signal despite ApTt_2mo having the highest observed scores of any 2mo contrast. The within-receiver design (5–13 weights per pool) tests the biologically precise question: *"Given this receiver's known kinase profile, are the specific kinases connecting to this backbone unusual?"*
+
+**Output files:**
+```
+aggregation/
+  backbone_permutation_pvalues_by_contrast.csv   full results (1.46M rows, all backbones)
+  backbone_significant_both_nulls.csv            82,127 rows passing both nulls (q < 0.25)
+  perm_tmp/                                      per-contrast temp files (cleaned after concatenation)
+```
+
+**Runner:**
+```bash
+bash code/integration/run_factorial_permutations.sh          # default 10,000 iterations
+bash code/integration/run_factorial_permutations.sh 1000     # custom N
+```
+
+Each contrast runs as a separate Python subprocess loading only its own MEA/attribution data, with per-contrast temp file caching for crash resilience. Memory budget: 400MB per permutation batch, ~500MB peak per contrast.
+
+### Deferred
+
+- Kinase-imputed pathway expansion (union across 9 contrasts)
+- Phospho integration for N conditions
+- Kinase node scoring (SiK, AKPDS) in factorial mode
+
 ## Future directions
 
-### Nested experimental design: beyond a single contrast
-
-The all-pairs pipeline currently runs on a single contrast: WT vs App knock-in, 4-month males. This is one cell of a factorial design that spans 3 genotypes (WT, App, Tau, plus the App×Tau interaction), 3 timepoints (2mo, 4mo, 6mo), and 2 sexes (with males as primary). The bulk phosphoproteomics pipeline produces 9 time-resolved contrasts from the full design.
-
-Running Incytr on a single contrast means:
-
-- **42 million pathways describe one comparison.** The 462 sender-receiver pairs × ~93K pathways/pair represent a single snapshot (App_4mo). Extending to all 9 contrasts would produce ~380 million pathway evaluations, each requiring snRNA-seq expression estimates stratified by condition --- which may not be available for all contrast arms given the snRNA-seq sample composition (28 animals, not all genotype×timepoint cells equally populated).
-
-- **The contrasts are not independent.** The 9 contrasts share animals (the WT baseline is the same across App, Tau, and interaction contrasts at each timepoint), share the same snRNA-seq expression data (Incytr's TPDS is computed from the same nuclei), and share the same kinase-substrate reference. Treating each contrast's Incytr results as independent observations would overstate the evidence.
-
-- **Temporal and genotype structure is informative.** A pathway that is active in App_4mo but not App_2mo or App_6mo tells a different biological story than one that is consistently active across all timepoints. Similarly, pathways active in both App and Tau contrasts vs. those specific to one genotype have different implications for disease mechanism. The current single-contrast approach cannot capture these dynamics.
-
-Addressing this requires thinking about how to either (a) run Incytr across multiple contrasts and handle the non-independence in downstream analysis, or (b) define a summary statistic across contrasts that the Incytr integration can target. This is an architectural question that interacts with snRNA-seq sample availability and the factorial OLS structure in the bulk pipeline.
+The factorial pipeline produces TPDS-only results. Full PDS scoring (phospho layers, kinase node integration, substrate-based external reranking) requires adapting the downstream scoring components for per-contrast operation — this is the scope of the second PR.
 
 ## Known limitations and future robustness checks
 
