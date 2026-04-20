@@ -61,10 +61,17 @@ BACKBONE_SIG_CSV = os.path.join(AGGREGATION_DIR, "backbone_significant_both_null
 BACKBONE_REC_CSV = os.path.join(AGGREGATION_DIR, "backbone_recurrence_by_contrast.csv")
 
 UNIFIED_VIEWER_OUTPUT_DIR = os.path.join(config.REPO_ROOT, "outputs", "reports")
-PAYLOAD_JSON = os.path.join(UNIFIED_VIEWER_OUTPUT_DIR, "unified_viewer.payload.json")
+UNIFIED_VIEWER_DIR = os.path.join(UNIFIED_VIEWER_OUTPUT_DIR, "unified_viewer")
+PAYLOAD_JSON = os.path.join(UNIFIED_VIEWER_DIR, "unified_viewer.payload.json")
 PAYLOAD_JSON_GZ = PAYLOAD_JSON + ".gz"
 SIDECAR_PARQUET = os.path.join(UNIFIED_VIEWER_OUTPUT_DIR, "kinase_backbone_edges_sig.parquet")
-UNIFIED_VIEWER_HTML = os.path.join(UNIFIED_VIEWER_OUTPUT_DIR, "unified_viewer.html")
+UNIFIED_VIEWER_HTML = os.path.join(UNIFIED_VIEWER_DIR, "index.html")
+PER_KINASE_SUMMARY = os.path.join(UNIFIED_VIEWER_DIR, "edge_summaries",
+                                  "per_kinase_summary.parquet")
+PER_BACKBONE_SUMMARY = os.path.join(UNIFIED_VIEWER_DIR, "edge_summaries",
+                                    "per_backbone_summary.parquet")
+EDGE_SLICES_KINASE_DIR = os.path.join(UNIFIED_VIEWER_DIR, "edge_slices", "kinase")
+EDGE_SLICES_BACKBONE_DIR = os.path.join(UNIFIED_VIEWER_DIR, "edge_slices", "backbone")
 REPORT_MD = os.path.join(config.REPO_ROOT, "pipeline_notes", "phase2_payload_report.md")
 
 SCHEMA_VERSION = 1
@@ -568,9 +575,23 @@ def build_payload(data: UnifiedData) -> dict:
 
     contrasts = data.edge_metadata["contrasts"]
 
-    sidecar_rows = None
-    if os.path.exists(SIDECAR_PARQUET):
-        sidecar_rows = pq.ParquetFile(SIDECAR_PARQUET).metadata.num_rows
+    # Tier-1 edge summary (embedded). Tier-2 slices are loaded lazily by the
+    # browser from edge_slices/ — not embedded.
+    if not os.path.exists(PER_KINASE_SUMMARY):
+        raise SystemExit(
+            f"per_kinase_summary missing: {PER_KINASE_SUMMARY}. "
+            f"Run: pixi run python code/integration/adapters/build_edge_shards.py"
+        )
+    pk_summary_tbl = pq.read_table(PER_KINASE_SUMMARY)
+    per_kinase_summary = {name: pk_summary_tbl[name].to_pylist()
+                          for name in pk_summary_tbl.column_names}
+
+    kinase_index_path = os.path.join(EDGE_SLICES_KINASE_DIR, "index.json")
+    backbone_index_path = os.path.join(EDGE_SLICES_BACKBONE_DIR, "index.json")
+    with open(kinase_index_path) as f:
+        kinase_slice_index = json.load(f)
+    with open(backbone_index_path) as f:
+        backbone_slice_index = json.load(f)
 
     meta = {
         "schema_version": SCHEMA_VERSION,
@@ -598,10 +619,18 @@ def build_payload(data: UnifiedData) -> dict:
         "celltypes": celltypes_slice,
         "backbones": backbones_slice,
         "overview": _build_overview_slice(data),
-        "edges_ref": {
-            "path": os.path.relpath(SIDECAR_PARQUET, UNIFIED_VIEWER_OUTPUT_DIR),
-            "n_rows": sidecar_rows,
+        "per_kinase_summary": per_kinase_summary,
+        "edge_slice_ref": {
+            "kinase_url": "edge_slices/kinase/",
+            "backbone_url": "edge_slices/backbone/",
+            "kinase_index": "edge_slices/kinase/index.json",
+            "backbone_index": "edge_slices/backbone/index.json",
+            "backbone_summary_url": "edge_summaries/per_backbone_summary.parquet",
+            "bucket_size": backbone_slice_index["bucket_size"],
             "schema_version": SCHEMA_VERSION,
+            "n_kinase_slices": kinase_slice_index["slice_count"],
+            "n_backbone_buckets": backbone_slice_index["bucket_count"],
+            "source_sha256": kinase_slice_index.get("source_sha256"),
         },
         "meta": meta,
     }
@@ -609,7 +638,7 @@ def build_payload(data: UnifiedData) -> dict:
 
 
 def write_payload(payload: dict) -> dict:
-    os.makedirs(UNIFIED_VIEWER_OUTPUT_DIR, exist_ok=True)
+    os.makedirs(UNIFIED_VIEWER_DIR, exist_ok=True)
     json_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     raw = json_str.encode("utf-8")
     with open(PAYLOAD_JSON, "wb") as f:
@@ -632,6 +661,11 @@ HTML_TEMPLATE = r"""<!doctype html>
 <title>Unified Kinase + Pathway Viewer</title>
 <script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
 <script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+<script type="module">
+  // hyparquet: ESM-only parquet reader. Attach to window for non-module code.
+  import { parquetReadObjects } from "https://cdn.jsdelivr.net/npm/hyparquet@1.8.0/+esm";
+  window.hyparquet = { parquetReadObjects };
+</script>
 <style>
 :root {
   --app-red:__APP_COLOR__; --tau-blue:__TAU_COLOR__; --aptt-purple:__APTT_COLOR__;
@@ -849,6 +883,70 @@ function getFilteredIndices() {
 window.getFilteredIndices = getFilteredIndices;
 
 // ---------------------------------------------------------------------------
+// SliceCache — lazy loader for per-entity edge parquets (Unit E).
+// Kinase slices and backbone-bucket slices are fetched on demand via the
+// URLs in PAYLOAD.edge_slice_ref. LRU-capped to avoid unbounded memory.
+// Parquet decoding uses hyparquet (CDN-loaded) when available; falls back
+// to reporting an error message on the selected entity's side panel.
+// ---------------------------------------------------------------------------
+const SliceCache = (function(){
+  const ESR = PAYLOAD.edge_slice_ref || {};
+  const BUCKET_SIZE = ESR.bucket_size || 256;
+  const MAX = 16;                          // LRU cap (per side)
+  const kCache = new Map();                // kinase_id -> {backbone_id, contrast_id, support_contribution, concordance}
+  const bCache = new Map();                // bucket_id -> same shape + kinase_id
+
+  function _lruTouch(cache, key, value){
+    if (cache.has(key)) cache.delete(key);
+    cache.set(key, value);
+    while (cache.size > MAX) cache.delete(cache.keys().next().value);
+  }
+
+  async function _fetchParquet(url){
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`fetch ${url} → ${resp.status}`);
+    const buf = new Uint8Array(await resp.arrayBuffer());
+    if (typeof hyparquet === "undefined") {
+      throw new Error("parquet reader not loaded (hyparquet missing)");
+    }
+    return await hyparquet.parquetReadObjects({ file: buf });
+  }
+
+  async function loadKinase(kinase_id){
+    if (kCache.has(kinase_id)) {
+      const v = kCache.get(kinase_id); _lruTouch(kCache, kinase_id, v); return v;
+    }
+    const pad = String(kinase_id).padStart(3, "0");
+    const url = `${ESR.kinase_url}${pad}.parquet`;
+    const rows = await _fetchParquet(url);
+    _lruTouch(kCache, kinase_id, rows);
+    return rows;
+  }
+
+  async function loadBackboneBucket(backbone_id){
+    const bkt = Math.floor(backbone_id / BUCKET_SIZE);
+    if (bCache.has(bkt)) {
+      const v = bCache.get(bkt); _lruTouch(bCache, bkt, v); return v;
+    }
+    const pad = String(bkt).padStart(3, "0");
+    const url = `${ESR.backbone_url}${pad}.parquet`;
+    const rows = await _fetchParquet(url);
+    _lruTouch(bCache, bkt, rows);
+    return rows;
+  }
+
+  async function backboneEdges(backbone_id){
+    const rows = await loadBackboneBucket(backbone_id);
+    return rows.filter(r => r.backbone_id === backbone_id);
+  }
+
+  return { loadKinase, loadBackboneBucket, backboneEdges,
+           get kinaseCacheSize(){ return kCache.size; },
+           get backboneCacheSize(){ return bCache.size; } };
+})();
+window.SliceCache = SliceCache;
+
+// ---------------------------------------------------------------------------
 // Header wiring
 // ---------------------------------------------------------------------------
 function populateHeader() {
@@ -1032,8 +1130,12 @@ else boot();
 
 
 def write_html(payload: dict, json_str: str | None = None) -> dict:
-    """Emit the single-file unified viewer. Payload is inlined as JSON."""
-    os.makedirs(UNIFIED_VIEWER_OUTPUT_DIR, exist_ok=True)
+    """Emit the unified viewer HTML at UNIFIED_VIEWER_DIR/index.html.
+
+    Sibling dirs (edge_slices/, edge_summaries/) are written by
+    build_edge_shards.py; this function only writes the HTML.
+    """
+    os.makedirs(UNIFIED_VIEWER_DIR, exist_ok=True)
     if json_str is None:
         json_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     # Escape </ so an embedded "</script>" in the JSON can't terminate the tag.
@@ -1086,13 +1188,39 @@ def validate(data: UnifiedData) -> str:
     if gzip_bytes >= 20 * 1024 * 1024:
         errors.append(f"payload gzip {gzip_bytes/1e6:.1f} MB exceeds 20 MB cap")
 
-    # Sidecar
-    if not os.path.exists(SIDECAR_PARQUET):
-        errors.append(f"sidecar parquet missing: {SIDECAR_PARQUET}")
-        sidecar_rows = sidecar_bytes = 0
+    # Edge-summary artifacts (Tier 1, embedded in payload)
+    pk_summary_rows = pk_summary_bytes = 0
+    pb_summary_rows = pb_summary_bytes = 0
+    if not os.path.exists(PER_KINASE_SUMMARY):
+        errors.append(f"per_kinase_summary missing: {PER_KINASE_SUMMARY}")
     else:
-        sidecar_rows = pq.ParquetFile(SIDECAR_PARQUET).metadata.num_rows
-        sidecar_bytes = os.path.getsize(SIDECAR_PARQUET)
+        pk_summary_rows = pq.ParquetFile(PER_KINASE_SUMMARY).metadata.num_rows
+        pk_summary_bytes = os.path.getsize(PER_KINASE_SUMMARY)
+    if not os.path.exists(PER_BACKBONE_SUMMARY):
+        errors.append(f"per_backbone_summary missing: {PER_BACKBONE_SUMMARY}")
+    else:
+        pb_summary_rows = pq.ParquetFile(PER_BACKBONE_SUMMARY).metadata.num_rows
+        pb_summary_bytes = os.path.getsize(PER_BACKBONE_SUMMARY)
+
+    # Tier-2 slice directories (lazy-loaded; not embedded)
+    n_kinase_slices = n_backbone_buckets = 0
+    slices_bytes = 0
+    if not os.path.isdir(EDGE_SLICES_KINASE_DIR):
+        errors.append(f"kinase slice dir missing: {EDGE_SLICES_KINASE_DIR}")
+    else:
+        n_kinase_slices = sum(1 for f in os.listdir(EDGE_SLICES_KINASE_DIR)
+                              if f.endswith(".parquet"))
+        slices_bytes += sum(os.path.getsize(os.path.join(EDGE_SLICES_KINASE_DIR, f))
+                            for f in os.listdir(EDGE_SLICES_KINASE_DIR)
+                            if f.endswith(".parquet"))
+    if not os.path.isdir(EDGE_SLICES_BACKBONE_DIR):
+        errors.append(f"backbone slice dir missing: {EDGE_SLICES_BACKBONE_DIR}")
+    else:
+        n_backbone_buckets = sum(1 for f in os.listdir(EDGE_SLICES_BACKBONE_DIR)
+                                 if f.endswith(".parquet"))
+        slices_bytes += sum(os.path.getsize(os.path.join(EDGE_SLICES_BACKBONE_DIR, f))
+                            for f in os.listdir(EDGE_SLICES_BACKBONE_DIR)
+                            if f.endswith(".parquet"))
 
     # Structural
     if payload is not None:
@@ -1128,18 +1256,36 @@ def validate(data: UnifiedData) -> str:
         if bad:
             errors.append(f"{len(bad)} orphan receiver_id(s) in backbones")
 
-        n_ref = payload["edges_ref"].get("n_rows")
-        if n_ref != sidecar_rows:
-            errors.append(f"edges_ref.n_rows={n_ref} but sidecar has {sidecar_rows}")
+        # Tier-1 summary embedded in payload
+        pks = payload.get("per_kinase_summary", {})
+        if len(pks.get("kinase_id", [])) != pk_summary_rows:
+            errors.append(
+                f"per_kinase_summary rows in payload "
+                f"{len(pks.get('kinase_id', []))} != parquet {pk_summary_rows}"
+            )
 
-        if sidecar_rows and len(sig_bb_ids):
-            # Quick check on a small sample
-            sample = pq.ParquetFile(SIDECAR_PARQUET).read_row_group(
-                0, columns=["backbone_id"])["backbone_id"].to_numpy()
-            if len(sample) and not np.isin(sample[:1000], sig_bb_ids).all():
-                warnings.append(
-                    "sidecar row-group 0 contains backbone_ids outside sig set"
-                )
+        # Tier-2 slice reference
+        esr = payload.get("edge_slice_ref", {})
+        if esr.get("n_kinase_slices") != n_kinase_slices:
+            errors.append(
+                f"edge_slice_ref.n_kinase_slices={esr.get('n_kinase_slices')} "
+                f"but {n_kinase_slices} parquet files on disk"
+            )
+        if esr.get("n_backbone_buckets") != n_backbone_buckets:
+            errors.append(
+                f"edge_slice_ref.n_backbone_buckets={esr.get('n_backbone_buckets')} "
+                f"but {n_backbone_buckets} parquet files on disk"
+            )
+
+        # Every kinase_id referenced in per_kinase_summary must be in kinases[]
+        summary_kids = set(pks.get("kinase_id", []))
+        payload_kids = set(payload["kinases"]["id"])
+        missing = summary_kids - payload_kids
+        if missing:
+            errors.append(
+                f"{len(missing)} per_kinase_summary kinase_id(s) absent from "
+                f"kinases[] (first 3: {sorted(missing)[:3]})"
+            )
 
     peak_mb = _peak_rss_mb()
 
@@ -1152,7 +1298,10 @@ def validate(data: UnifiedData) -> str:
         "",
         f"- Payload JSON (raw): {raw_bytes/1e6:.2f} MB (cap 100)",
         f"- Payload JSON (gzip): {gzip_bytes/1e6:.2f} MB (cap 20)",
-        f"- Sidecar parquet: {sidecar_bytes/1e6:.2f} MB, {sidecar_rows:,} rows",
+        f"- per_kinase_summary: {pk_summary_bytes/1e3:.1f} KB, {pk_summary_rows:,} rows",
+        f"- per_backbone_summary: {pb_summary_bytes/1e3:.1f} KB, {pb_summary_rows:,} rows",
+        f"- Edge slice shards total: {slices_bytes/1e6:.1f} MB "
+        f"({n_kinase_slices} kinase + {n_backbone_buckets} backbone buckets)",
         "",
         "## Counts",
         "",
@@ -1161,8 +1310,6 @@ def validate(data: UnifiedData) -> str:
         f"- contrasts: {n_contrasts}",
         f"- backbones: {md['backbones_n']:,}",
         f"- full edges (Phase 1): {md['n_edges']:,}",
-        f"- sig edges (sidecar): {sidecar_rows:,} "
-        f"({100 * sidecar_rows / max(md['n_edges'], 1):.2f}% of full)",
         "",
         "## Memory",
         "",
@@ -1217,16 +1364,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.summary:
         print(json.dumps(data.summary(), indent=2))
 
-    if args.sidecar or args.build:
+    if args.sidecar:
         bb_index = build_backbone_index(data.backbone_recurrence)
         write_sig_sidecar(data, bb_index)
 
     payload = None
     json_str = None
     if args.payload or args.build:
-        if not os.path.exists(SIDECAR_PARQUET):
+        if not os.path.exists(PER_KINASE_SUMMARY):
             raise SystemExit(
-                f"sidecar missing at {SIDECAR_PARQUET}; run --sidecar first"
+                f"edge shards missing; run: "
+                f"pixi run python code/integration/adapters/build_edge_shards.py"
             )
         payload = build_payload(data)
         sizes = write_payload(payload)
