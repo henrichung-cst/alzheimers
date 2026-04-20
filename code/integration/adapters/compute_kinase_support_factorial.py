@@ -177,7 +177,7 @@ def compute_pair_attr_weights(attr_by_ct, sender, receiver, sender_discount):
     return weights
 
 
-def process_one_pair(shared, pq_path, sender, receiver):
+def process_one_pair(shared, pq_path, sender, receiver, *, emit_routes=False):
     """Score one pair across all 9 contrasts. Returns summary dict."""
     import pyarrow.parquet as pq
 
@@ -198,6 +198,7 @@ def process_one_pair(shared, pq_path, sender, receiver):
 
     # Score each contrast
     all_scores = {}
+    routes_per_contrast = {} if emit_routes else None
     for contrast in icfg.FACTORIAL_CONTRASTS:
         cdata = shared["contrast_data"][contrast]
         attr_by_ct = shared["attr_by_contrast_ct"][contrast]
@@ -213,8 +214,12 @@ def process_one_pair(shared, pq_path, sender, receiver):
         pathways["TPDS"] = df[tpds_col].values
         pathways["PDS"] = df[tpds_col].values  # placeholder
 
+        routes_sink = [] if emit_routes else None
         scores_c = compute_scores_fast(
-            pathways, sub_pair, cdata["all_kinase_genes"])
+            pathways, sub_pair, cdata["all_kinase_genes"],
+            routes_sink=routes_sink)
+        if emit_routes:
+            routes_per_contrast[contrast] = routes_sink
 
         # Collect per-contrast columns
         all_scores[f"kinase_support_score_{contrast}"] = scores_c["kinase_support_score"].values
@@ -242,6 +247,27 @@ def process_one_pair(shared, pq_path, sender, receiver):
 
     out.to_csv(os.path.join(dir_path, "kinase_support_scores.csv"),
                index=False, float_format="%.6g")
+
+    if emit_routes:
+        rows = []
+        for contrast, sink in routes_per_contrast.items():
+            for path, kinase, contribution, nes_sign in sink:
+                rows.append((path, contrast, kinase, contribution, nes_sign))
+        if rows:
+            routes_df = pd.DataFrame(
+                rows,
+                columns=["Path", "contrast", "kinase",
+                         "support_contribution", "nes_sign"],
+            )
+            routes_df["support_contribution"] = (
+                routes_df["support_contribution"].astype("float32")
+            )
+            routes_df["nes_sign"] = routes_df["nes_sign"].astype("int8")
+            routes_df.to_parquet(
+                os.path.join(dir_path, "kinase_routes.parquet"),
+                index=False,
+                compression="zstd",
+            )
 
     # Summary JSON
     summary_data = {"n_pathways": n_pathways, "contrasts": {}}
@@ -281,6 +307,10 @@ def main():
                         help="Overwrite existing outputs")
     parser.add_argument("--pair-filter", metavar="PATTERN",
                         help="Filter pairs by glob (e.g. 'Astrocyte__*')")
+    parser.add_argument("--emit-kinase-routes", action="store_true",
+                        help="Also emit per-(backbone, kinase, contrast) "
+                             "routes to kinase_routes.parquet alongside "
+                             "kinase_support_scores.csv")
     args = parser.parse_args()
 
     ensure_intermediates_dir()
@@ -305,11 +335,14 @@ def main():
             f"{sanitize_celltype_name(sender)}__{sanitize_celltype_name(receiver)}")
         scores_path = os.path.join(dir_path, "kinase_support_scores.csv")
 
-        if os.path.exists(scores_path) and not args.force:
+        routes_path = os.path.join(dir_path, "kinase_routes.parquet")
+        needs_routes = args.emit_kinase_routes and not os.path.exists(routes_path)
+        if os.path.exists(scores_path) and not args.force and not needs_routes:
             n_skipped += 1
             continue
 
-        result = process_one_pair(shared, pq_path, sender, receiver)
+        result = process_one_pair(shared, pq_path, sender, receiver,
+                                  emit_routes=args.emit_kinase_routes)
         summaries.append(result)
 
         if i % 50 == 0 or i == n_total:

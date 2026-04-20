@@ -316,7 +316,21 @@ def _list_median(vals):
     return s[mid] if n % 2 else (s[mid - 1] + s[mid]) * 0.5
 
 
-def compute_scores_fast(pathways, sub_pair, all_kinase_genes):
+def _emit_routes(sink, path, abbrev_list, ew_list, sign_list):
+    """Aggregate edge weights to one row per (pathway, kinase) and append."""
+    agg = {}
+    for abbrev, w, s in zip(abbrev_list, ew_list, sign_list):
+        prev = agg.get(abbrev)
+        if prev is None:
+            agg[abbrev] = [w, s]
+        else:
+            prev[0] += w
+    for abbrev, (w, s) in agg.items():
+        sink.append((path, abbrev, w, s))
+
+
+def compute_scores_fast(pathways, sub_pair, all_kinase_genes, *,
+                        routes_sink=None):
     """Optimized pathway scoring using precomputed edge tables.
 
     ~4-10x faster than :func:`compute_scores` by:
@@ -334,6 +348,12 @@ def compute_scores_fast(pathways, sub_pair, all_kinase_genes):
         Output of :func:`apply_pair_weights`.
     all_kinase_genes : set
         Kinase gene symbols from :func:`build_substrate_edge_table`.
+    routes_sink : list, optional
+        When given, appended with per-(pathway, kinase) routes: each entry is
+        a tuple ``(path, kinase_abbrev, support_contribution, nes_sign)`` where
+        ``support_contribution`` is the sum of this kinase's edge weights
+        (ew_idf) across the pathway's EM+Target substrates. Summed across
+        kinases per pathway this reproduces ``kinase_support_score_sum``.
 
     Returns
     -------
@@ -383,16 +403,19 @@ def compute_scores_fast(pathways, sub_pair, all_kinase_genes):
                 ew = em_data["ew_idf"] + tg_data["ew_idf"]
                 ew_no = em_data["ew_no_idf"] + tg_data["ew_no_idf"]
                 signs = em_data["nes_sign"] + tg_data["nes_sign"]
+                abbrev_list = em_data["abbrevs"] + tg_data["abbrevs"]
                 all_abbrevs = em_data["abbrev_set"] | tg_data["abbrev_set"]
             elif em_data:
                 ew = em_data["ew_idf"]
                 ew_no = em_data["ew_no_idf"]
                 signs = em_data["nes_sign"]
+                abbrev_list = em_data["abbrevs"]
                 all_abbrevs = em_data["abbrev_set"]
             else:
                 ew = tg_data["ew_idf"]
                 ew_no = tg_data["ew_no_idf"]
                 signs = tg_data["nes_sign"]
+                abbrev_list = tg_data["abbrevs"]
                 all_abbrevs = tg_data["abbrev_set"]
 
             if not ew:
@@ -405,12 +428,16 @@ def compute_scores_fast(pathways, sub_pair, all_kinase_genes):
             n_kin[i] = len(all_abbrevs)
             top_kin_list[i] = ";".join(sorted(all_abbrevs)[:10])
 
+            if routes_sink is not None:
+                _emit_routes(routes_sink, path_arr[i], abbrev_list, ew, signs)
+
         else:
             # Slow path: exclude kinases that are pathway nodes
             node_set = {em, tg, lig_arr[i], rec_arr[i]}
             ew = []
             ew_no = []
             signs = []
+            abbrev_list = []
             all_abbrevs = set()
             excl = 0
 
@@ -424,6 +451,7 @@ def compute_scores_fast(pathways, sub_pair, all_kinase_genes):
                     ew.append(data["ew_idf"][j])
                     ew_no.append(data["ew_no_idf"][j])
                     signs.append(data["nes_sign"][j])
+                    abbrev_list.append(data["abbrevs"][j])
                     all_abbrevs.add(data["abbrevs"][j])
 
             n_excl[i] = excl
@@ -436,6 +464,9 @@ def compute_scores_fast(pathways, sub_pair, all_kinase_genes):
 
             n_kin[i] = len(all_abbrevs)
             top_kin_list[i] = ";".join(sorted(all_abbrevs)[:10])
+
+            if routes_sink is not None:
+                _emit_routes(routes_sink, path_arr[i], abbrev_list, ew, signs)
 
         # Concordance flag
         mean_sign = sum(signs) / len(signs)
