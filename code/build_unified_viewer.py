@@ -518,10 +518,8 @@ def _build_backbones_slice(data: UnifiedData,
 def _build_overview_slice(data: UnifiedData) -> dict:
     """Pre-aggregate receiver × contrast counts for the Overview tab.
 
-    Mirrors the pattern in build_pathway_viewer.py lines 160-173:
-    group `backbone_recurrence` by (contrast, receiver), emit per-cell
-    {n, n_up, n_down, mean_tpds}. Keyed by "{contrast}|{receiver}"; empty
-    cells are omitted (JS treats missing as zero).
+    Keyed by "{contrast}|{receiver}"; empty cells are omitted (JS treats
+    missing as zero).
     """
     rec = data.backbone_recurrence
     overview: dict[str, dict] = {}
@@ -612,21 +610,21 @@ def build_payload(data: UnifiedData) -> dict:
 
 def write_payload(payload: dict) -> dict:
     os.makedirs(UNIFIED_VIEWER_OUTPUT_DIR, exist_ok=True)
-    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    json_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    raw = json_str.encode("utf-8")
     with open(PAYLOAD_JSON, "wb") as f:
         f.write(raw)
     gz = gzip.compress(raw, compresslevel=6)
     with open(PAYLOAD_JSON_GZ, "wb") as f:
         f.write(gz)
-    return {"raw_bytes": len(raw), "gzip_bytes": len(gz)}
+    return {"raw_bytes": len(raw), "gzip_bytes": len(gz), "json_str": json_str}
 
 
 # ---------------------------------------------------------------------------
 # HTML shell (Phase 3)
 # ---------------------------------------------------------------------------
 
-# Raw triple-quoted string — CSS/JS braces are unescaped. Payload is
-# injected via .replace("__PAYLOAD_SENTINEL__", json_str), not f-string.
+# Raw string + sentinel replacement avoids f-string collisions with CSS/JS braces.
 HTML_TEMPLATE = r"""<!doctype html>
 <html lang="en">
 <head>
@@ -636,8 +634,8 @@ HTML_TEMPLATE = r"""<!doctype html>
 <script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
 <style>
 :root {
-  --app-red:#c62828; --tau-blue:#1565c0; --aptt-purple:#6a1b9a;
-  --up-red:#c62828; --down-blue:#1565c0;
+  --app-red:__APP_COLOR__; --tau-blue:__TAU_COLOR__; --aptt-purple:__APTT_COLOR__;
+  --up-red:__APP_COLOR__; --down-blue:__TAU_COLOR__;
   --receptor-color:#1b5e20; --em-color:#e65100; --target-color:#4a148c;
   --bg:#fafafa; --card-bg:#ffffff; --border:#e0e0e0;
   --text:#212121; --text-muted:#757575;
@@ -964,7 +962,7 @@ function renderOverview() {
   }
 
   const colorscale = (mode === "direction")
-    ? [[0, "#1565c0"], [0.5, "#ffffff"], [1, "#c62828"]]
+    ? [[0, DISEASE_COLORS.Tau], [0.5, "#ffffff"], [1, DISEASE_COLORS.App]]
     : "YlOrRd";
   const trace = {
     type:"heatmap", x:cols, y:rows, z, text:hover,
@@ -980,7 +978,7 @@ function renderOverview() {
   };
   Plotly.react(el, [trace], layout, {displaylogo:false, responsive:true});
 
-  // Click handler (re-attach on each render; Plotly.react preserves DOM).
+  // Plotly.react preserves the DOM node, so detach prior listeners first.
   el.removeAllListeners && el.removeAllListeners("plotly_click");
   el.on && el.on("plotly_click", ev => {
     if (!ev.points || !ev.points.length) return;
@@ -1033,17 +1031,25 @@ else boot();
 """
 
 
-def write_html(payload: dict, output_path: str = UNIFIED_VIEWER_HTML) -> dict:
+def write_html(payload: dict, json_str: str | None = None) -> dict:
     """Emit the single-file unified viewer. Payload is inlined as JSON."""
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    # ensure_ascii=False keeps size down; escape </ to avoid script-tag break
-    json_str = json.dumps(payload, ensure_ascii=False,
-                          separators=(",", ":")).replace("</", "<\\/")
-    html = HTML_TEMPLATE.replace("__PAYLOAD_SENTINEL__", json_str)
+    os.makedirs(UNIFIED_VIEWER_OUTPUT_DIR, exist_ok=True)
+    if json_str is None:
+        json_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    # Escape </ so an embedded "</script>" in the JSON can't terminate the tag.
+    safe = json_str.replace("</", "<\\/")
+    html = HTML_TEMPLATE
+    for sentinel, value in (
+        ("__APP_COLOR__", config.DISEASE_COLORS["App"]),
+        ("__TAU_COLOR__", config.DISEASE_COLORS["Tau"]),
+        ("__APTT_COLOR__", config.DISEASE_COLORS["ApTt"]),
+        ("__PAYLOAD_SENTINEL__", safe),
+    ):
+        html = html.replace(sentinel, value)
     raw = html.encode("utf-8")
-    with open(output_path, "wb") as f:
+    with open(UNIFIED_VIEWER_HTML, "wb") as f:
         f.write(raw)
-    return {"html_bytes": len(raw), "output": output_path}
+    return {"html_bytes": len(raw), "output": UNIFIED_VIEWER_HTML}
 
 
 # ---------------------------------------------------------------------------
@@ -1051,7 +1057,6 @@ def write_html(payload: dict, output_path: str = UNIFIED_VIEWER_HTML) -> dict:
 # ---------------------------------------------------------------------------
 
 def _peak_rss_mb() -> float:
-    # Linux: getrusage.ru_maxrss is in kB
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
 
 
@@ -1202,9 +1207,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--validate", action="store_true", help="Write Phase 2 validation report")
     args = ap.parse_args(argv)
 
-    # Default (no flags): build payload + write HTML — the Phase 3 checkpoint
-    # says `pixi run python code/build_unified_viewer.py` should produce
-    # outputs/reports/unified_viewer.html.
     if not any([args.summary, args.sidecar, args.payload, args.build,
                 args.html, args.validate]):
         args.build = True
@@ -1220,6 +1222,7 @@ def main(argv: list[str] | None = None) -> int:
         write_sig_sidecar(data, bb_index)
 
     payload = None
+    json_str = None
     if args.payload or args.build:
         if not os.path.exists(SIDECAR_PARQUET):
             raise SystemExit(
@@ -1227,6 +1230,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         payload = build_payload(data)
         sizes = write_payload(payload)
+        json_str = sizes.pop("json_str")
         print(f"  payload raw={sizes['raw_bytes']/1e6:.2f} MB "
               f"gzip={sizes['gzip_bytes']/1e6:.2f} MB")
 
@@ -1237,8 +1241,9 @@ def main(argv: list[str] | None = None) -> int:
                     f"payload missing at {PAYLOAD_JSON}; run --payload first"
                 )
             with open(PAYLOAD_JSON) as f:
-                payload = json.load(f)
-        info = write_html(payload)
+                json_str = f.read()
+            payload = json.loads(json_str)
+        info = write_html(payload, json_str=json_str)
         print(f"  html {info['html_bytes']/1e6:.2f} MB -> {info['output']}")
 
     if args.validate:
