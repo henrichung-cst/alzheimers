@@ -55,7 +55,7 @@ else
       local name="$1"
       shift
       echo "[$name]"
-      micromamba run -n alzheimers python3 "$ADAPTERS_DIR/$name.py" "$@"
+      pixi run python3 "$ADAPTERS_DIR/$name.py" "$@"
       echo
   }
 
@@ -79,14 +79,14 @@ echo "[run_incytr_all_pairs.R]"
 
 # Build env var forwarding for systemd-run (use array for safe word splitting)
 ENV_ARGS=()
-for var in PAIR_FILTER FORCE_RERUN MEMORY_LIMIT_GB SKIP_EXPRONLY EXPR_DETECTION_THRESHOLD; do
+for var in PAIR_FILTER FORCE_RERUN MEMORY_LIMIT_GB SKIP_EXPRONLY EXPR_DETECTION_THRESHOLD EXPR_IMPUTATION_FLOOR; do
   if [ -n "${!var:-}" ]; then
-    ENV_ARGS+=(-E "$var=${!var}")
+    ENV_ARGS+=(--setenv="$var=${!var}")
   fi
 done
 
-systemd-run --user --scope -p MemoryMax=12G \
-  micromamba run -n incytr "${ENV_ARGS[@]}" \
+systemd-run --user --scope -p MemoryMax="${MEMORY_LIMIT_GB:-12}G" "${ENV_ARGS[@]}" \
+  pixi run \
   Rscript "$WRAPPERS_DIR/run_incytr_all_pairs.R"
 
 # ---------------------------------------------------------------
@@ -102,7 +102,7 @@ fi
 if [ "${FORCE_RERUN:-}" = "1" ]; then
   KSCORE_ARGS+=(--force)
 fi
-micromamba run -n alzheimers python3 \
+pixi run python3 \
   "$ADAPTERS_DIR/compute_kinase_support_all_pairs.py" "${KSCORE_ARGS[@]}"
 
 # ---------------------------------------------------------------
@@ -117,7 +117,7 @@ fi
 if [ "${FORCE_RERUN:-}" = "1" ]; then
   AGG_ARGS+=(--force)
 fi
-micromamba run -n alzheimers python3 \
+pixi run python3 \
   "$ADAPTERS_DIR/aggregate_cross_pair.py" "${AGG_ARGS[@]}"
 
 echo

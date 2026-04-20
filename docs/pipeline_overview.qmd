@@ -1,0 +1,172 @@
+---
+title: "Kinase attribution and incytr integration"
+author: "Henri Chung"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    number-sections: true
+    theme: cosmo
+    fig-align: center
+    code-overflow: wrap
+    embed-resources: true
+  pdf:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    fig-align: center
+    geometry:
+      - margin=1in
+    documentclass: scrartcl
+    papersize: letter
+    colorlinks: true
+execute:
+  echo: false
+  warning: false
+---
+
+## Abstract
+
+The Song cohort consists of 72 mouse-brain samples spanning four Alzheimer's disease-relevant genotypes (wild-type, APP knock-in, T22 tauopathy, and the double knock-in) at three timepoints (2, 4, and 6 months). Each animal was profiled by both TMT total-proteome mass spectrometry and IMAC-enriched phosphoproteomics. A 28-animal subset has paired single-nucleus RNA-seq (~63,000 nuclei), providing within-cohort transcriptomic context; two external brain atlases anchor cell-type interpretation across species.
+
+This pipeline takes those measurements and produces two kinds of outputs. On the bulk side, it delivers a per-kinase hypothesis table that pairs kinase enrichment scores with cell-type attribution and confidence tiers — the starting point for identifying which kinases are dysregulated, and where in the brain. On the integration side, it connects those kinase findings to intercellular signaling: for each pair of brain cell types, it scores how disease alters the ligand–receptor–effector–target pathway chains linking them, across nine disease-by-timepoint contrasts, and identifies which pathway patterns recur consistently across many cell-type pairs rather than appearing by chance. The outputs throughout are hypothesis-generating: convergent functional evidence for candidate mechanisms, not mechanistic validation.
+
+# Samples
+
+The Song cohort is a 4 genotype × 3 timepoint × 2 sex factorial design with 3 biological replicates per group, giving 72 animals total. Genotypes are wild-type (WT), APP knock-in (App), T22 tauopathy (Tau), and the double knock-in (T22/APP, here called ApTt). Timepoints are 2, 4, and 6 months. All 72 animals were profiled by TMT total-proteome mass spectrometry (6 plexes × 10 channels + bridge channel) and IMAC-enriched phosphoproteomics. A 28-animal subset — selected so that each genotype × timepoint cell has at least one paired sample — contributes ~63,000 nuclei from single-nucleus RNA-seq (Allen Cell Type Mapper annotations, 22 of 24 SEA-AD subclasses represented). Two external references are used only to anchor cell-type interpretation, not as direct evidence streams: SEA-AD human MTG postmortem transcriptomic effect sizes (stratified by continuous pathology score into early-/low-CPS, late-/high-CPS, and full strata) and the Whole Mouse Brain 10Xv3 expression matrix (per-subclass kinase specificity against the SEA-AD-mapped taxonomy).
+
+**Primary analysis — males only (33 animals).** All enrichment and attribution results reported here use males only. The reason is statistical: the cohort has only 3 biological replicates per factorial cell, which is insufficient degrees of freedom to estimate sex × genotype interaction terms reliably. Including both sexes while modeling sex only as a main effect would absorb those degrees of freedom as a nuisance covariate without actually controlling for sex-specific disease biology — a worse tradeoff than running a clean single-sex analysis. Female samples also showed elevated outlier rates during QC, further motivating their exclusion from the primary analysis. Outlier exclusion reduces the 36 male animals to **33** (Stages 2–5 and integration all operate on this set).
+
+**Sensitivity analysis — full cohort (72 animals).** The same OLS model is re-fit across all 72 animals with sex entered as a main-effect covariate. This run is available for comparison — if a finding holds in both the males-only and full-cohort fits, that convergence adds confidence. Results from the full-cohort run are not the primary reported outputs; they exist to verify that the males-only findings are not artifacts of restricting to one sex.
+
+# Stage 1 — Data ingestion
+
+<!-- data_ingest.py -->
+Raw TMT channels are mapped to animals across the 6 plexes × 10 channels + bridge layout to assemble the sample manifest, followed by three QC passes. First, phosphosites are linked to their parent proteins by UniProt accession plus residue-level matching, achieving 91.7% site-to-parent matching over 86.5% of parent proteins. Second, per-plex and cross-plex PCA surfaces batch structure, genotype separation, and candidate technical outliers. Third, a robust within-group z-score procedure flags individual animals whose phospho intensity profile sits far enough from its genotype × timepoint × sex group median to be excluded from downstream OLS — yielding 33 animals in the males-only primary analysis. The outlier list applies to the primary analysis; the full-cohort sensitivity run uses its own outlier pass across all 72 samples.
+
+![PCA embedding (left) and within-group robust z-scores by genotype × timepoint group (right). Animals exceeding the ±3 z-score threshold are labeled and excluded from downstream OLS.](../outputs/reports/data_ingest/pca_plots/outlier_diagnostic.png){#fig-outlier width=85%}
+
+# Stage 2 — IRS normalization and stoichiometry correction
+
+**IRS normalization.** The 72 animals were run across six separate mass spectrometry plexes, which introduces systematic multiplicative batch effects — raw intensities from one plex are not directly comparable to those from another. Internal Reference Scaling (IRS) corrects this using a bridge channel: a pooled reference sample that was run in every plex. Each animal's intensities are scaled to that bridge, placing all 72 samples on a common intensity axis. Normalization is always computed over all 72 samples; the males-only filter is applied later, at the OLS stage, so that the bridge scaling is not biased by which subset is analyzed.
+
+**Stoichiometry correction.** Even after cross-plex normalization, phospho intensities conflate two biologically distinct signals: a change in the *amount* of a protein and a change in the *fraction* of that protein that is phosphorylated at a given site. A site that appears elevated in disease simply because its parent protein was upregulated carries no information about kinase regulation. Stoichiometry correction removes this confound by computing, per site per sample:
+
+$$\text{stoichiometry} = \log_2(\text{phospho}) - \log_2(\text{parent protein})$$
+
+The difference is the log-ratio of phosphorylated to total protein. A site whose parent protein increased proportionally will cancel to zero; only genuine shifts in phosphorylation occupancy survive.
+
+Empirically, the correction is consequential. Comparing kinase enrichment rankings before and after correction: roughly 379 kinases rank as enriched in raw phospho but lose that signal after correction — their apparent activity was protein-abundance-driven. Around 101 retain enrichment in both. About 12 are invisible in raw phospho but emerge only after correction, where suppression by abundance confounding is removed. Those 12 represent findings that would be missed entirely without this step.
+
+# Stage 3 — Kinase enrichment (MEA)
+
+<!-- kinase_attribution.py --enrich -->
+For each phosphosite independently, stoichiometry values are modelled as a function of genotype and nuisance covariates using ordinary least squares (OLS) regression:
+
+$$y_i = \mu + \beta_{\text{App}}\, x_{\text{App},i} + \beta_{\text{Tau}}\, x_{\text{Tau},i} + \beta_{\text{Int}}\, x_{\text{Int},i} + \beta_{\text{sex}}\, x_{\text{sex},i} + \beta_{\text{4mo}}\, x_{\text{4mo},i} + \beta_{\text{6mo}}\, x_{\text{6mo},i} + \varepsilon_i$$
+
+where $y_i$ is the stoichiometry value for animal $i$ and the $x$ terms are binary indicator variables. The three genotype indicators encode WT as the reference group (all zeros); App, Tau, and ApTt animals each set one or more indicators to 1. Crucially, $\beta_{\text{Int}}$ is not a genotype × timepoint interaction: it estimates the excess effect of the double knock-in (ApTt) beyond the additive sum of the two single-genotype effects, i.e. how much more — or less — the combined model deviates from $\beta_{\text{App}} + \beta_{\text{Tau}}$ alone. Sex and timepoint enter only as main-effect nuisance covariates; a full-interaction design is not used because at three replicates per factorial cell, the additional parameters would exhaust the degrees of freedom available without improving the downstream enrichment, which aggregates signal across thousands of sites per kinase.
+
+Three biologically interpretable contrasts are formed from the fitted coefficients:
+
+| Contrast | Estimand | Interpretation |
+|---|---|---|
+| App | $\hat{\beta}_{\text{App}}$ | APP knock-in effect vs. WT |
+| Tau | $\hat{\beta}_{\text{Tau}}$ | T22 tauopathy effect vs. WT |
+| ApTt | $\hat{\beta}_{\text{App}} + \hat{\beta}_{\text{Tau}} + \hat{\beta}_{\text{Int}}$ | Full double knock-in effect vs. WT |
+
+Each contrast is tested with a two-tailed $t$-test and Benjamini-Hochberg correction applied independently per contrast.
+
+The per-site contrast estimates are then ranked for kinase enrichment analysis (MEA). Before ranking, estimates are median-centered across all sites to remove any global stoichiometry shift within a contrast, then winsorized at the 1st and 99th percentiles to limit the influence of extreme sites. These ranked estimates are passed to GSEA pre-ranked enrichment against the kinase-library motif-substrate catalog. The output is a normalized enrichment score (NES) and FDR per kinase per contrast; kinases with FDR < 0.25 on at least one contrast advance to cell-type attribution.
+
+![Adjusting for sex and timepoint as covariates materially changes site-level estimates for App and Tau: 13–17% of sites reverse sign between the naive group-mean difference and the OLS contrast estimate, meaning those sites would be ranked in the opposite direction — and contribute to the opposite enrichment direction for any kinase targeting them — without covariate adjustment. Each panel plots naive log-fold-change (x-axis) against OLS estimate (y-axis); points on the diagonal agree, points crossing it are sign flips. The ApTt row (bottom) is a perfect diagonal (r = 1.00, 0% flips) because the ApTt contrast $\hat{\beta}_{\text{App}} + \hat{\beta}_{\text{Tau}} + \hat{\beta}_{\text{Int}}$ is algebraically equivalent to the naive ApTt vs. WT group mean in a balanced design and serves as a consistency check rather than a further justification for the model.](../outputs/reports/kinase_attribution/diagnostic_naive_vs_ols.png){#fig-ols width=85%}
+
+# Stage 4 — Unified cell-type attribution
+
+A kinase being enriched in bulk tissue does not, on its own, tell us which cell type is driving the signal. Bulk phosphoproteomics is tissue-averaged, so cell-type assignment is done through transcriptomic evidence rather than by inverting the bulk signal directly. Three evidence sources are combined into a single attribution:
+
+- **Within-cohort Song snRNA-seq concordance** (weight 3×). The same factorial OLS model from Stage 3 is applied to the 28-animal paired snRNA-seq, separately for each gene and each cell type using pseudobulk expression (aggregated counts per cell type per animal). This produces an estimated log-fold-change per gene × cell type for each of the three contrasts — the same App, Tau, and ApTt contrasts as the bulk MEA. For a given kinase and cell type, concordance is then assessed by asking whether the mRNA of that kinase's known substrate genes is trending in the same direction as the kinase's NES: a kinase with a positive NES (enriched in the upward direction) whose substrates are also increasing in expression in microglia receives positive concordance with microglia in that contrast. Because these are the same animals, same disease model, and same contrast structure as the bulk phosphoproteomics, this is the most direct cross-modal evidence available.
+- **Cross-species SEA-AD concordance** (weight 1×). Human MTG postmortem transcriptomic effect sizes from the SEA-AD cohort provide a disease-anchored check independent of the mouse model. The SEA-AD data are stratified by continuous pathology score (CPS); strata are matched to contrasts by pathological relevance — App contrasts use the early/low-CPS stratum (amyloid-driven early changes), Tau contrasts use the late/high-CPS stratum (tau-driven late changes), and ApTt uses the full stratum.
+- **WMB expression specificity** (prerequisite gate, not scored). Per-subclass kinase expression from the Whole Mouse Brain atlas is used as a filter: a kinase must be expressed in a given cell type at least twice the level expected if expression were uniform across all 24 subclasses. This is a necessary but not sufficient condition — a kinase absent from a cell type cannot plausibly be attributed there, but presence alone does not imply activity.
+
+The Song and SEA-AD concordance values are combined into a weighted score (Song 3×, SEA-AD 1×), reflecting that within-cohort cross-modal evidence from the same animals carries more direct relevance than cross-species postmortem data. Attributions where the net concordance is zero or negative — meaning the transcriptomic evidence does not support the kinase acting in that cell type in that direction — are rejected. Surviving attributions are assigned a confidence tier:
+
+- **High** — the WMB expression gate passes and at least one concordance source (Song or SEA-AD) is positive. If both are positive, the attribution is still High but flagged as having three-way support.
+- **Moderate** — only one concordance source is positive, or SEA-AD concordance without Song support. SEA-AD-only attributions are capped at Moderate regardless of magnitude: a human postmortem signal without within-cohort corroboration cannot reach High confidence in this framework.
+- **Low** — marginal cases that pass the net concordance sign check but fail the WMB expression gate, or carry only weak single-source evidence.
+
+Each attribution records which evidence sources contributed, so that downstream interpretation can weight findings appropriately. The taxonomy spans 24 SEA-AD subclasses; 22 are covered by the Song snRNA-seq subset and are therefore the only ones that can earn Song-backed High-confidence attributions.
+
+![Microglia attribution bubble plot, top 50 kinases by evidence strength.](../outputs/reports/attribution_recovery/bubble_plots/bubble_microglia_top50.png){#fig-bubble width=85%}
+
+# Stage 5 — Attribution recovery and final tables
+
+<!-- attribution_recovery.py, build_viewer.py -->
+Stage 5 assembles the bulk pipeline's primary deliverable: a per-kinase hypothesis table that pairs each kinase's enrichment scores with its attributed cell types, confidence tier, supporting evidence sources, and cross-contrast trajectory. The trajectory step asks whether a kinase's attribution is consistent across the three contrasts — for example, is it App-specific, shared across all three, or divergent in ApTt — and attaches that label to every row. The result can be read as: *"kinase X is enriched in contrast C, is supported as acting in cell type Y at confidence tier T, on the basis of evidence sources E, with cross-contrast pattern P."*
+
+The same tables are also available in cell-type-first orientation — NES profiles per cell type across all attributed kinases — for readers whose question starts from a cell type rather than a kinase.
+
+These outputs are packaged into a self-contained interactive HTML viewer that loads directly in any browser without additional dependencies. The viewer presents kinases grouped by tissue category, color-coded by kinase family, with NES heatmaps ordered by hierarchical clustering and filterable by contrast, confidence tier, and cell type. It is the intended entry point for biological exploration of Stage 5 results; the underlying tables exist for downstream programmatic use.
+
+![Microglia heatmap view of top-50 kinases across the three bulk contrasts.](../outputs/reports/attribution_recovery/bubble_plots/heatmap_microglia_top50.png){#fig-heatmap width=85%}
+
+Stage 5 is the terminal output of the bulk pipeline; Stage 6 begins the hand-off to the cell-cell signaling integration layer.
+
+# Stage 6 — Incytr integration
+
+The integration layer asks a different question than Stages 1–5. Given that we now know which kinases are active and where they are likely acting, which *cell-cell signaling pathways* does that kinase activity support? The pipeline uses Incytr for this. Incytr models each intercellular signaling pathway as a four-gene chain — **Ligand** (sender cell) → **Receptor** (receiver) → **Effector Molecule / EM** (receiver) → **Target** (receiver) — with valid chains enumerated from the curated IncytrDB catalog. Per-link Hill functions of joint node expression combine into a signaling probability `SigProb = Hill(L × R) × Hill(R × EM) × Hill(EM × T)`, and a logistic transform of SigProb produces TPDS (Transcriptomic Pathway Differential Score) in [−1, +1] — the condition-level change in co-expression along the chain. Additional evidence layers add to produce PDS, with `kinase_boost = PDS − TPDS` recording how much non-expression evidence moved the score per pathway.
+
+The factorial mode uses per-animal SigProb and OLS contrast estimation rather than condition-level averaging. Across the 15 male snRNA-seq animals, a per-pathway 10-parameter OLS (`const, App, Tau, Int, time_4mo, time_6mo, App×time4, App×time6, Tau×time4, Tau×time6`) yields, for each of 9 disease×timepoint contrasts (App/Tau/ApTt × 2mo/4mo/6mo), a per-pathway TPDS, standard error, and p-value. (`df_resid = 5`, so the p-values are conservative and ApTt contrasts — driven by 1 animal per timepoint — have the widest SE.) This is a deliberately finer-grained design than the bulk MEA's 3-contrast model: the MEA layer treats sex and time as nuisance to maximize enrichment power; the integration layer interrogates them because temporal and genotype-combination dynamics are among the things it is trying to resolve.
+
+## Dual kinase channels
+
+Incytr natively scores kinase genes that pass the 10% expression detection threshold when those kinases appear as pathway nodes. Most disease-relevant kinases don't pass: phospho activity can be high while mRNA is sparse or post-translationally regulated. The integration adds a second channel for them. For each pathway, the **external kinase support score** is
+
+$$
+\text{kinase\_support\_score} \;=\; \operatorname{median}\!\bigl( \lvert NES_K \rvert \times IDF_G \times w^{\text{attr}}_K \bigr)
+$$
+
+over kinase→substrate edges where kinase $K$ (disease-significant in MEA, FDR < 0.25 for the contrast) phosphorylates substrate gene $G$, where $G$ is an EM or Target node of the pathway, and where $K$ is *not* already a node at that position (to avoid double-counting the internal channel). $IDF_G = 1 / \log(N)$ with $N$ the number of MEA-significant kinases targeting $G$, discounting hub substrates like *Srrm2* (targeted by 80+ kinases) so that connections to promiscuous substrates count for less. $w^{\text{attr}}_K$ pulls from Stage 4's unified attribution: the full `combined_score` when $K$ is attributed to the pathway's receiver cell type, and 0.25× that score when $K$ is attributed only to the sender (the sender discount reflects that intracellular kinases in the sender cell rarely phosphorylate substrates in the receiver). The median over edges is robust to both hub-substrate inflation and single-outlier dominance.
+
+A kinase-imputed expansion step admits receiver genes below the 10% expression detection threshold when they are substrates of high-FDR kinases (FDR < 0.10, tighter than the main gate) strongly attributed to the target receiver, gated by an R-side expression floor at `det_rates ≥ 0.05` and with a soft-rescue weight proportional to `1 − best_fdr` so that borderline-FDR kinases contribute proportionally less than strongly significant ones.
+
+Outputs: 22 receiver Parquet files; per-pair `kinase_support_scores.csv`; per-pair `adjusted_rankings.csv` that re-rank pathways under `TPDS + λ × kinase_support_score` for λ in {0.1, 0.25, 0.5, 1.0, 2.0}; and per-pair `reranking_summary.json`.
+
+![Sender × receiver hub heatmap: signaling load distribution across the 22 × 22 grid, faceted by contrast.](../code/integration/intermediates/factorial/all_pairs/aggregation/hub_heatmap_grid.png){#fig-hub width=95%}
+
+# Stage 7 — Cross-pair aggregation and interpretation
+
+After per-pair scoring, three cross-pair views summarize the 462-pair landscape:
+
+- **Backbone recurrence.** For each receiver, Receptor × EM × Target triples that recur across many senders into that receiver. A backbone that shows up via most senders is more likely to reflect receiver-intrinsic biology than sender-specific signaling.
+- **Hub matrix.** A 22 × 22 sender × receiver grid of aggregate signaling intensity per contrast. Rows and columns with dense high-magnitude entries identify cell-type hubs.
+- **Target convergence.** Genes reached by many senders through many distinct routes — candidate points of convergent regulation.
+
+Statistical support comes from a per-contrast dual-null permutation run at the backbone level. **Null 1 (enrichment null)** shuffles which MEA-significant kinases each edge draws from the full 311-kinase MEA universe, holding attribution weights at their median; it asks whether disease-significant kinases concentrate in specific backbones. **Null 2 (wiring null)** shuffles kinase identity and samples attribution weights *within each backbone's receiver cell type* (not globally, because cross-cell-type attribution variance inflates null scores for contrasts with few MEA-significant kinases); it asks whether the specific kinase-substrate-to-cell-type wiring is non-random given the receiver. Storey's q-value (fixed λ = 0.5, computed on the active-backbone set — those with at least one kinase-substrate edge) controls the FDR. Null 2 is the binding constraint in practice: most backbones that pass Null 1 (enrichment) fail Null 2 (wiring); the set passing both is the high-confidence layer. Null 2 significance varies strongly by receiver: GABAergic interneuron subclasses (Lamp5 Lhx6, Chandelier, Sst Chodl) carry the densest wiring signal, while excitatory glutamatergic types (L2/3 IT, L4 IT) and astrocytes are sparse.
+
+`examine_factorial.py --run` produces the interpretation outputs from these aggregates: **additivity** — compares ApTt effect to `App + Tau` per backbone (sub-additivity, which we observe, is a biologically informative deviation from the null expectation that the double knock-in is the sum of its components); **temporal trajectories** — classifies each backbone's 2mo/4mo/6mo behavior per genotype (monotonic, peaked, late-onset, etc.); **cell-type centrality** — identifies sender and receiver cell types that carry disproportionate signaling load; **kinase concordance** — per-contrast summaries of how often kinase-substrate evidence agrees in sign with TPDS.
+
+![Temporal dynamics: backbone trajectory classification across 2mo/4mo/6mo, per genotype.](../code/integration/intermediates/factorial/all_pairs/aggregation/temporal_dynamics.png){#fig-temporal width=95%}
+
+![Examination composite: additivity, temporal, centrality, and concordance panels.](../code/integration/intermediates/factorial/all_pairs/aggregation/examination/figure_overview.png){#fig-examine width=95%}
+
+# What the pipeline does and doesn't claim
+
+The outputs are convergent functional evidence for candidate intercellular signaling pathways, at per-contrast resolution across disease genotypes and timepoints. They are not mechanistic validation. Three caveats belong attached to any downstream interpretation:
+
+1. **Shared-animal dependence.** The 28 snRNA-seq animals are a subset of the 72 TMT animals, so the Song within-cohort concordance that feeds Stage 4 attribution weights shares subjects with the phospho measurements it is used to attribute. The two evidence streams are different modalities (mRNA vs phosphoprotein), but they are not statistically independent. A SEA-AD + WMB-only run is implementable as the conservative sensitivity comparison — if kinase support rankings materially shift under that restriction, the Song contribution should be disclosed; if they don't, the dependence is immaterial.
+2. **Unsigned external kinase support score.** The external channel is magnitude-only by design, to preserve the biology of inhibitory phosphorylation (a kinase activated, pathway downregulated — an inhibitory phospho-mediated mechanism — would otherwise be erased by a signed score). The unsigned score conflates concordant and discordant pathway hits in the top-ranked set. Any downstream aggregation or top-N summary needs to stratify by the concordance flag that each pathway carries; otherwise it mixes biologically opposite signals under the same rank.
+3. **IncytrDB constrains discoverable biology.** Enumeration is bounded to four-gene chains in IncytrDB's curated catalog. Non-canonical interactions, recently discovered signaling modes, and architectures that are not four-gene (longer, shorter, branching) are invisible to the pipeline. The framework prioritizes convergent evidence within known templates, it does not discover novel signaling architectures.
+
+# How to run it
+
+```bash
+pixi run live                                                  # bulk: ingest → normalize → enrich → attribute → recover
+bash code/integration/run_factorial_all_pairs.sh               # 462 pairs × 9 contrasts
+bash code/integration/run_factorial_permutations.sh            # per-contrast dual-null backbone tests
+python code/integration/adapters/examine_factorial.py --run    # additivity, temporal, cell-type, kinase interpretation
+```
+
+Environment variables that matter at run time: `ANALYSIS_MODE` (`males_only` default or `full_cohort`), `PAIR_FILTER` (e.g. `"Microglia-PVM:L5 IT"` or `"*:L5 IT"` to restrict), `ENABLE_KINASE_IMPUTATION` (default on), and `MEMORY_LIMIT_GB` (R memory guard, default 10, runs under a 12 GB systemd scope).

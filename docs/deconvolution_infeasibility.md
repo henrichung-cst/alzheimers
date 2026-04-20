@@ -139,33 +139,9 @@ A(α) = (1 - α) A_good + α A_obs,  normalized to valid compositions
 
 ## 7. Interpretation
 
-The composition matrix **A_obs** in this experiment has three compounding problems:
+The composition geometry of A_obs does not support deconvolution: low effective rank (4 of 9 singular values > 0.05), small absolute compositional variation (σ₁ = 0.183), and unfavorable sample-to-parameter ratio (24 groups, 9 effective dimensions). These factors interact multiplicatively. The conclusion is method-independent (Figure 4), robust across 200 Monte Carlo trials (Figure 5), continuous in composition quality (Figure 7), and not a noise artifact (Figure 6).
 
-1. **Low effective rank.** Only 4 of 9 effective singular values exceed 0.05. The top 2 components capture 73.5% of composition variance, meaning 7 of 9 directions carry very little information.
-
-2. **Small absolute compositional variation.** The largest singular value is only 0.183. Cell-type fractions vary by just a few percentage points across groups (Figure 2). The deconvolution problem asks the inverse to extract signal from these tiny differences.
-
-3. **Unfavorable sample-to-parameter ratio.** With 24 groups and 9 effective composition dimensions, there are fewer than 3 samples per composition direction — well below what is needed for reliable estimation in the presence of noise.
-
-These three factors interact multiplicatively. A condition number of κ = 11.3 would not be problematic for a large, well-sampled matrix. But for a 24 x 10 matrix with small absolute variation and realistic noise, it is sufficient to render per-site deconvolution uninformative.
-
-Critically, this conclusion is:
-- **Method-independent**: OLS, Ridge (4 regularization strengths), and NNLS all fail (Figure 4).
-- **Robust**: 200 independent Monte Carlo trials show zero overlap between well-conditioned and A_obs recovery distributions (Figure 5).
-- **Continuous**: Parametric interpolation shows recovery degrades smoothly with composition quality — there is no cliff, just a gradual transition from informative to uninformative (Figure 7).
-- **Not a noise problem**: Even at 30x lower noise, A_obs recovery remains poor (Figure 6).
-
-## 8. Relationship to Prior Work
-
-This analysis is consistent with the documented history of deconvolution attempts on this dataset:
-
-- An 8-phase synthetic validation campaign returned r ≈ 0
-- Four audit-driven rescue strategies returned r ≈ 0
-- A joint kinase-activity factor model (146K → 1,332 parameters) returned r ≈ 0
-- Two-compartment neuronal/glial collapse did not restore recovery
-- Transcript-based rescue did not exceed chance (p = 0.556)
-
-The Hurdle-Tweedie deconvolution model passed internal diagnostics (confirming correct implementation), yet could not produce biological attribution. This analysis provides the explanation: the composition geometry of the data does not support the inverse problem, regardless of the estimator.
+For the design logic behind the pivot away from deconvolution, see [`analysis_rationale.md`](foundation/analysis_rationale.md). For the mathematical constraints, see [`statistical_constraints.md`](foundation/statistical_constraints.md).
 
 ## Reproducibility
 

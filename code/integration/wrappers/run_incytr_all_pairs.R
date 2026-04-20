@@ -184,15 +184,48 @@ if (file.exists(kl_output_path)) {
   cat("  kl_output.csv not found, skipping activity kinase.\n")
 }
 
-# Kinase-imputed genes
-kinase_imputed_genes <- character(0)
-imputed_path <- file.path(int_dir, "kinase_imputed_genes.csv")
-if (file.exists(imputed_path)) {
-  kinase_imputed_genes <- read.csv(imputed_path)$gene
-  kinase_imputed_genes <- kinase_imputed_genes[kinase_imputed_genes %in% all_genes]
-  cat(sprintf("  Kinase-imputed genes: %d\n", length(kinase_imputed_genes)))
-} else {
-  cat("  No kinase_imputed_genes.csv, using expression-only.\n")
+# Kinase-imputed genes (refined per-receiver with legacy fallback).
+# Refined adapter emits intermediates/kinase_imputed_genes__{receiver}.csv
+# with columns (gene, best_fdr, imputed_weight). Legacy adapter emits a
+# flat intermediates/kinase_imputed_genes.csv keyed only on gene.
+expr_imputation_floor <- as.numeric(Sys.getenv("EXPR_IMPUTATION_FLOOR", "0.05"))
+cat(sprintf("  EXPR_IMPUTATION_FLOOR = %.3f\n", expr_imputation_floor))
+
+legacy_imputed_df <- NULL
+legacy_imputed_path <- file.path(int_dir, "kinase_imputed_genes.csv")
+if (file.exists(legacy_imputed_path)) {
+  tmp <- read.csv(legacy_imputed_path)
+  if (nrow(tmp) > 0) {
+    if (!"best_fdr" %in% names(tmp)) tmp$best_fdr <- 0
+    if (!"imputed_weight" %in% names(tmp)) tmp$imputed_weight <- 1.0
+    tmp <- tmp[tmp$gene %in% all_genes, , drop = FALSE]
+    legacy_imputed_df <- tmp[, c("gene", "best_fdr", "imputed_weight")]
+    cat(sprintf("  Legacy kinase_imputed_genes.csv: %d genes\n",
+                nrow(legacy_imputed_df)))
+  }
+}
+
+per_recv_imputed_files <- Sys.glob(file.path(int_dir, "kinase_imputed_genes__*.csv"))
+cat(sprintf("  Per-receiver imputed files: %d\n", length(per_recv_imputed_files)))
+if (length(per_recv_imputed_files) == 0 && is.null(legacy_imputed_df)) {
+  cat("  No imputed files found; running expression-only.\n")
+}
+
+load_imputed_for_recv <- function(recv) {
+  fname <- paste0("kinase_imputed_genes__", sanitize_name(recv), ".csv")
+  per_recv <- file.path(int_dir, fname)
+  if (file.exists(per_recv)) {
+    df <- read.csv(per_recv)
+    if (nrow(df) == 0) {
+      return(data.frame(gene = character(), best_fdr = numeric(),
+                        imputed_weight = numeric()))
+    }
+    if (!"best_fdr" %in% names(df)) df$best_fdr <- 0
+    if (!"imputed_weight" %in% names(df)) df$imputed_weight <- pmax(0, 1 - df$best_fdr)
+    df <- df[df$gene %in% all_genes, , drop = FALSE]
+    return(df[, c("gene", "best_fdr", "imputed_weight")])
+  }
+  return(legacy_imputed_df)
 }
 
 # =========================================================================
@@ -379,13 +412,30 @@ for (recv in receivers_in_order) {
   r_c1 <- wq_expr[[recv]][[conditions[1]]]
   r_c2 <- wq_expr[[recv]][[conditions[2]]]
 
-  # Receiver gene list (expression + kinase-imputed)
+  # Receiver gene list (expression + kinase-imputed, per-receiver refined).
   recv_genes_expr <- gene_lists[[recv]]
-  ki_for_recv <- setdiff(kinase_imputed_genes, recv_genes_expr)
-  recv_genes <- union(recv_genes_expr, ki_for_recv)
+  recv_imputed_df <- load_imputed_for_recv(recv)
+  if (is.null(recv_imputed_df)) {
+    recv_imputed_df <- data.frame(gene = character(), best_fdr = numeric(),
+                                  imputed_weight = numeric())
+  }
 
-  # Patch kinase-imputed expression (rowMeans where weighted quantile is zero)
-  # Cache rowMeans per receiver — reused in Expr_bygroup patching for each sender
+  # R3: expression floor — imputed substrate must have some RNA evidence
+  # in this receiver even if bulk protein evidence exists in another type.
+  if (expr_imputation_floor > 0 && nrow(recv_imputed_df) > 0) {
+    dr <- det_rates[[recv]][recv_imputed_df$gene]
+    dr[is.na(dr)] <- 0
+    recv_imputed_df <- recv_imputed_df[dr >= expr_imputation_floor, , drop = FALSE]
+  }
+
+  ki_for_recv <- setdiff(recv_imputed_df$gene, recv_genes_expr)
+  recv_genes <- union(recv_genes_expr, ki_for_recv)
+  imputed_weight_vec <- setNames(recv_imputed_df$imputed_weight,
+                                 recv_imputed_df$gene)
+
+  # Patch kinase-imputed expression with SOFT rescue (R2):
+  # rescued = imputed_weight * rowMeans, weighting by 1 - best_fdr so weakly
+  # significant kinases rescue less aggressively than strong ones.
   r_c1_patched <- r_c1
   r_c2_patched <- r_c2
   ki_rm_c1 <- NULL; ki_rm_c2 <- NULL
@@ -397,8 +447,10 @@ for (recv in receivers_in_order) {
     if (length(ki_zero) > 0) {
       ki_rm_c1 <- setNames(Matrix::rowMeans(mat[ki_zero, recv_cells_c1, drop = FALSE]), ki_zero)
       ki_rm_c2 <- setNames(Matrix::rowMeans(mat[ki_zero, recv_cells_c2, drop = FALSE]), ki_zero)
-      r_c1_patched[ki_zero] <- pmax(r_c1_patched[ki_zero], ki_rm_c1)
-      r_c2_patched[ki_zero] <- pmax(r_c2_patched[ki_zero], ki_rm_c2)
+      w <- imputed_weight_vec[ki_zero]
+      w[is.na(w)] <- 1.0
+      r_c1_patched[ki_zero] <- pmax(r_c1_patched[ki_zero], w * ki_rm_c1)
+      r_c2_patched[ki_zero] <- pmax(r_c2_patched[ki_zero], w * ki_rm_c2)
     }
   }
 

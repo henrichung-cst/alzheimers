@@ -6,6 +6,11 @@ exports a sparse expression matrix plus metadata for R consumption.
 """
 
 import os
+import sys
+
+_ADAPTERS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_ADAPTERS_DIR))  # code/integration
+sys.path.insert(0, os.path.dirname(os.path.dirname(_ADAPTERS_DIR)))  # code
 
 import anndata as ad
 import numpy as np

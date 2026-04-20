@@ -41,27 +41,19 @@ Practical implication: the data can support bulk condition effects, but not reli
 
 ## 4. Evidence That The Failure Is Structural
 
-The non-identifiability conclusion is not based on one failed implementation.
-
-Retained evidence:
-
-- an 8-phase synthetic validation campaign returned essentially zero recovery,
-- four additional audit-driven rescue strategies also returned `r ~= 0`,
-- a joint kinase-activity factor model reduced the parameter count from roughly `146K` to `1,332` but still returned `r ~= 0`,
-- two-compartment neuronal/glial collapse did not restore recovery,
-- matched transcript-based rescue did not exceed chance.
+The non-identifiability conclusion is not based on one failed implementation. An 8-phase synthetic validation campaign, four rescue strategies, a joint factor model, two-compartment collapse, and transcript-only rescue all returned near-zero recovery. See [`analysis_rationale.md`](./analysis_rationale.md) for the full pivot logic and [`deconvolution_infeasibility.md`](../deconvolution_infeasibility.md) for the synthetic validation.
 
 The factor-model failure matters because it shows that parameter reduction and kinase-substrate structure did not solve the real problem. The bottleneck is the composition geometry, not the size of the parameterization.
 
 ## 5. Why Diagnostics Do Not Reopen The Old Path
 
-The Hurdle-Tweedie deconvolution stack passed important internal diagnostics. That result should be retained, but interpreted correctly:
+The Hurdle-Tweedie deconvolution stack passed internal diagnostics, but passing diagnostics does not rehabilitate the model:
 
 - it means the old model was built coherently,
 - it argues against a trivial coding or fitting bug,
-- it does not rehabilitate the model for biological attribution.
+- it does not restore biological attribution capability.
 
-This distinction is important because it prevents future work from reopening the old branch under the assumption that better tuning alone would fix it.
+This prevents future work from reopening the old branch under the assumption that better tuning alone would fix it.
 
 ## 6. Supported And Unsupported Statistical Claims
 

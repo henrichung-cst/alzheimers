@@ -15,15 +15,15 @@ The live program is the 72-sample pathway:
 
 ## Closed Paths
 
-These paths are closed and should not drive new code:
+These paths are closed and should not drive new code. See [`analysis_rationale.md`](./analysis_rationale.md) for the full pivot logic.
 
-| Path | Why it is closed |
+| Path | Status |
 |:---|:---|
-| Direct cell-type deconvolution from the 24-group design | Cell-type-specific condition effects are not identifiable |
-| Joint kinase-activity factor model | Parameter reduction did not overcome the composition bottleneck |
-| Two-compartment neuronal/glial simplification | Synthetic validation still failed |
-| Transcript-only rescue | Matched RNA did not produce defensible cell-type attribution |
-| Pre-stoichiometry atlas concordance | Mixed abundance and activity signal diluted concordance |
+| Direct cell-type deconvolution from the 24-group design | Closed — not identifiable |
+| Joint kinase-activity factor model | Closed — composition bottleneck |
+| Two-compartment neuronal/glial simplification | Closed — failed validation |
+| Transcript-only rescue | Closed — no defensible attribution |
+| Pre-stoichiometry atlas concordance | Closed — diluted signal |
 
 ## Live Workflow
 

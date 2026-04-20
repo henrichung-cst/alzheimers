@@ -1,8 +1,15 @@
 """Build the canonical kinase <-> backbone edge index.
 
-Concatenates per-pair kinase_routes.parquet across all 460 pairs, assigns
-stable integer ids (kinase_id, backbone_id, celltype_id, contrast_id), and
-writes kinase_backbone_edges.parquet + edge_index_metadata.json.
+Streams per-pair kinase_routes.parquet across all 460 pairs in two passes:
+
+  Pass 1 (vocab): collect the set of kinases and backbone (receiver, Receptor,
+          EM, Target) keys. No route data retained.
+  Pass 2 (emit):  for each pair, load routes, assign integer ids via vector
+          merges/maps, append a RecordBatch to a streaming ParquetWriter.
+
+This avoids concatenating ~48 GB of per-pair frames (460 pairs x ~105 MB each)
+and the Python-tuple materialization that caused OOMs in an earlier one-shot
+implementation.
 
 Contract: see pipeline_notes/phase1_edge_schema.md.
 
@@ -13,7 +20,6 @@ Usage:
 """
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -21,6 +27,8 @@ import time
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 ADAPTERS_DIR = os.path.dirname(os.path.abspath(__file__))
 INTEGRATION_DIR = os.path.dirname(ADAPTERS_DIR)
@@ -36,6 +44,18 @@ CONTRASTS = list(icfg.FACTORIAL_CONTRASTS.keys())
 OUT_DIR = os.path.join(icfg.FACTORIAL_ALL_PAIRS_DIR, "aggregation")
 OUT_EDGES = os.path.join(OUT_DIR, "kinase_backbone_edges.parquet")
 OUT_META = os.path.join(OUT_DIR, "edge_index_metadata.json")
+
+EDGE_SCHEMA = pa.schema([
+    ("kinase_id", pa.uint16()),
+    ("backbone_id", pa.uint32()),
+    ("contrast_id", pa.uint8()),
+    ("sender_id", pa.uint8()),
+    ("receiver_id", pa.uint8()),
+    ("support_contribution", pa.float32()),
+    ("support_magnitude", pa.float32()),
+    ("concordance", pa.int8()),
+    ("lambda_bin", pa.uint8()),
+])
 
 
 def discover_pair_dirs(pair_filter=None):
@@ -54,7 +74,6 @@ def discover_pair_dirs(pair_filter=None):
 
 
 def unsanitize(name):
-    """Reverse sanitize_celltype_name: restore '/', ' ' in subclass strings."""
     lookup = {s.replace("/", "-").replace(" ", "_"): s for s in SEA_AD_SUBCLASSES}
     return lookup.get(name, name.replace("_", " "))
 
@@ -62,6 +81,141 @@ def unsanitize(name):
 def split_pair(dir_name):
     sender_san, receiver_san = dir_name.split("__", 1)
     return unsanitize(sender_san), unsanitize(receiver_san)
+
+
+def _scores_cols(path):
+    return pd.read_csv(
+        path,
+        usecols=["Path", "EM", "Target", "Receptor"],
+        dtype="string",
+    )
+
+
+def _collect_vocab(pairs_with_routes):
+    """Pass 1: scan every pair, collect kinase set + unique backbone keys.
+    Retains only small string sets; per-pair frames are released each iter."""
+    kinase_set = set()
+    bb_frames = []
+    ct_set = set()
+    t0 = time.monotonic()
+    for i, (pair_name, d) in enumerate(pairs_with_routes, 1):
+        sender, receiver = split_pair(pair_name)
+        ct_set.add(sender)
+        ct_set.add(receiver)
+
+        routes_k = pd.read_parquet(
+            os.path.join(d, "kinase_routes.parquet"), columns=["kinase", "Path"]
+        )
+        kinase_set.update(routes_k["kinase"].unique())
+        used_paths = routes_k["Path"].unique()
+        del routes_k
+
+        scores = _scores_cols(os.path.join(d, "kinase_support_scores.csv"))
+        scores = scores[scores["Path"].isin(used_paths)]
+        bb = scores[["Receptor", "EM", "Target"]].drop_duplicates().copy()
+        bb["receiver"] = receiver
+        bb_frames.append(bb[["receiver", "Receptor", "EM", "Target"]])
+
+        if i % 50 == 0 or i == len(pairs_with_routes):
+            print(f"  vocab [{i}/{len(pairs_with_routes)}] "
+                  f"kinases={len(kinase_set)} bb_frames={len(bb_frames)}")
+
+    backbones = (
+        pd.concat(bb_frames, ignore_index=True)
+        .drop_duplicates()
+        .sort_values(["receiver", "Receptor", "EM", "Target"])
+        .reset_index(drop=True)
+    )
+    backbones["backbone_id"] = np.arange(len(backbones), dtype=np.uint32)
+    print(f"  vocab pass: {time.monotonic() - t0:.1f}s; "
+          f"kinases={len(kinase_set)} backbones={len(backbones)} "
+          f"celltypes={len(ct_set)}")
+    return sorted(kinase_set), backbones, sorted(ct_set)
+
+
+def _emit_pair(pair_name, d, kin_to_id, backbones, ct_to_id, cn_to_id,
+               writer, verify):
+    """Load one pair, build ids, append a RecordBatch. Return verify failure
+    string or None."""
+    sender, receiver = split_pair(pair_name)
+
+    routes = pd.read_parquet(os.path.join(d, "kinase_routes.parquet"))
+    scores = _scores_cols(os.path.join(d, "kinase_support_scores.csv"))
+    routes = routes.merge(scores, on="Path", how="left", validate="many_to_one")
+
+    if verify:
+        vf = _verify_pair(routes, d, pair_name)
+        if vf:
+            return vf
+
+    # Assign ids vectorized. backbones is shared, so filter to this receiver
+    # before merging to keep the join small.
+    bb_r = backbones[backbones["receiver"] == receiver][
+        ["Receptor", "EM", "Target", "backbone_id"]
+    ]
+    routes = routes.merge(
+        bb_r, on=["Receptor", "EM", "Target"], how="left", validate="many_to_one"
+    )
+    if routes["backbone_id"].isna().any():
+        return f"{pair_name}: unresolved backbone_id after merge"
+
+    kinase_id = routes["kinase"].map(kin_to_id).astype("uint16")
+    contrast_id = routes["contrast"].map(cn_to_id).astype("uint8")
+    sender_id = np.full(len(routes), ct_to_id[sender], dtype="uint8")
+    receiver_id = np.full(len(routes), ct_to_id[receiver], dtype="uint8")
+    backbone_id = routes["backbone_id"].astype("uint32")
+    support = routes["support_contribution"].astype("float32")
+    magnitude = support.abs()
+    concordance = routes["nes_sign"].astype("int8")
+    lambda_bin = np.zeros(len(routes), dtype="uint8")
+
+    batch = pa.RecordBatch.from_arrays(
+        [
+            pa.array(kinase_id.values, type=pa.uint16()),
+            pa.array(backbone_id.values, type=pa.uint32()),
+            pa.array(contrast_id.values, type=pa.uint8()),
+            pa.array(sender_id, type=pa.uint8()),
+            pa.array(receiver_id, type=pa.uint8()),
+            pa.array(support.values, type=pa.float32()),
+            pa.array(magnitude.values, type=pa.float32()),
+            pa.array(concordance.values, type=pa.int8()),
+            pa.array(lambda_bin, type=pa.uint8()),
+        ],
+        schema=EDGE_SCHEMA,
+    )
+    writer.write_batch(batch)
+    return None
+
+
+def _verify_pair(routes, pair_dir, pair_name, tol=1e-4):
+    verify_cols = ["Path"] + [f"kinase_support_score_sum_{c}" for c in CONTRASTS] \
+        + [f"n_distinct_kinases_{c}" for c in CONTRASTS]
+    scores = pd.read_csv(
+        os.path.join(pair_dir, "kinase_support_scores.csv"), usecols=verify_cols
+    )
+    agg = (
+        routes.groupby(["Path", "contrast"], sort=False)
+        .agg(route_sum=("support_contribution", "sum"),
+             route_n=("kinase", "nunique"))
+        .reset_index()
+    )
+    for contrast in CONTRASTS:
+        rc = agg[agg["contrast"] == contrast][["Path", "route_sum", "route_n"]]
+        sc_col = f"kinase_support_score_sum_{contrast}"
+        nk_col = f"n_distinct_kinases_{contrast}"
+        merged = rc.merge(scores[["Path", sc_col, nk_col]], on="Path",
+                          how="left")
+        diff = (merged["route_sum"].astype("float64")
+                - merged[sc_col].astype("float64"))
+        max_diff = diff.abs().max() if len(diff) else 0.0
+        if max_diff > tol:
+            return (f"{pair_name}/{contrast}: "
+                    f"max |route_sum - score_sum| = {max_diff:.6g} (tol {tol})")
+        count_mismatch = (merged["route_n"] != merged[nk_col]).sum()
+        if count_mismatch:
+            return (f"{pair_name}/{contrast}: "
+                    f"{count_mismatch} paths with route_n != n_distinct_kinases")
+    return None
 
 
 def main():
@@ -90,108 +244,47 @@ def main():
     print(f"  {len(pairs_with_routes)} with routes; "
           f"{len(pairs_missing_routes)} missing routes")
 
-    # Load routes + per-pair validation data
-    t_load = time.monotonic()
-    kinases = set()
-    backbone_key_set = set()
-    verify_failures = []
-    dfs = []
-    for i, (pair_name, d) in enumerate(pairs_with_routes, 1):
-        sender, receiver = split_pair(pair_name)
-        routes = pd.read_parquet(os.path.join(d, "kinase_routes.parquet"))
-        # Pull (EM, Target, Receptor) from kinase_support_scores.csv once via
-        # left-join on Path (backbone key on disk is Path string).
-        scores = pd.read_csv(
-            os.path.join(d, "kinase_support_scores.csv"),
-            usecols=["Path", "EM", "Target", "Receptor", "Ligand"],
-        )
-        routes = routes.merge(scores, on="Path", how="left", validate="many_to_one")
-        routes["sender"] = sender
-        routes["receiver"] = receiver
-        dfs.append(routes)
-        kinases.update(routes["kinase"].unique())
-        for em, tg, rc in zip(routes["EM"], routes["Target"], routes["Receptor"]):
-            backbone_key_set.add((receiver, rc, em, tg))
+    kinases_sorted, backbones, celltypes_present = _collect_vocab(pairs_with_routes)
+    kin_to_id = {k: i for i, k in enumerate(kinases_sorted)}
+    ct_to_id = {c: i for i, c in enumerate(celltypes_present)}
+    cn_to_id = {c: i for i, c in enumerate(CONTRASTS)}
 
-        if not args.skip_verify:
-            vf = _verify_pair(routes, d, pair_name)
+    os.makedirs(OUT_DIR, exist_ok=True)
+    t_emit = time.monotonic()
+    verify_failures = []
+    with pq.ParquetWriter(OUT_EDGES, EDGE_SCHEMA, compression="zstd") as writer:
+        for i, (pair_name, d) in enumerate(pairs_with_routes, 1):
+            vf = _emit_pair(pair_name, d, kin_to_id, backbones, ct_to_id,
+                            cn_to_id, writer, verify=not args.skip_verify)
             if vf:
                 verify_failures.append(vf)
-
-        if i % 50 == 0 or i == len(pairs_with_routes):
-            print(f"  loaded [{i}/{len(pairs_with_routes)}] "
-                  f"{pair_name} rows={len(routes)}")
-
-    print(f"  load+verify: {time.monotonic() - t_load:.1f}s")
+                if len(verify_failures) >= 3:
+                    break
+                continue
+            if i % 25 == 0 or i == len(pairs_with_routes):
+                print(f"  emit [{i}/{len(pairs_with_routes)}] {pair_name}")
 
     if verify_failures:
-        print(f"\nVERIFY FAILED for {len(verify_failures)} pairs. "
-              "First 3:")
-        for f in verify_failures[:3]:
+        print(f"\nVERIFY FAILED for {len(verify_failures)} pairs:")
+        for f in verify_failures:
             print("  -", f)
         sys.exit(2)
 
-    # Side tables
-    kinases_sorted = sorted(kinases)
-    kin_to_id = {k: i for i, k in enumerate(kinases_sorted)}
-
-    backbones_sorted = sorted(backbone_key_set)
-    bb_to_id = {k: i for i, k in enumerate(backbones_sorted)}
-
-    ct_set = set()
-    for name, _ in pairs_with_routes:
-        s, r = split_pair(name)
-        ct_set.add(s)
-        ct_set.add(r)
-    celltypes_present = sorted(ct_set)
-    ct_to_id = {c: i for i, c in enumerate(celltypes_present)}
-
-    cn_to_id = {c: i for i, c in enumerate(CONTRASTS)}
-
-    # Concatenate + join ids
-    t_join = time.monotonic()
-    routes_all = pd.concat(dfs, ignore_index=True)
-    del dfs
-    routes_all["kinase_id"] = routes_all["kinase"].map(kin_to_id).astype("uint16")
-    routes_all["contrast_id"] = routes_all["contrast"].map(cn_to_id).astype("uint8")
-    routes_all["sender_id"] = routes_all["sender"].map(ct_to_id).astype("uint8")
-    routes_all["receiver_id"] = routes_all["receiver"].map(ct_to_id).astype("uint8")
-    bb_tuples = list(zip(routes_all["receiver"], routes_all["Receptor"],
-                         routes_all["EM"], routes_all["Target"]))
-    routes_all["backbone_id"] = np.fromiter(
-        (bb_to_id[t] for t in bb_tuples), dtype=np.uint32, count=len(bb_tuples))
-    routes_all["support_magnitude"] = (
-        routes_all["support_contribution"].abs().astype("float32")
-    )
-    # concordance: sign(kinase_nes) * sign(TPDS). TPDS lookup deferred —
-    # we need it from scores; compute from support_contribution sign for now.
-    # For a first cut, concordance = nes_sign (TPDS-adjusted at viewer time).
-    routes_all["concordance"] = routes_all["nes_sign"].astype("int8")
-    routes_all["lambda_bin"] = np.uint8(0)
-    print(f"  id assignment: {time.monotonic() - t_join:.1f}s")
-
-    edges = routes_all[[
-        "kinase_id", "backbone_id", "contrast_id",
-        "sender_id", "receiver_id",
-        "support_contribution", "support_magnitude",
-        "concordance", "lambda_bin",
-    ]]
-
-    os.makedirs(OUT_DIR, exist_ok=True)
-    t_write = time.monotonic()
-    edges.to_parquet(OUT_EDGES, index=False, compression="zstd")
-    print(f"  wrote {OUT_EDGES} ({len(edges):,} rows) in "
-          f"{time.monotonic() - t_write:.1f}s")
+    # Read footer for authoritative row count.
+    pf = pq.ParquetFile(OUT_EDGES)
+    n_edges = pf.metadata.num_rows
+    print(f"  emit pass: {time.monotonic() - t_emit:.1f}s; "
+          f"edges={n_edges:,}")
 
     meta = {
         "schema_version": 1,
         "source": "pipeline Unit 1.3 build_edge_index.py",
-        "n_edges": int(len(edges)),
+        "n_edges": int(n_edges),
         "n_pairs_with_routes": len(pairs_with_routes),
         "n_pairs_missing_routes": len(pairs_missing_routes),
         "pairs_missing_routes": pairs_missing_routes[:20],
         "kinases": kinases_sorted,
-        "backbones_n": len(backbones_sorted),
+        "backbones_n": int(len(backbones)),
         "celltypes": celltypes_present,
         "contrasts": CONTRASTS,
         "backbone_key_cols": ["receiver", "Receptor", "EM", "Target"],
@@ -200,42 +293,9 @@ def main():
     }
     with open(OUT_META, "w") as f:
         json.dump(meta, f, indent=2)
+    print(f"  wrote {OUT_EDGES}")
     print(f"  wrote {OUT_META}")
-
     print(f"\n=== done in {time.monotonic() - t0:.1f}s ===")
-
-
-def _verify_pair(routes, pair_dir, pair_name, tol=1e-4):
-    """Per-pair verify: sum(support_contribution) over kinases per (Path,
-    contrast) matches kinase_support_score_sum_{contrast} in the
-    pair's kinase_support_scores.csv, and count matches n_distinct_kinases.
-    """
-    scores = pd.read_csv(os.path.join(pair_dir, "kinase_support_scores.csv"))
-
-    agg = (
-        routes.groupby(["Path", "contrast"], sort=False)
-        .agg(route_sum=("support_contribution", "sum"),
-             route_n=("kinase", "nunique"))
-        .reset_index()
-    )
-
-    for contrast in CONTRASTS:
-        rc = agg[agg["contrast"] == contrast][["Path", "route_sum", "route_n"]]
-        sc_col = f"kinase_support_score_sum_{contrast}"
-        nk_col = f"n_distinct_kinases_{contrast}"
-        merged = rc.merge(scores[["Path", sc_col, nk_col]], on="Path",
-                          how="left")
-        diff = (merged["route_sum"].astype("float64")
-                - merged[sc_col].astype("float64"))
-        max_diff = diff.abs().max() if len(diff) else 0.0
-        if max_diff > tol:
-            return (f"{pair_name}/{contrast}: "
-                    f"max |route_sum - score_sum| = {max_diff:.6g} (tol {tol})")
-        count_mismatch = (merged["route_n"] != merged[nk_col]).sum()
-        if count_mismatch:
-            return (f"{pair_name}/{contrast}: "
-                    f"{count_mismatch} paths with route_n != n_distinct_kinases")
-    return None
 
 
 if __name__ == "__main__":

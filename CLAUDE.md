@@ -10,11 +10,10 @@ The project pivoted from direct cell-type deconvolution (which failed validation
 
 ## Environment Setup
 
-Requires Python 3.11 (kinase-library compatibility). The active environment is `alzheimers` (managed by micromamba), which includes both `kinase-library` and `anndata`:
+Env managed by **pixi**; activated automatically via direnv on `cd`. Python 3.11 + kinase-library 1.7.0 + R. Package versions are pinned to match kinase-library's strict `~=` requirements (scipy 1.14, scikit-learn 1.6, pandas 2.2, seaborn 0.13, etc).
+
 ```bash
-micromamba create -n alzheimers python=3.11 -y
-micromamba activate alzheimers
-mamba install kinase-library natsort pandas numpy matplotlib seaborn scipy requests anndata gseapy scikit-learn
+pixi install   # first-time setup
 ```
 
 ## Running the Analysis
@@ -23,21 +22,23 @@ All scripts run from the repo root.
 
 ### Live Pipeline
 
-The bundled front door runs all three stages in order:
+The bundled live task runs ingest → normalize → enrich → attribute → recover:
 ```bash
-bash code/runners/main/run_live_pipeline.sh
+pixi run live
 ```
 
 The **dual-track runner** runs males-only (primary) and full-cohort (sensitivity) analyses sequentially:
 ```bash
-bash code/runners/main/run_dual_analysis.sh
+pixi run dual
 ```
 
 Or run individual stages:
 ```bash
-bash code/runners/main/run_data_ingest.sh          # data ingestion
-bash code/runners/main/run_kinase_attribution.sh    # kinase attribution
-bash code/runners/main/run_attribution_recovery.sh  # attribution recovery
+pixi run ingest     # data ingestion
+pixi run normalize  # IRS + stoichiometry
+pixi run enrich     # MEA kinase enrichment (males-only)
+pixi run attribute  # unified cell-type attribution (males-only)
+pixi run recover    # cross-contrast + final tables
 ```
 
 **Data ingestion and characterization** (`data_ingest.py`):
@@ -125,92 +126,40 @@ python code/lucie_5xfad_manifest.py       # Lucie 5xFAD proteomics manifest buil
 
 ## Architecture
 
-### Live Pipeline
+The live pipeline is a 3-stage stoichiometry-corrected MEA enrichment + unified attribution workflow. For full specifications, see the foundation docs:
 
-The live analysis is a stoichiometry-corrected MEA enrichment + unified attribution workflow:
+- **Scope and workflow**: [`docs/foundation/analysis_charter.md`](docs/foundation/analysis_charter.md)
+- **Stage-by-stage contract** (inputs, outputs, failure modes): [`docs/foundation/live_pipeline_contract.md`](docs/foundation/live_pipeline_contract.md)
+- **Concordance model** (evidence sources, weights, confidence tiers): [`docs/foundation/concordance.md`](docs/foundation/concordance.md)
+- **Statistical constraints** (identifiability, DOF): [`docs/foundation/statistical_constraints.md`](docs/foundation/statistical_constraints.md)
+- **Pivot rationale**: [`docs/foundation/analysis_rationale.md`](docs/foundation/analysis_rationale.md)
 
-1. **data_ingest.py** — Reads 72-animal Song TMT proteomics, maps TMT channels to experimental design, matches 14,772/16,114 phosphosites to parent proteins (91.7%), assesses marker proteins and kinase coverage, runs PCA quality control, detects statistical outliers (within-group robust z-scores)
-2. **kinase_attribution.py** — IRS cross-plex normalization (all 72 samples), sample filtering (outlier exclusion + optional males-only), stoichiometry computation (`log2(phospho) − log2(protein)`), factorial OLS per site with disease×timepoint interactions (9 time-resolved contrasts), MEA (GSEA-based) kinase enrichment on median-centered + winsorized stoichiometry β values, unified cell-type attribution combining SEA-AD concordance and WMB expression specificity
-3. **attribution_recovery.py** — Cross-contrast consistency analysis and final attribution table assembly
-4. **plot_attribution_bubbles.py** — Visualization: per-tissue heatmaps, direction-over-time diverging bars, ApTt additivity scatter, winsorization diagnostic
+### Pipeline Summary
 
-### Stoichiometry Correction
+1. **data_ingest.py** — TMT channel mapping, phosphosite-to-protein matching (91.7%), marker assessment, PCA QC, outlier detection
+2. **kinase_attribution.py** — IRS normalization (all 72 samples), stoichiometry (`log2(phospho) − log2(protein)`), factorial OLS (9 time-resolved contrasts), MEA kinase enrichment (median-centered + winsorized), unified cell-type attribution (SEA-AD + WMB + Song concordance)
+3. **attribution_recovery.py** — Cross-contrast consistency and final hypothesis tables (primary deliverable: `kinase_hypothesis_table.csv`)
+4. **plot_attribution_bubbles.py** — Visualization: heatmaps, direction-over-time bars, additivity scatter
 
-The core enabling transformation:
-```
-stoichiometry = log2(phospho) − log2(parent protein abundance)
-```
-This removes parent-protein abundance confounding and exposes activity-regulated kinase signals.
+### Key Design Points
 
-### Sample Filtering
-
-The pipeline supports two analysis modes controlled by `ANALYSIS_MODE` env var (default: `males_only`):
-
-1. **Outlier exclusion** — `data_ingest.py --outliers` detects outliers using within-group robust z-scores (median + MAD, scaled by 1.4826 for normal consistency). Animals with |z| > `config.OUTLIER_ZSCORE_THRESH` (default 3.0) are flagged in `sample_exclusions.csv`. Applied to all 72 animals regardless of sex.
-
-2. **Sex filtering** — In `males_only` mode, female animals are excluded to remove hormonal confounds on phosphoproteomics. This reduces the design from 72 to ~33 animals (3 per cell after outlier removal), drops the `female` covariate from the design matrix (N×10 instead of N×11), and yields 23 residual DOF.
-
-IRS normalization always uses all 72 samples to maintain a stable per-plex reference. Filtering applies at OLS time (`step_enrich()`), not during normalization.
-
-### Time-Resolved Contrasts
-
-The OLS model uses disease×timepoint interaction terms to produce 9 time-resolved contrasts (3 diseases × 3 timepoints). The design matrix includes: const, App, Tau, Int, [female], time_4mo, time_6mo, App×time4, App×time6, Tau×time4, Tau×time6. Contrasts are defined in `CONTRAST_COEFS` (e.g., `App_4mo = β_App + β_App×time4`).
-
-### MEA Kinase Enrichment
-
-Replaces the earlier DiffPhos (Fisher's exact test on binarized sites) approach. Uses MEA (Motif Enrichment Analysis) via GSEA pre-ranked on stoichiometry β values. This provides continuous NES (Normalized Enrichment Score) per kinase per contrast, without requiring arbitrary binarization cutoffs. Significance: FDR < 0.25 (standard GSEA threshold).
-
-**Preprocessing before GSEA ranking** (per contrast, in `_run_mea()`):
-
-1. **Median-centering** — Subtracts the median stoichiometry LFC from all sites. Without this, a global shift in phosphorylation (e.g., net dephosphorylation at a timepoint) propagates into every kinase substrate set, making NES sign reflect the background shift rather than kinase-specific activity. The removed offsets are logged to `mea_global_shift.csv`.
-
-2. **Winsorization** — Clips centered LFCs at the 1st/99th percentile (`config.MEA_WINSORIZE_PERCENTILE`) to prevent extreme outlier sites from inflating GSEA enrichment scores. Clipped sites are logged to `winsorized_sites.csv`.
-
-### Unified Cell-Type Attribution
-
-All MEA-significant kinases are evaluated against three evidence sources for cell-type attribution at the **subclass level** (24 SEA-AD subclasses, e.g., Pvalb, Sst, L2/3 IT, Microglia-PVM):
-
-1. **SEA-AD concordance (pathway-matched)**: For each kinase gene, look up its differential expression in human AD (SEA-AD, 139 supertypes aggregated to 24 subclasses via `adata.var["Subclass"]`). The effect size file is **pathway-matched** to the mouse contrast: App contrasts use `effect_sizes_early.h5ad` (early/low-CPS donors, amyloid-dominant), Tau contrasts use `effect_sizes_late.h5ad` (late/high-CPS, tau-dominant), and ApTt contrasts use `effect_sizes.h5ad` (full CPS range). This avoids checking amyloid-pathway kinases against a tau-dominated late-stage signature (early/late Pearson r ≈ −0.12, ~48% sign flips). Concordance score = `sign(NES) * median(sea_ad_lfc)` — positive when kinase activity direction matches human AD transcriptomic change in that subclass. The stratum used is recorded in `sea_ad_stratum`. Mapping: `config.SEA_AD_PATHWAY_MAP`.
-
-2. **WMB expression specificity**: How specifically each kinase gene is expressed in each of the 24 subclasses (Allen WMB 10Xv3 HPF dataset, 338 WMB subclasses mapped to 24 SEA-AD subclasses via keyword matching).
-
-3. **Song within-cohort concordance**: Same-species, same-cohort evidence from paired snRNA-seq (28 animals). Uses Allen Cell Type Mapper annotations from `170_gex_celltypes_00.h5ad` (210 subclass labels → 22/24 SEA-AD subclasses). Pseudobulk expression is aggregated per (animal, subclass), then factorial OLS (males only, pooled across timepoints) estimates pathway-specific LFCs (App, Tau, ApTt). Song concordance = `sign(NES) * song_lfc`. Also provides within-cohort expression specificity as a complement to WMB. Song specificity correlates r ≈ 0.73 with WMB specificity (Pearson). Song evidence is additive — it can boost confidence but is never required.
-
-**Weighted concordance model (Song 3× : SEA-AD 1×):** Song and SEA-AD are both evidence, weighted by reliability. Song (same-species, same-cohort, paired animals) receives 3× weight; SEA-AD (cross-species human proxy) receives 1×. When both are available: `effective_concordance = (3 × song_cs + 1 × sea_ad_cs) / 4`. When only one is available, it provides the full concordance signal. Neither reference has absolute veto power — Song can rescue attributions that SEA-AD blocks, and vice versa, proportional to signal strength. The `concordance_source` column records which references contributed ("both", "song", or "sea_ad"). Weights are configurable via `config.SONG_CONCORDANCE_WEIGHT` and `config.SEA_AD_CONCORDANCE_WEIGHT`.
-
-Combined confidence (thresholds scale with number of cell types, expressed as multiples of uniform = 1/24):
-- **High**: Song-contributed concordance + WMB specificity ≥ 2× uniform (~0.083) + |LFC| > 0.1
-- **Moderate**: SEA-AD-only concordance (capped regardless of WMB tier), or Song-contributed + lower WMB
-- **Low**: Weak evidence from all sources
-
-Evidence basis labels: `three_way` (WMB + SEA-AD + Song), `within_cohort` (WMB + Song), `cross_species` (WMB + SEA-AD), `mouse_expression_only`, `song_only`, `human_concordance_only`, `weak`.
-
-The 24 subclasses are defined once in `config.SEA_AD_SUBCLASSES` and re-exported by `atlas_reference.py`. Each subclass maps to a parent 5+1 class via `atlas_reference.SUBCLASS_TO_5PLUS1`.
-
-### Mechanism Annotation (Supplementary)
-
-Optionally (`--mechanism-annotation`), the pipeline can classify kinases as abundance-driven, activity-driven, or both by comparing raw phospho MEA vs stoichiometry MEA significance. This is a descriptive annotation, not a routing variable for attribution.
-
-### Final Attribution Tables
-
-attribution_recovery.py produces four hypothesis-generation tables. Static localization evidence (WMB, SEA-AD) is separated from the dynamic NES signal. WMB acts as a gate (kinase must be expressed) not a weight.
-
-- **Table 1** `kinase_activity_matrix.csv` — wide NES/FDR across 9 contrasts + trajectory label (one row/kinase)
-- **Table 2** `celltype_evidence_table.csv` — WMB-gated static localization evidence (one row/kinase×celltype)
-- **Table 3** `kinase_hypothesis_table.csv` — kinase-first synthesis: activity profile + top cell-type candidates. **Primary downstream deliverable.**
-- **Table 4** `celltype_kinase_profiles.csv` — cell-type-first synthesis: per-cell-type NES trajectories for all WMB-gated kinases
+- **Stoichiometry**: `log2(phospho) − log2(protein)` removes parent-protein abundance confounding
+- **Sample filtering**: `ANALYSIS_MODE` env var (default `males_only`); IRS normalization always uses all 72 samples, filtering applies at OLS time
+- **OLS model**: disease×timepoint interactions → 9 contrasts (3 diseases × 3 timepoints). Design matrix: const, App, Tau, Int, [female], time_4mo, time_6mo, App×time4, App×time6, Tau×time4, Tau×time6
+- **MEA**: GSEA pre-ranked on stoichiometry β values; median-centered then winsorized (1st/99th percentile) before ranking; FDR < 0.25
+- **Attribution**: 3 evidence sources (SEA-AD concordance, WMB specificity, Song within-cohort) weighted Song 3× : SEA-AD 1×; 24 subclasses; confidence tiers (high/moderate/low)
 
 ### Dependency Graph
 
 ```
-config.py  ←  data_ingest.py                                    (total-proteome characterization)
-config.py  ←  data_ingest.py  ←  kinase_attribution.py          (stoichiometry + MEA + unified attribution)
-config.py  ←  kinase_attribution.py  ←  attribution_recovery.py (cross-contrast + final table)
+config.py  ←  data_ingest.py  ←  kinase_attribution.py  ←  attribution_recovery.py
 
 Supporting:
-config.py  ←  atlas_reference.py                                (SEA-AD + WMB + Aging Mouse acquisition)
-config.py  ←  atlas_reference.py  ←  wmb_expression.py          (WMB expression export)
-config.py  ←  snrna_integration.py                              (Song within-cohort evidence)
+config.py  ←  atlas_reference.py  ←  wmb_expression.py
+config.py  ←  snrna_integration.py
+
+Integration:
+kinase_attribution.py + snrna_integration.py  ←  code/integration/
 ```
 
 ### Live Code
@@ -229,6 +178,17 @@ config.py  ←  snrna_integration.py                              (Song within-c
 - `wmb_expression.py` — WMB expression export: per-subclass kinase/phosphatase expression from Allen WMB 10Xv3 HPF (24 SEA-AD subclasses). Produces `outputs/reports/wmb_expression/wmb_kinase_expression.csv` consumed by kinase_attribution.py unified attribution. Requires: `anndata`, `abc_atlas_access`.
 - `snrna_integration.py` — Song snRNA-seq integration: computes pseudobulk expression from paired 170_gex_celltypes_00.h5ad (63K nuclei, 28 animals, Allen Cell Type Mapper annotations → 22/24 SEA-AD subclasses), within-cohort expression specificity, and within-cohort transcriptomic concordance via factorial OLS (males-only, pooled across timepoints). Outputs to `outputs/reports/snrna_integration/`. Requires: `anndata`, `scipy`, `statsmodels`.
 - `map_kinases_to_genes.py` — Kinase→gene symbol mapping utility.
+
+### Integration Code (Incytr)
+
+Cell-cell signaling integration under `code/integration/`. Connects bulk kinase activity (from live pipeline) with Incytr's snRNA-seq-based intercellular pathway inference across 462 sender-receiver pairs (22 subclasses). See `code/integration/README.md` for full methodology.
+
+- `config_integration.py` — Integration-specific config (paths, thresholds, 10% detection threshold)
+- `adapters/` — Python data adapters: export expression, phospho, kinase-library data for R; compute kinase support scores; aggregate cross-pair results
+- `wrappers/` — R wrappers: `duckdb_enumeration.R` (combinatorial pathway enumeration via DuckDB), `receiver_scoring.R` (vectorized receiver-side scoring), `run_incytr_all_pairs.R` (462-pair orchestrator), `postprocess.R`, `verify_phase2.R`
+- `tests/edge_pruning/` — R-based diagnostic and validation scripts for enumeration scaling
+- `run_all_pairs.sh` — Shell runner for all-pairs pipeline (requires R + DuckDB + Incytr package)
+- Requires: R with `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow` packages; Python adapters use `kinase-library`, `anndata`
 
 ### Runners
 
@@ -294,10 +254,16 @@ Operational shell wrappers under `code/runners/`:
 The `docs/foundation/` directory contains authoritative design documents:
 - `analysis_charter.md` — Single front door defining the live scope, closed paths, and rules for new work
 - `live_pipeline_contract.md` — Stage-by-stage runtime spec (inputs, outputs, failure modes) for the live pipeline
-- `repo_surface_index.md` — Exhaustive main/supporting/archived classification of every file
+- `concordance.md` — SEA-AD concordance analysis design and pathway matching
 - `analysis_rationale.md` — Why the project pivoted from deconvolution to stoichiometry
 - `statistical_constraints.md` — Hard design limits (identifiability, DOF)
 - `repo_retention_policy.md` — Active-vs-archived boundaries
+- `repo_surface_index.md` — Exhaustive main/supporting/archived classification of every file
+
+Other documentation:
+- `docs/integrations/kinase_incytr_integration.md` — Source of truth for the kinase ↔ Incytr integration (scoring model, runtime modes, configuration, outputs, limitations)
+- `docs/archive/legacy.md` — Legacy proportional decomposition method (historical reference)
+- `docs/deconvolution_infeasibility.md` — Synthetic validation proving deconvolution is infeasible on this dataset
 
 ## Gotchas
 
@@ -312,19 +278,48 @@ The `docs/foundation/` directory contains authoritative design documents:
 - **WMB expression memory** — `wmb_expression.py --proteome` processes 6,308 genes across 13 regions; use `skip_regional=True` and `chunk_size=2000` to avoid OOM (~30GB RAM available)
 - **A_obs is group-level** — `A_obs_fractions.tsv` has 24 rows (one per factorial group), not 72 (per-animal). Marker assessment correlates per-animal protein intensity with per-group composition, so most cell types yield q≈1.0 — this is expected
 - **Do not reopen closed paths** — direct deconvolution, factor model, two-compartment, and transcript-only rescue are all closed (see charter)
+- **Integration is Python+R** — `code/integration/` uses Python adapters for data export and R wrappers for Incytr/DuckDB. The R environment requires `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow` packages. Config lives in `config_integration.py`, not `config.py`
 
-### Code Intelligence
+## Tooling & Environment
 
-Prefer [LSP](/search_kw/2519ab10c2ea14e4599a7c2565ea0ac0) over [Grep](/search_kw/6ccc30f8b0bcd9ee2f2c9f62486726d2)/Read for code navigation — it's faster, precise, and avoids reading entire files:
-- `workspaceSymbol` to find where something is defined
-- `findReferences` to see all usages across the codebase
-- `goToDefinition` / `goToImplementation` to jump to source
-- `hover` for type info without reading the file
+- Prefer `Grep` (text/filename search) over LSP-based symbol search unless explicitly doing semantic code navigation; the cclsp MCP server is not always available.
+- When credentials are needed (Confluence, APIs), check for hidden env files first: `.env`, `.env.confluence`, `.env.local` before asking the user.
+- For Confluence page updates with diagrams, render Mermaid locally to PNG images and upload as attachments — do NOT paste raw Mermaid code blocks.
+- Use `bat` for file previewing when showing output to the user.
+- Use `eza -lah --git` for directory listings.
 
-Use Grep only when LSP isn't available or for text/pattern searches (comments, strings, config).
+## Schema & Data Conventions
 
-After writing or editing code, check LSP diagnostics and fix errors before proceeding.
+- When adding provenance/metadata columns, match the existing schema's type exactly (e.g., if single-contrast uses string format for `imputed_nodes`, factorial must too).
+- Aggregation queries: always verify whether stats (std, consistency) should be computed over raw route-level rows or pre-aggregated sender-level values.
 
-## Tool Preferences
-- Use `bat` for file previewing when showing output to the user
-- Use `eza -lah --git` for directory listings
+## Layer-2 drive access (2026-04-19)
+
+Live FUSE mounts for `data/gdrive_shared/` and `data/lucie_proteomics/` were retired in favor of on-demand `rclone copy` ingest tasks (per `~/Projects/work/drive_audit.md` §Phase 3).
+
+- `pixi run ingest-gdrive-shared` → pulls into `data/raw/external/gdrive_shared/`
+- `pixi run ingest-lucie-proteomics` → pulls into `data/raw/external/lucie_proteomics/`
+
+Docs under `docs/integrations/` and `docs/archive/` that reference paths under `data/gdrive_shared/<…>/` or `data/lucie_proteomics/<…>/` are historical. If a pipeline needs those files, run the relevant ingest task first and read from `data/raw/external/<name>/<…>`.
+
+## Workflow Conventions
+
+- After any implementation phase, run the full test suite (`pytest` for Python, `devtools::test()` for R) and report pass/fail counts before declaring done.
+- When auditing for performance or consolidation, produce the audit document FIRST and get approval before editing files — do not dive into exploratory Read/Bash loops.
+- For multi-phase work (audit → plan → implement → simplify), write the plan to a file the user can approve.
+
+## Workflow rules
+
+- Run `pixi task list` to enumerate tasks before suggesting how to execute a pipeline step — do not guess task names.
+- When adding a dependency, scan `pixi.toml` and PyPI constraints for `~=` pins (kinase-library forces scipy/scikit-learn/pandas/seaborn) and match them on the conda side before `pixi install`.
+- Fresh collaborator data flows through `pixi run ingest-<name>`. There are no live collaborator mounts; do not hunt for `data/gdrive_shared/` or `data/lucie_proteomics/` paths.
+- DuckDB spill directory is `~/.cache/duckdb` via `.envrc` to avoid OOM on tmpfs `/tmp`. If DuckDB hits disk-full, verify `.envrc` was sourced (`echo $DUCKDB_TEMP_DIR`).
+- Ground kinase/biology claims against literature via the connected MCPs (PubMed, bioRxiv, Scholar Gateway) before finalizing interpretations or reports.
+
+## Git workflow
+
+- Commit after each logical unit of work with a conventional commit message (`feat:`, `fix:`, `refactor:`, `docs:`).
+- Use `git` (Bash) for all local operations — add, commit, branch, diff, log, status.
+- Use `gh` (Bash) for all GitHub operations — PRs, issues, CI status. Do not route these through a GitHub MCP.
+- Do not push or open PRs without explicit instruction.
+- Do not run `git reset --hard`, force-push, or any destructive operation without confirmation.

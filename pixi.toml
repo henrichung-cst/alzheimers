@@ -1,0 +1,74 @@
+[workspace]
+authors = ["Henri Chung <henri.chung@cellsignal.com>"]
+channels = ["conda-forge", "bioconda"]
+name = "alzheimers"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+ingest = "python code/data_ingest.py --run"
+ingest-gdrive-shared = "rclone copy gdrive_shared: data/raw/external/gdrive_shared/ --drive-root-folder-id 1syiic6d9DUJIc1sPL5wc8uL7Od3Dsq3Z --progress"
+ingest-lucie-proteomics = "rclone copy gdrive_shared: data/raw/external/lucie_proteomics/ --drive-root-folder-id 1uWjRb_ZnrDp9HwgijE48zhb8gvJjOr2P --progress"
+normalize = "python code/kinase_attribution.py --normalize"
+enrich = { cmd = "python code/kinase_attribution.py --enrich", env = { ANALYSIS_MODE = "males_only" } }
+attribute = { cmd = "python code/kinase_attribution.py --attribute", env = { ANALYSIS_MODE = "males_only" } }
+mechanism = "python code/kinase_attribution.py --mechanism-annotation"
+recover = "python code/attribution_recovery.py --run"
+live = { depends-on = ["ingest", "normalize", "enrich", "attribute", "recover"] }
+dual = "bash code/runners/main/run_dual_analysis.sh"
+atlas = "python code/atlas_reference.py --run"
+wmb-export = "python code/wmb_expression.py --run"
+snrna = "python code/snrna_integration.py --run"
+bubbles = "python code/plot_attribution_bubbles.py"
+viewer = "python code/build_viewer.py"
+install-incytr = "R CMD INSTALL --no-multiarch ../incytr"
+
+[dependencies]
+python = "3.11.*"
+pip = "*"
+# Versions pinned to match kinase-library 1.7.0 metadata (scipy/seaborn/sklearn/pandas have strict ~= bounds)
+pandas = "~=2.2.3"
+numpy = "~=1.26.4"
+matplotlib = "~=3.8.3"
+seaborn = "~=0.13.2"
+scipy = "~=1.14.1"
+scikit-learn = "~=1.6.0"
+statsmodels = "~=0.14.2"
+pyarrow = "~=18.0.0"
+gseapy = "~=1.1.8"
+requests = "*"
+natsort = "~=8.3.1"
+openpyxl = "*"
+ipykernel = "*"
+anndata = "*"
+boto3 = "*"
+r-base = ">=4.0.0"
+r-devtools = "*"
+r-remotes = "*"
+r-matrix = "*"
+r-forcats = "*"
+"r-data.table" = "*"
+r-matrixstats = "*"
+r-knitr = "*"
+r-rmarkdown = "*"
+r-roxygen2 = "*"
+r-seurat = ">=5.0.0"
+r-testthat = ">=3.0.0"
+bioconductor-limma = "*"
+r-rcpp = "*"
+r-ggplot2 = "*"
+r-patchwork = "*"
+r-dplyr = "*"
+r-tidyr = "*"
+r-purrr = "*"
+r-stringr = "*"
+r-magrittr = "*"
+r-irkernel = "*"
+r-duckdb = ">=1.5.2,<2"
+r-dbi = ">=1.3.0,<2"
+r-arrow = ">=18.0.0,<19"
+duckdb = ">=1.5.2,<2"
+
+[pypi-dependencies]
+kinase-library = "*"
+py-spy = ">=0.4.1, <0.5"

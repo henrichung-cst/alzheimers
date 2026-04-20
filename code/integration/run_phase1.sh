@@ -1,4 +1,10 @@
 #!/bin/bash
+# STATUS: single-pair reference / debug path; output schema (incytr_object.rds,
+# pvalues_seed{1,2,3}.csv, results_expronly.csv, results_full.csv) differs from
+# the production all-pairs / factorial runners which write per-receiver Parquet.
+# Keep for validation and Incytr S4 comparison; do not rely on its outputs for
+# cross-pair analysis.
+#
 # Phase 1 proof of concept: Microglia-PVM -> L5 IT, WT vs App, 4mo males
 #
 # Runs Python adapters (alzheimers env) then R wrappers (incytr env).
@@ -29,7 +35,7 @@ echo
 run_adapter() {
     local name="$1"
     echo "[$name]"
-    micromamba run -n alzheimers python3 "$ADAPTERS_DIR/$name.py"
+    pixi run python3 "$ADAPTERS_DIR/$name.py"
     echo
 }
 
@@ -49,11 +55,11 @@ fi
 # ---------------------------------------------------------------
 echo "=== R Pipeline ==="
 echo "[run_incytr.R]"
-micromamba run -n incytr Rscript "$WRAPPERS_DIR/run_incytr.R"
+pixi run Rscript "$WRAPPERS_DIR/run_incytr.R"
 echo
 
 echo "[postprocess.R]"
-micromamba run -n incytr Rscript "$WRAPPERS_DIR/postprocess.R"
+pixi run Rscript "$WRAPPERS_DIR/postprocess.R"
 echo
 
 # ---------------------------------------------------------------
@@ -61,13 +67,13 @@ echo
 # ---------------------------------------------------------------
 echo "=== Kinase Support Scoring ==="
 echo "[compute_kinase_support.py]"
-micromamba run -n alzheimers python3 "$ADAPTERS_DIR/compute_kinase_support.py"
+pixi run python3 "$ADAPTERS_DIR/compute_kinase_support.py"
 echo
 
 # Permutation tests (optional, slow)
 if [ "${RUN_PERMUTATIONS:-0}" = "1" ]; then
   echo "[compute_kinase_support.py --permutations]"
-  micromamba run -n alzheimers python3 "$ADAPTERS_DIR/compute_kinase_support.py" \
+  pixi run python3 "$ADAPTERS_DIR/compute_kinase_support.py" \
     --permutations
   echo
 fi
@@ -76,7 +82,7 @@ fi
 if [ "${RUN_BOOTSTRAP:-0}" = "1" ]; then
   echo "=== Bootstrap Sensitivity ==="
   echo "[bootstrap_sensitivity.R]"
-  micromamba run -n incytr Rscript "$WRAPPERS_DIR/bootstrap_sensitivity.R"
+  pixi run Rscript "$WRAPPERS_DIR/bootstrap_sensitivity.R"
   echo
 fi
 

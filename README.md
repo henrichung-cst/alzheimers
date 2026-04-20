@@ -15,10 +15,9 @@ Use the documentation by role, not by creation date:
 - [`docs/foundation/live_pipeline_contract.md`](docs/foundation/live_pipeline_contract.md): exact live stage contract, outputs, and ordered run sequence
 - [`docs/foundation/statistical_constraints.md`](docs/foundation/statistical_constraints.md): identifiability limits and interpretation guardrails
 - [`docs/foundation/repo_surface_index.md`](docs/foundation/repo_surface_index.md): explicit `main` / `supporting` / `archived` file inventory
-- [`docs/foundation/incytr_integration_methodology.md`](docs/foundation/incytr_integration_methodology.md): Incytr integration design and methodology
-- [`docs/sap_document_map.md`](docs/sap_document_map.md): map of the live documentation set
+- [`docs/integrations/kinase_incytr_integration.md`](docs/integrations/kinase_incytr_integration.md): Incytr integration — scoring, runtime modes, configuration, outputs
+- [`docs/INDEX.md`](docs/INDEX.md): map of the live documentation set
 - [`docs/integrations/integrations-structure.md`](docs/integrations/integrations-structure.md): upstream archive layout and current operational data locations
-- [`docs/integrations/alzheimers-incytr-input-validation.md`](docs/integrations/alzheimers-incytr-input-validation.md): current input mapping and validation notes for Song and 5xFAD
 - [`docs/report_writing_checklist.md`](docs/report_writing_checklist.md): report-writing guidance derived from reviewer feedback
 
 Historical context lives under `archive/`.
@@ -69,8 +68,10 @@ alzheimers/
 │   │   ├── wrappers/               # R: DuckDB enumeration, Incytr orchestration, bootstrap
 │   │   ├── tests/                  # Integration tests
 │   │   ├── config_integration.py   # Integration-specific configuration
-│   │   ├── run_phase1.sh           # Single-pair runner (reference: Microglia-PVM -> L5 IT)
-│   │   └── run_all_pairs.sh        # All-pairs runner (462 pairs, systemd-run memory guard)
+│   │   ├── run_phase1.sh           # Single-pair debug runner (Microglia-PVM -> L5 IT)
+│   │   ├── run_all_pairs.sh        # 462-pair single-contrast runner (App_4mo)
+│   │   ├── run_factorial_all_pairs.sh    # 462-pair × 9-contrast runner (primary)
+│   │   └── run_factorial_permutations.sh # per-contrast backbone dual-null tests
 │   ├── supplementary/              # Reviewer-response diagnostic analyses
 │   ├── data_ingest.py              # Main: data ingestion + characterization
 │   ├── kinase_attribution.py       # Main: stoichiometry + MEA + unified attribution
@@ -164,35 +165,7 @@ bash code/runners/supporting/run_snrna_integration.sh  # Song within-cohort snRN
 
 ### Incytr Integration Pipeline
 
-Connects bulk kinase activity to intercellular signaling pathways. Requires the bulk pipeline to have been run first (needs MEA results and unified attribution).
-
-**Single-pair** (reference pair: Microglia-PVM -> L5 IT):
-
-```bash
-cd code/integration
-bash run_phase1.sh
-```
-
-**All 462 sender-receiver pairs:**
-
-```bash
-cd code/integration
-bash run_all_pairs.sh              # full run: Python adapters + R pipeline + kinase support
-bash run_all_pairs.sh --skip-adapters  # checkpoint-resume (skip Python export)
-```
-
-Environment variables for the all-pairs runner:
-
-| Variable | Default | Description |
-|---|---|---|
-| `PAIR_FILTER` | (all pairs) | Filter pairs, e.g. `"Microglia-PVM:L5 IT"` or `"*:L5 IT"` |
-| `FORCE_RERUN` | `0` | Set to `1` to reprocess pairs with existing results |
-| `ENABLE_KINASE_IMPUTATION` | `1` | Set to `0` to disable kinase-imputed pathway expansion |
-| `RUN_PERMUTATIONS` | `0` | Set to `1` to run dual null model permutation tests |
-| `RUN_BOOTSTRAP` | `0` | Set to `1` to run L5 IT bootstrap sensitivity analysis |
-| `MEMORY_LIMIT_GB` | `10` | R memory guard threshold |
-
-The all-pairs pipeline runs under `systemd-run --user --scope -p MemoryMax=12G`.
+Connects bulk kinase activity to intercellular signaling pathways. Requires the bulk pipeline (MEA results and unified attribution) to have been run first. The primary runner is `code/integration/run_factorial_all_pairs.sh` (462 pairs × 9 contrasts). See [`docs/integrations/kinase_incytr_integration.md`](docs/integrations/kinase_incytr_integration.md) for the full runtime spec — runners, environment variables, outputs, and configuration.
 
 ### Supplementary Diagnostics
 
@@ -229,7 +202,7 @@ The active Song dataset lives under `data/incytr_collections/song/`. Treat this 
 
 - `data/lucie_proteomics/` contains upstream source files
 - [`docs/integrations/5xfad-lucie-manifest.json`](docs/integrations/5xfad-lucie-manifest.json) inventories local Lucie files
-- [`docs/integrations/alzheimers-incytr-input-validation.md`](docs/integrations/alzheimers-incytr-input-validation.md) documents input mapping
+- [`docs/archive/alzheimers-incytr-input-validation.md`](docs/archive/alzheimers-incytr-input-validation.md) documents input mapping (archived session audit)
 
 ## Conventions
 

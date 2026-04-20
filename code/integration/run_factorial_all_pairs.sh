@@ -56,7 +56,7 @@ else
       local name="$1"
       shift
       echo "[$name]"
-      micromamba run -n alzheimers python3 "$ADAPTERS_DIR/$name.py" "$@"
+      pixi run python3 "$ADAPTERS_DIR/$name.py" "$@"
       echo
   }
 
@@ -64,6 +64,11 @@ else
   run_adapter "export_expression_factorial"
   run_adapter "export_kldata"
   run_adapter "export_kl_output_factorial"
+
+  # Kinase-imputed gene expansion (per-contrast, per-receiver)
+  if [ "${ENABLE_KINASE_IMPUTATION:-1}" = "1" ]; then
+    run_adapter "export_kinase_imputed_genes_factorial"
+  fi
 fi
 
 # ---------------------------------------------------------------
@@ -74,14 +79,14 @@ echo "[run_incytr_factorial_all_pairs.R]"
 
 # Build env var forwarding for systemd-run
 ENV_ARGS=()
-for var in PAIR_FILTER FORCE_RERUN MEMORY_LIMIT_GB EXPR_DETECTION_THRESHOLD; do
+for var in PAIR_FILTER FORCE_RERUN MEMORY_LIMIT_GB EXPR_DETECTION_THRESHOLD EXPR_IMPUTATION_FLOOR; do
   if [ -n "${!var:-}" ]; then
-    ENV_ARGS+=(-E "$var=${!var}")
+    ENV_ARGS+=(--setenv="$var=${!var}")
   fi
 done
 
-systemd-run --user --scope -p MemoryMax=12G \
-  micromamba run -n incytr "${ENV_ARGS[@]}" \
+systemd-run --user --scope -p MemoryMax="${MEMORY_LIMIT_GB:-12}G" "${ENV_ARGS[@]}" \
+  pixi run \
   Rscript "$WRAPPERS_DIR/run_incytr_factorial_all_pairs.R"
 
 echo
@@ -92,8 +97,9 @@ echo "Key outputs:"
 echo "  Receiver Parquet: $FAC_DIR/all_pairs/recv_{receiver}.parquet"
 echo "  Pair summary:     $FAC_DIR/all_pairs/pair_summary.csv"
 echo
-echo "Deferred to PR 2:"
-echo "  - Kinase support scoring"
-echo "  - Cross-pair aggregation"
-echo "  - Backbone-level permutation tests"
+echo "Factorial mode components (all implemented):"
+echo "  - Kinase-imputed gene expansion (per-contrast, per-receiver)"
+echo "  - Kinase support scoring (compute_kinase_support_factorial.py)"
+echo "  - Cross-pair aggregation (aggregate_factorial.py)"
+echo "  - Backbone-level permutation tests (aggregate_factorial.py --permutations)"
 echo "============================================================"

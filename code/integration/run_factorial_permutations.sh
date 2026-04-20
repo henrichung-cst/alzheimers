@@ -36,7 +36,7 @@ for i in "${!CONTRASTS[@]}"; do
     echo ""
     echo "--- Contrast $((i+1))/9: ${contrast} ---"
 
-    micromamba run -n alzheimers python3 -u - <<PYEOF
+    pixi run python3 -u - <<PYEOF
 import sys, os, gc
 sys.path.insert(0, os.path.join(os.getcwd(), 'code/integration'))
 sys.path.insert(0, os.path.join(os.getcwd(), 'code/integration/adapters'))
@@ -106,6 +106,33 @@ done
 
 echo "=== All contrasts complete ==="
 wc -l "${FINAL_FILE}"
+
+# Derive the filtered significant_both subset consumed by build_pathway_viewer.py.
+SIG_FILE="${OUT_DIR}/backbone_significant_both_nulls.csv"
+echo "Writing ${SIG_FILE}..."
+pixi run python3 - <<PYEOF
+import pandas as pd
+df = pd.read_csv("${FINAL_FILE}")
+sig = df[df["significant_both"]].copy()
+sig.to_csv("${SIG_FILE}", index=False)
+print(f"  {len(sig):,} significant backbones of {len(df):,}")
+PYEOF
+
 echo "Cleaning up temp files..."
 rm -rf "${TMP_DIR}"
+
+# -----------------------------------------------------------------
+# Edge index build (Unit 1.3/1.4): concatenate per-pair kinase routes
+# into kinase_backbone_edges.parquet for the unified viewer.
+# Skips pairs whose kinase_routes.parquet already exists.
+# -----------------------------------------------------------------
+echo ""
+echo "=== Emitting per-pair kinase routes (idempotent) ==="
+pixi run python3 code/integration/adapters/compute_kinase_support_factorial.py \
+  --emit-kinase-routes
+
+echo ""
+echo "=== Building edge index ==="
+pixi run python3 code/integration/adapters/build_edge_index.py
+
 echo "Done."

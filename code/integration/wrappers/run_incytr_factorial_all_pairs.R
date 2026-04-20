@@ -215,6 +215,57 @@ for (ct in cell_types) {
   gene_lists[[ct]] <- names(det_rates[[ct]][det_rates[[ct]] >= expr_threshold])
 }
 
+# ------------------------------------------------------------------
+# Kinase-imputed genes (factorial): per-receiver union across contrasts.
+# Refined adapter (export_kinase_imputed_genes_factorial.py) writes
+#   factorial/kinase_imputed_genes__{receiver}__{contrast}.csv
+# with columns gene, best_fdr, imputed_weight, receiver. We build a
+# per-receiver union keyed on gene with max(imputed_weight) across
+# contrasts (the strongest rescue applies).
+# ------------------------------------------------------------------
+expr_imputation_floor <- as.numeric(Sys.getenv("EXPR_IMPUTATION_FLOOR", "0.05"))
+cat(sprintf("  EXPR_IMPUTATION_FLOOR = %.3f\n", expr_imputation_floor))
+
+load_imputed_for_recv_factorial <- function(recv) {
+  pat <- paste0("kinase_imputed_genes__", sanitize_name(recv), "__*.csv")
+  files <- Sys.glob(file.path(fac_dir, pat))
+  if (length(files) == 0) return(NULL)
+  frames <- lapply(files, function(p) {
+    d <- tryCatch(read.csv(p), error = function(e) NULL)
+    if (is.null(d) || nrow(d) == 0) return(NULL)
+    if (!"best_fdr" %in% names(d)) d$best_fdr <- 0
+    if (!"imputed_weight" %in% names(d)) d$imputed_weight <- pmax(0, 1 - d$best_fdr)
+    d[, c("gene", "best_fdr", "imputed_weight")]
+  })
+  frames <- Filter(Negate(is.null), frames)
+  if (length(frames) == 0) return(NULL)
+  all_df <- do.call(rbind, frames)
+  agg <- aggregate(
+    cbind(best_fdr = all_df$best_fdr,
+          imputed_weight = all_df$imputed_weight) ~ gene,
+    data = all_df,
+    FUN = function(x) if (identical(names(x), NULL)) x else x,
+    simplify = TRUE
+  )
+  # aggregate above returns one row per gene but stacks numeric columns as
+  # lists; use split/sapply for clarity instead.
+  by_gene <- split(all_df, all_df$gene)
+  out <- do.call(rbind, lapply(by_gene, function(g) {
+    data.frame(gene = g$gene[1],
+               best_fdr = min(g$best_fdr),
+               imputed_weight = max(g$imputed_weight),
+               stringsAsFactors = FALSE)
+  }))
+  rownames(out) <- NULL
+  out <- out[out$gene %in% all_genes, , drop = FALSE]
+  out
+}
+
+per_recv_imputed_files <- Sys.glob(
+  file.path(fac_dir, "kinase_imputed_genes__*.csv"))
+cat(sprintf("  Per-receiver factorial imputed files: %d\n",
+            length(per_recv_imputed_files)))
+
 # Pooled expression (all cells of each type, regardless of animal)
 # Used for DuckDB edge pruning — gives a realistic single estimate per gene,
 # unlike max-across-animals which overstates products (max_A * max_B where
@@ -410,6 +461,36 @@ for (recv in receivers_in_order) {
   # max-across-animals overstates products because max(A)*max(B) can come
   # from different animals, producing 100x more surviving edges.
   recv_expr_pool <- pooled_expr[[recv]]
+
+  # Kinase imputation (factorial): union across contrasts, per-gene soft
+  # rescue weight. Applied to pooled expression only (per-animal vectors
+  # are not patched — imputation changes *which* pathways enumerate, not
+  # the per-animal SigProbs used for OLS contrast estimation).
+  ki_for_recv <- character(0)
+  recv_imputed_df <- load_imputed_for_recv_factorial(recv)
+  if (!is.null(recv_imputed_df) && nrow(recv_imputed_df) > 0) {
+    if (expr_imputation_floor > 0) {
+      dr <- det_rates[[recv]][recv_imputed_df$gene]
+      dr[is.na(dr)] <- 0
+      recv_imputed_df <- recv_imputed_df[dr >= expr_imputation_floor, , drop = FALSE]
+    }
+    ki_for_recv <- setdiff(recv_imputed_df$gene, recv_genes)
+    recv_genes <- union(recv_genes, ki_for_recv)
+    if (length(ki_for_recv) > 0) {
+      recv_cells <- which(meta$labels == recv)
+      ki_zero <- ki_for_recv[recv_expr_pool[ki_for_recv] == 0]
+      ki_zero <- ki_zero[!is.na(ki_zero)]
+      if (length(ki_zero) > 0) {
+        rm_pool <- setNames(
+          Matrix::rowMeans(mat[ki_zero, recv_cells, drop = FALSE]), ki_zero)
+        w <- setNames(recv_imputed_df$imputed_weight, recv_imputed_df$gene)[ki_zero]
+        w[is.na(w)] <- 1.0
+        recv_expr_pool[ki_zero] <- pmax(recv_expr_pool[ki_zero], w * rm_pool)
+        cat(sprintf("  Kinase-imputed rescue: %d genes patched (mean w = %.3f)\n",
+                    length(ki_zero), mean(w)))
+      }
+    }
+  }
 
   # --- Prune L2/L3 for this receiver ---
   dt2 <- l2_raw[l2_raw$from %in% recv_genes & l2_raw$to %in% recv_genes]
@@ -663,10 +744,21 @@ for (recv in receivers_in_order) {
   # --- Pathway evidence labels ---
   dt[, pathway_evidence := "expression-confirmed"]
 
+  # Per-pathway labels of receiver-side nodes that came from kinase imputation
+  # (Receptor / EM / Target). Ligand is sender-side and not imputed here.
+  # String format ("" or e.g. "Receptor;EM") matches single-contrast schema in
+  # receiver_scoring.R label_pathway_evidence().
+  dt[, imp_r := ifelse(Receptor %in% ki_for_recv, "Receptor", "")]
+  dt[, imp_e := ifelse(EM       %in% ki_for_recv, "EM",       "")]
+  dt[, imp_t := ifelse(Target   %in% ki_for_recv, "Target",   "")]
+  dt[, imputed_nodes := gsub("^;+|;+$", "", gsub(";{2,}", ";",
+    paste(imp_r, imp_e, imp_t, sep = ";")))]
+  dt[, c("imp_r", "imp_e", "imp_t") := NULL]
+
   # --- Write Parquet (atomic) ---
   # Select output columns
   out_cols <- c("sender", "Ligand", "Receptor", "EM", "Target", "Path",
-                "pathway_evidence", "n_animals", "df_resid")
+                "pathway_evidence", "imputed_nodes", "n_animals", "df_resid")
   for (cname in contrast_names) {
     out_cols <- c(out_cols,
                   paste0("TPDS_", cname),

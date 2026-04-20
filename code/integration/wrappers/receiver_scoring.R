@@ -1,5 +1,10 @@
 # receiver_scoring.R — Vectorized all-sender scoring for one receiver
 #
+# Regression check: after any change to the scoring logic here, run
+# `wrappers/verify_phase2.R` manually — it validates that vectorized
+# receiver scoring reproduces the pair-centric Incytr S4 scores for one
+# pair. Not wired into any shell runner.
+#
 # Phase 2 of the receiver-centric refactor. Replaces the per-pair inner loop
 # (462 Incytr S4 object creations + downstream scoring) with vectorized
 # data.table operations over the unified all_pathways_df.

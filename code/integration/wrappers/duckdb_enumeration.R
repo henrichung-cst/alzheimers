@@ -45,6 +45,10 @@ weighted_quantile_expr <- function(mat_sub) {
 #' @param kinase_imputed_genes character: receiver genes added via kinase
 #'   imputation (below expression threshold). These use rowMeans instead
 #'   of weighted quantile to prevent zero-out. Default NULL (none).
+#' @param imputed_weights optional named numeric in [0,1] keyed by gene:
+#'   per-gene rescue weight (1 - best_fdr). Applied multiplicatively in the
+#'   soft rescue: rescued = imputed_weight * rowMeans. Default NULL, in
+#'   which case all imputed genes rescue with weight = 1 (legacy hard rescue).
 #' @param K numeric: Hill function half-max (default 0.5)
 #' @param N integer: Hill function exponent (default 2)
 #' @param cutoff_SigProb numeric: SigProb threshold (default 0.01)
@@ -59,6 +63,7 @@ duckdb_enumerate_pathways <- function(
   mat, meta, DB, sender, receiver, conditions,
   gene.use_Sender = NULL, gene.use_Receiver = NULL,
   kinase_imputed_genes = NULL,
+  imputed_weights = NULL,
   K = 0.5, N = 2, cutoff_SigProb = 0.01,
   em_promiscuity_weight = TRUE,
   duckdb_memory = "6GB", duckdb_threads = 4L,
@@ -126,11 +131,18 @@ duckdb_enumerate_pathways <- function(
                         ki_zero)
       rm_c2 <- setNames(Matrix::rowMeans(mat[ki_zero, r_cells_c2, drop = FALSE]),
                         ki_zero)
-      # Only replace where weighted quantile was zero
-      r_c1[ki_zero] <- pmax(r_c1[ki_zero], rm_c1)
-      r_c2[ki_zero] <- pmax(r_c2[ki_zero], rm_c2)
-      cat(sprintf("  Kinase-imputed expression rescue: %d genes patched with rowMeans\n",
-                  length(ki_zero)))
+      # Soft rescue (R2): rescued = imputed_weight * rowMeans. If
+      # imputed_weights is NULL, defaults to 1 (legacy hard rescue).
+      w <- rep(1.0, length(ki_zero))
+      if (!is.null(imputed_weights)) {
+        wi <- imputed_weights[ki_zero]
+        wi[is.na(wi)] <- 1.0
+        w <- as.numeric(wi)
+      }
+      r_c1[ki_zero] <- pmax(r_c1[ki_zero], w * rm_c1)
+      r_c2[ki_zero] <- pmax(r_c2[ki_zero], w * rm_c2)
+      cat(sprintf("  Kinase-imputed rescue: %d genes patched (mean weight = %.3f)\n",
+                  length(ki_zero), mean(w)))
     }
   }
 

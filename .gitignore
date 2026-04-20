@@ -7,7 +7,17 @@
 !CLAUDE.md
 !/docs/
 !/docs/**
+!pixi.toml
+!pixi.lock
+!.envrc
 # Ignore generated Python cache files.
 /code/__pycache__/
 /code/**/*.pyc
 code/integration/intermediates/
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+# Archived docs and rendered artifacts — provenance on disk, not in git.
+/docs/archive/
+/docs/**/*.pdf
+/docs/**/*.html
