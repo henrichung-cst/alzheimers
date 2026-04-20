@@ -1,24 +1,27 @@
 #!/usr/bin/env python3
 """Unified viewer builder: single entry point for kinase + pathway views.
 
-Phase 2 deliverable. Produces:
+Phase 3 adds the HTML shell (template + CSS + JS Store + Overview tab).
+Phase 2 artifacts produced:
 
   - kinase_backbone_edges_sig.parquet  — edges filtered to backbones that
     pass both null permutation tests (significant_both). Sidecar artifact
-    that the HTML viewer will fetch at runtime in later phases.
+    (not embedded in HTML; fetched by future tabs only if needed).
   - unified_viewer.payload.json (+ .gz) — columnar JSON payload with
-    stable integer IDs for kinases, celltypes, and backbones. Does NOT
-    embed edges (the sig set is still ~10^7-10^8 rows). Carries an
-    `edges_ref` pointer to the sidecar.
+    stable integer IDs for kinases, celltypes, and backbones. Embedded
+    inline in the HTML via a <script type="application/json"> tag so the
+    viewer is a single-file deliverable usable over file://.
 
 The full 7.14 GB / 2.23B-row edge parquet is streamed via
 ParquetFile.iter_batches — it is never materialized in memory.
 
 Usage:
+    python code/build_unified_viewer.py              # build + html (default)
     python code/build_unified_viewer.py --summary    # input row counts
     python code/build_unified_viewer.py --sidecar    # sig parquet only
     python code/build_unified_viewer.py --payload    # JSON only (needs sidecar)
     python code/build_unified_viewer.py --build      # sidecar + payload
+    python code/build_unified_viewer.py --html       # write HTML (needs payload)
     python code/build_unified_viewer.py --validate   # write report md
 """
 
@@ -61,6 +64,7 @@ UNIFIED_VIEWER_OUTPUT_DIR = os.path.join(config.REPO_ROOT, "outputs", "reports")
 PAYLOAD_JSON = os.path.join(UNIFIED_VIEWER_OUTPUT_DIR, "unified_viewer.payload.json")
 PAYLOAD_JSON_GZ = PAYLOAD_JSON + ".gz"
 SIDECAR_PARQUET = os.path.join(UNIFIED_VIEWER_OUTPUT_DIR, "kinase_backbone_edges_sig.parquet")
+UNIFIED_VIEWER_HTML = os.path.join(UNIFIED_VIEWER_OUTPUT_DIR, "unified_viewer.html")
 REPORT_MD = os.path.join(config.REPO_ROOT, "pipeline_notes", "phase2_payload_report.md")
 
 SCHEMA_VERSION = 1
@@ -511,6 +515,29 @@ def _build_backbones_slice(data: UnifiedData,
     return cols, sender_order
 
 
+def _build_overview_slice(data: UnifiedData) -> dict:
+    """Pre-aggregate receiver × contrast counts for the Overview tab.
+
+    Mirrors the pattern in build_pathway_viewer.py lines 160-173:
+    group `backbone_recurrence` by (contrast, receiver), emit per-cell
+    {n, n_up, n_down, mean_tpds}. Keyed by "{contrast}|{receiver}"; empty
+    cells are omitted (JS treats missing as zero).
+    """
+    rec = data.backbone_recurrence
+    overview: dict[str, dict] = {}
+    for (c, r), g in rec.groupby(["contrast", "receiver"], sort=False):
+        tpds = g["mean_tpds"].to_numpy()
+        tpds_fin = tpds[np.isfinite(tpds)]
+        mean_tpds = float(tpds_fin.mean()) if tpds_fin.size else 0.0
+        overview[f"{c}|{r}"] = {
+            "n": int(len(g)),
+            "n_up": int((tpds > 0).sum()),
+            "n_down": int((tpds < 0).sum()),
+            "mean_tpds": round(mean_tpds, 4),
+        }
+    return overview
+
+
 def _extract_pi0(backbone_sig: pd.DataFrame, contrasts: list[str]) -> dict:
     out = {}
     for c in contrasts:
@@ -572,6 +599,7 @@ def build_payload(data: UnifiedData) -> dict:
         "kinases": kinases_slice,
         "celltypes": celltypes_slice,
         "backbones": backbones_slice,
+        "overview": _build_overview_slice(data),
         "edges_ref": {
             "path": os.path.relpath(SIDECAR_PARQUET, UNIFIED_VIEWER_OUTPUT_DIR),
             "n_rows": sidecar_rows,
@@ -591,6 +619,431 @@ def write_payload(payload: dict) -> dict:
     with open(PAYLOAD_JSON_GZ, "wb") as f:
         f.write(gz)
     return {"raw_bytes": len(raw), "gzip_bytes": len(gz)}
+
+
+# ---------------------------------------------------------------------------
+# HTML shell (Phase 3)
+# ---------------------------------------------------------------------------
+
+# Raw triple-quoted string — CSS/JS braces are unescaped. Payload is
+# injected via .replace("__PAYLOAD_SENTINEL__", json_str), not f-string.
+HTML_TEMPLATE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Unified Kinase + Pathway Viewer</title>
+<script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
+<script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+<style>
+:root {
+  --app-red:#c62828; --tau-blue:#1565c0; --aptt-purple:#6a1b9a;
+  --up-red:#c62828; --down-blue:#1565c0;
+  --receptor-color:#1b5e20; --em-color:#e65100; --target-color:#4a148c;
+  --bg:#fafafa; --card-bg:#ffffff; --border:#e0e0e0;
+  --text:#212121; --text-muted:#757575;
+  --near-miss-bg:#fff8e1; --sub-thresh-bg:#f5f5f5;
+  --selected-border:#1976d2;
+}
+* { box-sizing:border-box; }
+html, body { margin:0; padding:0; background:var(--bg); color:var(--text);
+  font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+header#app-header { background:#455a64; color:#fff; padding:8px 14px;
+  display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+  border-bottom:1px solid #37474f; }
+header#app-header h1 { margin:0 16px 0 0; font-size:15px; font-weight:600;
+  letter-spacing:0.2px; }
+header#app-header label { display:flex; gap:4px; align-items:center;
+  font-size:12px; color:#cfd8dc; }
+header#app-header select, header#app-header input[type=number] {
+  background:#fff; color:var(--text); border:1px solid #37474f;
+  border-radius:3px; padding:2px 5px; font-size:12px; }
+header#app-header button#glossary-toggle {
+  margin-left:auto; background:#263238; color:#fff; border:1px solid #37474f;
+  border-radius:3px; padding:3px 10px; cursor:pointer; font-size:12px; }
+header#app-header button#glossary-toggle:hover { background:#37474f; }
+nav#tab-bar { background:#37474f; display:flex; gap:0; padding:0 10px;
+  border-bottom:1px solid #263238; }
+nav#tab-bar button { background:transparent; color:#cfd8dc; border:none;
+  border-bottom:3px solid transparent; padding:9px 16px; cursor:pointer;
+  font-size:13px; font-weight:500; letter-spacing:0.2px; }
+nav#tab-bar button:hover { color:#fff; background:#455a64; }
+nav#tab-bar button.active { color:#fff; border-bottom-color:#42a5f5; }
+main#app-main { padding:14px; }
+.tab-panel { display:none; }
+.tab-panel.active { display:block; }
+.card { background:var(--card-bg); border:1px solid var(--border);
+  border-radius:4px; padding:12px 14px; margin-bottom:12px; }
+.card h2 { margin:0 0 6px; font-size:14px; font-weight:600; }
+.muted { color:var(--text-muted); font-size:12px; }
+#overview-plot { width:100%; height:560px; }
+#glossary-panel { position:fixed; top:0; right:0; width:340px; height:100%;
+  background:#fff; border-left:1px solid var(--border); padding:16px 18px;
+  box-shadow:-4px 0 12px rgba(0,0,0,0.08); transform:translateX(100%);
+  transition:transform 0.15s ease-out; z-index:50; overflow-y:auto; }
+#glossary-panel.open { transform:translateX(0); }
+#glossary-panel h3 { margin-top:0; font-size:14px; }
+#glossary-panel dl { margin:0; font-size:12px; }
+#glossary-panel dt { font-weight:600; margin-top:8px; color:#37474f; }
+#glossary-panel dd { margin:2px 0 0; color:var(--text-muted); }
+.tab-stub { color:var(--text-muted); font-style:italic; padding:40px;
+  text-align:center; border:1px dashed var(--border); border-radius:4px; }
+</style>
+</head>
+<body>
+<header id="app-header">
+  <h1>Unified Kinase + Pathway Viewer</h1>
+  <label>Contrast <select id="f-contrast"></select></label>
+  <label>Direction <select id="f-direction">
+    <option value="ALL">All</option>
+    <option value="up">Up</option>
+    <option value="down">Down</option>
+  </select></label>
+  <label>Receiver <select id="f-receiver"></select></label>
+  <label>FDR &lt; <input id="f-fdr" type="number" step="0.05" min="0" max="1"
+    value="0.25" style="width:60px;"></label>
+  <label>|Score| &gt; <input id="f-score" type="number" step="0.1" min="0"
+    value="0" style="width:60px;"></label>
+  <button id="glossary-toggle">Glossary</button>
+</header>
+<nav id="tab-bar">
+  <button data-tab="overview" class="active">Overview</button>
+  <button data-tab="kinase">Kinase</button>
+  <button data-tab="pathway">Pathway</button>
+  <button data-tab="graph">Graph</button>
+  <button data-tab="senders">Sender&times;Receiver</button>
+  <button data-tab="temporal">Temporal</button>
+  <button data-tab="additivity">Additivity</button>
+</nav>
+<main id="app-main">
+  <div id="tab-overview" class="tab-panel active">
+    <div class="card">
+      <h2>Receiver &times; Contrast</h2>
+      <div class="muted" id="overview-subtitle">Sig backbone counts
+        (significant-both) per receiver cell type across 9 contrasts.
+        Click any cell to filter the other tabs to that receiver.</div>
+    </div>
+    <div class="card">
+      <div id="overview-plot"></div>
+    </div>
+  </div>
+  <div id="tab-kinase" class="tab-panel">
+    <div class="tab-stub">Kinase Explorer — Phase 4.1</div>
+  </div>
+  <div id="tab-pathway" class="tab-panel">
+    <div class="tab-stub">Pathway Explorer — Phase 4.2</div>
+  </div>
+  <div id="tab-graph" class="tab-panel">
+    <div class="tab-stub">Pathway Graph (Cytoscape) — Phase 4.3</div>
+  </div>
+  <div id="tab-senders" class="tab-panel">
+    <div class="tab-stub">Sender &times; Receiver — Phase 4.4</div>
+  </div>
+  <div id="tab-temporal" class="tab-panel">
+    <div class="tab-stub">Temporal Dynamics — Phase 4.5</div>
+  </div>
+  <div id="tab-additivity" class="tab-panel">
+    <div class="tab-stub">Additivity — Phase 4.6</div>
+  </div>
+</main>
+<aside id="glossary-panel">
+  <h3>Glossary</h3>
+  <dl>
+    <dt>TPDS</dt><dd>Total Pathway Directional Score per backbone.</dd>
+    <dt>Sig-both</dt><dd>Backbone passing both permutation nulls.</dd>
+    <dt>NES</dt><dd>Normalized Enrichment Score (MEA on stoichiometry).</dd>
+    <dt>Contrast</dt><dd>disease &times; timepoint: App/Tau/ApTt at 2/4/6mo.</dd>
+  </dl>
+</aside>
+
+<script type="application/json" id="payload-data">__PAYLOAD_SENTINEL__</script>
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Payload
+// ---------------------------------------------------------------------------
+const PAYLOAD = JSON.parse(document.getElementById("payload-data").textContent);
+const META = PAYLOAD.meta;
+const CONTRASTS = META.contrasts;
+const RECEIVERS = PAYLOAD.celltypes.name;
+const TISSUE_CAT = PAYLOAD.celltypes.tissue_category;
+const DISEASE_COLORS = META.diseaseColors;
+
+// ---------------------------------------------------------------------------
+// Store — reducer-style with {selection, filters, view} slices
+// ---------------------------------------------------------------------------
+const INITIAL_STATE = {
+  selection: { kinase:null, backbone:null, celltype:null },
+  filters:   { contrast:"ALL", direction:"ALL", receiver:"ALL",
+               fdr:0.25, score:0.0 },
+  view:      { activeTab:"overview", overviewMode:"count",
+               overviewSort:"tissue", glossaryOpen:false },
+};
+
+const _clone = (typeof structuredClone === "function")
+  ? structuredClone
+  : (v) => JSON.parse(JSON.stringify(v));
+
+function reducer(state, action) {
+  const s = _clone(state);
+  if (action.type === "SET_FILTER") s.filters[action.key] = action.value;
+  else if (action.type === "SET_SELECTION") s.selection[action.key] = action.value;
+  else if (action.type === "SET_VIEW") s.view[action.key] = action.value;
+  else return state;
+  return s;
+}
+
+const Store = (function(){
+  let state = _clone(INITIAL_STATE);
+  const subs = [];
+  return {
+    get state() { return state; },
+    subscribe(fn) { subs.push(fn); return () => {
+      const i = subs.indexOf(fn); if (i >= 0) subs.splice(i, 1);
+    }; },
+    dispatch(action) {
+      const prev = state;
+      const next = reducer(state, action);
+      if (next === prev) return;
+      state = next;
+      for (const fn of subs) fn(next, prev);
+    },
+  };
+})();
+window.Store = Store;  // expose for console smoke test
+
+// ---------------------------------------------------------------------------
+// Derived-array memoization — keyed on JSON signature of filters slice
+// ---------------------------------------------------------------------------
+let _filteredCache = { key:null, indices:null };
+
+function _computeFilteredIndices() {
+  const f = Store.state.filters;
+  const BB = PAYLOAD.backbones;
+  const n = BB.id.length;
+  const cIdx = CONTRASTS.indexOf(f.contrast);
+  const tpdsCol = cIdx >= 0 ? BB["mean_tpds_" + f.contrast] : null;
+  const sigCol = BB.significant_both_mask;
+  const rIdx = (f.receiver === "ALL") ? -1 : RECEIVERS.indexOf(f.receiver);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    if (rIdx >= 0 && BB.receiver_id[i] !== rIdx) continue;
+    if (cIdx >= 0) {
+      if (!((sigCol[i] >> cIdx) & 1)) continue;
+      const t = tpdsCol[i];
+      if (t == null) continue;
+      if (f.direction === "up" && !(t > 0)) continue;
+      if (f.direction === "down" && !(t < 0)) continue;
+      if (f.score > 0 && Math.abs(t) < f.score) continue;
+    }
+    out.push(i);
+  }
+  return out;
+}
+
+function getFilteredIndices() {
+  const key = JSON.stringify(Store.state.filters);
+  if (key !== _filteredCache.key) {
+    _filteredCache = { key, indices:_computeFilteredIndices() };
+  }
+  return _filteredCache.indices;
+}
+window.getFilteredIndices = getFilteredIndices;
+
+// ---------------------------------------------------------------------------
+// Header wiring
+// ---------------------------------------------------------------------------
+function populateHeader() {
+  const fc = document.getElementById("f-contrast");
+  fc.innerHTML = ['<option value="ALL">All</option>']
+    .concat(CONTRASTS.map(c => `<option value="${c}">${c}</option>`)).join("");
+  const fr = document.getElementById("f-receiver");
+  fr.innerHTML = ['<option value="ALL">All</option>']
+    .concat(RECEIVERS.map(r => `<option value="${r}">${r}</option>`)).join("");
+  fc.addEventListener("change", e => Store.dispatch({
+    type:"SET_FILTER", key:"contrast", value:e.target.value}));
+  fr.addEventListener("change", e => Store.dispatch({
+    type:"SET_FILTER", key:"receiver", value:e.target.value}));
+  document.getElementById("f-direction").addEventListener("change", e =>
+    Store.dispatch({type:"SET_FILTER", key:"direction", value:e.target.value}));
+  document.getElementById("f-fdr").addEventListener("change", e =>
+    Store.dispatch({type:"SET_FILTER", key:"fdr", value:parseFloat(e.target.value)}));
+  document.getElementById("f-score").addEventListener("change", e =>
+    Store.dispatch({type:"SET_FILTER", key:"score", value:parseFloat(e.target.value)}));
+  document.getElementById("glossary-toggle").addEventListener("click", () =>
+    Store.dispatch({type:"SET_VIEW", key:"glossaryOpen",
+      value:!Store.state.view.glossaryOpen}));
+}
+
+function syncHeaderFromStore() {
+  const f = Store.state.filters;
+  const ids = ["f-contrast","f-direction","f-receiver"];
+  const vals = [f.contrast, f.direction, f.receiver];
+  for (let i = 0; i < ids.length; i++) {
+    const el = document.getElementById(ids[i]);
+    if (el && el.value !== String(vals[i])) el.value = vals[i];
+  }
+  document.getElementById("f-fdr").value = f.fdr;
+  document.getElementById("f-score").value = f.score;
+}
+
+// ---------------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------------
+function wireTabs() {
+  document.querySelectorAll("nav#tab-bar button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      Store.dispatch({type:"SET_VIEW", key:"activeTab", value:btn.dataset.tab});
+    });
+  });
+}
+
+function syncTabsFromStore() {
+  const active = Store.state.view.activeTab;
+  document.querySelectorAll("nav#tab-bar button").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.tab === active);
+  });
+  document.querySelectorAll(".tab-panel").forEach(p => {
+    p.classList.toggle("active", p.id === "tab-" + active);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Overview tab — receiver × contrast heatmap
+// ---------------------------------------------------------------------------
+function receiverOrder() {
+  // Sort receivers by tissue_category then alphabetical within category.
+  const pairs = RECEIVERS.map((r, i) => [r, TISSUE_CAT[i] || "zzz", i]);
+  pairs.sort((a, b) => {
+    if (a[1] !== b[1]) return a[1] < b[1] ? -1 : 1;
+    return a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0);
+  });
+  return pairs.map(p => p[0]);
+}
+
+function renderOverview() {
+  const el = document.getElementById("overview-plot");
+  if (!el) return;
+  const f = Store.state.filters;
+  const mode = Store.state.view.overviewMode;  // 'count' | 'direction'
+  const rows = receiverOrder();
+  const cols = CONTRASTS;
+
+  // Build z matrix + hover + customdata.
+  const z = [], hover = [], cd = [];
+  for (const r of rows) {
+    const zrow = [], hrow = [], crow = [];
+    for (const c of cols) {
+      const cell = PAYLOAD.overview[c + "|" + r];
+      if (!cell || cell.n === 0) {
+        zrow.push(null); hrow.push(`${r} | ${c}<br>(no sig backbones)`);
+        crow.push({receiver:r, contrast:c, n:0});
+      } else {
+        let v;
+        if (mode === "direction") v = cell.n_up - cell.n_down;
+        else v = Math.log10(1 + cell.n);
+        // Direction filter mask
+        if (f.direction === "up" && cell.n_up === 0) v = null;
+        if (f.direction === "down" && cell.n_down === 0) v = null;
+        zrow.push(v);
+        hrow.push(
+          `${r} | ${c}<br>n=${cell.n} (up=${cell.n_up}, down=${cell.n_down})` +
+          `<br>mean TPDS=${cell.mean_tpds}`);
+        crow.push({receiver:r, contrast:c, n:cell.n});
+      }
+    }
+    z.push(zrow); hover.push(hrow); cd.push(crow);
+  }
+
+  // Contrast filter: dim non-selected columns by blanking cells.
+  if (f.contrast !== "ALL") {
+    const keep = cols.indexOf(f.contrast);
+    for (let i = 0; i < z.length; i++)
+      for (let j = 0; j < z[i].length; j++)
+        if (j !== keep) z[i][j] = null;
+  }
+
+  const colorscale = (mode === "direction")
+    ? [[0, "#1565c0"], [0.5, "#ffffff"], [1, "#c62828"]]
+    : "YlOrRd";
+  const trace = {
+    type:"heatmap", x:cols, y:rows, z, text:hover,
+    hovertemplate:"%{text}<extra></extra>", customdata:cd,
+    colorscale, showscale:true,
+    zmid: (mode === "direction") ? 0 : undefined,
+  };
+  const layout = {
+    margin:{l:130, r:20, t:10, b:90},
+    xaxis:{tickangle:-30, automargin:true},
+    yaxis:{automargin:true, autorange:"reversed"},
+    height:560,
+  };
+  Plotly.react(el, [trace], layout, {displaylogo:false, responsive:true});
+
+  // Click handler (re-attach on each render; Plotly.react preserves DOM).
+  el.removeAllListeners && el.removeAllListeners("plotly_click");
+  el.on && el.on("plotly_click", ev => {
+    if (!ev.points || !ev.points.length) return;
+    const d = ev.points[0].customdata;
+    if (!d || d.n === 0) return;
+    Store.dispatch({type:"SET_SELECTION", key:"backbone", value:null});
+    Store.dispatch({type:"SET_FILTER", key:"receiver", value:d.receiver});
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Glossary
+// ---------------------------------------------------------------------------
+function syncGlossary() {
+  document.getElementById("glossary-panel").classList.toggle(
+    "open", Store.state.view.glossaryOpen);
+}
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+function boot() {
+  populateHeader();
+  wireTabs();
+  syncHeaderFromStore();
+  syncTabsFromStore();
+  syncGlossary();
+  renderOverview();
+
+  Store.subscribe((next, prev) => {
+    if (next.filters !== prev.filters) {
+      syncHeaderFromStore();
+      if (Store.state.view.activeTab === "overview") renderOverview();
+    }
+    if (next.view !== prev.view) {
+      if (next.view.activeTab !== prev.view.activeTab) syncTabsFromStore();
+      if (next.view.glossaryOpen !== prev.view.glossaryOpen) syncGlossary();
+      if (next.view.overviewMode !== prev.view.overviewMode &&
+          Store.state.view.activeTab === "overview") renderOverview();
+    }
+  });
+}
+
+if (document.readyState === "loading")
+  document.addEventListener("DOMContentLoaded", boot);
+else boot();
+</script>
+</body>
+</html>
+"""
+
+
+def write_html(payload: dict, output_path: str = UNIFIED_VIEWER_HTML) -> dict:
+    """Emit the single-file unified viewer. Payload is inlined as JSON."""
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    # ensure_ascii=False keeps size down; escape </ to avoid script-tag break
+    json_str = json.dumps(payload, ensure_ascii=False,
+                          separators=(",", ":")).replace("</", "<\\/")
+    html = HTML_TEMPLATE.replace("__PAYLOAD_SENTINEL__", json_str)
+    raw = html.encode("utf-8")
+    with open(output_path, "wb") as f:
+        f.write(raw)
+    return {"html_bytes": len(raw), "output": output_path}
 
 
 # ---------------------------------------------------------------------------
@@ -745,11 +1198,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--sidecar", action="store_true", help="Stream-filter full edges to _sig sidecar parquet")
     ap.add_argument("--payload", action="store_true", help="Write JSON payload (requires sidecar)")
     ap.add_argument("--build", action="store_true", help="Sidecar then payload")
+    ap.add_argument("--html", action="store_true", help="Write unified_viewer.html (requires payload)")
     ap.add_argument("--validate", action="store_true", help="Write Phase 2 validation report")
     args = ap.parse_args(argv)
 
-    if not any([args.summary, args.sidecar, args.payload, args.build, args.validate]):
-        args.summary = True
+    # Default (no flags): build payload + write HTML — the Phase 3 checkpoint
+    # says `pixi run python code/build_unified_viewer.py` should produce
+    # outputs/reports/unified_viewer.html.
+    if not any([args.summary, args.sidecar, args.payload, args.build,
+                args.html, args.validate]):
+        args.build = True
+        args.html = True
 
     data = load_all_data()
 
@@ -760,6 +1219,7 @@ def main(argv: list[str] | None = None) -> int:
         bb_index = build_backbone_index(data.backbone_recurrence)
         write_sig_sidecar(data, bb_index)
 
+    payload = None
     if args.payload or args.build:
         if not os.path.exists(SIDECAR_PARQUET):
             raise SystemExit(
@@ -769,6 +1229,17 @@ def main(argv: list[str] | None = None) -> int:
         sizes = write_payload(payload)
         print(f"  payload raw={sizes['raw_bytes']/1e6:.2f} MB "
               f"gzip={sizes['gzip_bytes']/1e6:.2f} MB")
+
+    if args.html:
+        if payload is None:
+            if not os.path.exists(PAYLOAD_JSON):
+                raise SystemExit(
+                    f"payload missing at {PAYLOAD_JSON}; run --payload first"
+                )
+            with open(PAYLOAD_JSON) as f:
+                payload = json.load(f)
+        info = write_html(payload)
+        print(f"  html {info['html_bytes']/1e6:.2f} MB -> {info['output']}")
 
     if args.validate:
         validate(data)
