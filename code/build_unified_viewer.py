@@ -763,6 +763,10 @@ main#app-main { padding:14px; }
 .badge.hi { background:#c8e6c9; color:#1b5e20; }
 .badge.lo { background:#eceff1; color:#546e7a; }
 #ke-detail-nes { height:160px; }
+#pe-detail-cross { height:180px; }
+.pe-chip { display:inline-block; padding:1px 5px; margin:0 2px 2px 0;
+  border-radius:3px; font-size:10px; font-weight:600; background:#eceff1; color:#546e7a; }
+.pe-chip.on { background:#c8e6c9; color:#1b5e20; }
 </style>
 </head>
 <body>
@@ -831,7 +835,33 @@ main#app-main { padding:14px; }
     </div>
   </div>
   <div id="tab-pathway" class="tab-panel">
-    <div class="tab-stub">Pathway Explorer — Phase 4.2</div>
+    <div class="explorer-layout">
+      <div class="card">
+        <div class="ke-toolbar">
+          <input id="pe-search" placeholder="Search Receptor / EM / Target…"/>
+          <label><input id="pe-sig-only" type="checkbox" checked/> Sig-both only</label>
+          <span class="muted" id="pe-count"></span>
+        </div>
+        <div class="ke-table-wrap">
+          <table class="data-table" id="pe-table">
+            <thead><tr>
+              <th data-col="receiver">Receiver</th>
+              <th data-col="Receptor">Receptor</th>
+              <th data-col="EM">EM</th>
+              <th data-col="Target">Target</th>
+              <th data-col="tpds">TPDS</th>
+              <th data-col="n_sig">Sig</th>
+              <th data-col="n_senders">Senders</th>
+              <th data-col="max_abs_tpds">Max|TPDS|</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <aside class="detail-card" id="pe-detail">
+        <div class="muted">Select a backbone to see details.</div>
+      </aside>
+    </div>
   </div>
   <div id="tab-graph" class="tab-panel">
     <div class="tab-stub">Pathway Graph (Cytoscape) — Phase 4.3</div>
@@ -1487,6 +1517,308 @@ function wireKinaseTable() {
 }
 
 // ---------------------------------------------------------------------------
+// Pathway Explorer tab
+// ---------------------------------------------------------------------------
+let peSortCol = "tpds";
+let peSortAsc = false;
+let peSearch = "";
+let peSigOnly = true;
+let _peRows = null;
+let _peSearchTimer = null;
+
+function _popcount(m) {
+  m = m - ((m >> 1) & 0x55555555);
+  m = (m & 0x33333333) + ((m >> 2) & 0x33333333);
+  return (((m + (m >> 4)) & 0x0f0f0f0f) * 0x01010101) >> 24;
+}
+
+function _buildPathwayRowModel() {
+  const BB = PAYLOAD.backbones;
+  const n = BB.id.length;
+  const tpdsCols = CONTRASTS.map(c => BB["mean_tpds_" + c]);
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const tpds = new Array(CONTRASTS.length);
+    for (let c = 0; c < CONTRASTS.length; c++) tpds[c] = tpdsCols[c][i];
+    out[i] = {
+      idx: i,
+      id: BB.id[i],
+      receiver_id: BB.receiver_id[i],
+      receiver: RECEIVERS[BB.receiver_id[i]],
+      Receptor: BB.Receptor[i] || "",
+      EM: BB.EM[i] || "",
+      Target: BB.Target[i] || "",
+      sender_mask: BB.sender_mask[i],
+      n_senders: BB.n_senders[i],
+      n_senders_sig: BB.n_senders_significant[i],
+      max_abs_tpds: BB.max_abs_tpds[i],
+      sig_mask: BB.significant_both_mask[i],
+      sig_count: _popcount(BB.significant_both_mask[i]),
+      _tpds: tpds,
+    };
+  }
+  return out;
+}
+
+function _ensurePathwayIndexes() {
+  if (_peRows === null) _peRows = _buildPathwayRowModel();
+  if (_backboneIdxById === null) {
+    const BB = PAYLOAD.backbones;
+    const m = new Map();
+    for (let i = 0; i < BB.id.length; i++) m.set(BB.id[i], i);
+    _backboneIdxById = m;
+  }
+}
+
+function _peCompare(a, b, cIdx) {
+  const col = peSortCol;
+  let va, vb;
+  if (col === "tpds") {
+    va = cIdx >= 0 ? a._tpds[cIdx] : a.max_abs_tpds;
+    vb = cIdx >= 0 ? b._tpds[cIdx] : b.max_abs_tpds;
+    va = (va == null) ? -Infinity : (cIdx >= 0 ? va : va);
+    vb = (vb == null) ? -Infinity : (cIdx >= 0 ? vb : vb);
+  }
+  else if (col === "n_sig") { va = a.sig_count; vb = b.sig_count; }
+  else if (col === "receiver") { va = a.receiver; vb = b.receiver; }
+  else { va = a[col]; vb = b[col]; }
+  if (va == null && vb == null) return 0;
+  if (va == null) return 1;
+  if (vb == null) return -1;
+  if (typeof va === "string") return peSortAsc
+    ? va.localeCompare(vb) : vb.localeCompare(va);
+  return peSortAsc ? (va - vb) : (vb - va);
+}
+
+function renderPathwayExplorer() {
+  const tbody = document.querySelector("#pe-table tbody");
+  if (!tbody) return;
+  _ensurePathwayIndexes();
+  const f = Store.state.filters;
+  const cIdx = CONTRASTS.indexOf(f.contrast);
+  const selBid = Store.state.selection.backbone;
+  const q = peSearch.trim().toLowerCase();
+  const baseIdx = getFilteredIndices();
+
+  const visible = [];
+  for (const i of baseIdx) {
+    const r = _peRows[i];
+    if (peSigOnly && r.sig_count === 0) continue;
+    if (q && !(r.Receptor.toLowerCase().includes(q) ||
+               r.EM.toLowerCase().includes(q) ||
+               r.Target.toLowerCase().includes(q))) continue;
+    visible.push(r);
+  }
+  visible.sort((a, b) => _peCompare(a, b, cIdx));
+
+  document.querySelectorAll("#pe-table thead th").forEach(th => {
+    const c = th.dataset.col;
+    th.textContent = th.textContent.replace(/[ ▲▼]+$/, "");
+    if (c === peSortCol) th.textContent += peSortAsc ? " ▲" : " ▼";
+  });
+
+  const CAP = 2000;
+  const shown = visible.slice(0, CAP);
+  const parts = [];
+  for (const r of shown) {
+    const selCls = r.id === selBid ? " selected" : "";
+    const t = cIdx >= 0 ? r._tpds[cIdx] : r.max_abs_tpds;
+    const tStr = (t == null) ? "—" : t.toFixed(3);
+    parts.push(
+      `<tr class="pe-row${selCls}" data-bid="${r.id}">` +
+      `<td>${r.receiver}</td>` +
+      `<td>${r.Receptor}</td>` +
+      `<td>${r.EM}</td>` +
+      `<td>${r.Target}</td>` +
+      `<td>${tStr}</td>` +
+      `<td>${r.sig_count}</td>` +
+      `<td>${r.n_senders_sig}/${r.n_senders}</td>` +
+      `<td>${r.max_abs_tpds == null ? "—" : r.max_abs_tpds.toFixed(3)}</td>` +
+      `</tr>`
+    );
+  }
+  tbody.innerHTML = parts.join("");
+  const countEl = document.getElementById("pe-count");
+  if (countEl) {
+    const cap = visible.length > CAP ? ` (first ${CAP} shown)` : "";
+    countEl.textContent = `${visible.length.toLocaleString()} / ${_peRows.length.toLocaleString()} backbones${cap}`;
+  }
+}
+
+function _updatePathwayRowSelection(bid) {
+  const tbody = document.querySelector("#pe-table tbody");
+  if (!tbody) return;
+  const prev = tbody.querySelector("tr.pe-row.selected");
+  if (prev) prev.classList.remove("selected");
+  if (bid == null) return;
+  const row = tbody.querySelector(`tr.pe-row[data-bid="${bid}"]`);
+  if (row) row.classList.add("selected");
+}
+
+function renderPathwayDetail(backbone_id) {
+  const el = document.getElementById("pe-detail");
+  if (!el) return;
+  if (backbone_id == null) {
+    el.innerHTML = '<div class="muted">Select a backbone to see details.</div>';
+    return;
+  }
+  _ensurePathwayIndexes();
+  const BB = PAYLOAD.backbones;
+  const i = _backboneIdxById.get(backbone_id);
+  if (i == null) {
+    el.innerHTML = '<div class="muted">Backbone not found.</div>';
+    return;
+  }
+  const receiver = RECEIVERS[BB.receiver_id[i]];
+  const rcp = BB.Receptor[i] || "—";
+  const em = BB.EM[i] || "—";
+  const tgt = BB.Target[i] || "—";
+  const sigMask = BB.significant_both_mask[i];
+  const chips = CONTRASTS.map((c, ci) => {
+    const on = ((sigMask >> ci) & 1) ? " on" : "";
+    return `<span class="pe-chip${on}">${c}</span>`;
+  }).join("");
+  const nSendSig = BB.n_senders_significant[i];
+  const nSend = BB.n_senders[i];
+
+  el.innerHTML =
+    `<h3>${rcp} → ${em} → ${tgt}</h3>` +
+    `<div class="meta">Receiver: ${receiver} · Senders: ${nSendSig}/${nSend} sig</div>` +
+    `<h4>Sig-both by contrast</h4><div>${chips}</div>` +
+    `<h4>TPDS across contrasts</h4><div id="pe-detail-cross"></div>` +
+    `<h4>Driving kinases</h4><div id="pe-detail-kinases" class="muted">loading…</div>`;
+
+  const tpds = CONTRASTS.map(c => BB["mean_tpds_" + c][i]);
+  const barColors = tpds.map(v => {
+    if (v == null || v === 0) return "#cfd8dc";
+    return v > 0 ? "var(--up-red)" : "var(--down-blue)";
+  });
+  const outlines = CONTRASTS.map((_, ci) =>
+    ((sigMask >> ci) & 1) ? "#000" : "rgba(0,0,0,0)");
+  Plotly.react("pe-detail-cross", [{
+    type: "bar", x: CONTRASTS, y: tpds.map(v => v == null ? 0 : v),
+    marker: { color: barColors, line: { color: outlines, width: 1.5 } },
+    hovertemplate: "%{x}<br>TPDS %{y:.3f}<extra></extra>",
+  }], {
+    margin:{l:40,r:10,t:6,b:60}, height:180,
+    yaxis:{zeroline:true, zerolinecolor:"#bbb"},
+    xaxis:{tickangle:-35},
+  }, {displaylogo:false, responsive:true});
+
+  renderPathwayKinases(backbone_id);
+}
+
+async function renderPathwayKinases(backbone_id) {
+  const container = document.getElementById("pe-detail-kinases");
+  if (!container) return;
+  _ensurePathwayIndexes();
+  const bi = _backboneIdxById.get(backbone_id);
+  if (bi == null) {
+    container.innerHTML = '<div class="muted">Backbone not found.</div>';
+    return;
+  }
+  if (PAYLOAD.backbones.significant_both_mask[bi] === 0) {
+    container.innerHTML = '<div class="muted">No significant kinase edges.</div>';
+    return;
+  }
+  let rows;
+  try {
+    rows = await SliceCache.backboneEdges(backbone_id);
+  } catch (e) {
+    if (Store.state.selection.backbone !== backbone_id) return;
+    container.innerHTML = `<div class="muted">Failed to load: ${e.message}</div>`;
+    return;
+  }
+  if (Store.state.selection.backbone !== backbone_id) return;
+
+  const f = Store.state.filters;
+  const cIdx = CONTRASTS.indexOf(f.contrast);
+  const filtered = (cIdx >= 0)
+    ? rows.filter(r => r.contrast_id === cIdx)
+    : rows;
+
+  // Group by kinase_id
+  const byK = new Map();
+  for (const r of filtered) {
+    let g = byK.get(r.kinase_id);
+    if (!g) { g = { sum_abs:0, net:0, up:0, down:0, n:0 }; byK.set(r.kinase_id, g); }
+    const s = r.support_contribution;
+    g.sum_abs += Math.abs(s);
+    g.net += s;
+    if (r.concordance > 0) g.up++;
+    else if (r.concordance < 0) g.down++;
+    g.n++;
+  }
+  const groups = Array.from(byK.entries()).map(([kid, g]) => ({ kid, ...g }));
+  groups.sort((a, b) => b.sum_abs - a.sum_abs);
+
+  const K = PAYLOAD.kinases;
+  const kNameById = new Map();
+  for (let i = 0; i < K.id.length; i++) kNameById.set(K.id[i], K.name[i]);
+  const famMap = META.familyMap || {};
+
+  const TOP = 200;
+  const shown = groups.slice(0, TOP);
+  const header = cIdx >= 0
+    ? `Showing ${shown.length} of ${groups.length} kinases (contrast ${f.contrast}).`
+    : `Showing ${shown.length} of ${groups.length} kinases (all contrasts).`;
+  const parts = [
+    `<div class="muted">${header}</div>`,
+    '<table class="data-table"><thead><tr>',
+    '<th>Kinase</th><th>Family</th><th>Σ|Support|</th>',
+    '<th>Net</th><th>Conc.</th><th>#Edges</th>',
+    '</tr></thead><tbody>',
+  ];
+  for (const g of shown) {
+    const name = kNameById.get(g.kid) || `kid:${g.kid}`;
+    const fam = famMap[name] || "";
+    const conc = (g.up > g.down) ? "↑" : (g.down > g.up ? "↓" : "—");
+    parts.push(
+      `<tr><td>${name}</td><td>${fam}</td>` +
+      `<td>${g.sum_abs.toFixed(3)}</td>` +
+      `<td>${g.net.toFixed(3)}</td>` +
+      `<td>${conc} (${g.up}/${g.down})</td>` +
+      `<td>${g.n}</td></tr>`
+    );
+  }
+  parts.push("</tbody></table>");
+  container.innerHTML = parts.join("");
+}
+
+function wirePathwayTable() {
+  const tbl = document.getElementById("pe-table");
+  if (!tbl) return;
+  tbl.querySelectorAll("thead th").forEach(th => {
+    th.addEventListener("click", () => {
+      const col = th.dataset.col;
+      if (peSortCol === col) peSortAsc = !peSortAsc;
+      else { peSortCol = col; peSortAsc = false; }
+      renderPathwayExplorer();
+    });
+  });
+  tbl.querySelector("tbody").addEventListener("click", ev => {
+    const tr = ev.target.closest("tr.pe-row");
+    if (!tr) return;
+    const bid = parseInt(tr.dataset.bid, 10);
+    Store.dispatch({type:"SET_SELECTION", key:"backbone", value: bid});
+  });
+  const search = document.getElementById("pe-search");
+  if (search) search.addEventListener("input", ev => {
+    const val = ev.target.value;
+    if (_peSearchTimer) clearTimeout(_peSearchTimer);
+    _peSearchTimer = setTimeout(() => {
+      peSearch = val;
+      renderPathwayExplorer();
+    }, 250);
+  });
+  const sig = document.getElementById("pe-sig-only");
+  if (sig) sig.addEventListener("change", ev => {
+    peSigOnly = ev.target.checked;
+    renderPathwayExplorer();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Glossary
 // ---------------------------------------------------------------------------
 function syncGlossary() {
@@ -1501,6 +1833,7 @@ function boot() {
   populateHeader();
   wireTabs();
   wireKinaseTable();
+  wirePathwayTable();
   syncHeaderFromStore();
   syncTabsFromStore();
   syncGlossary();
@@ -1516,10 +1849,19 @@ function boot() {
         if (next.selection.kinase != null)
           renderKinaseDetail(next.selection.kinase);
       }
+      if (activeTab === "pathway") {
+        renderPathwayExplorer();
+        if (next.selection.backbone != null)
+          renderPathwayDetail(next.selection.backbone);
+      }
     }
     if (next.selection.kinase !== prev.selection.kinase && activeTab === "kinase") {
       _updateKinaseRowSelection(next.selection.kinase);
       renderKinaseDetail(next.selection.kinase);
+    }
+    if (next.selection.backbone !== prev.selection.backbone && activeTab === "pathway") {
+      _updatePathwayRowSelection(next.selection.backbone);
+      renderPathwayDetail(next.selection.backbone);
     }
     if (next.view !== prev.view) {
       if (next.view.activeTab !== prev.view.activeTab) {
@@ -1528,6 +1870,11 @@ function boot() {
           renderKinaseExplorer();
           if (next.selection.kinase != null)
             renderKinaseDetail(next.selection.kinase);
+        }
+        if (activeTab === "pathway") {
+          renderPathwayExplorer();
+          if (next.selection.backbone != null)
+            renderPathwayDetail(next.selection.backbone);
         }
       }
       if (next.view.glossaryOpen !== prev.view.glossaryOpen) syncGlossary();
