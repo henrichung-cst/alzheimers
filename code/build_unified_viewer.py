@@ -101,7 +101,6 @@ class UnifiedData:
     kinase_activity: pd.DataFrame
     celltype_evidence: pd.DataFrame
     kinase_hypothesis: pd.DataFrame
-    celltype_profiles: pd.DataFrame
     mea_stoichiometry: pd.DataFrame
 
     # Pathway-side
@@ -124,7 +123,6 @@ class UnifiedData:
             "kinase_activity_rows": len(self.kinase_activity),
             "celltype_evidence_rows": len(self.celltype_evidence),
             "kinase_hypothesis_rows": len(self.kinase_hypothesis),
-            "celltype_profiles_rows": len(self.celltype_profiles),
             "mea_rows": len(self.mea_stoichiometry),
             "backbone_sig_rows": len(self.backbone_sig),
             "backbone_recurrence_rows": len(self.backbone_recurrence),
@@ -140,7 +138,6 @@ def load_all_data() -> UnifiedData:
     kinase_activity = pd.read_csv(os.path.join(ar_dir, "kinase_activity_matrix.csv"))
     celltype_evidence = pd.read_csv(os.path.join(ar_dir, "celltype_evidence_table.csv"))
     kinase_hypothesis = pd.read_csv(os.path.join(ar_dir, "kinase_hypothesis_table.csv"))
-    celltype_profiles = pd.read_csv(os.path.join(ar_dir, "celltype_kinase_profiles.csv"))
     mea = pd.read_csv(os.path.join(ka_dir, "mea_stoichiometry.csv"),
                       usecols=["kinase", "NES", "FDR", "contrast"])
 
@@ -180,7 +177,6 @@ def load_all_data() -> UnifiedData:
         kinase_activity=kinase_activity,
         celltype_evidence=celltype_evidence,
         kinase_hypothesis=kinase_hypothesis,
-        celltype_profiles=celltype_profiles,
         mea_stoichiometry=mea,
         backbone_sig=backbone_sig,
         backbone_recurrence=backbone_recurrence,

@@ -17,7 +17,6 @@ Outputs (all under outputs/reports/attribution_recovery/):
   kinase_activity_matrix.csv    -- wide NES/FDR + trajectory label (1 row/kinase)
   celltype_evidence_table.csv   -- WMB-gated static evidence (1 row/kinase×celltype)
   kinase_hypothesis_table.csv   -- kinase-first synthesis (1 row/kinase)
-  celltype_kinase_profiles.csv  -- cell-type-first synthesis (1 row/celltype×kinase)
 """
 
 import argparse
@@ -308,35 +307,6 @@ def _build_kinase_hypothesis_table(t1, t2):
     return t3
 
 
-# ---------------------------------------------------------------------------
-# Table 4: Cell-type kinase profiles
-# ---------------------------------------------------------------------------
-
-def _build_celltype_kinase_profiles(t2, t1):
-    """Build Table 4: cell-type-first view joining WMB evidence + NES profiles."""
-    present_nes = [c for c in NES_COLS if c in t1.columns]
-    present_fdr = [c for c in FDR_COLS if c in t1.columns]
-    t1_join = t1[["kinase"] + present_nes + present_fdr +
-                 ["n_sig_contrasts", "trajectory_label"]]
-
-    t4 = t2.merge(t1_join, on="kinase", how="left")
-    t4["n_sig_contrasts"] = t4["n_sig_contrasts"].fillna(0).astype("Int64")
-    t4["trajectory_label"] = t4["trajectory_label"].fillna("none")
-
-    t4 = t4.sort_values(
-        ["cell_type", "wmb_fold_over_uniform"], ascending=[True, False])
-
-    song_cols = []
-    if "song_lfc" in t4.columns:
-        song_cols = ["song_lfc", "song_concordance_direction"]
-
-    return t4[["cell_type", "kinase", "gene_symbol",
-               "wmb_specificity", "wmb_fold_over_uniform",
-               "sea_ad_lfc", "concordance_direction"] +
-              song_cols + present_nes + present_fdr +
-              ["n_sig_contrasts", "trajectory_label"]]
-
-
 # ===========================================================================
 # S3: Kinase-first hypothesis tables
 # ===========================================================================
@@ -376,24 +346,16 @@ def step_kinase_profiles():
 # ===========================================================================
 
 def step_celltype_profiles():
-    """S4: Cell-type evidence table (Table 2) and cell-type kinase profiles (Table 4)."""
+    """S4: Cell-type evidence table (Table 2)."""
     _ensure_output_dir()
-    print("\n=== S4: Cell-Type Kinase Profiles ===\n")
+    print("\n=== S4: Cell-Type Evidence Table ===\n")
 
     uaf_full = _load_unified_attribution_full()
-    mea = _load_mea_stoichiometry()
-    gene_map = _build_gene_symbol_map(uaf_full, mea)
 
     t2 = _build_celltype_evidence(uaf_full)
     t2_path = os.path.join(OUTPUT_DIR, "celltype_evidence_table.csv")
     t2.to_csv(t2_path, index=False)
     print(f"  Saved {t2_path} ({len(t2)} kinase-celltype pairs)")
-
-    t1 = _build_kinase_activity_matrix(mea, gene_map)
-    t4 = _build_celltype_kinase_profiles(t2, t1)
-    t4_path = os.path.join(OUTPUT_DIR, "celltype_kinase_profiles.csv")
-    t4.to_csv(t4_path, index=False)
-    print(f"  Saved {t4_path} ({len(t4)} rows)")
 
     print(f"\n  {t2['kinase'].nunique()} kinases above WMB expression gate")
     print(f"  {len(t2)} (kinase, cell_type) pairs in evidence table")
@@ -447,14 +409,6 @@ def print_summary():
             print(f"    {tier}: {cnt}")
     else:
         print("\nS4 (Table 2): Not yet computed")
-
-    t4_path = os.path.join(OUTPUT_DIR, "celltype_kinase_profiles.csv")
-    if os.path.exists(t4_path):
-        t4 = pd.read_csv(t4_path)
-        print(f"\nS4 (Table 4): Cell-Type Kinase Profiles")
-        print(f"  {len(t4)} rows ({t4['cell_type'].nunique()} cell types)")
-    else:
-        print("\nS4 (Table 4): Not yet computed")
 
     print()
 
