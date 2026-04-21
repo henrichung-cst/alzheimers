@@ -365,6 +365,9 @@ def _build_kinases_slice(data: UnifiedData) -> dict:
         "trajectory": [], "peak_contrast": [], "peak_NES": [],
         "n_sig_contrasts": [],
         "top_celltype_1": [], "top_celltype_2": [], "top_celltype_3": [],
+        "top_celltype_1_wmb_fold": [],
+        "top_celltype_1_sea_ad_lfc": [],
+        "top_celltype_1_song_lfc": [],
         "n_celltype_candidates": [], "has_high_conf_attribution": [],
     }
     for c in contrasts:
@@ -391,6 +394,9 @@ def _build_kinases_slice(data: UnifiedData) -> dict:
         cols["top_celltype_1"].append(_get(hyp_row, "top_celltype_1", ""))
         cols["top_celltype_2"].append(_get(hyp_row, "top_celltype_2", ""))
         cols["top_celltype_3"].append(_get(hyp_row, "top_celltype_3", ""))
+        cols["top_celltype_1_wmb_fold"].append(_get(hyp_row, "top_celltype_1_wmb_fold"))
+        cols["top_celltype_1_sea_ad_lfc"].append(_get(hyp_row, "top_celltype_1_sea_ad_lfc"))
+        cols["top_celltype_1_song_lfc"].append(_get(hyp_row, "top_celltype_1_song_lfc"))
         cols["n_celltype_candidates"].append(_get(hyp_row, "n_celltype_candidates", 0))
         cols["has_high_conf_attribution"].append(
             bool(_get(hyp_row, "has_high_conf_attribution", False))
@@ -429,7 +435,7 @@ def _build_backbones_slice(data: UnifiedData,
     contrasts = data.edge_metadata["contrasts"]
     cn_to_id = {c: i for i, c in enumerate(contrasts)}
 
-    # Sender vocabulary (same rule as build_pathway_viewer.py)
+    # Sender vocabulary (same rule as the legacy pathway viewer, archived under archive/code/integration/)
     all_senders: set[str] = set()
     for sl in data.backbone_recurrence["sender_list"].dropna():
         for s in str(sl).split(","):
@@ -683,6 +689,26 @@ def build_payload(data: UnifiedData) -> dict:
         "sea_ad_lfc": ev["sea_ad_lfc"].astype(float).round(3).tolist(),
         "song_lfc":   ev["song_lfc"].astype(float).round(3).tolist(),
         "wmb_tier":   ev["wmb_tier"].astype(str).tolist(),
+        "evidence_basis": ev["evidence_basis"].fillna("").astype(str).tolist(),
+        "concordance_direction": ev["concordance_direction"].fillna("").astype(str).tolist(),
+    }
+
+    # Attribution index — pivoted from unified_attribution.csv. Columnar arrays
+    # (kinase_id, contrast_id, cell_type, combined_confidence, combined_score)
+    # consumed by the Evidence Audit tab. Restricted to high+moderate
+    # confidence (drops ~3% low-confidence rows that are hidden by the
+    # kinase_hypothesis_table anyway).
+    contrast_to_id = {c: i for i, c in enumerate(contrasts)}
+    ua = data.unified_attribution
+    ua = ua[ua["kinase"].isin(kid)
+            & ua["contrast"].isin(contrast_to_id)
+            & ua["combined_confidence"].isin(["high", "moderate"])].copy()
+    attribution_index = {
+        "kinase_id":   ua["kinase"].map(kid).astype("uint16").tolist(),
+        "contrast_id": ua["contrast"].map(contrast_to_id).astype("uint8").tolist(),
+        "cell_type":   ua["cell_type"].astype(str).tolist(),
+        "combined_confidence": ua["combined_confidence"].astype(str).tolist(),
+        "combined_score": ua["combined_score"].astype(float).round(3).tolist(),
     }
 
     payload = {
@@ -693,6 +719,7 @@ def build_payload(data: UnifiedData) -> dict:
         "senderMatrix": _build_sender_matrix_slice(data, sender_order),
         "per_kinase_summary": per_kinase_summary,
         "kinase_celltype_evidence": kinase_celltype_evidence,
+        "attribution_index": attribution_index,
         "edge_slice_ref": {
             "kinase_url": "edge_slices/kinase/",
             "backbone_url": "edge_slices/backbone/",
@@ -816,6 +843,15 @@ main#app-main { padding:14px; }
 .data-table tbody tr:hover { background:#f5f5f5; }
 .data-table tbody tr.selected { background:#e3f2fd; box-shadow:inset 3px 0 0 var(--selected-border); }
 .data-table tbody tr.sub-thresh { color:var(--text-muted); }
+.data-table tbody tr.driver { box-shadow:inset 3px 0 0 #e65100; }
+#score-builder summary { cursor:pointer; padding:2px 0; }
+.score-builder-body { padding-top:8px; }
+.score-sliders { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px 16px; }
+.score-sliders .sw-row { display:flex; gap:6px; align-items:center; font-size:12px; }
+.score-sliders .sw-row label { flex:0 0 130px; color:#37474f; font-weight:500; }
+.score-sliders .sw-row input[type=range] { flex:1; }
+.score-sliders .sw-row .sw-val { flex:0 0 28px; text-align:right;
+  font-variant-numeric:tabular-nums; color:var(--text-muted); }
 .badge { display:inline-block; padding:1px 6px; border-radius:9px; font-size:10px;
   font-weight:600; letter-spacing:0.2px; }
 .badge.hi { background:#c8e6c9; color:#1b5e20; }
@@ -857,6 +893,8 @@ main#app-main { padding:14px; }
   <button id="glossary-toggle">Glossary</button>
   <button id="f-graph-nodes-clear" class="chip" hidden>Clear graph-node filter</button>
   <button id="f-sender-clear" class="chip" hidden>Clear sender filter</button>
+  <button id="f-selection-kinase-clear" class="chip" hidden>Clear kinase selection</button>
+  <button id="f-selection-celltype-clear" class="chip" hidden>Clear cell-type selection</button>
 </header>
 <nav id="tab-bar">
   <button data-tab="overview" class="active">Overview</button>
@@ -866,6 +904,7 @@ main#app-main { padding:14px; }
   <button data-tab="senders">Sender&times;Receiver</button>
   <button data-tab="temporal">Temporal</button>
   <button data-tab="additivity">Additivity</button>
+  <button data-tab="audit">Evidence Audit</button>
 </nav>
 <main id="app-main">
   <div id="tab-overview" class="tab-panel active">
@@ -880,6 +919,23 @@ main#app-main { padding:14px; }
     </div>
   </div>
   <div id="tab-kinase" class="tab-panel">
+    <details class="card" id="score-builder">
+      <summary><b>Composite Score Builder</b>
+        <span class="muted">— sort by a weighted blend of 6 evidence dimensions</span></summary>
+      <div class="score-builder-body">
+        <div class="detail-chips">
+          <label>Preset:
+            <select id="score-preset">
+              <option value="balanced">Balanced</option>
+              <option value="consistency">Consistency-first</option>
+              <option value="effect">Effect-driven</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+        </div>
+        <div id="score-sliders" class="score-sliders"></div>
+      </div>
+    </details>
     <div class="explorer-layout">
       <div class="card">
         <div class="ke-toolbar">
@@ -897,6 +953,7 @@ main#app-main { padding:14px; }
               <th data-col="top_celltype_1">Top cell type</th>
               <th data-col="has_high_conf_attribution">Conf</th>
               <th data-col="n_backbones">#Backbones</th>
+              <th data-col="composite_score">Score</th>
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -1028,6 +1085,35 @@ main#app-main { padding:14px; }
       <div class="muted" id="add-stats"></div>
     </div>
   </div>
+  <div id="tab-audit" class="tab-panel">
+    <div class="card" id="audit-empty">
+      <div class="muted">Select a backbone in <b>Pathway Explorer</b> or
+        <b>Pathway Graph</b> to see its full evidence chain
+        (MEA → kinase attribution → cell-type concordance →
+        support contribution → TPDS).</div>
+    </div>
+    <div id="audit-content" hidden>
+      <div class="card">
+        <h2 id="audit-header">—</h2>
+        <div class="meta" id="audit-meta"></div>
+        <div id="audit-sigchips"></div>
+        <h4>TPDS across contrasts</h4>
+        <div id="audit-tpds" style="height:180px;"></div>
+      </div>
+      <div class="card">
+        <h4>Driving kinases (lossless slice)</h4>
+        <div class="muted" id="audit-kinase-meta"></div>
+        <div id="audit-kinases">loading…</div>
+      </div>
+      <div class="card">
+        <h4>Selected kinase × cell-type evidence</h4>
+        <div class="muted" id="audit-kinase-pick">
+          Select a row above to see MEA NES, attribution source, and
+          cell-type concordance for that kinase.</div>
+        <div id="audit-chain"></div>
+      </div>
+    </div>
+  </div>
 </main>
 <aside id="glossary-panel">
   <h3>Glossary</h3>
@@ -1108,6 +1194,7 @@ let _filteredCache = { key:null, gnRef:null, indices:null };
 
 function _computeFilteredIndices() {
   const f = Store.state.filters;
+  const sel = Store.state.selection;
   const BB = PAYLOAD.backbones;
   const n = BB.id.length;
   const cIdx = CONTRASTS.indexOf(f.contrast);
@@ -1120,9 +1207,15 @@ function _computeFilteredIndices() {
     ? new Set(f.graphNodeIds) : null;
   const senderBit = (f.sender == null) ? 0 : (1 << f.sender);
   const senderMaskCol = BB.sender_mask;
+  // selection.kinase mask is null until the slice loads — the SET_SELECTION
+  // subscriber re-renders on resolve so the unconstrained pass is transient.
+  const kSet = (sel.kinase != null)
+    ? SliceCache.kinaseBackboneSetSync(sel.kinase) : null;
+  const ctIdx = (sel.celltype != null) ? sel.celltype : -1;
   const out = [];
   for (let i = 0; i < n; i++) {
     if (rIdx >= 0 && BB.receiver_id[i] !== rIdx) continue;
+    if (ctIdx >= 0 && BB.receiver_id[i] !== ctIdx) continue;
     if (senderBit && !(senderMaskCol[i] & senderBit)) continue;
     if (cIdx >= 0) {
       if (!((sigCol[i] >> cIdx) & 1)) continue;
@@ -1133,6 +1226,7 @@ function _computeFilteredIndices() {
       if (f.score > 0 && Math.abs(t) < f.score) continue;
     }
     if (gnSet !== null && !gnSet.has(BB.id[i])) continue;
+    if (kSet !== null && !kSet.has(BB.id[i])) continue;
     out.push(i);
   }
   return out;
@@ -1140,13 +1234,19 @@ function _computeFilteredIndices() {
 
 function getFilteredIndices() {
   const f = Store.state.filters;
+  const sel = Store.state.selection;
   // graphNodeIds array identity changes on each SET_FILTER dispatch (reducer
   // deep-clones state) — use identity, not stringify, to avoid scanning the
   // full array on every read.
   const gnKey = f.graphNodeIds ? ("gn:" + f.graphNodeIds.length) : "gn:null";
   const gnRef = f.graphNodeIds;  // also compare by identity
+  // kLoaded distinguishes pre-load (no mask) from post-load (mask applied).
+  const kLoaded = (sel.kinase != null
+    && SliceCache.kinaseBackboneSetSync(sel.kinase) !== null) ? "1" : "0";
   const key = f.contrast + "|" + f.direction + "|" + f.receiver + "|"
-            + f.fdr + "|" + f.score + "|" + gnKey + "|s:" + (f.sender ?? "");
+            + f.fdr + "|" + f.score + "|" + gnKey + "|s:" + (f.sender ?? "")
+            + "|k:" + (sel.kinase ?? "") + "/" + kLoaded
+            + "|c:" + (sel.celltype ?? "");
   if (key !== _filteredCache.key || gnRef !== _filteredCache.gnRef) {
     _filteredCache = {
       key, gnRef, indices: _computeFilteredIndices(),
@@ -1154,6 +1254,7 @@ function getFilteredIndices() {
   }
   return _filteredCache.indices;
 }
+function invalidateFilterCache(){ _filteredCache.key = null; }
 window.getFilteredIndices = getFilteredIndices;
 
 // ---------------------------------------------------------------------------
@@ -1186,6 +1287,17 @@ const SliceCache = (function(){
     return await hyparquet.parquetReadObjects({ file: buf });
   }
 
+  // Persistent (non-LRU) sets of backbone_ids per kinase, for sync filter use.
+  const kBbSets = new Map();
+  function _populateBbSet(kinase_id, rows){
+    const s = new Set();
+    for (const r of rows) s.add(r.backbone_id);
+    kBbSets.set(kinase_id, s);
+  }
+  function kinaseBackboneSetSync(kinase_id){
+    return kBbSets.has(kinase_id) ? kBbSets.get(kinase_id) : null;
+  }
+
   async function loadKinase(kinase_id){
     if (kCache.has(kinase_id)) {
       const v = kCache.get(kinase_id); _lruTouch(kCache, kinase_id, v); return v;
@@ -1194,6 +1306,7 @@ const SliceCache = (function(){
     const url = `${ESR.kinase_url}${pad}.parquet`;
     const rows = await _fetchParquet(url);
     _lruTouch(kCache, kinase_id, rows);
+    if (!kBbSets.has(kinase_id)) _populateBbSet(kinase_id, rows);
     return rows;
   }
 
@@ -1214,7 +1327,40 @@ const SliceCache = (function(){
     return rows.filter(r => r.backbone_id === backbone_id);
   }
 
-  return { loadKinase, loadBackboneBucket, backboneEdges,
+  // per_backbone_summary.parquet — fetched once, indexed by backbone_id.
+  // ~64,592 rows × 7 cols ≈ ~3 MB; small enough to keep wholesale in memory.
+  let _bbSummaryAll = null;
+  let _bbSummaryIdx = null;
+  let _bbSummaryPromise = null;
+  async function _loadBackboneSummary(){
+    if (_bbSummaryAll) return _bbSummaryAll;
+    if (_bbSummaryPromise) return _bbSummaryPromise;
+    const url = ESR.backbone_summary_url;
+    if (!url) throw new Error("backbone_summary_url missing in edge_slice_ref");
+    _bbSummaryPromise = (async () => {
+      const rows = await _fetchParquet(url);
+      _bbSummaryAll = rows;
+      const idx = new Map();
+      for (let i = 0; i < rows.length; i++) {
+        const bid = rows[i].backbone_id;
+        let arr = idx.get(bid);
+        if (!arr) { arr = []; idx.set(bid, arr); }
+        arr.push(i);
+      }
+      _bbSummaryIdx = idx;
+      _bbSummaryPromise = null;
+      return rows;
+    })();
+    return _bbSummaryPromise;
+  }
+  async function backboneSummary(backbone_id){
+    const rows = await _loadBackboneSummary();
+    const arr = _bbSummaryIdx.get(backbone_id) || [];
+    return arr.map(i => rows[i]);
+  }
+
+  return { loadKinase, loadBackboneBucket, backboneEdges, backboneSummary,
+           kinaseBackboneSetSync,
            get kinaseCacheSize(){ return kCache.size; },
            get backboneCacheSize(){ return bCache.size; } };
 })();
@@ -1249,6 +1395,12 @@ function populateHeader() {
   const sClear = document.getElementById("f-sender-clear");
   if (sClear) sClear.addEventListener("click", () =>
     Store.dispatch({type:"SET_FILTER", key:"sender", value:null}));
+  const skClear = document.getElementById("f-selection-kinase-clear");
+  if (skClear) skClear.addEventListener("click", () =>
+    Store.dispatch({type:"SET_SELECTION", key:"kinase", value:null}));
+  const scClear = document.getElementById("f-selection-celltype-clear");
+  if (scClear) scClear.addEventListener("click", () =>
+    Store.dispatch({type:"SET_SELECTION", key:"celltype", value:null}));
 }
 
 function syncHeaderFromStore() {
@@ -1276,6 +1428,28 @@ function syncHeaderFromStore() {
       const SENDERS = META.senderOrder || [];
       sClear.textContent = "Clear sender filter (" +
         (SENDERS[f.sender] || ("sid:" + f.sender)) + ")";
+    }
+  }
+  const sel = Store.state.selection;
+  const skClear = document.getElementById("f-selection-kinase-clear");
+  if (skClear) {
+    const on = sel.kinase != null;
+    skClear.hidden = !on;
+    if (on) {
+      _ensureKinaseIdx();
+      const K = PAYLOAD.kinases;
+      const ki = _kinaseIdxById.get(sel.kinase);
+      const name = ki != null ? K.name[ki] : ("kid:" + sel.kinase);
+      skClear.textContent = "Clear kinase selection (" + name + ")";
+    }
+  }
+  const scClear = document.getElementById("f-selection-celltype-clear");
+  if (scClear) {
+    const on = sel.celltype != null;
+    scClear.hidden = !on;
+    if (on) {
+      const name = RECEIVERS[sel.celltype] || ("cid:" + sel.celltype);
+      scClear.textContent = "Clear cell-type selection (" + name + ")";
     }
   }
 }
@@ -1962,6 +2136,143 @@ function wireAdditivityControls() {
 }
 
 // ---------------------------------------------------------------------------
+// Composite Score Builder — 6 weighted dimensions normalized to dataset max;
+// composite = Σ(w_i/W)·norm_i, scaled to 0–100. Sortable column only.
+// ---------------------------------------------------------------------------
+const SCORE_DIMS = ["consistency", "magnitude", "temporal",
+                    "specificity", "concordance", "songConcordance"];
+const SCORE_LABELS = {
+  consistency:    "Sig. contrasts",
+  magnitude:      "Peak |NES|",
+  temporal:       "Multi-timepoint",
+  specificity:    "WMB fold",
+  concordance:    "|SEA-AD LFC|",
+  songConcordance:"|Song LFC|",
+};
+const SCORE_PRESETS = {
+  balanced:    { consistency:15, magnitude:15, temporal:15,
+                 specificity:15, concordance:10, songConcordance:30 },
+  consistency: { consistency:30, magnitude:15, temporal:15,
+                 specificity:10, concordance:5,  songConcordance:25 },
+  effect:      { consistency:10, magnitude:30, temporal:10,
+                 specificity:15, concordance:10, songConcordance:25 },
+};
+let _scoreWeights = { ...SCORE_PRESETS.balanced };
+let _scoreMap = null;          // kinase_id -> composite (0..100)
+let _scoreFdr = null;          // fdr threshold the score was last computed at
+
+function _trajectoryOrdinal(K, ki, fdr) {
+  const DG = META.diseaseGroups || ["App", "Tau", "ApTt"];
+  const TPS = META.timepoints || ["2mo", "4mo", "6mo"];
+  let count = 0;
+  for (const d of DG) {
+    let n = 0;
+    for (const t of TPS) {
+      const q = K["FDR_" + d + "_" + t]; if (!q) continue;
+      const v = q[ki]; if (v != null && v < fdr) n++;
+    }
+    if (n >= 2) count++;
+  }
+  return count / DG.length;
+}
+
+function computeKinaseScores() {
+  _ensureKinaseIdx();
+  const K = PAYLOAD.kinases;
+  const n = K.id.length;
+  const fdr = Store.state.filters.fdr;
+  _scoreFdr = fdr;
+  const w = _scoreWeights;
+  const wTot = SCORE_DIMS.reduce((s,d) => s + (w[d] || 0), 0);
+
+  const raw = new Array(n);
+  let mxMag = 1e-3, mxSpec = 1e-3, mxConc = 1e-3, mxSong = 1e-3;
+  for (let i = 0; i < n; i++) {
+    let nSig = 0;
+    for (const c of CONTRASTS) {
+      const q = K["FDR_" + c][i];
+      if (q != null && q < fdr) nSig++;
+    }
+    const peak = K.peak_NES[i];
+    const r = {
+      consistency: nSig / CONTRASTS.length,
+      magnitude:   peak == null ? 0 : Math.abs(peak),
+      temporal:    _trajectoryOrdinal(K, i, fdr),
+      specificity: K.top_celltype_1_wmb_fold[i] || 0,
+      concordance: Math.abs(K.top_celltype_1_sea_ad_lfc[i] || 0),
+      songConcordance: Math.abs(K.top_celltype_1_song_lfc[i] || 0),
+    };
+    raw[i] = r;
+    if (r.magnitude > mxMag) mxMag = r.magnitude;
+    if (r.specificity > mxSpec) mxSpec = r.specificity;
+    if (r.concordance > mxConc) mxConc = r.concordance;
+    if (r.songConcordance > mxSong) mxSong = r.songConcordance;
+  }
+  const m = new Map();
+  for (let i = 0; i < n; i++) {
+    const r = raw[i];
+    const norm = {
+      consistency: r.consistency,
+      magnitude:   r.magnitude / mxMag,
+      temporal:    r.temporal,
+      specificity: r.specificity / mxSpec,
+      concordance: r.concordance / mxConc,
+      songConcordance: r.songConcordance / mxSong,
+    };
+    let comp = 0;
+    if (wTot > 0) for (const d of SCORE_DIMS) comp += (w[d] / wTot) * norm[d];
+    m.set(K.id[i], Math.round(comp * 100));
+  }
+  _scoreMap = m;
+}
+
+function _ensureScores() {
+  if (_scoreMap === null || _scoreFdr !== Store.state.filters.fdr)
+    computeKinaseScores();
+}
+
+function _renderScoreSliders() {
+  const host = document.getElementById("score-sliders");
+  if (!host) return;
+  const w = _scoreWeights;
+  host.innerHTML = SCORE_DIMS.map(d =>
+    `<div class="sw-row"><label for="sw-${d}">${SCORE_LABELS[d]}</label>` +
+    `<input type="range" id="sw-${d}" min="0" max="50" step="1" value="${w[d]}">` +
+    `<span class="sw-val" id="sv-${d}">${w[d]}</span></div>`
+  ).join("");
+  let _sliderRecomputeTimer = null;
+  for (const d of SCORE_DIMS) {
+    const el = document.getElementById("sw-" + d);
+    el.addEventListener("input", ev => {
+      _scoreWeights[d] = parseInt(ev.target.value, 10);
+      document.getElementById("sv-" + d).textContent = _scoreWeights[d];
+      const presetSel = document.getElementById("score-preset");
+      if (presetSel) presetSel.value = "custom";
+      // Debounce expensive recompute+render while the user drags the thumb.
+      if (_sliderRecomputeTimer) clearTimeout(_sliderRecomputeTimer);
+      _sliderRecomputeTimer = setTimeout(() => {
+        _sliderRecomputeTimer = null;
+        computeKinaseScores();
+        renderKinaseExplorer();
+      }, 60);
+    });
+  }
+}
+
+function wireScoreBuilder() {
+  _renderScoreSliders();
+  const presetSel = document.getElementById("score-preset");
+  if (presetSel) presetSel.addEventListener("change", ev => {
+    const p = SCORE_PRESETS[ev.target.value];
+    if (!p) return;
+    _scoreWeights = { ...p };
+    _renderScoreSliders();
+    computeKinaseScores();
+    renderKinaseExplorer();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Kinase Explorer tab
 // ---------------------------------------------------------------------------
 let keSortCol = "peak_NES";
@@ -2059,6 +2370,10 @@ function _keCompare(a, b) {
     va = a.peak_NES == null ? -Infinity : Math.abs(a.peak_NES);
     vb = b.peak_NES == null ? -Infinity : Math.abs(b.peak_NES);
   }
+  else if (col === "composite_score") {
+    va = (_scoreMap && _scoreMap.get(a.id)) || 0;
+    vb = (_scoreMap && _scoreMap.get(b.id)) || 0;
+  }
   else { va = a[col]; vb = b[col]; }
   if (va == null && vb == null) return 0;
   if (va == null) return 1;
@@ -2080,6 +2395,7 @@ function renderKinaseExplorer() {
   const q = keSearch.trim().toLowerCase();
 
   _refreshSigCounts(fdr);
+  _ensureScores();
   const visible = [];
   for (const r of _keRows) {
     if (cIdx >= 0) {
@@ -2099,15 +2415,17 @@ function renderKinaseExplorer() {
   });
 
   const parts = [];
+  const drvSet = _highlightKinaseIds;
   for (const r of visible) {
     const selCls = r.id === selKid ? " selected" : "";
     const subCls = r._sigCount === 0 ? " sub-thresh" : "";
+    const drvCls = (drvSet && drvSet.has(r.id)) ? " driver" : "";
     const conf = r.has_high_conf_attribution
       ? '<span class="badge hi">HIGH</span>'
       : '<span class="badge lo">low</span>';
     const peak = r.peak_NES == null ? "—" : r.peak_NES.toFixed(2);
     parts.push(
-      `<tr class="ke-row${selCls}${subCls}" data-kid="${r.id}">` +
+      `<tr class="ke-row${selCls}${subCls}${drvCls}" data-kid="${r.id}">` +
       `<td>${r.name}</td>` +
       `<td>${r.family}</td>` +
       `<td>${r.gene_symbol}</td>` +
@@ -2116,6 +2434,7 @@ function renderKinaseExplorer() {
       `<td>${r.top_celltype_1 || "—"}</td>` +
       `<td>${conf}</td>` +
       `<td>${r.n_backbones.toLocaleString()}</td>` +
+      `<td>${(_scoreMap && _scoreMap.get(r.id)) || 0}</td>` +
       `</tr>`
     );
   }
@@ -2865,11 +3184,313 @@ function wireGraphControls() {
 }
 
 // ---------------------------------------------------------------------------
+// Evidence Audit tab — full evidence chain for a selected backbone:
+// MEA NES → kinase attribution → cell-type concordance → support contribution → TPDS.
+// All data sourced from PAYLOAD + lazy SliceCache; no new computation.
+// ---------------------------------------------------------------------------
+let _attribIndex = null;       // Map<kinase_id, Map<contrast_id, [{cell_type, conf, score}]>>
+let _auditSelectedKid = null;  // user's row pick within the audit tab
+let _auditDrivers = null;      // last loaded drivers list for the active backbone
+let _auditActiveBid = null;    // backbone the drivers correspond to
+
+function _ensureAttribIndex() {
+  if (_attribIndex !== null) return _attribIndex;
+  const A = PAYLOAD.attribution_index || {kinase_id:[]};
+  const m = new Map();
+  for (let i = 0; i < A.kinase_id.length; i++) {
+    const kid = A.kinase_id[i];
+    const cid = A.contrast_id[i];
+    let byC = m.get(kid);
+    if (!byC) { byC = new Map(); m.set(kid, byC); }
+    let arr = byC.get(cid);
+    if (!arr) { arr = []; byC.set(cid, arr); }
+    arr.push({
+      cell_type: A.cell_type[i],
+      confidence: A.combined_confidence[i],
+      score: A.combined_score[i],
+    });
+  }
+  _attribIndex = m;
+  return m;
+}
+
+function _evidenceForKinaseCell(kinase_id, cell_type) {
+  const EV = PAYLOAD.kinase_celltype_evidence || {kinase_id:[]};
+  const evIdx = (_evidenceByKinase && _evidenceByKinase.get(kinase_id)) || [];
+  for (const k of evIdx) if (EV.cell_type[k] === cell_type) return {
+    wmb_fold: EV.wmb_fold[k], sea_ad_lfc: EV.sea_ad_lfc[k],
+    song_lfc: EV.song_lfc[k], wmb_tier: EV.wmb_tier[k],
+    evidence_basis: EV.evidence_basis[k],
+    concordance_direction: EV.concordance_direction[k],
+  };
+  return null;
+}
+
+function renderAuditChain() {
+  const el = document.getElementById("audit-chain");
+  const pickEl = document.getElementById("audit-kinase-pick");
+  if (!el) return;
+  const kid = _auditSelectedKid;
+  if (kid == null) {
+    el.innerHTML = "";
+    if (pickEl) pickEl.style.display = "";
+    return;
+  }
+  if (pickEl) pickEl.style.display = "none";
+  _ensureKinaseIndexes();
+  _ensureAttribIndex();
+  const K = PAYLOAD.kinases;
+  const ki = _kinaseIdxById.get(kid);
+  if (ki == null) { el.innerHTML = '<div class="muted">Kinase not found.</div>'; return; }
+  const name = K.name[ki];
+  const fdr = Store.state.filters.fdr;
+
+  // (b) MEA NES strip — per contrast
+  const nesRows = CONTRASTS.map((c, ci) => {
+    const nes = K["NES_" + c][ki], q = K["FDR_" + c][ci != null ? ki : ki];
+    const sig = (q != null && q < fdr);
+    return {c, nes, q: K["FDR_" + c][ki], sig};
+  });
+
+  // (c) Attribution source per contrast (cell type, confidence)
+  const byC = _attribIndex.get(kid) || new Map();
+
+  // (d) Cell-type concordance — pulled per (kinase, cell_type) for the
+  // top attribution cell type per contrast, plus the kinase's primary
+  // top_celltype_1 for context.
+  const primaryCell = K.top_celltype_1[ki] || "";
+
+  const parts = ['<table class="data-table"><thead><tr>',
+    '<th>Contrast</th><th>NES</th><th>FDR</th><th>Attrib. cell type</th>',
+    '<th>Conf.</th><th>Score</th><th>WMB fold</th><th>SEA-AD LFC</th>',
+    '<th>Song LFC</th><th>Direction</th><th>Basis</th>',
+    '</tr></thead><tbody>'];
+  const fmt = (v, d=2) => v == null ? "—" : Number(v).toFixed(d);
+  for (let ci = 0; ci < CONTRASTS.length; ci++) {
+    const c = CONTRASTS[ci];
+    const r = nesRows[ci];
+    const arr = (byC.get(ci) || []).slice().sort((a,b) => b.score - a.score);
+    const top = arr[0] || null;
+    const cell = top ? top.cell_type : (primaryCell || "—");
+    const ev = cell && cell !== "—" ? _evidenceForKinaseCell(kid, cell) : null;
+    const sigCls = r.sig ? ' style="font-weight:600;"' : ' class="sub-thresh"';
+    parts.push(
+      `<tr${sigCls}><td>${c}</td><td>${fmt(r.nes)}</td><td>${fmt(r.q,3)}</td>` +
+      `<td>${cell}</td>` +
+      `<td>${top ? top.confidence : "—"}</td>` +
+      `<td>${top ? fmt(top.score, 3) : "—"}</td>` +
+      `<td>${fmt(ev && ev.wmb_fold)}</td>` +
+      `<td>${fmt(ev && ev.sea_ad_lfc)}</td>` +
+      `<td>${fmt(ev && ev.song_lfc)}</td>` +
+      `<td>${ev && ev.concordance_direction || "—"}</td>` +
+      `<td>${ev && ev.evidence_basis || "—"}</td></tr>`
+    );
+  }
+  parts.push("</tbody></table>");
+  el.innerHTML = `<div class="muted" style="margin-bottom:6px;">` +
+    `Kinase <b>${name}</b> · primary cell type: ${primaryCell || "—"} · FDR < ${fdr}.</div>` +
+    parts.join("");
+}
+
+async function renderAudit() {
+  const empty = document.getElementById("audit-empty");
+  const content = document.getElementById("audit-content");
+  if (!empty || !content) return;
+  const bid = Store.state.selection.backbone;
+  if (bid == null) {
+    empty.hidden = false; content.hidden = true;
+    _auditSelectedKid = null; _auditDrivers = null; _auditActiveBid = null;
+    return;
+  }
+  empty.hidden = true; content.hidden = false;
+  _ensurePathwayIndexes();
+  const BB = PAYLOAD.backbones;
+  const i = _backboneIdxById.get(bid);
+  if (i == null) {
+    document.getElementById("audit-header").textContent = "Backbone not found.";
+    return;
+  }
+  const receiver = RECEIVERS[BB.receiver_id[i]];
+  const rcp = BB.Receptor[i] || "—";
+  const em = BB.EM[i] || "—";
+  const tgt = BB.Target[i] || "—";
+  const sigMask = BB.significant_both_mask[i];
+  const nSendSig = BB.n_senders_significant[i];
+  const nSend = BB.n_senders[i];
+  document.getElementById("audit-header").textContent = `${rcp} → ${em} → ${tgt}`;
+  document.getElementById("audit-meta").textContent =
+    `Receiver: ${receiver} · Senders: ${nSendSig}/${nSend} sig · backbone_id=${bid}`;
+  document.getElementById("audit-sigchips").innerHTML =
+    "<h4>Sig-both by contrast</h4><div>" +
+    CONTRASTS.map((c, ci) =>
+      `<span class="pe-chip${((sigMask >> ci) & 1) ? " on" : ""}">${c}</span>`
+    ).join("") + "</div>";
+
+  // (a) TPDS bar
+  const tpds = CONTRASTS.map(c => BB["mean_tpds_" + c][i]);
+  const obs = CONTRASTS.map(c => {
+    const col = BB["observed_score_" + c]; return col ? col[i] : null;
+  });
+  const barColors = tpds.map(v => v == null || v === 0 ? "#cfd8dc"
+    : (v > 0 ? "var(--up-red)" : "var(--down-blue)"));
+  const outlines = CONTRASTS.map((_, ci) =>
+    ((sigMask >> ci) & 1) ? "#000" : "rgba(0,0,0,0)");
+  Plotly.react("audit-tpds", [{
+    type: "bar", x: CONTRASTS, y: tpds.map(v => v == null ? 0 : v),
+    customdata: obs.map((s, ci) => [tpds[ci], s]),
+    marker: { color: barColors, line: { color: outlines, width: 1.5 } },
+    hovertemplate: "%{x}<br>mean TPDS: %{customdata[0]}<br>observed score: %{customdata[1]}<extra></extra>",
+  }], {
+    margin:{l:40,r:10,t:6,b:60}, height:180,
+    yaxis:{zeroline:true, zerolinecolor:"#bbb"},
+    xaxis:{tickangle:-35},
+  }, {displaylogo:false, responsive:true});
+
+  // (e) Lossless drivers + (b)/(c)/(d) chain rows live on this loaded data.
+  const meta = document.getElementById("audit-kinase-meta");
+  const container = document.getElementById("audit-kinases");
+  if (BB.significant_both_mask[i] === 0) {
+    container.innerHTML = '<div class="muted">No significant kinase edges for this backbone.</div>';
+    meta.textContent = "";
+    _auditDrivers = []; _auditActiveBid = bid; _auditSelectedKid = null;
+    renderAuditChain();
+    return;
+  }
+  meta.textContent = "Loading per-backbone summary + edges…";
+  let summary = [], edges = [];
+  try {
+    [summary, edges] = await Promise.all([
+      SliceCache.backboneSummary(bid),
+      SliceCache.backboneEdges(bid),
+    ]);
+  } catch (e) {
+    if (Store.state.selection.backbone !== bid) return;
+    container.innerHTML = `<div class="muted">Failed to load: ${e.message}</div>`;
+    return;
+  }
+  if (Store.state.selection.backbone !== bid) return;
+
+  // Aggregate edges by kinase × contrast for the table.
+  const f = Store.state.filters;
+  const cIdx = CONTRASTS.indexOf(f.contrast);
+  const filtered = (cIdx >= 0)
+    ? edges.filter(r => r.contrast_id === cIdx) : edges;
+  const byK = new Map();
+  for (const r of filtered) {
+    let g = byK.get(r.kinase_id);
+    if (!g) {
+      g = { kid: r.kinase_id, sum_abs: 0, net: 0, up: 0, down: 0, n: 0,
+            byContrast: new Map() };
+      byK.set(r.kinase_id, g);
+    }
+    g.sum_abs += Math.abs(r.support_contribution);
+    g.net += r.support_contribution;
+    if (r.concordance > 0) g.up++;
+    else if (r.concordance < 0) g.down++;
+    g.n++;
+    const cv = g.byContrast.get(r.contrast_id) || 0;
+    g.byContrast.set(r.contrast_id, cv + r.support_contribution);
+  }
+  const drivers = Array.from(byK.values()).sort((a, b) => b.sum_abs - a.sum_abs);
+  _auditDrivers = drivers;
+  _auditActiveBid = bid;
+
+  // Non-truncation invariant: per_backbone_summary.n_kinases for this
+  // (backbone, contrast) should match the displayed kinase count.
+  const summaryByCid = new Map();
+  for (const s of summary) summaryByCid.set(s.contrast_id, s);
+  let summaryNote = "";
+  if (cIdx >= 0) {
+    const s = summaryByCid.get(cIdx);
+    if (s) summaryNote = ` · summary n_kinases (contrast ${f.contrast}) = ${s.n_kinases}`;
+  } else {
+    const total = Array.from(summaryByCid.values())
+      .reduce((m, s) => m + s.n_kinases, 0);
+    summaryNote = ` · summary Σ n_kinases (all contrasts) = ${total}`;
+  }
+  meta.textContent =
+    `${drivers.length} unique kinases across ${filtered.length} edges` +
+    (cIdx >= 0 ? ` (contrast ${f.contrast})` : " (all contrasts)") +
+    summaryNote + " · click a row to inspect.";
+
+  _ensureKinaseIdx();
+  const K = PAYLOAD.kinases;
+  const famMap = META.familyMap || {};
+  const parts = ['<table class="data-table"><thead><tr>',
+    '<th>Kinase</th><th>Family</th><th>Σ|Support|</th>',
+    '<th>Net</th><th>Conc. (↑/↓)</th><th>#Edges</th></tr></thead><tbody>'];
+  for (const g of drivers) {
+    const ki = _kinaseIdxById.get(g.kid);
+    const name = ki != null ? K.name[ki] : `kid:${g.kid}`;
+    const fam = famMap[name] || "";
+    const conc = (g.up > g.down) ? "↑" : (g.down > g.up ? "↓" : "—");
+    const sel = (g.kid === _auditSelectedKid) ? " selected" : "";
+    parts.push(
+      `<tr class="audit-driver-row${sel}" data-kid="${g.kid}">` +
+      `<td>${name}</td><td>${fam}</td>` +
+      `<td>${g.sum_abs.toFixed(3)}</td>` +
+      `<td>${g.net.toFixed(3)}</td>` +
+      `<td>${conc} (${g.up}/${g.down})</td>` +
+      `<td>${g.n}</td></tr>`
+    );
+  }
+  parts.push("</tbody></table>");
+  container.innerHTML = parts.join("");
+  // Wire row clicks (delegated to container; rebuilt each render).
+  container.querySelectorAll("tr.audit-driver-row").forEach(tr => {
+    tr.addEventListener("click", () => {
+      _auditSelectedKid = parseInt(tr.dataset.kid, 10);
+      container.querySelectorAll("tr.audit-driver-row.selected")
+        .forEach(x => x.classList.remove("selected"));
+      tr.classList.add("selected");
+      renderAuditChain();
+    });
+  });
+  // If the current pick is not in the new driver set, clear it.
+  if (_auditSelectedKid != null
+      && !drivers.some(d => d.kid === _auditSelectedKid)) {
+    _auditSelectedKid = null;
+  }
+  renderAuditChain();
+}
+
+// ---------------------------------------------------------------------------
 // Glossary
 // ---------------------------------------------------------------------------
 function syncGlossary() {
   document.getElementById("glossary-panel").classList.toggle(
     "open", Store.state.view.glossaryOpen);
+}
+
+function _kinaseRerenderForFilter(activeTab){
+  if (activeTab === "pathway") renderPathwayExplorer();
+  if (activeTab === "graph") renderGraph();
+  if (activeTab === "temporal" && Store.state.view.temporalLevel === "backbone")
+    renderTemporal();
+  if (activeTab === "additivity" && Store.state.view.additivityLevel === "backbone")
+    renderAdditivity();
+  if (activeTab === "kinase") renderKinaseExplorer();
+}
+
+// Backbone selection → highlight kinases that drive it. Loaded async from the
+// per-backbone edge slice; updates a Set used by the table renderer.
+let _highlightKinaseIds = null;
+let _highlightForBid = null;
+async function _refreshHighlightForBackbone(bid){
+  if (bid == null) {
+    _highlightKinaseIds = null; _highlightForBid = null;
+    return;
+  }
+  if (bid === _highlightForBid) return;
+  _highlightForBid = bid;
+  try {
+    const rows = await SliceCache.backboneEdges(bid);
+    if (Store.state.selection.backbone !== bid) return;
+    const s = new Set();
+    for (const r of rows) s.add(r.kinase_id);
+    _highlightKinaseIds = s;
+    if (Store.state.view.activeTab === "kinase") renderKinaseExplorer();
+  } catch (e) { console.warn("highlight fetch failed", e); }
 }
 
 // ---------------------------------------------------------------------------
@@ -2879,6 +3500,7 @@ function boot() {
   populateHeader();
   wireTabs();
   wireKinaseTable();
+  wireScoreBuilder();
   wirePathwayTable();
   wireGraphControls();
   wireSenderMatrix();
@@ -2908,14 +3530,41 @@ function boot() {
       if (activeTab === "senders") renderSenderMatrix();
       if (activeTab === "temporal") renderTemporal();
       if (activeTab === "additivity") renderAdditivity();
+      if (activeTab === "audit") renderAudit();
     }
-    if (next.selection.kinase !== prev.selection.kinase && activeTab === "kinase") {
-      _updateKinaseRowSelection(next.selection.kinase);
-      renderKinaseDetail(next.selection.kinase);
+    if (next.selection.kinase !== prev.selection.kinase) {
+      syncHeaderFromStore();
+      const kid = next.selection.kinase;
+      if (kid != null && SliceCache.kinaseBackboneSetSync(kid) === null) {
+        SliceCache.loadKinase(kid).then(() => {
+          if (Store.state.selection.kinase !== kid) return;
+          invalidateFilterCache();
+          _kinaseRerenderForFilter(Store.state.view.activeTab);
+        }).catch(e => console.warn("kinase slice load failed", e));
+      } else {
+        invalidateFilterCache();
+      }
+      if (activeTab === "kinase") {
+        _updateKinaseRowSelection(next.selection.kinase);
+        renderKinaseDetail(next.selection.kinase);
+      }
+      if (activeTab !== "kinase") _kinaseRerenderForFilter(activeTab);
     }
-    if (next.selection.backbone !== prev.selection.backbone && activeTab === "pathway") {
-      _updatePathwayRowSelection(next.selection.backbone);
-      renderPathwayDetail(next.selection.backbone);
+    if (next.selection.celltype !== prev.selection.celltype) {
+      syncHeaderFromStore();
+      invalidateFilterCache();
+      _kinaseRerenderForFilter(activeTab);
+    }
+    if (next.selection.backbone !== prev.selection.backbone) {
+      if (activeTab === "pathway") {
+        _updatePathwayRowSelection(next.selection.backbone);
+        renderPathwayDetail(next.selection.backbone);
+      }
+      if (activeTab === "audit") {
+        _auditSelectedKid = null;
+        renderAudit();
+      }
+      _refreshHighlightForBackbone(next.selection.backbone);
     }
     if (next.view !== prev.view) {
       if (next.view.activeTab !== prev.view.activeTab) {
@@ -2934,6 +3583,7 @@ function boot() {
         if (activeTab === "senders") renderSenderMatrix();
         if (activeTab === "temporal") renderTemporal();
         if (activeTab === "additivity") renderAdditivity();
+        if (activeTab === "audit") renderAudit();
         if (prev.view.activeTab === "graph" && activeTab !== "graph")
           _destroyCy();
       }

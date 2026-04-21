@@ -107,7 +107,7 @@ done
 echo "=== All contrasts complete ==="
 wc -l "${FINAL_FILE}"
 
-# Derive the filtered significant_both subset consumed by build_pathway_viewer.py.
+# Derive the filtered significant_both subset (Unit 6.2 pending — to be merged into the recurrence CSV).
 SIG_FILE="${OUT_DIR}/backbone_significant_both_nulls.csv"
 echo "Writing ${SIG_FILE}..."
 pixi run python3 - <<PYEOF

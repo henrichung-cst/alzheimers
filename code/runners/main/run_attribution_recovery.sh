@@ -18,9 +18,6 @@ $PYTHON code/attribution_recovery.py --kinase-profiles 2>&1 | tee -a "$LOG"
 echo "--- S4: Cell-type evidence table + kinase profiles ---" | tee -a "$LOG"
 $PYTHON code/attribution_recovery.py --celltype-profiles 2>&1 | tee -a "$LOG"
 
-echo "--- Building interactive viewer ---" | tee -a "$LOG"
-$PYTHON code/build_viewer.py 2>&1 | tee -a "$LOG"
-
 echo "=== Attribution recovery finished at $(date) ===" | tee -a "$LOG"
 echo "Summary:"
 $PYTHON code/attribution_recovery.py --summary

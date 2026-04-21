@@ -20,7 +20,7 @@ atlas = "python code/atlas_reference.py --run"
 wmb-export = "python code/wmb_expression.py --run"
 snrna = "python code/snrna_integration.py --run"
 bubbles = "python code/plot_attribution_bubbles.py"
-viewer = "python code/build_viewer.py"
+viewer = "python code/build_unified_viewer.py"
 install-incytr = "R CMD INSTALL --no-multiarch ../incytr"
 
 [dependencies]
