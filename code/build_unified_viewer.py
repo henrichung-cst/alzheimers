@@ -1163,9 +1163,13 @@ let keSortCol = "peak_NES";
 let keSortAsc = false;
 let keSearch = "";
 let _keRows = null;
+let _keSigFdr = null;
+let _kinaseIdxById = null;
+let _backboneIdxById = null;
+let _evidenceByKinase = null;
+let _presentKinaseSet = null;
 
 function _buildKinaseRowModel() {
-  // One pass: denormalize per-kinase info into a flat array for sort/filter.
   const K = PAYLOAD.kinases;
   const PKS = PAYLOAD.per_kinase_summary || {kinase_id:[], n_backbones:[]};
   const famMap = META.familyMap || {};
@@ -1173,8 +1177,10 @@ function _buildKinaseRowModel() {
   for (let i = 0; i < PKS.kinase_id.length; i++) {
     bbByK[PKS.kinase_id[i]] += PKS.n_backbones[i];
   }
+  const idxById = new Map();
   const out = [];
   for (let i = 0; i < K.id.length; i++) {
+    idxById.set(K.id[i], i);
     out.push({
       id: K.id[i],
       name: K.name[i],
@@ -1190,13 +1196,43 @@ function _buildKinaseRowModel() {
       _nes: CONTRASTS.map(c => K["NES_" + c][i]),
     });
   }
+  _kinaseIdxById = idxById;
   return out;
 }
 
-function _countSigByFdr(row, fdr) {
-  let n = 0;
-  for (const v of row._fdr) if (v != null && v < fdr) n++;
-  return n;
+function _ensureKinaseIndexes() {
+  if (_keRows === null) _keRows = _buildKinaseRowModel();
+  if (_backboneIdxById === null) {
+    const BB = PAYLOAD.backbones;
+    const m = new Map();
+    for (let i = 0; i < BB.id.length; i++) m.set(BB.id[i], i);
+    _backboneIdxById = m;
+  }
+  if (_evidenceByKinase === null) {
+    const EV = PAYLOAD.kinase_celltype_evidence || {kinase_id:[]};
+    const m = new Map();
+    for (let k = 0; k < EV.kinase_id.length; k++) {
+      const kid = EV.kinase_id[k];
+      let arr = m.get(kid);
+      if (!arr) { arr = []; m.set(kid, arr); }
+      arr.push(k);
+    }
+    _evidenceByKinase = m;
+  }
+  if (_presentKinaseSet === null) {
+    const esr = PAYLOAD.edge_slice_ref || {};
+    _presentKinaseSet = new Set(esr.present_kinase_ids || []);
+  }
+}
+
+function _refreshSigCounts(fdr) {
+  if (_keSigFdr === fdr) return;
+  for (const r of _keRows) {
+    let n = 0;
+    for (const v of r._fdr) if (v != null && v < fdr) n++;
+    r._sigCount = n;
+  }
+  _keSigFdr = fdr;
 }
 
 function _keCompare(a, b) {
@@ -1219,7 +1255,7 @@ function _keCompare(a, b) {
 function renderKinaseExplorer() {
   const tbody = document.querySelector("#ke-table tbody");
   if (!tbody) return;
-  if (_keRows === null) _keRows = _buildKinaseRowModel();
+  _ensureKinaseIndexes();
   const f = Store.state.filters;
   const fdr = f.fdr;
   const contrast = f.contrast;
@@ -1227,10 +1263,9 @@ function renderKinaseExplorer() {
   const selKid = Store.state.selection.kinase;
   const q = keSearch.trim().toLowerCase();
 
-  // Compute live sig count + optional contrast filter.
+  _refreshSigCounts(fdr);
   const visible = [];
   for (const r of _keRows) {
-    r._sigCount = _countSigByFdr(r, fdr);
     if (cIdx >= 0) {
       const fdrC = r._fdr[cIdx];
       if (!(fdrC != null && fdrC < fdr)) continue;
@@ -1241,7 +1276,6 @@ function renderKinaseExplorer() {
   }
   visible.sort(_keCompare);
 
-  // Sync header sort indicators.
   document.querySelectorAll("#ke-table thead th").forEach(th => {
     const c = th.dataset.col;
     th.textContent = th.textContent.replace(/[ ▲▼]+$/, "");
@@ -1274,6 +1308,16 @@ function renderKinaseExplorer() {
   if (countEl) countEl.textContent = `${visible.length} / ${_keRows.length} kinases`;
 }
 
+function _updateKinaseRowSelection(kid) {
+  const tbody = document.querySelector("#ke-table tbody");
+  if (!tbody) return;
+  const prev = tbody.querySelector("tr.ke-row.selected");
+  if (prev) prev.classList.remove("selected");
+  if (kid == null) return;
+  const row = tbody.querySelector(`tr.ke-row[data-kid="${kid}"]`);
+  if (row) row.classList.add("selected");
+}
+
 function _diseaseColorFor(contrast) {
   for (const d of ["App","Tau","ApTt"])
     if (contrast.indexOf(d) === 0) return DISEASE_COLORS[d];
@@ -1287,9 +1331,10 @@ function renderKinaseDetail(kinase_id) {
     el.innerHTML = '<div class="muted">Select a kinase to see details.</div>';
     return;
   }
+  _ensureKinaseIndexes();
   const K = PAYLOAD.kinases;
-  const i = K.id.indexOf(kinase_id);
-  if (i < 0) {
+  const i = _kinaseIdxById.get(kinase_id);
+  if (i == null) {
     el.innerHTML = '<div class="muted">Kinase not found.</div>';
     return;
   }
@@ -1306,7 +1351,6 @@ function renderKinaseDetail(kinase_id) {
     `<h4>Cell-type evidence</h4><div id="ke-detail-evidence"></div>` +
     `<h4>Backbones supported</h4><div id="ke-detail-backbones" class="muted">loading…</div>`;
 
-  // NES bar
   const nes = CONTRASTS.map(c => K["NES_" + c][i]);
   const fdrs = CONTRASTS.map(c => K["FDR_" + c][i]);
   const colors = CONTRASTS.map(_diseaseColorFor);
@@ -1321,19 +1365,15 @@ function renderKinaseDetail(kinase_id) {
     xaxis:{tickangle:-35},
   }, {displaylogo:false, responsive:true});
 
-  // Cell-type evidence
   const EV = PAYLOAD.kinase_celltype_evidence || {kinase_id:[]};
-  const rows = [];
-  for (let k = 0; k < EV.kinase_id.length; k++) {
-    if (EV.kinase_id[k] !== kinase_id) continue;
-    rows.push({
-      cell_type: EV.cell_type[k],
-      wmb_fold: EV.wmb_fold[k],
-      sea_ad_lfc: EV.sea_ad_lfc[k],
-      song_lfc: EV.song_lfc[k],
-      wmb_tier: EV.wmb_tier[k],
-    });
-  }
+  const evIdx = _evidenceByKinase.get(kinase_id) || [];
+  const rows = evIdx.map(k => ({
+    cell_type: EV.cell_type[k],
+    wmb_fold: EV.wmb_fold[k],
+    sea_ad_lfc: EV.sea_ad_lfc[k],
+    song_lfc: EV.song_lfc[k],
+    wmb_tier: EV.wmb_tier[k],
+  }));
   rows.sort((a, b) => {
     const av = a.wmb_fold == null ? -Infinity : a.wmb_fold;
     const bv = b.wmb_fold == null ? -Infinity : b.wmb_fold;
@@ -1361,16 +1401,14 @@ function renderKinaseDetail(kinase_id) {
     evEl.innerHTML = evParts.join("");
   }
 
-  // Backbones supported — lazy load the kinase edge slice.
   renderKinaseBackbones(kinase_id);
 }
 
 async function renderKinaseBackbones(kinase_id) {
   const container = document.getElementById("ke-detail-backbones");
   if (!container) return;
-  const esr = PAYLOAD.edge_slice_ref || {};
-  const present = esr.present_kinase_ids || [];
-  if (!present.includes(kinase_id)) {
+  _ensureKinaseIndexes();
+  if (!_presentKinaseSet.has(kinase_id)) {
     container.innerHTML = '<div class="muted">No significant edges for this kinase.</div>';
     container.classList.remove("muted");
     return;
@@ -1383,7 +1421,6 @@ async function renderKinaseBackbones(kinase_id) {
     container.innerHTML = `<div class="muted">Failed to load: ${e.message}</div>`;
     return;
   }
-  // Race guard: user may have clicked elsewhere while fetching.
   if (Store.state.selection.kinase !== kinase_id) return;
 
   const f = Store.state.filters;
@@ -1397,12 +1434,7 @@ async function renderKinaseBackbones(kinase_id) {
   const shown = sorted.slice(0, TOP);
 
   const BB = PAYLOAD.backbones;
-  const bbIdxById = BB._idIndex || (function(){
-    const m = new Map();
-    for (let i = 0; i < BB.id.length; i++) m.set(BB.id[i], i);
-    BB._idIndex = m;
-    return m;
-  })();
+  const bbIdxById = _backboneIdxById;
 
   const parts = [
     `<div class="muted">Showing top ${shown.length} of ${filtered.length} edges` +
@@ -1474,25 +1506,25 @@ function boot() {
   syncGlossary();
   renderOverview();
 
-  const activeIs = (tab) => Store.state.view.activeTab === tab;
   Store.subscribe((next, prev) => {
+    const activeTab = next.view.activeTab;
     if (next.filters !== prev.filters) {
       syncHeaderFromStore();
-      if (activeIs("overview")) renderOverview();
-      if (activeIs("kinase")) {
+      if (activeTab === "overview") renderOverview();
+      if (activeTab === "kinase") {
         renderKinaseExplorer();
         if (next.selection.kinase != null)
           renderKinaseDetail(next.selection.kinase);
       }
     }
-    if (next.selection.kinase !== prev.selection.kinase && activeIs("kinase")) {
-      renderKinaseExplorer();
+    if (next.selection.kinase !== prev.selection.kinase && activeTab === "kinase") {
+      _updateKinaseRowSelection(next.selection.kinase);
       renderKinaseDetail(next.selection.kinase);
     }
     if (next.view !== prev.view) {
       if (next.view.activeTab !== prev.view.activeTab) {
         syncTabsFromStore();
-        if (next.view.activeTab === "kinase") {
+        if (activeTab === "kinase") {
           renderKinaseExplorer();
           if (next.selection.kinase != null)
             renderKinaseDetail(next.selection.kinase);
@@ -1500,7 +1532,7 @@ function boot() {
       }
       if (next.view.glossaryOpen !== prev.view.glossaryOpen) syncGlossary();
       if (next.view.overviewMode !== prev.view.overviewMode &&
-          activeIs("overview")) renderOverview();
+          activeTab === "overview") renderOverview();
     }
   });
 }
