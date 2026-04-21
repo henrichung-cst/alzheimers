@@ -77,7 +77,7 @@ Generated caches (`code/__pycache__/`, etc.) are excluded from this index.
 | `code/wmb_expression.py` | WMB expression export (required for unified attribution) |
 | `code/snrna_integration.py` | Song snRNA-seq pseudobulk, specificity, and concordance |
 | `code/plot_attribution_bubbles.py` | Attribution visualization |
-| `code/build_viewer.py` | Kinase attribution HTML viewer |
+| `code/build_unified_viewer.py` | Unified kinase + pathway HTML viewer (cross-entity) |
 | `code/map_kinases_to_genes.py` | Shared kinase→gene mapping utility |
 | `code/lucie_5xfad_manifest.py` | Lucie 5xFAD integration/provenance utility |
 | `code/runners/supporting/run_atlas_reference.sh` | Atlas/reference setup |

@@ -178,7 +178,7 @@ weighted_concordance = (3 × |song_lfc| + 1 × |sea_ad_lfc|) / 4
 AND concordance evidence from either source (`|song_lfc| > 0.1` OR
 `|sea_ad_lfc| > 0.1`).
 
-### Interactive viewer (`build_viewer.py`)
+### Interactive viewer (`build_unified_viewer.py`)
 
 The composite score builder exposes Song and SEA-AD as independent
 dimensions with configurable weights. Default "balanced" preset:
@@ -227,5 +227,5 @@ subclasses defined in `config.SEA_AD_SUBCLASSES`:
 | Song subclass mapping | `config.py` | `SONG_SUBCLASS_MAP` |
 | Top cell-type ranking | `attribution_recovery.py` | `_build_kinase_hypothesis_table()` |
 | High-confidence flag | `attribution_recovery.py` | `_build_kinase_hypothesis_table()` lines 276–282 |
-| Viewer score presets | `build_viewer.py` | `SCORE_PRESETS` |
+| Viewer score presets | `build_unified_viewer.py` | `SCORE_PRESETS` (Kinase Explorer side panel) |
 | Weight configuration | `config.py` | `SONG_CONCORDANCE_WEIGHT`, `SEA_AD_CONCORDANCE_WEIGHT` |

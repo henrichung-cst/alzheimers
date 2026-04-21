@@ -103,7 +103,7 @@ Each attribution records which evidence sources contributed, so that downstream 
 
 # Stage 5 — Attribution recovery and final tables
 
-<!-- attribution_recovery.py, build_viewer.py -->
+<!-- attribution_recovery.py, build_unified_viewer.py -->
 Stage 5 assembles the bulk pipeline's primary deliverable: a per-kinase hypothesis table that pairs each kinase's enrichment scores with its attributed cell types, confidence tier, supporting evidence sources, and cross-contrast trajectory. The trajectory step asks whether a kinase's attribution is consistent across the three contrasts — for example, is it App-specific, shared across all three, or divergent in ApTt — and attaches that label to every row. The result can be read as: *"kinase X is enriched in contrast C, is supported as acting in cell type Y at confidence tier T, on the basis of evidence sources E, with cross-contrast pattern P."*
 
 The same tables are also available in cell-type-first orientation — NES profiles per cell type across all attributed kinases — for readers whose question starts from a cell type rather than a kinase.

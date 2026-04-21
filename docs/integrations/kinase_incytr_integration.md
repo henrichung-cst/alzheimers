@@ -53,8 +53,7 @@ code/integration/intermediates/[factorial/]all_pairs/aggregation/
    backbone_recurrence[_by_contrast].csv
    hub_matrix[_by_contrast].csv
    target_convergence[_by_contrast].csv
-   backbone_permutation_pvalues[_by_contrast].csv
-   backbone_significant_both_nulls.csv   (factorial only)
+   backbone_permutation_pvalues[_by_contrast].csv  (carries the `significant_both` column; no separate subset file)
    contrast_comparison.csv / temporal_dynamics.{csv,png}  (factorial only)
 
             │  examine_factorial.py  (factorial only)
@@ -333,9 +332,9 @@ Under `code/integration/intermediates/factorial/all_pairs/`:
 - `aggregation/backbone_recurrence_by_contrast.csv` — R-EM-T triples shared across senders, by contrast.
 - `aggregation/hub_matrix_by_contrast.csv` — 22 × 22 sender × receiver signaling summary.
 - `aggregation/target_convergence_by_contrast.csv`.
-- `aggregation/backbone_permutation_pvalues_by_contrast.csv` — dual-null per backbone per contrast.
-- `aggregation/backbone_significant_both_nulls.csv` — backbones passing Null 1 and Null 2 (Storey q < 0.25).
-- `aggregation/contrast_comparison.csv`, `temporal_dynamics.{csv,png}`, `kinase_tpds_integration.csv`, `kinase_coverage.png`, `hub_heatmap_grid.png`, `pathway_viewer.html`.
+- `aggregation/backbone_permutation_pvalues_by_contrast.csv` — dual-null per backbone per contrast; carries a `significant_both` boolean (True when the row passes Null 1 and Null 2 at Storey q < 0.25).
+- `aggregation/kinase_backbone_edges.parquet` — kinase ↔ backbone edge index (canonical join; see Phase 1 of `pipeline.md`).
+- `aggregation/contrast_comparison.csv`, `temporal_dynamics.{csv,png}`, `kinase_tpds_integration.csv`, `kinase_coverage.png`, `hub_heatmap_grid.png`.
 - `aggregation/examination/` — `examine_factorial.py` outputs: additivity (ApTt vs App+Tau), temporal trajectory classification, cell-type centrality, kinase concordance.
 
 `examine_factorial.py` CLI flags (combinable): `--summary`, `--additivity`, `--temporal`, `--celltype`, `--kinase`, `--figures`, `--run`.

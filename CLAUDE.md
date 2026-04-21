@@ -120,7 +120,7 @@ python code/supplementary/parent_protein_qc.py --run          # Q5: Activity-dri
 
 ```bash
 python code/map_kinases_to_genes.py       # Kinase→gene symbol mapping
-python code/build_viewer.py               # Interactive HTML viewer for attribution results
+python code/build_unified_viewer.py       # Unified interactive HTML viewer (kinase + pathway + cross-entity)
 python code/lucie_5xfad_manifest.py       # Lucie 5xFAD proteomics manifest builder
 ```
 
@@ -169,7 +169,7 @@ kinase_attribution.py + snrna_integration.py  ←  code/integration/
 - `kinase_attribution.py` — IRS normalization (all 72 samples), sample filtering (outlier exclusion + sex filter), stoichiometry computation, factorial OLS with disease×timepoint interactions (9 contrasts), MEA kinase enrichment (median-centered + winsorized), unified cell-type attribution (SEA-AD concordance + WMB expression specificity). Outputs to `outputs/reports/kinase_attribution/`. Requires: `kinase-library`, `gseapy`, `scikit-learn`, `matplotlib`, `anndata`.
 - `attribution_recovery.py` — Cross-contrast consistency analysis, final unified attribution table. Outputs to `outputs/reports/attribution_recovery/`. Requires: `matplotlib`.
 - `plot_attribution_bubbles.py` — Per-tissue heatmaps, direction-over-time diverging bars, ApTt additivity scatter, winsorization diagnostic. Outputs to `outputs/reports/attribution_recovery/bubble_plots/`. Requires: `matplotlib`, `scipy`.
-- `build_viewer.py` — Generates a self-contained interactive HTML viewer for kinase attribution results. Reads hypothesis tables, MEA stoichiometry, and site-level OLS; embeds as JSON in a single HTML file. Requires: `kinase-library`, `scipy`.
+- `build_unified_viewer.py` — Generates the unified interactive HTML viewer (kinase activity → cell-type attribution → pathway backbones → cross-entity views). Reads attribution-recovery tables, MEA stoichiometry, site-level OLS, factorial backbone recurrence + permutation pvalues, and the `kinase_backbone_edges.parquet` edge index. Emits `outputs/reports/unified_viewer/index.html` + a shared JSON payload plus sharded per-entity edge slices under `edge_slices/{kinase,backbone}/` fetched on demand via `SliceCache`. Requires: `kinase-library`, `scipy`, `pyarrow`.
 - `lucie_5xfad_manifest.py` — Builds a proteomics manifest for Lucie 5xFAD data integration.
 
 ### Supporting Code
@@ -244,7 +244,6 @@ Operational shell wrappers under `code/runners/`:
   - `kinase_activity_matrix.csv` — wide NES/FDR + trajectory label (1 row/kinase)
   - `celltype_evidence_table.csv` — WMB-gated static evidence (1 row/kinase×celltype)
   - `kinase_hypothesis_table.csv` — kinase-first synthesis, **primary downstream deliverable**
-  - `celltype_kinase_profiles.csv` — cell-type-first NES profiles (1 row/celltype×kinase)
   - `bubble_plots/` — Heatmaps, direction-over-time, additivity scatter, winsorization diagnostic
 - `outputs/reports/atlas_reference/` — Atlas structure reports, taxonomy mapping, coverage
 - `outputs/reports/wmb_expression/` — WMB expression export (supporting)

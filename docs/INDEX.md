@@ -113,7 +113,7 @@ Python adapters + R wrappers; config in `config_integration.py`.
 |:---|:---|
 | `data_ingest/` | `sample_exclusions.csv`, `pca_plots/outlier_diagnostic.png` |
 | `kinase_attribution/` | `stoichiometry_matrix.csv`, `mea_stoichiometry.csv`, `site_level_ols.csv`, `unified_attribution.csv`, `attribution_summary.json`, `mea_global_shift.csv`, `winsorized_sites.csv` |
-| `attribution_recovery/` | **`kinase_hypothesis_table.csv` (primary deliverable)**, `kinase_activity_matrix.csv`, `celltype_evidence_table.csv`, `celltype_kinase_profiles.csv`, `bubble_plots/` |
+| `attribution_recovery/` | **`kinase_hypothesis_table.csv` (primary deliverable)**, `kinase_activity_matrix.csv`, `celltype_evidence_table.csv`, `bubble_plots/` |
 | `atlas_reference/`, `wmb_expression/`, `snrna_integration/` | Supporting prerequisites |
 | `supplementary/` | Reviewer-diagnostic results |
 
@@ -122,7 +122,7 @@ Python adapters + R wrappers; config in `config_integration.py`.
 |:---|:---|
 | `factorial/` | Per-receiver kinase-imputed gene lists, expression matrices, `kldata.csv`, factorial kinase imputation summary |
 | `factorial/all_pairs/` | `recv_{subclass}.parquet` × 22 (with `imputed_nodes` provenance), `pair_summary.csv` |
-| `factorial/all_pairs/aggregation/` | `backbone_recurrence_by_contrast.csv`, `backbone_permutation_pvalues_by_contrast.csv`, `backbone_significant_both_nulls.csv`, `hub_matrix_by_contrast.csv`, `contrast_comparison.csv`, `temporal_dynamics.csv`, `target_convergence_by_contrast.csv`, `kinase_tpds_integration.csv`, `aggregation_metadata.json`, `hub_heatmap_grid.png`, `temporal_dynamics.png`, `kinase_coverage.png` |
+| `factorial/all_pairs/aggregation/` | `backbone_recurrence_by_contrast.csv`, `backbone_permutation_pvalues_by_contrast.csv` (superset with `significant_both` column), `kinase_backbone_edges.parquet`, `hub_matrix_by_contrast.csv`, `contrast_comparison.csv`, `temporal_dynamics.csv`, `target_convergence_by_contrast.csv`, `kinase_tpds_integration.csv`, `aggregation_metadata.json`, `hub_heatmap_grid.png`, `temporal_dynamics.png`, `kinase_coverage.png` |
 | `factorial/all_pairs/aggregation/examination/` | Additivity, trajectory, celltype-centrality figures |
 | `all_pairs/` | Single-contrast per-receiver parquets + aggregation |
 
@@ -130,5 +130,4 @@ Python adapters + R wrappers; config in `config_integration.py`.
 
 | Viewer | Builder | Input | Output |
 |:---|:---|:---|:---|
-| Kinase attribution | `code/build_viewer.py` | `kinase_hypothesis_table.csv`, `mea_stoichiometry.csv`, `site_level_ols.csv` | `outputs/reports/attribution_recovery/kinase_viewer.html` |
-| Pathway (factorial) | `code/integration/build_pathway_viewer.py` | `backbone_significant_both_nulls.csv`, kinase attribution tables | `code/integration/intermediates/factorial/all_pairs/aggregation/pathway_viewer.html` |
+| Unified (kinase + pathway) | `code/build_unified_viewer.py` | `kinase_hypothesis_table.csv`, `kinase_activity_matrix.csv`, `celltype_evidence_table.csv`, `mea_stoichiometry.csv`, `site_level_ols.csv`, `backbone_recurrence_by_contrast.csv`, `backbone_permutation_pvalues_by_contrast.csv`, `unified_attribution.csv`, `kinase_backbone_edges.parquet` | `outputs/reports/unified_viewer/index.html` + payload JSON + sharded edge slices |

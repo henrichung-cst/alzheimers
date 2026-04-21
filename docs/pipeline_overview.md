@@ -51,7 +51,6 @@ The `evidence_basis` column records exactly which sources contributed per row, w
 - **`kinase_hypothesis_table.csv`** — the primary deliverable. One row per (kinase, contrast) with attributed cell types, confidence tier, evidence basis, and cross-contrast trajectory. Reading a row: "kinase X, enriched in contrast C, is supported as acting in cell type Y at confidence tier T, on the basis of evidence sources E, with cross-contrast pattern P." This is the table biological interpretation starts from.
 - **`kinase_activity_matrix.csv`** — the same information in wide form: one row per kinase, columns are NES and FDR for each of the three contrasts, plus the trajectory label.
 - **`celltype_evidence_table.csv`** — one row per (kinase, cell type) with the static evidence that led to the attribution, WMB-gated. Useful when the question being asked is cell-type-first.
-- **`celltype_kinase_profiles.csv`** — the cell-type-first NES profile (one row per cell type × kinase), for heatmap-style summaries.
 
 A representative heatmap view for microglia is at [`../outputs/reports/attribution_recovery/bubble_plots/heatmap_microglia_top50.png`](../outputs/reports/attribution_recovery/bubble_plots/heatmap_microglia_top50.png). From the bulk side of the pipeline, Stage 5 is the terminal output; Stage 6 begins the hand-off to the integration layer.
 

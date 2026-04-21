@@ -82,7 +82,7 @@ alzheimers/
 │   ├── wmb_expression.py           # Supporting: WMB expression export
 │   ├── snrna_integration.py        # Supporting: Song within-cohort snRNA-seq evidence
 │   ├── map_kinases_to_genes.py     # Supporting: kinase-gene mapping utility
-│   ├── build_viewer.py             # Standalone: interactive HTML viewer
+│   ├── build_unified_viewer.py     # Standalone: unified kinase + pathway HTML viewer
 │   └── lucie_5xfad_manifest.py     # Standalone: 5xFAD integration/provenance
 ├── data/
 │   ├── incytr_collections/song/    # Authoritative localized Song workspace
@@ -183,7 +183,7 @@ bash code/runners/supplementary/run_reviewer_diagnostics.sh
 |---|---|
 | `data_ingest/` | Sample mapping, phospho-protein matching, PCA plots, `sample_exclusions.csv` |
 | `kinase_attribution/` | Stoichiometry matrix, MEA enrichment (`mea_stoichiometry.csv`), unified attribution (`unified_attribution.csv`), site-level OLS, winsorization logs |
-| `attribution_recovery/` | **Primary deliverables**: `kinase_hypothesis_table.csv` (kinase-first synthesis), `kinase_activity_matrix.csv`, `celltype_evidence_table.csv`, `celltype_kinase_profiles.csv`, bubble plots |
+| `attribution_recovery/` | **Primary deliverables**: `kinase_hypothesis_table.csv` (kinase-first synthesis), `kinase_activity_matrix.csv`, `celltype_evidence_table.csv`, bubble plots |
 | `atlas_reference/` | Atlas structure reports, taxonomy mapping, kinase gene coverage |
 | `wmb_expression/` | WMB per-subclass kinase/phosphatase expression matrix |
 | `snrna_integration/` | Song pseudobulk, within-cohort specificity, concordance |
