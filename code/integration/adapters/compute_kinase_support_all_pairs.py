@@ -233,8 +233,6 @@ def process_one_pair(shared, pq_path, sender, receiver, run_sensitivity=True):
     t5 = time.monotonic()
     scores_df.to_csv(os.path.join(dir_path, "kinase_support_scores.csv"),
                      index=False, float_format="%.6g")
-    adj_df.to_csv(os.path.join(dir_path, "adjusted_rankings.csv"),
-                  index=False, float_format="%.6g")
     summary_path = os.path.join(dir_path, "reranking_summary.json")
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)

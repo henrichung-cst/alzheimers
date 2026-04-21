@@ -24,7 +24,6 @@ single-outlier dominance (one strong edge in low-degree pathways).
 
 Outputs:
   intermediates/kinase_support_scores.csv
-  intermediates/adjusted_rankings.csv
   intermediates/reranking_summary.json
   intermediates/permutation_pvalues.csv  (with --permutations)
 """
@@ -843,10 +842,6 @@ def main():
         icfg.INTERMEDIATES_DIR, "kinase_support_scores.csv")
     scores_df.to_csv(scores_path, index=False)
     print(f"\nWrote {scores_path}")
-
-    adj_path = os.path.join(icfg.INTERMEDIATES_DIR, "adjusted_rankings.csv")
-    adj_df.to_csv(adj_path, index=False)
-    print(f"Wrote {adj_path}")
 
     summary_path = os.path.join(
         icfg.INTERMEDIATES_DIR, "reranking_summary.json")
