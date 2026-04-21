@@ -981,10 +981,52 @@ main#app-main { padding:14px; }
     </div>
   </div>
   <div id="tab-temporal" class="tab-panel">
-    <div class="tab-stub">Temporal Dynamics — Phase 4.5</div>
+    <div class="card">
+      <div class="detail-chips">
+        <label>Level:
+          <select id="tm-level">
+            <option value="kinase">Kinase</option>
+            <option value="backbone">Backbone</option>
+          </select>
+        </label>
+        <label id="tm-metric-label">Metric:
+          <select id="tm-metric">
+            <option value="count">Count</option>
+            <option value="mean_score">Mean observed score</option>
+            <option value="mean_tpds">Mean |TPDS|</option>
+            <option value="pct_up">% upregulated</option>
+          </select>
+        </label>
+        <label id="tm-tissue-label">Tissue:
+          <select id="tm-tissue"></select>
+        </label>
+        <span class="muted" id="tm-subtitle"></span>
+      </div>
+      <div id="temporal-plot" style="width:100%; height:480px;"></div>
+    </div>
   </div>
   <div id="tab-additivity" class="tab-panel">
-    <div class="tab-stub">Additivity — Phase 4.6</div>
+    <div class="card">
+      <div class="detail-chips">
+        <label>Level:
+          <select id="add-level">
+            <option value="kinase">Kinase</option>
+            <option value="backbone">Backbone</option>
+          </select>
+        </label>
+        <label>Timepoint:
+          <select id="add-tp">
+            <option value="ALL">All (2/4/6mo)</option>
+            <option value="2mo">2mo</option>
+            <option value="4mo">4mo</option>
+            <option value="6mo">6mo</option>
+          </select>
+        </label>
+        <span class="muted" id="add-subtitle"></span>
+      </div>
+      <div id="add-plot" style="width:100%; height:520px;"></div>
+      <div class="muted" id="add-stats"></div>
+    </div>
   </div>
 </main>
 <aside id="glossary-panel">
@@ -1021,7 +1063,10 @@ const INITIAL_STATE = {
   view:      { activeTab:"overview", overviewMode:"count",
                overviewSort:"tissue", glossaryOpen:false,
                graphLayout:"concentric", graphMinDegree:1,
-               senderMatrixMode:"count" },
+               senderMatrixMode:"count",
+               temporalLevel:"kinase", temporalMetric:"count",
+               temporalTissue:"ALL",
+               additivityLevel:"kinase", additivityTimepoint:"ALL" },
 };
 
 const _clone = (typeof structuredClone === "function")
@@ -1259,14 +1304,17 @@ function syncTabsFromStore() {
 // ---------------------------------------------------------------------------
 // Overview tab — receiver × contrast heatmap
 // ---------------------------------------------------------------------------
-function receiverOrder() {
-  // Sort receivers by tissue_category then alphabetical within category.
-  const pairs = RECEIVERS.map((r, i) => [r, TISSUE_CAT[i] || "zzz", i]);
+function _tissueSortedPairs(names, tissueOf) {
+  const pairs = names.map((n, i) => [n, tissueOf(n, i) || "zzz", i]);
   pairs.sort((a, b) => {
     if (a[1] !== b[1]) return a[1] < b[1] ? -1 : 1;
     return a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0);
   });
-  return pairs.map(p => p[0]);
+  return pairs;
+}
+
+function receiverOrder() {
+  return _tissueSortedPairs(RECEIVERS, (_, i) => TISSUE_CAT[i]).map(p => p[0]);
 }
 
 function renderOverview() {
@@ -1342,17 +1390,13 @@ function renderOverview() {
 // ---------------------------------------------------------------------------
 // Sender × Receiver tab
 // ---------------------------------------------------------------------------
+let _senderOrderCache = null;
 function _senderOrder() {
-  // Alphabetical within-tissue, matching the Overview's receiverOrder()
-  // presentation so matrix rows and columns align visually.
+  if (_senderOrderCache) return _senderOrderCache;
   const SENDERS = META.senderOrder || [];
   const toTissue = META.receiverToTissue || {};
-  const pairs = SENDERS.map((s, i) => [s, toTissue[s] || "zzz", i]);
-  pairs.sort((a, b) => {
-    if (a[1] !== b[1]) return a[1] < b[1] ? -1 : 1;
-    return a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0);
-  });
-  return pairs;  // [name, tissue, origIndex]
+  _senderOrderCache = _tissueSortedPairs(SENDERS, (s) => toTissue[s]);
+  return _senderOrderCache;
 }
 
 function renderSenderMatrix() {
@@ -1360,7 +1404,7 @@ function renderSenderMatrix() {
   if (!el) return;
   const sub = document.getElementById("sm-subtitle");
   const f = Store.state.filters;
-  const mode = Store.state.view.senderMatrixMode;  // 'count' | 'direction'
+  const mode = Store.state.view.senderMatrixMode;
   const SM = PAYLOAD.senderMatrix || {};
   const SENDERS = META.senderOrder || [];
 
@@ -1373,8 +1417,8 @@ function renderSenderMatrix() {
     return;
   }
 
-  const sRows = _senderOrder();   // [[name, tissue, origIdx], ...]
-  const rCols = receiverOrder();  // names in display order
+  const sRows = _senderOrder();
+  const rCols = receiverOrder();
   const ctid = {};
   for (let i = 0; i < RECEIVERS.length; i++) ctid[RECEIVERS[i]] = i;
 
@@ -1445,6 +1489,476 @@ function wireSenderMatrix() {
     Store.dispatch({type:"SET_VIEW", key:"senderMatrixMode",
                     value: ev.target.value});
   });
+}
+
+// ---------------------------------------------------------------------------
+// Temporal Dynamics tab — merged kinase Direction-over-Time + pathway Temporal.
+// Level toggle picks which entity is aggregated; both render to #temporal-plot.
+// ---------------------------------------------------------------------------
+function _parseContrast(c) {
+  const ix = c.lastIndexOf("_");
+  return { geno: c.slice(0, ix), tp: c.slice(ix + 1) };
+}
+
+function _temporalKinaseMemberMask() {
+  // Returns a Uint8Array over kinase ids indicating whether each kinase belongs
+  // to the selected tissue scope (top_celltype_1 membership).
+  const K = PAYLOAD.kinases;
+  const scope = Store.state.view.temporalTissue;
+  const n = K.id.length;
+  const mask = new Uint8Array(n);
+  if (scope === "ALL") { mask.fill(1); return mask; }
+  const tissues = META.tissueCategories || {};
+  if (scope.startsWith("t:")) {
+    const name = scope.slice(2);
+    const rs = new Set(tissues[name] || []);
+    for (let i = 0; i < n; i++) mask[i] = rs.has(K.top_celltype_1[i]) ? 1 : 0;
+  } else if (scope.startsWith("r:")) {
+    const r = scope.slice(2);
+    for (let i = 0; i < n; i++) mask[i] = (K.top_celltype_1[i] === r) ? 1 : 0;
+  } else {
+    mask.fill(1);
+  }
+  return mask;
+}
+
+function renderTemporalKinase() {
+  const el = document.getElementById("temporal-plot");
+  const sub = document.getElementById("tm-subtitle");
+  const K = PAYLOAD.kinases;
+  const fdr = Store.state.filters.fdr;
+  const mask = _temporalKinaseMemberMask();
+  const DG = META.diseaseGroups;
+  const TPS = META.timepoints;
+  const counts = {};
+  for (const g of DG) counts[g] = {};
+  for (const g of DG) for (const t of TPS) counts[g][t] = { up: 0, down: 0 };
+
+  const n = K.id.length;
+  let nScope = 0;
+  for (let i = 0; i < n; i++) if (mask[i]) nScope++;
+
+  for (const g of DG) {
+    for (const t of TPS) {
+      const c = g + "_" + t;
+      const nesCol = K["NES_" + c];
+      const fdrCol = K["FDR_" + c];
+      if (!nesCol || !fdrCol) continue;
+      let up = 0, down = 0;
+      for (let i = 0; i < n; i++) {
+        if (!mask[i]) continue;
+        const q = fdrCol[i], nes = nesCol[i];
+        if (q == null || nes == null) continue;
+        if (q >= fdr) continue;
+        if (nes > 0) up++;
+        else if (nes < 0) down++;
+      }
+      counts[g][t] = { up, down };
+    }
+  }
+
+  const traces = [];
+  for (const g of DG) {
+    const color = (META.diseaseColors || {})[g] || "#555";
+    traces.push({
+      type: "bar", name: g + " up",
+      x: TPS, y: TPS.map(t => counts[g][t].up),
+      marker: { color }, legendgroup: g,
+      hovertemplate: `${g} up @ %{x}: %{y}<extra></extra>`,
+    });
+    traces.push({
+      type: "bar", name: g + " down",
+      x: TPS, y: TPS.map(t => -counts[g][t].down),
+      marker: { color, opacity: 0.55 }, legendgroup: g, showlegend: true,
+      hovertemplate: `${g} down @ %{x}: %{customdata}<extra></extra>`,
+      customdata: TPS.map(t => counts[g][t].down),
+    });
+  }
+  const layout = {
+    barmode: "group", bargap: 0.25,
+    margin: { l: 60, r: 20, t: 10, b: 40 },
+    xaxis: { title: "Timepoint" },
+    yaxis: { title: "Sig kinases (up − down)", zeroline: true },
+    legend: { orientation: "h", y: -0.15 },
+    height: 480,
+    shapes: [{ type: "line", x0: -0.5, x1: TPS.length - 0.5, y0: 0, y1: 0,
+               xref: "x", yref: "y", line: { color: "#000", width: 1 } }],
+  };
+  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true });
+  if (sub) sub.textContent =
+    `${nScope} kinases in scope · FDR < ${fdr} · diverging bars show up (+) vs down (−) counts.`;
+}
+
+function renderTemporalBackbone() {
+  const el = document.getElementById("temporal-plot");
+  const sub = document.getElementById("tm-subtitle");
+  const BB = PAYLOAD.backbones;
+  const metric = Store.state.view.temporalMetric;
+  const DG = META.diseaseGroups;
+  const TPS = META.timepoints;
+  const idx = getFilteredIndices();
+
+  // agg[geno][tp] = {count, sumScore, sumAbsTpds, nFinite, nUp}
+  const agg = {};
+  for (const g of DG) { agg[g] = {}; for (const t of TPS)
+    agg[g][t] = { count: 0, sumScore: 0, sumAbsTpds: 0, nFinite: 0, nUp: 0 }; }
+  for (const g of DG) {
+    for (const t of TPS) {
+      const c = g + "_" + t;
+      const tpdsCol = BB["mean_tpds_" + c];
+      const obsCol = BB["observed_score_" + c];
+      if (!tpdsCol) continue;
+      const a = agg[g][t];
+      for (let j = 0; j < idx.length; j++) {
+        const i = idx[j];
+        const tp = tpdsCol[i];
+        const os = obsCol ? obsCol[i] : null;
+        if (tp != null) {
+          a.count++;
+          a.sumAbsTpds += Math.abs(tp);
+          if (tp > 0) a.nUp++;
+        }
+        if (os != null) { a.sumScore += os; a.nFinite++; }
+      }
+    }
+  }
+
+  const traces = [];
+  for (const g of DG) {
+    const color = (META.diseaseColors || {})[g] || "#555";
+    const y = TPS.map(t => {
+      const a = agg[g][t];
+      if (metric === "count") return a.count;
+      if (metric === "mean_score") return a.nFinite ? a.sumScore / a.nFinite : null;
+      if (metric === "mean_tpds") return a.count ? a.sumAbsTpds / a.count : null;
+      if (metric === "pct_up") return a.count ? (100 * a.nUp / a.count) : null;
+      return null;
+    });
+    traces.push({
+      type: "scatter", mode: "lines+markers", name: g,
+      x: TPS, y, line: { color, width: 2 },
+      marker: { color, size: 8 },
+    });
+  }
+  const yTitle = ({
+    count: "Backbone count (filtered)",
+    mean_score: "Mean observed score",
+    mean_tpds: "Mean |TPDS|",
+    pct_up: "% upregulated (mean_tpds > 0)",
+  })[metric] || "";
+  const layout = {
+    margin: { l: 70, r: 20, t: 10, b: 40 },
+    xaxis: { title: "Timepoint" },
+    yaxis: { title: yTitle, zeroline: true },
+    legend: { orientation: "h", y: -0.15 },
+    height: 480,
+  };
+  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true });
+  if (sub) sub.textContent =
+    `${idx.length.toLocaleString()} backbones in current filter · metric = ${metric}.`;
+}
+
+function renderTemporal() {
+  const el = document.getElementById("temporal-plot");
+  if (!el) return;
+  const level = Store.state.view.temporalLevel;
+  const metricLabel = document.getElementById("tm-metric-label");
+  const tissueLabel = document.getElementById("tm-tissue-label");
+  if (metricLabel) metricLabel.style.display = (level === "backbone") ? "" : "none";
+  if (tissueLabel) tissueLabel.style.display = (level === "kinase") ? "" : "none";
+  if (level === "kinase") renderTemporalKinase();
+  else renderTemporalBackbone();
+}
+
+function wireTemporalControls() {
+  const levelSel = document.getElementById("tm-level");
+  const metricSel = document.getElementById("tm-metric");
+  const tissueSel = document.getElementById("tm-tissue");
+  if (!levelSel || !metricSel || !tissueSel) return;
+
+  // Populate tissue dropdown: All + tissue groups + per-receiver leaves.
+  const opts = ['<option value="ALL">All cell types</option>'];
+  const tissues = META.tissueCategories || {};
+  for (const tname of Object.keys(tissues)) {
+    opts.push(`<option value="t:${tname}">${tname} (tissue)</option>`);
+    for (const r of tissues[tname])
+      opts.push(`<option value="r:${r}">&nbsp;&nbsp;${r}</option>`);
+  }
+  tissueSel.innerHTML = opts.join("");
+
+  levelSel.value = Store.state.view.temporalLevel;
+  metricSel.value = Store.state.view.temporalMetric;
+  tissueSel.value = Store.state.view.temporalTissue;
+
+  levelSel.addEventListener("change", ev =>
+    Store.dispatch({type:"SET_VIEW", key:"temporalLevel", value: ev.target.value}));
+  metricSel.addEventListener("change", ev =>
+    Store.dispatch({type:"SET_VIEW", key:"temporalMetric", value: ev.target.value}));
+  tissueSel.addEventListener("change", ev =>
+    Store.dispatch({type:"SET_VIEW", key:"temporalTissue", value: ev.target.value}));
+}
+
+// ---------------------------------------------------------------------------
+// Additivity tab — merged kinase NES + backbone TPDS ApTt-additivity scatter.
+// Predicted = App + Tau; observed = ApTt. y=x means perfectly additive; points
+// below the diagonal = sub-additive (standing sanity check).
+// ---------------------------------------------------------------------------
+const _ADD_COLORS = {
+  "App only":   "#d1495b",
+  "Tau only":   "#2e86ab",
+  "ApTt only":  "#8338ec",
+  "Multi":      "#444",
+  "n.s.":       "#bbb",
+};
+const _ADD_CATEGORIES = ["App only", "Tau only", "ApTt only", "Multi", "n.s."];
+const _ADD_BACKBONE_MAX_POINTS = 20000;
+
+const _axSuf = (k) => (k === 0) ? "" : String(k + 1);
+const _newAcc = () => ({ n:0, sx:0, sy:0, sxx:0, syy:0, sxy:0 });
+function _accAdd(a, x, y) {
+  a.n++; a.sx += x; a.sy += y; a.sxx += x*x; a.syy += y*y; a.sxy += x*y;
+}
+function _pearson(a) {
+  if (a.n < 3) return { r: null, n: a.n };
+  const num = a.n*a.sxy - a.sx*a.sy;
+  const den = Math.sqrt((a.n*a.sxx - a.sx*a.sx) * (a.n*a.syy - a.sy*a.sy));
+  return { r: den > 0 ? num/den : null, n: a.n };
+}
+
+function _addTimepointsInScope() {
+  const tp = Store.state.view.additivityTimepoint;
+  const TPS = META.timepoints;
+  return (tp === "ALL") ? TPS.slice() : [tp];
+}
+
+function _addDiagonalShapes(tps, xRange) {
+  const shapes = [];
+  const annotations = [];
+  for (let k = 0; k < tps.length; k++) {
+    const s = _axSuf(k);
+    shapes.push({
+      type: "line", xref: "x" + s, yref: "y" + s,
+      x0: xRange[0], x1: xRange[1], y0: xRange[0], y1: xRange[1],
+      line: { color: "#888", width: 1, dash: "dash" },
+    });
+    annotations.push({
+      xref: "x" + s + " domain", yref: "y" + s + " domain",
+      x: 0.03, y: 0.97, xanchor: "left", yanchor: "top", showarrow: false,
+      text: "Synergistic", font: { size: 10, color: "#888" },
+    });
+    annotations.push({
+      xref: "x" + s + " domain", yref: "y" + s + " domain",
+      x: 0.97, y: 0.03, xanchor: "right", yanchor: "bottom", showarrow: false,
+      text: "Sub-additive", font: { size: 10, color: "#888" },
+    });
+    annotations.push({
+      xref: "x" + s + " domain", yref: "y" + s + " domain",
+      x: 0.5, y: 1.08, xanchor: "center", yanchor: "bottom", showarrow: false,
+      text: "<b>" + tps[k] + "</b>", font: { size: 13 },
+    });
+  }
+  return { shapes, annotations };
+}
+
+function _addAxesLayout(tps, axRange, xTitle, yTitle) {
+  const layout = {
+    margin: { l: 60, r: 20, t: 40, b: 50 },
+    grid: { rows: 1, columns: tps.length, pattern: "independent" },
+    height: 520, hovermode: "closest",
+  };
+  for (let k = 0; k < tps.length; k++) {
+    const s = _axSuf(k);
+    layout["xaxis" + s] = { title: xTitle, range: axRange, zeroline: true };
+    layout["yaxis" + s] = { title: (k === 0) ? yTitle : "",
+                             range: axRange, zeroline: true,
+                             scaleanchor: "x" + s, scaleratio: 1 };
+  }
+  return layout;
+}
+
+function _addCategory(fApp, fTau, fApTt, thresh) {
+  const sApp = (fApp != null && fApp < thresh);
+  const sTau = (fTau != null && fTau < thresh);
+  const sAp  = (fApTt != null && fApTt < thresh);
+  const n = (sApp ? 1 : 0) + (sTau ? 1 : 0) + (sAp ? 1 : 0);
+  if (n === 0) return "n.s.";
+  if (n >= 2) return "Multi";
+  if (sApp) return "App only";
+  if (sTau) return "Tau only";
+  return "ApTt only";
+}
+
+function _writeStats(stats, tps, accs) {
+  if (!stats) return;
+  stats.textContent = tps.map((t, k) => {
+    const r = _pearson(accs[k]);
+    return `${t}: n=${r.n}, Pearson r=${r.r == null ? "–" : r.r.toFixed(3)}`;
+  }).join("  ·  ");
+}
+
+function renderAdditivityKinase() {
+  const el = document.getElementById("add-plot");
+  const sub = document.getElementById("add-subtitle");
+  const stats = document.getElementById("add-stats");
+  const K = PAYLOAD.kinases;
+  const fdr = Store.state.filters.fdr;
+  const recv = Store.state.filters.receiver;
+  const n = K.id.length;
+  const tps = _addTimepointsInScope();
+
+  const buckets = tps.map(() => {
+    const b = {};
+    for (const c of _ADD_CATEGORIES) b[c] = { x: [], y: [], text: [], customdata: [] };
+    return b;
+  });
+  const accs = tps.map(_newAcc);
+  let xMin = -0.1, xMax = 0.1, yMin = -0.1, yMax = 0.1;
+
+  for (let k = 0; k < tps.length; k++) {
+    const t = tps[k];
+    const nAppCol = K["NES_App_" + t],  nTauCol = K["NES_Tau_" + t],  nApCol = K["NES_ApTt_" + t];
+    const fAppCol = K["FDR_App_" + t],  fTauCol = K["FDR_Tau_" + t],  fApCol = K["FDR_ApTt_" + t];
+    if (!nAppCol || !nTauCol || !nApCol) continue;
+    const bucket = buckets[k];
+    const acc = accs[k];
+    for (let i = 0; i < n; i++) {
+      if (recv !== "ALL" && K.top_celltype_1 && K.top_celltype_1[i] !== recv) continue;
+      const nApp = nAppCol[i], nTau = nTauCol[i], nAp = nApCol[i];
+      if (nApp == null || nTau == null || nAp == null) continue;
+      const fApp = fAppCol[i], fTau = fTauCol[i], fAp = fApCol[i];
+      const x = nApp + nTau, y = nAp;
+      const b = bucket[_addCategory(fApp, fTau, fAp, fdr)];
+      b.x.push(x); b.y.push(y);
+      b.text.push(K.name[i]);
+      b.customdata.push([nApp, nTau, nAp, fApp, fTau, fAp]);
+      _accAdd(acc, x, y);
+      if (x < xMin) xMin = x; if (x > xMax) xMax = x;
+      if (y < yMin) yMin = y; if (y > yMax) yMax = y;
+    }
+  }
+
+  const axRange = [Math.min(xMin, yMin) - 0.2, Math.max(xMax, yMax) + 0.2];
+  const traces = [];
+  for (let k = 0; k < tps.length; k++) {
+    const s = _axSuf(k);
+    for (const cat of _ADD_CATEGORIES) {
+      const b = buckets[k][cat];
+      if (!b.x.length) continue;
+      traces.push({
+        type: "scattergl", mode: "markers", name: cat,
+        legendgroup: cat, showlegend: (k === 0),
+        x: b.x, y: b.y, text: b.text, customdata: b.customdata,
+        xaxis: "x" + s, yaxis: "y" + s,
+        marker: { color: _ADD_COLORS[cat], size: 7, opacity: 0.75,
+                  line: { width: 0.5, color: "#fff" } },
+        hovertemplate:
+          "<b>%{text}</b><br>App NES: %{customdata[0]:.2f} (q=%{customdata[3]:.2g})" +
+          "<br>Tau NES: %{customdata[1]:.2f} (q=%{customdata[4]:.2g})" +
+          "<br>ApTt NES: %{customdata[2]:.2f} (q=%{customdata[5]:.2g})" +
+          "<br>Pred (App+Tau): %{x:.2f}<br>Obs (ApTt): %{y:.2f}<extra></extra>",
+      });
+    }
+  }
+  const { shapes, annotations } = _addDiagonalShapes(tps, axRange);
+  const layout = _addAxesLayout(tps, axRange, "App + Tau NES", "ApTt NES (observed)");
+  layout.showlegend = true;
+  layout.legend = { orientation: "h", y: -0.18 };
+  layout.shapes = shapes;
+  layout.annotations = annotations;
+  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true });
+
+  _writeStats(stats, tps, accs);
+  if (sub) sub.textContent =
+    `Kinase level · predicted = App NES + Tau NES · observed = ApTt NES · FDR < ${fdr}` +
+    (recv !== "ALL" ? ` · receiver=${recv}` : "");
+}
+
+function renderAdditivityBackbone() {
+  const el = document.getElementById("add-plot");
+  const sub = document.getElementById("add-subtitle");
+  const stats = document.getElementById("add-stats");
+  const BB = PAYLOAD.backbones;
+  const tps = _addTimepointsInScope();
+  const idx = getFilteredIndices();
+
+  let sampleIdx = idx;
+  let thinned = false;
+  if (idx.length > _ADD_BACKBONE_MAX_POINTS) {
+    const stride = idx.length / _ADD_BACKBONE_MAX_POINTS;
+    sampleIdx = new Int32Array(_ADD_BACKBONE_MAX_POINTS);
+    for (let j = 0; j < _ADD_BACKBONE_MAX_POINTS; j++)
+      sampleIdx[j] = idx[Math.floor(j * stride)];
+    thinned = true;
+  }
+
+  const perTp = tps.map(() => ({ x: [], y: [] }));
+  const accs = tps.map(_newAcc);
+  let xMin = 0, xMax = 0, yMin = 0, yMax = 0;
+  for (let k = 0; k < tps.length; k++) {
+    const t = tps[k];
+    const oApp = BB["observed_score_App_" + t];
+    const oTau = BB["observed_score_Tau_" + t];
+    const oAp  = BB["observed_score_ApTt_" + t];
+    if (!oApp || !oTau || !oAp) continue;
+    const dst = perTp[k];
+    const acc = accs[k];
+    for (let j = 0; j < sampleIdx.length; j++) {
+      const i = sampleIdx[j];
+      const a = oApp[i], tv = oTau[i], av = oAp[i];
+      if (a == null || tv == null || av == null) continue;
+      const x = a + tv;
+      dst.x.push(x); dst.y.push(av);
+      _accAdd(acc, x, av);
+      if (x < xMin) xMin = x; if (x > xMax) xMax = x;
+      if (av < yMin) yMin = av; if (av > yMax) yMax = av;
+    }
+  }
+  const axRange = [Math.min(xMin, yMin) * 1.05 - 0.1,
+                   Math.max(xMax, yMax) * 1.05 + 0.1];
+
+  const traces = [];
+  for (let k = 0; k < tps.length; k++) {
+    const s = _axSuf(k);
+    const p = perTp[k];
+    traces.push({
+      type: "scattergl", mode: "markers", name: tps[k], showlegend: false,
+      x: p.x, y: p.y, xaxis: "x" + s, yaxis: "y" + s,
+      marker: { color: "#2e86ab", size: 3, opacity: 0.35 },
+      hovertemplate: "Pred: %{x:.3f}<br>Obs: %{y:.3f}<extra></extra>",
+    });
+  }
+  const { shapes, annotations } = _addDiagonalShapes(tps, axRange);
+  const layout = _addAxesLayout(tps, axRange, "App + Tau score", "ApTt score (observed)");
+  layout.showlegend = false;
+  layout.shapes = shapes;
+  layout.annotations = annotations;
+  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true });
+
+  _writeStats(stats, tps, accs);
+  if (sub) sub.textContent =
+    `Backbone level · ${idx.length.toLocaleString()} in current filter` +
+    (thinned ? ` (showing ${_ADD_BACKBONE_MAX_POINTS.toLocaleString()} sampled)` : "") +
+    ` · predicted = App + Tau observed_score · observed = ApTt observed_score.`;
+}
+
+function renderAdditivity() {
+  const el = document.getElementById("add-plot");
+  if (!el) return;
+  const level = Store.state.view.additivityLevel;
+  if (level === "kinase") renderAdditivityKinase();
+  else renderAdditivityBackbone();
+}
+
+function wireAdditivityControls() {
+  const levelSel = document.getElementById("add-level");
+  const tpSel = document.getElementById("add-tp");
+  if (!levelSel || !tpSel) return;
+  levelSel.value = Store.state.view.additivityLevel;
+  tpSel.value = Store.state.view.additivityTimepoint;
+  levelSel.addEventListener("change", ev =>
+    Store.dispatch({type:"SET_VIEW", key:"additivityLevel", value: ev.target.value}));
+  tpSel.addEventListener("change", ev =>
+    Store.dispatch({type:"SET_VIEW", key:"additivityTimepoint", value: ev.target.value}));
 }
 
 // ---------------------------------------------------------------------------
@@ -2368,6 +2882,8 @@ function boot() {
   wirePathwayTable();
   wireGraphControls();
   wireSenderMatrix();
+  wireTemporalControls();
+  wireAdditivityControls();
   syncHeaderFromStore();
   syncTabsFromStore();
   syncGlossary();
@@ -2390,6 +2906,8 @@ function boot() {
       }
       if (activeTab === "graph") renderGraph();
       if (activeTab === "senders") renderSenderMatrix();
+      if (activeTab === "temporal") renderTemporal();
+      if (activeTab === "additivity") renderAdditivity();
     }
     if (next.selection.kinase !== prev.selection.kinase && activeTab === "kinase") {
       _updateKinaseRowSelection(next.selection.kinase);
@@ -2414,6 +2932,8 @@ function boot() {
         }
         if (activeTab === "graph") renderGraph();
         if (activeTab === "senders") renderSenderMatrix();
+        if (activeTab === "temporal") renderTemporal();
+        if (activeTab === "additivity") renderAdditivity();
         if (prev.view.activeTab === "graph" && activeTab !== "graph")
           _destroyCy();
       }
@@ -2425,6 +2945,13 @@ function boot() {
           activeTab === "graph") renderGraph();
       if (next.view.senderMatrixMode !== prev.view.senderMatrixMode &&
           activeTab === "senders") renderSenderMatrix();
+      if ((next.view.temporalLevel !== prev.view.temporalLevel ||
+           next.view.temporalMetric !== prev.view.temporalMetric ||
+           next.view.temporalTissue !== prev.view.temporalTissue) &&
+          activeTab === "temporal") renderTemporal();
+      if ((next.view.additivityLevel !== prev.view.additivityLevel ||
+           next.view.additivityTimepoint !== prev.view.additivityTimepoint) &&
+          activeTab === "additivity") renderAdditivity();
     }
   });
 }
