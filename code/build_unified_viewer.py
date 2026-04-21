@@ -546,6 +546,60 @@ def _build_overview_slice(data: UnifiedData) -> dict:
     return overview
 
 
+def _build_sender_matrix_slice(data: UnifiedData,
+                               sender_order: list[str]) -> dict:
+    """Pre-aggregate (contrast, sender, receiver) cells for the Sender×Receiver
+    tab. Keyed "{contrast}|{sender_idx}|{receiver_idx}"; each value is
+    {n, n_up, n_down, mean_tpds}. Grid is ≤ 9 × 22 × 22 cells.
+
+    Every backbone recurrence row contributes to one (contrast, receiver) cell
+    per sender named in its sender_list (the old pathway viewer's bitmask
+    expansion, moved to build time).
+    """
+    rec = data.backbone_recurrence
+    celltypes = data.edge_metadata["celltypes"]
+    celltype_to_id = {c: i for i, c in enumerate(celltypes)}
+    sender_to_id = {s: i for i, s in enumerate(sender_order)}
+
+    out: dict[str, dict] = {}
+    for row in rec.itertuples(index=False):
+        c = row.contrast
+        r = row.receiver
+        rid = celltype_to_id.get(r)
+        if rid is None:
+            continue
+        sl = row.sender_list
+        if not isinstance(sl, str) or not sl:
+            continue
+        tpds = row.mean_tpds
+        tpds_ok = isinstance(tpds, (int, float)) and np.isfinite(tpds)
+        sign = 0 if not tpds_ok else (1 if tpds > 0 else (-1 if tpds < 0 else 0))
+        for s in sl.split(","):
+            s = s.strip()
+            sid = sender_to_id.get(s)
+            if sid is None:
+                continue
+            key = f"{c}|{sid}|{rid}"
+            cell = out.get(key)
+            if cell is None:
+                cell = {"n": 0, "n_up": 0, "n_down": 0,
+                        "_sum": 0.0, "_cnt": 0}
+                out[key] = cell
+            cell["n"] += 1
+            if sign > 0:
+                cell["n_up"] += 1
+            elif sign < 0:
+                cell["n_down"] += 1
+            if tpds_ok:
+                cell["_sum"] += float(tpds)
+                cell["_cnt"] += 1
+    for cell in out.values():
+        cnt = cell.pop("_cnt")
+        s = cell.pop("_sum")
+        cell["mean_tpds"] = round(s / cnt, 4) if cnt else 0.0
+    return out
+
+
 def _extract_pi0(backbone_sig: pd.DataFrame, contrasts: list[str]) -> dict:
     out = {}
     for c in contrasts:
@@ -636,6 +690,7 @@ def build_payload(data: UnifiedData) -> dict:
         "celltypes": celltypes_slice,
         "backbones": backbones_slice,
         "overview": _build_overview_slice(data),
+        "senderMatrix": _build_sender_matrix_slice(data, sender_order),
         "per_kinase_summary": per_kinase_summary,
         "kinase_celltype_evidence": kinase_celltype_evidence,
         "edge_slice_ref": {
@@ -801,6 +856,7 @@ main#app-main { padding:14px; }
     value="0" style="width:60px;"></label>
   <button id="glossary-toggle">Glossary</button>
   <button id="f-graph-nodes-clear" class="chip" hidden>Clear graph-node filter</button>
+  <button id="f-sender-clear" class="chip" hidden>Clear sender filter</button>
 </header>
 <nav id="tab-bar">
   <button data-tab="overview" class="active">Overview</button>
@@ -910,7 +966,19 @@ main#app-main { padding:14px; }
     </div>
   </div>
   <div id="tab-senders" class="tab-panel">
-    <div class="tab-stub">Sender &times; Receiver — Phase 4.4</div>
+    <div class="card">
+      <div class="detail-chips">
+        <label>Mode:
+          <select id="sm-mode">
+            <option value="count">Count (log10 1+n)</option>
+            <option value="direction">Direction (n_up − n_down)</option>
+          </select>
+        </label>
+        <span class="muted" id="sm-subtitle">Pick a single contrast above
+          to render the 22×22 grid.</span>
+      </div>
+      <div id="sender-matrix-plot" style="width:100%; height:640px;"></div>
+    </div>
   </div>
   <div id="tab-temporal" class="tab-panel">
     <div class="tab-stub">Temporal Dynamics — Phase 4.5</div>
@@ -948,11 +1016,12 @@ const DISEASE_COLORS = META.diseaseColors;
 // ---------------------------------------------------------------------------
 const INITIAL_STATE = {
   selection: { kinase:null, backbone:null, celltype:null },
-  filters:   { contrast:"ALL", direction:"ALL", receiver:"ALL",
+  filters:   { contrast:"ALL", direction:"ALL", receiver:"ALL", sender:null,
                fdr:0.25, score:0.0, graphNodeIds:null },
   view:      { activeTab:"overview", overviewMode:"count",
                overviewSort:"tissue", glossaryOpen:false,
-               graphLayout:"concentric", graphMinDegree:1 },
+               graphLayout:"concentric", graphMinDegree:1,
+               senderMatrixMode:"count" },
 };
 
 const _clone = (typeof structuredClone === "function")
@@ -1004,9 +1073,12 @@ function _computeFilteredIndices() {
   // click. Stored as a Set of backbone_id for O(1) membership.
   const gnSet = (f.graphNodeIds && f.graphNodeIds.length)
     ? new Set(f.graphNodeIds) : null;
+  const senderBit = (f.sender == null) ? 0 : (1 << f.sender);
+  const senderMaskCol = BB.sender_mask;
   const out = [];
   for (let i = 0; i < n; i++) {
     if (rIdx >= 0 && BB.receiver_id[i] !== rIdx) continue;
+    if (senderBit && !(senderMaskCol[i] & senderBit)) continue;
     if (cIdx >= 0) {
       if (!((sigCol[i] >> cIdx) & 1)) continue;
       const t = tpdsCol[i];
@@ -1029,7 +1101,7 @@ function getFilteredIndices() {
   const gnKey = f.graphNodeIds ? ("gn:" + f.graphNodeIds.length) : "gn:null";
   const gnRef = f.graphNodeIds;  // also compare by identity
   const key = f.contrast + "|" + f.direction + "|" + f.receiver + "|"
-            + f.fdr + "|" + f.score + "|" + gnKey;
+            + f.fdr + "|" + f.score + "|" + gnKey + "|s:" + (f.sender ?? "");
   if (key !== _filteredCache.key || gnRef !== _filteredCache.gnRef) {
     _filteredCache = {
       key, gnRef, indices: _computeFilteredIndices(),
@@ -1129,6 +1201,9 @@ function populateHeader() {
   const gnClear = document.getElementById("f-graph-nodes-clear");
   if (gnClear) gnClear.addEventListener("click", () =>
     Store.dispatch({type:"SET_FILTER", key:"graphNodeIds", value:null}));
+  const sClear = document.getElementById("f-sender-clear");
+  if (sClear) sClear.addEventListener("click", () =>
+    Store.dispatch({type:"SET_FILTER", key:"sender", value:null}));
 }
 
 function syncHeaderFromStore() {
@@ -1147,6 +1222,16 @@ function syncHeaderFromStore() {
     gnClear.hidden = !on;
     if (on) gnClear.textContent = "Clear graph-node filter ("
       + f.graphNodeIds.length + " backbones)";
+  }
+  const sClear = document.getElementById("f-sender-clear");
+  if (sClear) {
+    const on = f.sender != null;
+    sClear.hidden = !on;
+    if (on) {
+      const SENDERS = META.senderOrder || [];
+      sClear.textContent = "Clear sender filter (" +
+        (SENDERS[f.sender] || ("sid:" + f.sender)) + ")";
+    }
   }
 }
 
@@ -1251,6 +1336,114 @@ function renderOverview() {
     if (!d || d.n === 0) return;
     Store.dispatch({type:"SET_SELECTION", key:"backbone", value:null});
     Store.dispatch({type:"SET_FILTER", key:"receiver", value:d.receiver});
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Sender × Receiver tab
+// ---------------------------------------------------------------------------
+function _senderOrder() {
+  // Alphabetical within-tissue, matching the Overview's receiverOrder()
+  // presentation so matrix rows and columns align visually.
+  const SENDERS = META.senderOrder || [];
+  const toTissue = META.receiverToTissue || {};
+  const pairs = SENDERS.map((s, i) => [s, toTissue[s] || "zzz", i]);
+  pairs.sort((a, b) => {
+    if (a[1] !== b[1]) return a[1] < b[1] ? -1 : 1;
+    return a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0);
+  });
+  return pairs;  // [name, tissue, origIndex]
+}
+
+function renderSenderMatrix() {
+  const el = document.getElementById("sender-matrix-plot");
+  if (!el) return;
+  const sub = document.getElementById("sm-subtitle");
+  const f = Store.state.filters;
+  const mode = Store.state.view.senderMatrixMode;  // 'count' | 'direction'
+  const SM = PAYLOAD.senderMatrix || {};
+  const SENDERS = META.senderOrder || [];
+
+  if (f.contrast === "ALL") {
+    el.innerHTML = '<div class="graph-placeholder">' +
+      'Select a single contrast in the header to render the 22×22 grid.' +
+      '</div>';
+    if (sub) sub.textContent =
+      "Pick a single contrast above to render the 22×22 grid.";
+    return;
+  }
+
+  const sRows = _senderOrder();   // [[name, tissue, origIdx], ...]
+  const rCols = receiverOrder();  // names in display order
+  const ctid = {};
+  for (let i = 0; i < RECEIVERS.length; i++) ctid[RECEIVERS[i]] = i;
+
+  const z = [], hover = [], cd = [];
+  for (const [sname, , sid] of sRows) {
+    const zrow = [], hrow = [], crow = [];
+    for (const rname of rCols) {
+      const rid = ctid[rname];
+      const cell = SM[f.contrast + "|" + sid + "|" + rid];
+      if (!cell || cell.n === 0) {
+        zrow.push(null);
+        hrow.push(`${sname} → ${rname}<br>(no backbones)`);
+        crow.push({sender_id: sid, receiver: rname, n: 0});
+      } else {
+        let v;
+        if (mode === "direction") v = cell.n_up - cell.n_down;
+        else v = Math.log10(1 + cell.n);
+        if (f.direction === "up" && cell.n_up === 0) v = null;
+        if (f.direction === "down" && cell.n_down === 0) v = null;
+        zrow.push(v);
+        hrow.push(
+          `${sname} → ${rname}<br>n=${cell.n} ` +
+          `(up=${cell.n_up}, down=${cell.n_down})` +
+          `<br>mean TPDS=${cell.mean_tpds}`);
+        crow.push({sender_id: sid, receiver: rname, n: cell.n});
+      }
+    }
+    z.push(zrow); hover.push(hrow); cd.push(crow);
+  }
+
+  const colorscale = (mode === "direction")
+    ? [[0, DISEASE_COLORS.Tau], [0.5, "#ffffff"], [1, DISEASE_COLORS.App]]
+    : "YlOrRd";
+  const trace = {
+    type: "heatmap",
+    x: rCols, y: sRows.map(p => p[0]), z,
+    text: hover, hovertemplate: "%{text}<extra></extra>",
+    customdata: cd, colorscale, showscale: true,
+    zmid: (mode === "direction") ? 0 : undefined,
+  };
+  const layout = {
+    margin: {l:150, r:20, t:10, b:120},
+    xaxis: {title:"Receiver", tickangle:-45, automargin:true, tickfont:{size:10}},
+    yaxis: {title:"Sender", automargin:true, autorange:"reversed",
+            dtick:1, tickfont:{size:10}},
+    height: 640,
+  };
+  Plotly.react(el, [trace], layout, {displaylogo:false, responsive:true});
+  if (sub) sub.textContent =
+    `Contrast ${f.contrast} — ${SENDERS.length} senders × ${rCols.length} receivers.`;
+
+  el.removeAllListeners && el.removeAllListeners("plotly_click");
+  el.on && el.on("plotly_click", ev => {
+    if (!ev.points || !ev.points.length) return;
+    const d = ev.points[0].customdata;
+    if (!d || d.n === 0) return;
+    Store.dispatch({type:"SET_FILTER", key:"sender", value: d.sender_id});
+    Store.dispatch({type:"SET_FILTER", key:"receiver", value: d.receiver});
+    Store.dispatch({type:"SET_VIEW", key:"activeTab", value:"pathway"});
+  });
+}
+
+function wireSenderMatrix() {
+  const modeSel = document.getElementById("sm-mode");
+  if (!modeSel) return;
+  modeSel.value = Store.state.view.senderMatrixMode;
+  modeSel.addEventListener("change", ev => {
+    Store.dispatch({type:"SET_VIEW", key:"senderMatrixMode",
+                    value: ev.target.value});
   });
 }
 
@@ -2174,6 +2367,7 @@ function boot() {
   wireKinaseTable();
   wirePathwayTable();
   wireGraphControls();
+  wireSenderMatrix();
   syncHeaderFromStore();
   syncTabsFromStore();
   syncGlossary();
@@ -2195,6 +2389,7 @@ function boot() {
           renderPathwayDetail(next.selection.backbone);
       }
       if (activeTab === "graph") renderGraph();
+      if (activeTab === "senders") renderSenderMatrix();
     }
     if (next.selection.kinase !== prev.selection.kinase && activeTab === "kinase") {
       _updateKinaseRowSelection(next.selection.kinase);
@@ -2218,6 +2413,7 @@ function boot() {
             renderPathwayDetail(next.selection.backbone);
         }
         if (activeTab === "graph") renderGraph();
+        if (activeTab === "senders") renderSenderMatrix();
         if (prev.view.activeTab === "graph" && activeTab !== "graph")
           _destroyCy();
       }
@@ -2227,6 +2423,8 @@ function boot() {
       if ((next.view.graphLayout !== prev.view.graphLayout ||
            next.view.graphMinDegree !== prev.view.graphMinDegree) &&
           activeTab === "graph") renderGraph();
+      if (next.view.senderMatrixMode !== prev.view.senderMatrixMode &&
+          activeTab === "senders") renderSenderMatrix();
     }
   });
 }
