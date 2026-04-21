@@ -496,17 +496,20 @@ def _build_backbones_slice(data: UnifiedData,
         aligned["n_senders_significant"].fillna(0).astype(int).tolist()
     )
 
-    pivot = rec.pivot_table(
-        index="backbone_id", columns="contrast",
-        values="mean_tpds", aggfunc="first",
-    ).reindex(index=base["backbone_id"], columns=contrasts)
-    for c in contrasts:
-        cols[f"mean_tpds_{c}"] = pivot[c].astype(object).where(
-            pivot[c].notna(), None
-        ).tolist()
+    def _flatten_pivot(df: pd.DataFrame, value_col: str) -> None:
+        piv = (df.pivot_table(index="backbone_id", columns="contrast",
+                              values=value_col, aggfunc="first")
+                 .reindex(index=base["backbone_id"], columns=contrasts))
+        for c in contrasts:
+            cols[f"{value_col}_{c}"] = piv[c].astype(object).where(
+                piv[c].notna(), None
+            ).tolist()
+
+    _flatten_pivot(rec, "mean_tpds")
     cols["max_abs_tpds"] = base["backbone_id"].map(
         rec.groupby("backbone_id")["max_abs_tpds"].max()
     ).astype(float).tolist()
+    _flatten_pivot(sig_bb, "observed_score")
 
     # significant_both encoded as a 9-bit integer, one bit per contrast.
     sig_by_bb: dict[int, int] = {}
@@ -767,6 +770,19 @@ main#app-main { padding:14px; }
 .pe-chip { display:inline-block; padding:1px 5px; margin:0 2px 2px 0;
   border-radius:3px; font-size:10px; font-weight:600; background:#eceff1; color:#546e7a; }
 .pe-chip.on { background:#c8e6c9; color:#1b5e20; }
+.detail-chips { display:flex; gap:12px; align-items:center; margin-bottom:8px;
+  flex-wrap:wrap; font-size:12px; }
+.detail-chips label { display:flex; gap:4px; align-items:center; }
+.chip { background:#fff3cd; color:#8a6d3b; border:1px solid #f0ad4e;
+  border-radius:3px; padding:2px 8px; font-size:11px; cursor:pointer; }
+#graph-container { display:grid; grid-template-columns:1fr 320px; gap:12px;
+  height:calc(100vh - 180px); }
+#cy { background:#fafafa; border:1px solid var(--border); border-radius:4px;
+  min-height:400px; }
+#graph-detail { position:relative; top:0; }
+.graph-placeholder { display:flex; align-items:center; justify-content:center;
+  height:100%; color:var(--text-muted); font-style:italic; text-align:center;
+  padding:20px; }
 </style>
 </head>
 <body>
@@ -784,6 +800,7 @@ main#app-main { padding:14px; }
   <label>|Score| &gt; <input id="f-score" type="number" step="0.1" min="0"
     value="0" style="width:60px;"></label>
   <button id="glossary-toggle">Glossary</button>
+  <button id="f-graph-nodes-clear" class="chip" hidden>Clear graph-node filter</button>
 </header>
 <nav id="tab-bar">
   <button data-tab="overview" class="active">Overview</button>
@@ -864,7 +881,33 @@ main#app-main { padding:14px; }
     </div>
   </div>
   <div id="tab-graph" class="tab-panel">
-    <div class="tab-stub">Pathway Graph (Cytoscape) — Phase 4.3</div>
+    <div id="graph-controls" class="detail-chips">
+      <label>Layout:
+        <select id="graph-layout">
+          <option value="concentric">Concentric (R → EM → T)</option>
+          <option value="flow">Flow (column-snapped)</option>
+          <option value="force">Force-directed</option>
+        </select>
+      </label>
+      <label>Min degree:
+        <select id="graph-min-degree">
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="5">5</option>
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="50">50</option>
+        </select>
+      </label>
+      <span id="graph-stats" class="muted"></span>
+      <button id="graph-focus-clear" class="chip" hidden>Clear focus</button>
+    </div>
+    <div id="graph-container">
+      <div id="cy"></div>
+      <aside class="detail-card" id="graph-detail">
+        <div class="muted">Pick a single contrast, then click a node.</div>
+      </aside>
+    </div>
   </div>
   <div id="tab-senders" class="tab-panel">
     <div class="tab-stub">Sender &times; Receiver — Phase 4.4</div>
@@ -906,9 +949,10 @@ const DISEASE_COLORS = META.diseaseColors;
 const INITIAL_STATE = {
   selection: { kinase:null, backbone:null, celltype:null },
   filters:   { contrast:"ALL", direction:"ALL", receiver:"ALL",
-               fdr:0.25, score:0.0 },
+               fdr:0.25, score:0.0, graphNodeIds:null },
   view:      { activeTab:"overview", overviewMode:"count",
-               overviewSort:"tissue", glossaryOpen:false },
+               overviewSort:"tissue", glossaryOpen:false,
+               graphLayout:"concentric", graphMinDegree:1 },
 };
 
 const _clone = (typeof structuredClone === "function")
@@ -946,7 +990,7 @@ window.Store = Store;  // expose for console smoke test
 // ---------------------------------------------------------------------------
 // Derived-array memoization — keyed on JSON signature of filters slice
 // ---------------------------------------------------------------------------
-let _filteredCache = { key:null, indices:null };
+let _filteredCache = { key:null, gnRef:null, indices:null };
 
 function _computeFilteredIndices() {
   const f = Store.state.filters;
@@ -956,6 +1000,10 @@ function _computeFilteredIndices() {
   const tpdsCol = cIdx >= 0 ? BB["mean_tpds_" + f.contrast] : null;
   const sigCol = BB.significant_both_mask;
   const rIdx = (f.receiver === "ALL") ? -1 : RECEIVERS.indexOf(f.receiver);
+  // graphNodeIds is a transient filter applied after a Pathway Graph node
+  // click. Stored as a Set of backbone_id for O(1) membership.
+  const gnSet = (f.graphNodeIds && f.graphNodeIds.length)
+    ? new Set(f.graphNodeIds) : null;
   const out = [];
   for (let i = 0; i < n; i++) {
     if (rIdx >= 0 && BB.receiver_id[i] !== rIdx) continue;
@@ -967,15 +1015,25 @@ function _computeFilteredIndices() {
       if (f.direction === "down" && !(t < 0)) continue;
       if (f.score > 0 && Math.abs(t) < f.score) continue;
     }
+    if (gnSet !== null && !gnSet.has(BB.id[i])) continue;
     out.push(i);
   }
   return out;
 }
 
 function getFilteredIndices() {
-  const key = JSON.stringify(Store.state.filters);
-  if (key !== _filteredCache.key) {
-    _filteredCache = { key, indices:_computeFilteredIndices() };
+  const f = Store.state.filters;
+  // graphNodeIds array identity changes on each SET_FILTER dispatch (reducer
+  // deep-clones state) — use identity, not stringify, to avoid scanning the
+  // full array on every read.
+  const gnKey = f.graphNodeIds ? ("gn:" + f.graphNodeIds.length) : "gn:null";
+  const gnRef = f.graphNodeIds;  // also compare by identity
+  const key = f.contrast + "|" + f.direction + "|" + f.receiver + "|"
+            + f.fdr + "|" + f.score + "|" + gnKey;
+  if (key !== _filteredCache.key || gnRef !== _filteredCache.gnRef) {
+    _filteredCache = {
+      key, gnRef, indices: _computeFilteredIndices(),
+    };
   }
   return _filteredCache.indices;
 }
@@ -1068,6 +1126,9 @@ function populateHeader() {
   document.getElementById("glossary-toggle").addEventListener("click", () =>
     Store.dispatch({type:"SET_VIEW", key:"glossaryOpen",
       value:!Store.state.view.glossaryOpen}));
+  const gnClear = document.getElementById("f-graph-nodes-clear");
+  if (gnClear) gnClear.addEventListener("click", () =>
+    Store.dispatch({type:"SET_FILTER", key:"graphNodeIds", value:null}));
 }
 
 function syncHeaderFromStore() {
@@ -1080,6 +1141,13 @@ function syncHeaderFromStore() {
   }
   document.getElementById("f-fdr").value = f.fdr;
   document.getElementById("f-score").value = f.score;
+  const gnClear = document.getElementById("f-graph-nodes-clear");
+  if (gnClear) {
+    const on = !!(f.graphNodeIds && f.graphNodeIds.length);
+    gnClear.hidden = !on;
+    if (on) gnClear.textContent = "Clear graph-node filter ("
+      + f.graphNodeIds.length + " backbones)";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1230,14 +1298,25 @@ function _buildKinaseRowModel() {
   return out;
 }
 
+function _ensureBackboneIdx() {
+  if (_backboneIdxById !== null) return;
+  const BB = PAYLOAD.backbones;
+  const m = new Map();
+  for (let i = 0; i < BB.id.length; i++) m.set(BB.id[i], i);
+  _backboneIdxById = m;
+}
+
+function _ensureKinaseIdx() {
+  if (_kinaseIdxById !== null) return;
+  const K = PAYLOAD.kinases;
+  const m = new Map();
+  for (let i = 0; i < K.id.length; i++) m.set(K.id[i], i);
+  _kinaseIdxById = m;
+}
+
 function _ensureKinaseIndexes() {
   if (_keRows === null) _keRows = _buildKinaseRowModel();
-  if (_backboneIdxById === null) {
-    const BB = PAYLOAD.backbones;
-    const m = new Map();
-    for (let i = 0; i < BB.id.length; i++) m.set(BB.id[i], i);
-    _backboneIdxById = m;
-  }
+  _ensureBackboneIdx();
   if (_evidenceByKinase === null) {
     const EV = PAYLOAD.kinase_celltype_evidence || {kinase_id:[]};
     const m = new Map();
@@ -1338,14 +1417,18 @@ function renderKinaseExplorer() {
   if (countEl) countEl.textContent = `${visible.length} / ${_keRows.length} kinases`;
 }
 
-function _updateKinaseRowSelection(kid) {
-  const tbody = document.querySelector("#ke-table tbody");
+function _updateRowSelection(tableSel, rowCls, dataAttr, value) {
+  const tbody = document.querySelector(`${tableSel} tbody`);
   if (!tbody) return;
-  const prev = tbody.querySelector("tr.ke-row.selected");
+  const prev = tbody.querySelector(`tr.${rowCls}.selected`);
   if (prev) prev.classList.remove("selected");
-  if (kid == null) return;
-  const row = tbody.querySelector(`tr.ke-row[data-kid="${kid}"]`);
+  if (value == null) return;
+  const row = tbody.querySelector(`tr.${rowCls}[${dataAttr}="${value}"]`);
   if (row) row.classList.add("selected");
+}
+
+function _updateKinaseRowSelection(kid) {
+  _updateRowSelection("#ke-table", "ke-row", "data-kid", kid);
 }
 
 function _diseaseColorFor(contrast) {
@@ -1562,12 +1645,7 @@ function _buildPathwayRowModel() {
 
 function _ensurePathwayIndexes() {
   if (_peRows === null) _peRows = _buildPathwayRowModel();
-  if (_backboneIdxById === null) {
-    const BB = PAYLOAD.backbones;
-    const m = new Map();
-    for (let i = 0; i < BB.id.length; i++) m.set(BB.id[i], i);
-    _backboneIdxById = m;
-  }
+  _ensureBackboneIdx();
 }
 
 function _peCompare(a, b, cIdx) {
@@ -1576,8 +1654,8 @@ function _peCompare(a, b, cIdx) {
   if (col === "tpds") {
     va = cIdx >= 0 ? a._tpds[cIdx] : a.max_abs_tpds;
     vb = cIdx >= 0 ? b._tpds[cIdx] : b.max_abs_tpds;
-    va = (va == null) ? -Infinity : (cIdx >= 0 ? va : va);
-    vb = (vb == null) ? -Infinity : (cIdx >= 0 ? vb : vb);
+    if (va == null) va = -Infinity;
+    if (vb == null) vb = -Infinity;
   }
   else if (col === "n_sig") { va = a.sig_count; vb = b.sig_count; }
   else if (col === "receiver") { va = a.receiver; vb = b.receiver; }
@@ -1646,13 +1724,7 @@ function renderPathwayExplorer() {
 }
 
 function _updatePathwayRowSelection(bid) {
-  const tbody = document.querySelector("#pe-table tbody");
-  if (!tbody) return;
-  const prev = tbody.querySelector("tr.pe-row.selected");
-  if (prev) prev.classList.remove("selected");
-  if (bid == null) return;
-  const row = tbody.querySelector(`tr.pe-row[data-bid="${bid}"]`);
-  if (row) row.classList.add("selected");
+  _updateRowSelection("#pe-table", "pe-row", "data-bid", bid);
 }
 
 function renderPathwayDetail(backbone_id) {
@@ -1737,7 +1809,6 @@ async function renderPathwayKinases(backbone_id) {
     ? rows.filter(r => r.contrast_id === cIdx)
     : rows;
 
-  // Group by kinase_id
   const byK = new Map();
   for (const r of filtered) {
     let g = byK.get(r.kinase_id);
@@ -1752,9 +1823,8 @@ async function renderPathwayKinases(backbone_id) {
   const groups = Array.from(byK.entries()).map(([kid, g]) => ({ kid, ...g }));
   groups.sort((a, b) => b.sum_abs - a.sum_abs);
 
+  _ensureKinaseIdx();
   const K = PAYLOAD.kinases;
-  const kNameById = new Map();
-  for (let i = 0; i < K.id.length; i++) kNameById.set(K.id[i], K.name[i]);
   const famMap = META.familyMap || {};
 
   const TOP = 200;
@@ -1770,7 +1840,8 @@ async function renderPathwayKinases(backbone_id) {
     '</tr></thead><tbody>',
   ];
   for (const g of shown) {
-    const name = kNameById.get(g.kid) || `kid:${g.kid}`;
+    const kIdx = _kinaseIdxById.get(g.kid);
+    const name = kIdx != null ? K.name[kIdx] : `kid:${g.kid}`;
     const fam = famMap[name] || "";
     const conc = (g.up > g.down) ? "↑" : (g.down > g.up ? "↓" : "—");
     parts.push(
@@ -1819,6 +1890,274 @@ function wirePathwayTable() {
 }
 
 // ---------------------------------------------------------------------------
+// Pathway Graph (Cytoscape) — aggregates filtered backbones into an
+// R → EM → T node DAG where each node is a unique gene across many backbones.
+// ---------------------------------------------------------------------------
+const GRAPH_MAX_NODES = 600;
+const GRAPH_COLORS = { "Receptor":"#43a047", "EM":"#fb8c00", "Target":"#5c6bc0" };
+
+let _cyInstance = null;
+let _nodeInfo = null;  // Map<nodeId, {bbs:number[], scoreSum, scoreN, nUp, nDown}>
+
+function _destroyCy() {
+  if (_cyInstance) { try { _cyInstance.destroy(); } catch(e) {} _cyInstance = null; }
+  _nodeInfo = null;
+}
+
+function _graphPlaceholder(msg) {
+  const el = document.getElementById("cy");
+  if (!el) return;
+  el.innerHTML = '<div class="graph-placeholder">' + msg + "</div>";
+}
+
+function _buildGraphData(indices, contrast) {
+  const BB = PAYLOAD.backbones;
+  const scoreCol = BB["observed_score_" + contrast];
+  const tpdsCol = BB["mean_tpds_" + contrast];
+  const nodeDeg = new Map();
+  const nodeType = new Map();
+  const nodeInfo = new Map();
+  const edgeScores = new Map();
+  const edgeTpds = new Map();
+  const edgeCounts = new Map();
+
+  for (const i of indices) {
+    const bid = BB.id[i];
+    const rGene = BB.Receptor[i];
+    const emGene = BB.EM[i];
+    const tGene = BB.Target[i];
+    const rId = "R:" + rGene;
+    const eId = "E:" + emGene;
+    const tId = "T:" + tGene;
+    const score = scoreCol ? scoreCol[i] : null;
+    const tpds = tpdsCol ? tpdsCol[i] : null;
+
+    for (const [nid, type] of [[rId, "Receptor"], [eId, "EM"], [tId, "Target"]]) {
+      nodeDeg.set(nid, (nodeDeg.get(nid) || 0) + 1);
+      if (!nodeType.has(nid)) nodeType.set(nid, type);
+      let info = nodeInfo.get(nid);
+      if (!info) {
+        info = {bbs:[], scoreSum:0, scoreN:0, nUp:0, nDown:0};
+        nodeInfo.set(nid, info);
+      }
+      info.bbs.push(bid);
+      if (score != null) { info.scoreSum += score; info.scoreN++; }
+      if (tpds != null) { if (tpds > 0) info.nUp++; else if (tpds < 0) info.nDown++; }
+    }
+
+    const rek = rId + ">" + eId;
+    const etk = eId + ">" + tId;
+    const s = (score == null) ? 0 : score;
+    const t = (tpds == null) ? 0 : tpds;
+    edgeScores.set(rek, Math.max(edgeScores.get(rek) || 0, s));
+    edgeScores.set(etk, Math.max(edgeScores.get(etk) || 0, s));
+    edgeTpds.set(rek, (edgeTpds.get(rek) || 0) + t);
+    edgeTpds.set(etk, (edgeTpds.get(etk) || 0) + t);
+    edgeCounts.set(rek, (edgeCounts.get(rek) || 0) + 1);
+    edgeCounts.set(etk, (edgeCounts.get(etk) || 0) + 1);
+  }
+
+  // Min-degree filter
+  const minDeg = Store.state.view.graphMinDegree | 0;
+  let keepIds = [...nodeDeg.keys()].filter(id => nodeDeg.get(id) >= minDeg);
+  // Node cap (degree-sorted)
+  if (keepIds.length > GRAPH_MAX_NODES) {
+    keepIds.sort((a,b) => nodeDeg.get(b) - nodeDeg.get(a));
+    keepIds = keepIds.slice(0, GRAPH_MAX_NODES);
+  }
+  const keep = new Set(keepIds);
+
+  // Edges only where both endpoints survive
+  const maxDeg = keepIds.reduce((m, id) => Math.max(m, nodeDeg.get(id)), 1);
+  const maxScore = [...edgeScores.values()].reduce((m,v) => Math.max(m,v), 0) || 1;
+
+  const nodes = keepIds.map(id => {
+    const type = nodeType.get(id);
+    const deg = nodeDeg.get(id);
+    const sz = 10 + 30 * Math.sqrt(deg / maxDeg);
+    const rank = type === "Receptor" ? 0 : type === "EM" ? 1 : 2;
+    return { data: {
+      id, label: id.slice(2), type, deg, size: sz,
+      color: GRAPH_COLORS[type], rank,
+    }};
+  });
+
+  const edges = [];
+  for (const [key, score] of edgeScores.entries()) {
+    const [src, tgt] = key.split(">");
+    if (!keep.has(src) || !keep.has(tgt)) continue;
+    const count = edgeCounts.get(key) || 1;
+    const avgTpds = (edgeTpds.get(key) || 0) / count;
+    const w = 0.5 + 3 * (score / maxScore);
+    const op = 0.2 + 0.6 * (score / maxScore);
+    const col = avgTpds > 0 ? "#c62828"
+              : avgTpds < 0 ? "#1565c0" : "#999";
+    edges.push({ data: {
+      id: key, source: src, target: tgt,
+      score, width: w, opacity: op, edgeColor: col,
+    }});
+  }
+
+  const finalInfo = new Map();
+  for (const id of keepIds) finalInfo.set(id, nodeInfo.get(id));
+
+  return { nodes, edges, nodeInfo: finalInfo,
+           totalNodes: nodeDeg.size, keptNodes: keepIds.length };
+}
+
+function _applyFlowSnap(cy) {
+  const w = cy.width() || 800;
+  const cols = { "Receptor": w * 0.15, "EM": w * 0.50, "Target": w * 0.85 };
+  cy.nodes().forEach(n => {
+    const xTarget = cols[n.data("type")];
+    const xCur = n.position("x");
+    n.position("x", xCur * 0.15 + xTarget * 0.85);
+  });
+}
+
+function _layoutConfig(layoutName, nNodes) {
+  if (layoutName === "concentric") {
+    return { name:"concentric",
+             concentric: node => 3 - (node.data("rank") || 0),
+             levelWidth: () => 1,
+             minNodeSpacing: 8, animate:false };
+  }
+  const cose = { name:"cose", animate:false, randomize:true,
+                 nodeRepulsion: () => nNodes > 200 ? 80000 : 40000,
+                 idealEdgeLength: () => nNodes > 200
+                   ? (layoutName === "flow" ? 60 : 50)
+                   : (layoutName === "flow" ? 80 : 70),
+                 gravity: layoutName === "flow" ? 0.3 : 0.25,
+                 nodeOverlap:20 };
+  return cose;
+}
+
+function _renderNodeDetail(nodeData) {
+  const det = document.getElementById("graph-detail");
+  if (!det) return;
+  const nodeId = nodeData.id;
+  const info = (_nodeInfo && _nodeInfo.get(nodeId))
+    || {bbs:[], scoreSum:0, scoreN:0, nUp:0, nDown:0};
+  const avgScore = info.scoreN ? (info.scoreSum / info.scoreN) : 0;
+  det.innerHTML = "<h3>" + nodeData.label
+    + ' <span class="meta">(' + nodeData.type + ")</span></h3>"
+    + '<div class="meta">Backbones: ' + nodeData.deg
+    + " &middot; avg score: " + avgScore.toFixed(3)
+    + " &middot; ↑" + info.nUp + " / ↓" + info.nDown + "</div>"
+    + '<button id="graph-filter-btn" class="chip" style="margin-top:8px;">'
+    + "Filter Pathway Explorer to this node</button>";
+  const btn = document.getElementById("graph-filter-btn");
+  if (btn) btn.addEventListener("click", () => {
+    const uniq = [...new Set(info.bbs)];
+    Store.dispatch({type:"SET_FILTER", key:"graphNodeIds", value: uniq});
+    Store.dispatch({type:"SET_VIEW", key:"activeTab", value:"pathway"});
+  });
+}
+
+function renderGraph() {
+  const el = document.getElementById("cy");
+  if (!el) return;
+  const contrast = Store.state.filters.contrast;
+  if (contrast === "ALL") {
+    _destroyCy();
+    _graphPlaceholder("Select a single contrast to view the network graph.");
+    const stats = document.getElementById("graph-stats");
+    if (stats) stats.textContent = "";
+    return;
+  }
+  el.innerHTML = "";  // clear any placeholder text
+  const indices = getFilteredIndices();
+  const built = _buildGraphData(indices, contrast);
+  _nodeInfo = built.nodeInfo;
+  const stats = document.getElementById("graph-stats");
+  if (stats) {
+    stats.textContent = built.keptNodes + " / " + built.totalNodes
+      + " nodes (min-deg " + Store.state.view.graphMinDegree
+      + (built.totalNodes > built.keptNodes
+         ? ", degree-capped at " + GRAPH_MAX_NODES : "")
+      + "), " + built.edges.length + " edges";
+  }
+  if (!built.nodes.length) {
+    _destroyCy();
+    _graphPlaceholder("No backbones for the current filters.");
+    return;
+  }
+
+  _destroyCy();
+  const layoutName = Store.state.view.graphLayout || "concentric";
+  const nNodes = built.nodes.length;
+  const layoutCfg = _layoutConfig(layoutName, nNodes);
+  _cyInstance = cytoscape({
+    container: el,
+    elements: { nodes: built.nodes, edges: built.edges },
+    style: [
+      { selector:"node", style: {
+        label:"data(label)", width:"data(size)", height:"data(size)",
+        "background-color":"data(color)", "font-size":8,
+        "text-valign":"bottom", "text-margin-y":4,
+        "text-outline-color":"#fff", "text-outline-width":1,
+        "min-zoomed-font-size":6,
+      }},
+      { selector:"edge", style: {
+        width:"data(width)", "line-color":"data(edgeColor)",
+        "target-arrow-color":"data(edgeColor)",
+        "target-arrow-shape":"triangle", "curve-style":"bezier",
+        opacity:"data(opacity)", "arrow-scale":0.6,
+      }},
+      { selector:"node.highlighted", style: {
+        "border-width":3, "border-color":"#e53935",
+        "font-weight":"bold", "font-size":10, "z-index":999,
+      }},
+      { selector:"node.faded", style: { opacity:0.15 } },
+      { selector:"edge.faded", style: { opacity:0.05 } },
+      { selector:"node.focus-center", style: {
+        "border-width":4, "border-color":"#ff6f00", "border-style":"double",
+      }},
+    ],
+    layout: layoutCfg,
+    wheelSensitivity: 0.3,
+  });
+  if (layoutName === "flow") {
+    _cyInstance.one("layoutstop", () => _applyFlowSnap(_cyInstance));
+  }
+
+  _cyInstance.on("tap", "node", evt => {
+    const n = evt.target;
+    _cyInstance.elements().removeClass("highlighted faded focus-center");
+    const nbh = n.closedNeighborhood();
+    _cyInstance.elements().not(nbh).addClass("faded");
+    nbh.nodes().addClass("highlighted");
+    n.addClass("focus-center");
+    _renderNodeDetail(n.data());
+  });
+  _cyInstance.on("tap", evt => {
+    if (evt.target === _cyInstance) {
+      _cyInstance.elements().removeClass("highlighted faded focus-center");
+      const det = document.getElementById("graph-detail");
+      if (det) det.innerHTML = '<div class="muted">Click a node for details.</div>';
+    }
+  });
+}
+
+function wireGraphControls() {
+  const layoutSel = document.getElementById("graph-layout");
+  if (layoutSel) {
+    layoutSel.value = Store.state.view.graphLayout;
+    layoutSel.addEventListener("change", ev => {
+      Store.dispatch({type:"SET_VIEW", key:"graphLayout", value: ev.target.value});
+    });
+  }
+  const degSel = document.getElementById("graph-min-degree");
+  if (degSel) {
+    degSel.value = String(Store.state.view.graphMinDegree);
+    degSel.addEventListener("change", ev => {
+      Store.dispatch({type:"SET_VIEW", key:"graphMinDegree",
+                      value: parseInt(ev.target.value, 10)});
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Glossary
 // ---------------------------------------------------------------------------
 function syncGlossary() {
@@ -1834,6 +2173,7 @@ function boot() {
   wireTabs();
   wireKinaseTable();
   wirePathwayTable();
+  wireGraphControls();
   syncHeaderFromStore();
   syncTabsFromStore();
   syncGlossary();
@@ -1854,6 +2194,7 @@ function boot() {
         if (next.selection.backbone != null)
           renderPathwayDetail(next.selection.backbone);
       }
+      if (activeTab === "graph") renderGraph();
     }
     if (next.selection.kinase !== prev.selection.kinase && activeTab === "kinase") {
       _updateKinaseRowSelection(next.selection.kinase);
@@ -1876,10 +2217,16 @@ function boot() {
           if (next.selection.backbone != null)
             renderPathwayDetail(next.selection.backbone);
         }
+        if (activeTab === "graph") renderGraph();
+        if (prev.view.activeTab === "graph" && activeTab !== "graph")
+          _destroyCy();
       }
       if (next.view.glossaryOpen !== prev.view.glossaryOpen) syncGlossary();
       if (next.view.overviewMode !== prev.view.overviewMode &&
           activeTab === "overview") renderOverview();
+      if ((next.view.graphLayout !== prev.view.graphLayout ||
+           next.view.graphMinDegree !== prev.view.graphMinDegree) &&
+          activeTab === "graph") renderGraph();
     }
   });
 }
@@ -2019,6 +2366,35 @@ def validate(data: UnifiedData) -> str:
                if rid < 0 or rid >= n_celltypes]
         if bad:
             errors.append(f"{len(bad)} orphan receiver_id(s) in backbones")
+
+        n_bb = len(pb["id"])
+        sig_mask_arr = np.asarray(pb["significant_both_mask"], dtype=np.int64)
+        for ci, c in enumerate(md["contrasts"]):
+            obs_key = f"observed_score_{c}"
+            tpds_key = f"mean_tpds_{c}"
+            if obs_key not in pb:
+                errors.append(f"missing backbones[{obs_key}]")
+                continue
+            if len(pb[obs_key]) != n_bb:
+                errors.append(
+                    f"{obs_key} length {len(pb[obs_key])} != id length {n_bb}"
+                )
+                continue
+            obs_notnull = np.array([v is not None for v in pb[obs_key]])
+            tpds_notnull = np.array([v is not None for v in pb[tpds_key]])
+            bad_rows = int(np.sum(obs_notnull & ~tpds_notnull))
+            if bad_rows:
+                errors.append(
+                    f"{obs_key}: {bad_rows} rows have sig observed_score but "
+                    f"no recurrence mean_tpds (sig should imply recurrence)"
+                )
+            sig_bit = ((sig_mask_arr >> ci) & 1).astype(bool)
+            missing_obs = int(np.sum(sig_bit & ~obs_notnull))
+            if missing_obs:
+                errors.append(
+                    f"{obs_key}: {missing_obs} sig-both rows missing "
+                    f"observed_score"
+                )
 
         # Tier-1 summary embedded in payload
         pks = payload.get("per_kinase_summary", {})
