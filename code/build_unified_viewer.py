@@ -141,14 +141,13 @@ def load_all_data() -> UnifiedData:
     mea = pd.read_csv(os.path.join(ka_dir, "mea_stoichiometry.csv"),
                       usecols=["kinase", "NES", "FDR", "contrast"])
 
-    # Unit 6.2: derive sig set from the superset pvalues CSV instead of the
-    # retired `backbone_significant_both_nulls.csv` subset.
     backbone_sig = pd.read_csv(
         BACKBONE_PERM_CSV,
         usecols=[
             "contrast", "receiver", "Receptor", "EM", "Target",
             "pi0_null1", "pi0_null2", "significant_both",
         ],
+        engine="pyarrow",
     )
     backbone_sig = backbone_sig[backbone_sig["significant_both"]].drop(
         columns=["significant_both"]
