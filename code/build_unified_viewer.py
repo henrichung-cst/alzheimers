@@ -57,7 +57,7 @@ import config_integration as icfg  # noqa: E402
 AGGREGATION_DIR = os.path.join(icfg.FACTORIAL_ALL_PAIRS_DIR, "aggregation")
 EDGES_PARQUET = os.path.join(AGGREGATION_DIR, "kinase_backbone_edges.parquet")
 EDGE_META_JSON = os.path.join(AGGREGATION_DIR, "edge_index_metadata.json")
-BACKBONE_SIG_CSV = os.path.join(AGGREGATION_DIR, "backbone_significant_both_nulls.csv")
+BACKBONE_PERM_CSV = os.path.join(AGGREGATION_DIR, "backbone_permutation_pvalues_by_contrast.csv")
 BACKBONE_REC_CSV = os.path.join(AGGREGATION_DIR, "backbone_recurrence_by_contrast.csv")
 
 UNIFIED_VIEWER_OUTPUT_DIR = os.path.join(config.REPO_ROOT, "outputs", "reports")
@@ -144,7 +144,18 @@ def load_all_data() -> UnifiedData:
     mea = pd.read_csv(os.path.join(ka_dir, "mea_stoichiometry.csv"),
                       usecols=["kinase", "NES", "FDR", "contrast"])
 
-    backbone_sig = pd.read_csv(BACKBONE_SIG_CSV)
+    # Unit 6.2: derive sig set from the superset pvalues CSV instead of the
+    # retired `backbone_significant_both_nulls.csv` subset.
+    backbone_sig = pd.read_csv(
+        BACKBONE_PERM_CSV,
+        usecols=[
+            "contrast", "receiver", "Receptor", "EM", "Target",
+            "pi0_null1", "pi0_null2", "significant_both",
+        ],
+    )
+    backbone_sig = backbone_sig[backbone_sig["significant_both"]].drop(
+        columns=["significant_both"]
+    ).reset_index(drop=True)
     backbone_recurrence = pd.read_csv(
         BACKBONE_REC_CSV,
         usecols=[

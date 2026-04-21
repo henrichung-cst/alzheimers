@@ -107,17 +107,6 @@ done
 echo "=== All contrasts complete ==="
 wc -l "${FINAL_FILE}"
 
-# Derive the filtered significant_both subset (Unit 6.2 pending — to be merged into the recurrence CSV).
-SIG_FILE="${OUT_DIR}/backbone_significant_both_nulls.csv"
-echo "Writing ${SIG_FILE}..."
-pixi run python3 - <<PYEOF
-import pandas as pd
-df = pd.read_csv("${FINAL_FILE}")
-sig = df[df["significant_both"]].copy()
-sig.to_csv("${SIG_FILE}", index=False)
-print(f"  {len(sig):,} significant backbones of {len(df):,}")
-PYEOF
-
 echo "Cleaning up temp files..."
 rm -rf "${TMP_DIR}"
 
