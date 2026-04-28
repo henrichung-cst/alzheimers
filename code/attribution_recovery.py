@@ -53,11 +53,31 @@ def _ensure_output_dir():
 # ---------------------------------------------------------------------------
 
 def _load_mea_stoichiometry():
-    path = os.path.join(KINASE_ATTR_DIR, "mea_stoichiometry.csv")
-    if not os.path.exists(path):
+    """Load MEA stoichiometry from every available phospho track and concatenate.
+
+    Reads `mea_stoichiometry.csv` (legacy S/T) and `mea_stoichiometry_pY.csv`
+    (Tyr) when present. Adds `residue_type` and `track` columns when missing
+    (for legacy files predating the pY refactor).
+    """
+    frames = []
+    for track_name, track_cfg in config.PHOSPHO_TRACKS.items():
+        suffix = track_cfg["output_suffix"]
+        fname = f"mea_stoichiometry{suffix}.csv"
+        path = os.path.join(KINASE_ATTR_DIR, fname)
+        if not os.path.exists(path):
+            continue
+        df = pd.read_csv(path)
+        if "residue_type" not in df.columns:
+            df["residue_type"] = track_cfg["residue"]
+        if "track" not in df.columns:
+            df["track"] = track_cfg["name"]
+        frames.append(df)
+    if not frames:
         raise FileNotFoundError(
-            f"{path} not found. Run kinase_attribution.py --enrich first.")
-    return pd.read_csv(path)
+            f"No mea_stoichiometry*.csv found in {KINASE_ATTR_DIR}. "
+            f"Run kinase_attribution.py --enrich first."
+        )
+    return pd.concat(frames, ignore_index=True, sort=False)
 
 
 def _load_unified_attribution_full():
@@ -223,7 +243,20 @@ def _build_kinase_activity_matrix(mea, gene_map):
     t1["trajectory_label"] = t1.apply(_classify_trajectory, axis=1)
     t1["gene_symbol"] = t1["kinase"].map(gene_map)
 
-    return t1[["kinase", "gene_symbol"] + present_nes + present_fdr +
+    # Carry residue type through so downstream consumers can stratify
+    # Tyr vs Ser/Thr biology. Each kinase only appears in one track's MEA
+    # output (S/T and Y kinome name spaces are disjoint), so a per-kinase
+    # mode lookup is unambiguous.
+    if "residue_type" in mea.columns:
+        kinase_to_residue = (mea.drop_duplicates("kinase")
+                             .set_index("kinase")["residue_type"]
+                             .to_dict())
+        t1["residue_type"] = t1["kinase"].map(kinase_to_residue).fillna("ST")
+    else:
+        t1["residue_type"] = "ST"
+
+    return t1[["kinase", "gene_symbol", "residue_type"] +
+              present_nes + present_fdr +
               ["n_sig_contrasts", "sig_conditions", "peak_NES",
                "peak_contrast", "trajectory_label"]]
 
@@ -287,8 +320,10 @@ def _build_kinase_hypothesis_table(t1, t2):
         .groupby("kinase").size().gt(0).rename("has_high_conf_attribution")
     )
 
-    t1_cols = ["kinase", "gene_symbol", "n_sig_contrasts", "sig_conditions",
+    t1_cols = ["kinase", "gene_symbol", "residue_type",
+               "n_sig_contrasts", "sig_conditions",
                "peak_NES", "peak_contrast", "trajectory_label"]
+    t1_cols = [c for c in t1_cols if c in t1.columns]
     t3 = (t1[t1_cols]
           .merge(n_cands.reset_index(), on="kinase", how="left")
           .merge(top3_df, on="kinase", how="left")

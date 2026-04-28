@@ -6,6 +6,53 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SONG_WORKSPACE_DIR = os.path.join(REPO_ROOT, "data", "incytr_collections", "song")
 SONG_PRIMARY_DIR = os.path.join(SONG_WORKSPACE_DIR, "primary")
 SONG_PRIMARY_PROTEOMICS_DIR = os.path.join(SONG_PRIMARY_DIR, "proteomics")
+
+# Phospho track input files (S/T via IMAC; Y via dedicated pY enrichment).
+SONG_IMAC_SITEQUANT_FILE = os.path.join(
+    SONG_PRIMARY_PROTEOMICS_DIR,
+    "song_IMAC_sitequant_merged_labeled (2).xlsx",
+)
+SONG_IMAC_COMPOSITE_FILE = os.path.join(
+    SONG_PRIMARY_PROTEOMICS_DIR,
+    "song_IMAC_compositeSites_merged_labeled (2).xlsx",
+)
+SONG_PY_SITEQUANT_FILE = os.path.join(
+    SONG_PRIMARY_PROTEOMICS_DIR,
+    "song_pY_sitequant_merged_labeled (2).xlsx",
+)
+SONG_PY_COMPOSITE_FILE = os.path.join(
+    SONG_PRIMARY_PROTEOMICS_DIR,
+    "song_pY_compositeSites_merged_labeled (2).xlsx",
+)
+
+# Phospho-track config: each track maps to an input file, column-rename rule,
+# residue type for the motif sanity check, output suffix, and kinase-library
+# kin_type for MEA. Track "st" is the legacy IMAC Ser/Thr track; "py" is the
+# tyrosine-enriched track added in 2026-04.
+PHOSPHO_TRACKS = {
+    "st": {
+        "name": "st",
+        "label": "Ser/Thr",
+        "input_file": SONG_IMAC_SITEQUANT_FILE,
+        "composite_file": SONG_IMAC_COMPOSITE_FILE,
+        "output_suffix": "",          # legacy filenames unchanged
+        "kin_type": "ser_thr",
+        "residue": "ST",              # central motif residue must be S or T
+        "column_prefix": "p",         # p1_126c_sn_sum
+        "site_id_source": "column",   # site_id column already present
+    },
+    "py": {
+        "name": "py",
+        "label": "Tyr",
+        "input_file": SONG_PY_SITEQUANT_FILE,
+        "composite_file": SONG_PY_COMPOSITE_FILE,
+        "output_suffix": "_pY",
+        "kin_type": "tyrosine",
+        "residue": "Y",
+        "column_prefix": "plex",      # plex1_126_sn_sum  → renamed to p1_126_sn_sum on load
+        "site_id_source": "synthesize",  # site_id := f"{protein_id}_{site_position}"
+    },
+}
 SONG_TRANSCRIPTOMICS_DIR = os.path.join(SONG_WORKSPACE_DIR, "transcriptomics")
 SONG_SNRNA_SAMPLE_MANIFEST = os.path.join(
     SONG_TRANSCRIPTOMICS_DIR, "snrna_sample_manifest.csv"

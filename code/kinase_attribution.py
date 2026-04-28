@@ -49,10 +49,9 @@ TOTAL_PROTEOME_FILE = os.path.join(
     config.SONG_PRIMARY_PROTEOMICS_DIR,
     "song2024_tmttotal_protein_quant_merged_labeled (2).xlsx",
 )
-IMAC_SITEQUANT_FILE = os.path.join(
-    config.SONG_PRIMARY_PROTEOMICS_DIR,
-    "song_IMAC_sitequant_merged_labeled (2).xlsx",
-)
+# Legacy alias: existing call sites and external scripts may still reference
+# IMAC_SITEQUANT_FILE. Track-aware code paths read config.PHOSPHO_TRACKS instead.
+IMAC_SITEQUANT_FILE = config.SONG_IMAC_SITEQUANT_FILE
 
 REF_CHANNEL = "126"  # Ref_Pool channel in each plex
 
@@ -150,6 +149,98 @@ def _proteome_to_phospho_col(col):
     plex_num = parts[0].replace("plex", "")
     rest = parts[1].rsplit("_sn_mean", 1)[0]
     return f"p{plex_num}_{rest}_sn_sum"
+
+
+def _resolve_track(track):
+    """Look up a phospho-track config by name; return the dict from config."""
+    if isinstance(track, dict):
+        return track
+    if track not in config.PHOSPHO_TRACKS:
+        raise ValueError(
+            f"Unknown phospho track {track!r}; "
+            f"valid: {list(config.PHOSPHO_TRACKS)}"
+        )
+    return config.PHOSPHO_TRACKS[track]
+
+
+def _load_phospho_track(track_cfg):
+    """Load a phospho-track xlsx and normalize it to the canonical IMAC schema.
+
+    Canonical schema (matches the legacy IMAC sitequant file):
+      - site_id (synthesized for tracks where the source file lacks it)
+      - protein_id, gene_symbol, site_position, motif
+      - matched_protein columns are produced downstream in step_normalize
+      - sample/ref columns named p{N}_{channel}_sn_sum (rename plex{N}_*)
+
+    The pY workbook ships per-plex metadata columns (plex1_sequence,
+    plex1_site_id, ...). Those are dropped — only the sn_sum quant columns
+    are retained on the sample side.
+    """
+    cfg = _resolve_track(track_cfg)
+    path = cfg["input_file"]
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Phospho-track {cfg['name']} input not found: {path}"
+        )
+    df = pd.read_excel(path, header=1)
+
+    # Rename sample columns: plex{N}_* → p{N}_* (only when prefix differs).
+    if cfg["column_prefix"] == "plex":
+        rename_map = {}
+        for c in df.columns:
+            if isinstance(c, str) and c.startswith("plex") and c.endswith("_sn_sum"):
+                rest = c[len("plex"):]  # e.g. "1_126c_sn_sum"
+                rename_map[c] = "p" + rest
+        df = df.rename(columns=rename_map)
+        # Drop per-plex non-quant metadata columns (plex1_sequence, plex1_site_id, …)
+        drop_cols = [c for c in df.columns
+                     if isinstance(c, str)
+                     and c.startswith("plex")
+                     and not c.endswith("_sn_sum")]
+        df = df.drop(columns=drop_cols)
+
+    # Synthesize site_id when the source workbook lacks one.
+    if cfg["site_id_source"] == "synthesize" or "site_id" not in df.columns:
+        if "protein_id" in df.columns and "site_position" in df.columns:
+            df["site_id"] = (
+                df["protein_id"].astype(str) + "_" + df["site_position"].astype(str)
+            )
+        else:
+            raise ValueError(
+                f"Track {cfg['name']}: cannot synthesize site_id "
+                f"(need protein_id and site_position columns)"
+            )
+
+    # Residue purity check on motif central residue.
+    if "motif" in df.columns:
+        # Motif is typically a 15-mer with the modified residue at the center.
+        # Take the middle character; tolerate variable-length motifs by
+        # picking the index closest to the center.
+        def _central(m):
+            if not isinstance(m, str) or len(m) == 0:
+                return ""
+            return m[len(m) // 2].upper()
+        central = df["motif"].fillna("").map(_central)
+        expected = set(cfg["residue"])
+        non_purity = (~central.isin(expected | {""})).sum()
+        purity = 1.0 - non_purity / max(len(df), 1)
+        if purity < 0.99:
+            print(f"  WARNING: track {cfg['name']} motif central-residue "
+                  f"purity = {purity*100:.1f}% (expected {cfg['residue']})")
+        else:
+            print(f"  Track {cfg['name']} motif residue purity: "
+                  f"{purity*100:.1f}% {cfg['residue']}")
+    return df
+
+
+def _track_output(filename, track_cfg):
+    """Compose an output path with the track's suffix appended before the extension."""
+    cfg = _resolve_track(track_cfg)
+    suffix = cfg["output_suffix"]
+    if not suffix:
+        return os.path.join(OUTPUT_DIR, filename)
+    base, ext = os.path.splitext(filename)
+    return os.path.join(OUTPUT_DIR, f"{base}{suffix}{ext}")
 
 
 def _irs_normalize(quant_df, ref_cols, sample_to_plex):
@@ -261,10 +352,21 @@ def _bh_fdr(pvals):
 # Stage 1: Cross-plex normalization + stoichiometry
 # ===========================================================================
 
-def step_normalize():
-    """Stage 1: IRS normalization and stoichiometry computation."""
+def step_normalize(track="st"):
+    """Stage 1: IRS normalization and stoichiometry computation.
+
+    Parameters
+    ----------
+    track : str or dict, default "st"
+        Phospho-track name from config.PHOSPHO_TRACKS ("st" for the legacy
+        IMAC Ser/Thr track, "py" for tyrosine). Output filenames receive
+        the track's suffix; total proteome processing is shared across
+        tracks but recomputed each call.
+    """
     _ensure_output_dir()
-    print("\n=== Stage 1: Cross-Plex Normalization + Stoichiometry ===\n")
+    track_cfg = _resolve_track(track)
+    print(f"\n=== Stage 1: Cross-Plex Normalization + Stoichiometry "
+          f"(track={track_cfg['name']}/{track_cfg['label']}) ===\n")
 
     # --- 1.0 Load sample mapping ---
     mapping = load_sample_mapping()
@@ -331,9 +433,10 @@ def step_normalize():
     print(f"  Plex medians after:  {plex_medians_after}")
 
     # --- 1.2 Load and IRS-normalize phospho sitequant ---
-    print("\n--- 1.2 Phospho sitequant normalization ---")
-    sq = pd.read_excel(IMAC_SITEQUANT_FILE, header=1)
-    print(f"  Loaded {len(sq)} phosphosites")
+    print(f"\n--- 1.2 Phospho sitequant normalization "
+          f"(track={track_cfg['name']}) ---")
+    sq = _load_phospho_track(track_cfg)
+    print(f"  Loaded {len(sq)} phosphosites from {track_cfg['input_file']}")
 
     # Map bio columns from proteome to phospho naming
     phospho_bio_cols = [_proteome_to_phospho_col(c) for c in bio_cols]
@@ -497,7 +600,7 @@ def step_normalize():
             ]]
             stoich_vals = stoich_matrix[site_idx, geno_idx]
             qc_rows.append({
-                "gene": gene, "site_id": int(site_id),
+                "gene": gene, "site_id": str(site_id),
                 "site_position": str(pos_str),
                 "genotype": geno,
                 "raw_phospho_mean": float(np.nanmean(raw_vals)) if len(raw_vals) else np.nan,
@@ -512,19 +615,20 @@ def step_normalize():
 
     # --- 1.5 Save outputs ---
     print("\n--- 1.5 Saving outputs ---")
-    stoich_path = os.path.join(OUTPUT_DIR, "stoichiometry_matrix.csv")
+    stoich_path = _track_output("stoichiometry_matrix.csv", track_cfg)
     stoich_df.to_csv(stoich_path, index=False)
     print(f"  Saved {stoich_path} ({stoich_df.shape})")
 
-    raw_path = os.path.join(OUTPUT_DIR, "raw_phospho_normalized.csv")
+    raw_path = _track_output("raw_phospho_normalized.csv", track_cfg)
     raw_phospho_df.to_csv(raw_path, index=False)
     print(f"  Saved {raw_path}")
 
-    qc_path = os.path.join(OUTPUT_DIR, "stoichiometry_qc.csv")
+    qc_path = _track_output("stoichiometry_qc.csv", track_cfg)
     qc_df.to_csv(qc_path, index=False)
     print(f"  Saved {qc_path}")
 
     norm_summary = {
+        "track": track_cfg["name"],
         "normalization_method": norm_method,
         "n_sites_total": int(n_sites),
         "n_sites_matched": int(n_matched),
@@ -536,7 +640,7 @@ def step_normalize():
         "pca_before": pca_before,
         "pca_after": pca_after,
     }
-    norm_path = os.path.join(OUTPUT_DIR, "normalization_summary.json")
+    norm_path = _track_output("normalization_summary.json", track_cfg)
     with open(norm_path, "w") as f:
         json.dump(norm_summary, f, indent=2)
     print(f"  Saved {norm_path}")
@@ -674,7 +778,7 @@ def _winsorize_lfc(lfc_array, pct=None):
 
 
 def _run_mea(motif_series, results_by_contrast, lfc_key,
-             site_ids=None, gene_symbols=None):
+             site_ids=None, gene_symbols=None, track="st"):
     """Run MEA (GSEA-based) kinase enrichment across contrasts.
 
     Preprocessing before GSEA ranking (applied per contrast):
@@ -698,6 +802,7 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
     """
     from kinase_library import RankedPhosData
 
+    track_cfg = _resolve_track(track)
     enrichment_results = {}
     outlier_records = []
     shift_records = []
@@ -755,7 +860,7 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
             seq_col="motif",
         )
         result = rpd.mea(
-            kin_type="ser_thr",
+            kin_type=track_cfg["kin_type"],
             kl_method=config.KL_METHOD,
             kl_thresh=config.KL_THRESH,
             permutation_num=config.MEA_PERMUTATION_NUM,
@@ -765,6 +870,8 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
         er.index.name = "kinase"
         er = er.reset_index()
         er["contrast"] = contrast_name
+        er["residue_type"] = track_cfg["residue"]
+        er["track"] = track_cfg["name"]
         enrichment_results[contrast_name] = er
         n_sig = (er["FDR"] < config.MEA_FDR_THRESH).sum()
         print(f"  {contrast_name}: {len(er)} kinases tested, "
@@ -773,14 +880,14 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
     # Save winsorized-site log
     if outlier_records:
         outlier_df = pd.DataFrame(outlier_records)
-        outlier_path = os.path.join(OUTPUT_DIR, "winsorized_sites.csv")
+        outlier_path = _track_output("winsorized_sites.csv", track_cfg)
         outlier_df.to_csv(outlier_path, index=False)
         print(f"  Saved {outlier_path} ({len(outlier_df)} clipped sites)")
 
     # Save global-shift log for transparency
     if shift_records:
         shift_df = pd.DataFrame(shift_records)
-        shift_path = os.path.join(OUTPUT_DIR, "mea_global_shift.csv")
+        shift_path = _track_output("mea_global_shift.csv", track_cfg)
         shift_df.to_csv(shift_path, index=False)
         print(f"  Saved {shift_path} (median offsets removed per contrast)")
 
@@ -802,19 +909,28 @@ def _prepare_raw_ols(mapping, bio_cols, raw_df):
     return X, X_np, param_names, Y_raw, betas_r, pvals_r, nobs_r
 
 
-def step_enrich():
-    """Stage 2: OLS models + kinase enrichment + classification."""
+def step_enrich(track="st"):
+    """Stage 2: OLS models + kinase enrichment + classification.
+
+    Parameters
+    ----------
+    track : str or dict, default "st"
+        Phospho-track name from config.PHOSPHO_TRACKS. Reads track-suffixed
+        Stage 1 outputs and runs MEA against the track's substrate library
+        (ser_thr or tyrosine).
+    """
     _ensure_output_dir()
+    track_cfg = _resolve_track(track)
     print(f"\n=== Stage 2: OLS Models + Kinase Enrichment "
-          f"({config.ANALYSIS_MODE}) ===\n")
+          f"({config.ANALYSIS_MODE}, track={track_cfg['name']}) ===\n")
 
     # Load data — filter samples for outlier exclusion + sex subsetting
     mapping_full = load_sample_mapping()
     mapping = _filter_samples(mapping_full)
     bio_cols = mapping["column_name"].tolist()
 
-    stoich_path = os.path.join(OUTPUT_DIR, "stoichiometry_matrix.csv")
-    raw_path = os.path.join(OUTPUT_DIR, "raw_phospho_normalized.csv")
+    stoich_path = _track_output("stoichiometry_matrix.csv", track_cfg)
+    raw_path = _track_output("raw_phospho_normalized.csv", track_cfg)
     if not os.path.exists(stoich_path):
         raise FileNotFoundError(f"{stoich_path} not found. Run --normalize first.")
     stoich_df = pd.read_csv(stoich_path)
@@ -893,12 +1009,14 @@ def step_enrich():
         print(f"  {contrast_name}: stoich {n_sig_s} sig sites (FDR<0.05), "
               f"raw {n_sig_r} sig sites")
 
-    print("\n--- 2.4 Running MEA kinase enrichment (stoichiometry) ---")
+    print(f"\n--- 2.4 Running MEA kinase enrichment "
+          f"(stoichiometry, kin_type={track_cfg['kin_type']}) ---")
     mea_stoich = _run_mea(
         stoich_df["motif"], results_by_contrast, "stoich_lfc",
         site_ids=stoich_df["site_id"].values,
-        gene_symbols=stoich_df["gene_symbol"].values)
-    mea_path = os.path.join(OUTPUT_DIR, "mea_stoichiometry.csv")
+        gene_symbols=stoich_df["gene_symbol"].values,
+        track=track_cfg)
+    mea_path = _track_output("mea_stoichiometry.csv", track_cfg)
     mea_stoich.to_csv(mea_path, index=False)
     n_sig_total = (mea_stoich["FDR"] < config.MEA_FDR_THRESH).sum() if len(mea_stoich) > 0 else 0
     print(f"\n  Saved {mea_path} ({len(mea_stoich)} rows, {n_sig_total} significant)")
@@ -917,11 +1035,11 @@ def step_enrich():
         site_results[f"stoich_fdr_{cn}"] = res["stoich_fdr"]
         site_results[f"raw_lfc_{cn}"] = res["raw_lfc"]
         site_results[f"raw_fdr_{cn}"] = res["raw_fdr"]
-    site_path = os.path.join(OUTPUT_DIR, "site_level_ols.csv")
+    site_path = _track_output("site_level_ols.csv", track_cfg)
     site_results.to_csv(site_path, index=False)
     print(f"  Saved {site_path} ({len(site_results)} rows)")
 
-    print("\n  Stage 2 complete.")
+    print(f"\n  Stage 2 complete (track={track_cfg['name']}).")
 
 
 # ===========================================================================
@@ -1059,17 +1177,46 @@ def _assign_confidence_and_basis_vectorized(unified):
 
 
 def step_attribute():
-    """Stage 3: Unified cell-type attribution (SEA-AD concordance + WMB expression)."""
+    """Stage 3: Unified cell-type attribution (SEA-AD concordance + WMB expression).
+
+    Loads MEA results from every available phospho track (S/T + pY when both
+    are present) and concatenates them into a single significant-kinase
+    table. Each row carries `residue_type` and `track` columns so downstream
+    consumers can stratify by Tyr vs Ser/Thr biology. If only the legacy
+    S/T track exists, behavior is unchanged.
+    """
     _ensure_output_dir()
     print("\n=== Stage 3: Unified Cell-Type Attribution ===\n")
-    # 3a. Load MEA results and filter significant kinases
-    mea_path = os.path.join(OUTPUT_DIR, "mea_stoichiometry.csv")
-    if not os.path.exists(mea_path):
-        raise FileNotFoundError(f"{mea_path} not found. Run --enrich first.")
-    mea = pd.read_csv(mea_path)
+    # 3a. Load MEA results from every track that produced an output and
+    # concatenate. Stage 3 is residue-agnostic at the gene level — SEA-AD,
+    # WMB and Song lookups all key on gene_symbol — so combining tracks
+    # before attribution gives a single coherent table downstream.
+    mea_frames = []
+    for track_name, track_cfg in config.PHOSPHO_TRACKS.items():
+        mea_path = _track_output("mea_stoichiometry.csv", track_cfg)
+        if not os.path.exists(mea_path):
+            print(f"  Track {track_name}: {mea_path} not present, skipping")
+            continue
+        df = pd.read_csv(mea_path)
+        # Backfill residue_type / track columns for legacy outputs that
+        # predate the pY refactor.
+        if "residue_type" not in df.columns:
+            df["residue_type"] = track_cfg["residue"]
+        if "track" not in df.columns:
+            df["track"] = track_cfg["name"]
+        mea_frames.append(df)
+        print(f"  Track {track_name}: loaded {len(df)} rows from {mea_path}")
+    if not mea_frames:
+        raise FileNotFoundError(
+            f"No MEA outputs found under {OUTPUT_DIR}; run --enrich first."
+        )
+    mea = pd.concat(mea_frames, ignore_index=True, sort=False)
     sig = mea[mea["FDR"] < config.MEA_FDR_THRESH].copy()
-    print(f"  MEA results: {len(mea)} total, {len(sig)} significant "
+    print(f"  MEA results (combined): {len(mea)} total, {len(sig)} significant "
           f"(FDR<{config.MEA_FDR_THRESH})")
+    if "residue_type" in sig.columns:
+        residue_breakdown = sig["residue_type"].value_counts().to_dict()
+        print(f"  By residue_type: {residue_breakdown}")
     if len(sig) == 0:
         print("  No significant kinases found. Stage 3 complete.")
         return
@@ -1159,6 +1306,8 @@ def step_attribute():
                     adata_by_stratum[stratum], gene_idx)
             sc_lfcs, sc_counts = _lfc_cache[cache_key]
 
+            residue_type = row.get("residue_type", "ST")
+            track_name = row.get("track", "st")
             for subclass, median_lfc in sc_lfcs.items():
                 concordance = np.sign(nes) * median_lfc
                 sea_ad_rows.append({
@@ -1167,6 +1316,8 @@ def step_attribute():
                     "contrast": contrast,
                     "NES": nes,
                     "FDR": fdr,
+                    "residue_type": residue_type,
+                    "track": track_name,
                     "cell_type": subclass,
                     "sea_ad_lfc": median_lfc,
                     "sea_ad_n_supertypes": sc_counts[subclass],
@@ -1235,6 +1386,8 @@ def step_attribute():
                     "contrast": row["contrast"],
                     "NES": row["NES"],
                     "FDR": row["FDR"],
+                    "residue_type": row.get("residue_type", "ST"),
+                    "track": row.get("track", "st"),
                     "cell_type": subclass,
                     "sea_ad_lfc": np.nan,
                     "sea_ad_n_supertypes": 0,
@@ -1565,14 +1718,30 @@ def main():
                        help="Run stages 1-3 in order")
     group.add_argument("--summary", action="store_true",
                        help="Print cached results summary")
+    parser.add_argument(
+        "--track", choices=["st", "py", "both"], default="both",
+        help="Phospho track: 'st' (Ser/Thr via IMAC, legacy), 'py' (Tyr), "
+             "or 'both' (default; runs Stage 1+2 for each track sequentially). "
+             "Stage 3 (--attribute) currently consumes the 'st' track only "
+             "until Phase 5 lands.")
 
     args = parser.parse_args()
 
+    # Resolve which tracks to iterate over for stages that are track-specific.
+    if args.track == "both":
+        tracks = ["st", "py"]
+    else:
+        tracks = [args.track]
+
     if args.normalize or args.run:
-        step_normalize()
+        for t in tracks:
+            step_normalize(track=t)
     if args.enrich or args.run:
-        step_enrich()
+        for t in tracks:
+            step_enrich(track=t)
     if args.attribute or args.run:
+        # Stage 3 still operates on the S/T MEA file by default.
+        # Phase 5 will combine tracks before attribution.
         step_attribute()
     if args.mechanism_annotation:
         step_mechanism_annotation()
