@@ -5059,40 +5059,47 @@ function getScopedContrastIds(filter) {
 }
 
 // Confidence threshold: a row passes if its tier rank ≥ requested rank.
-// very_high(4) > high(3) > moderate(2) > low(1). "" / undefined → no constraint.
-const _CONF_RANK = {very_high: 4, high: 3, moderate: 2, low: 1};
+// "" / undefined → no constraint.
+const _CONF_RANK = {very_high: 4, high: 3, moderate: 2, low: 1, none: 0};
 function _confPass(rowConf, threshold) {
   if (!threshold) return true;
-  const r = _CONF_RANK[rowConf] || 0;
-  const t = _CONF_RANK[threshold] || 0;
-  return r >= t;
+  return (_CONF_RANK[rowConf] || 0) >= (_CONF_RANK[threshold] || 0);
 }
 
-// Compute decomp step (-2..3) for a (kinase, contrast_id, cell_type) row,
-// mirroring the logic in _renderAttributionVerdict. Bulk NES is read from
-// PAYLOAD.kinases.NES_<contrast>. Returns 0 when decomp NES is missing.
-function _decompStepFor(kid, contrastId, cellType) {
-  if (!_decompByKey) return 0;
-  const d = _decompByKey.get(`${kid}|${contrastId}|${cellType}`);
-  if (!d || d.nes == null || !isFinite(d.nes) || d.nes === 0) return 0;
-  const cName = CONTRASTS[contrastId];
-  const _K = PAYLOAD.kinases;
-  const bulkNes = (_K && cName && _K["NES_" + cName]) ? _K["NES_" + cName][kid] : null;
+// Decomp step ordinal vs bulk MEA direction:
+//   3 strong-agree (FDR<0.10), 2 sig-agree (FDR<0.25), 1 nominal,
+//   0 absent, -2 sig-disagree (FDR<0.25, sign opposes bulk).
+// bulkNes may be passed in pre-fetched; otherwise read from PAYLOAD.kinases.
+function _decompStep(decompNes, decompFdr, bulkNes) {
+  if (decompNes == null || !isFinite(decompNes) || decompNes === 0) return 0;
   if (bulkNes == null || !isFinite(bulkNes) || bulkNes === 0) return 1;
-  const agree = (d.nes > 0) === (bulkNes > 0);
-  const sig = d.fdr != null && isFinite(d.fdr) && d.fdr < 0.25;
-  const strong = d.fdr != null && isFinite(d.fdr) && d.fdr < 0.10;
+  const agree = (decompNes > 0) === (bulkNes > 0);
+  const sig = decompFdr != null && isFinite(decompFdr) && decompFdr < 0.25;
+  const strong = decompFdr != null && isFinite(decompFdr) && decompFdr < 0.10;
   if (agree) return strong ? 3 : (sig ? 2 : 1);
   return sig ? -2 : 1;
 }
 
-// Combine attribution tier with decomp-step to produce displayed tier.
-// Currently: only the "very_high" upgrade (high + decomp sig-agree). Lower tiers
-// pass through unchanged.
+function _decompStepFor(kid, contrastId, cellType) {
+  if (!_decompByKey) return 0;
+  const d = _decompByKey.get(`${kid}|${contrastId}|${cellType}`);
+  if (!d) return 0;
+  const cName = CONTRASTS[contrastId];
+  const _K = PAYLOAD.kinases;
+  const bulkNes = (_K && cName && _K["NES_" + cName]) ? _K["NES_" + cName][kid] : null;
+  return _decompStep(d.nes, d.fdr, bulkNes);
+}
+
+// Apply the very_high upgrade rule: a "high" attribution row whose decomp
+// significantly agrees with the bulk direction is promoted.
+function _upgradeTier(attrConf, decompStep) {
+  if (attrConf === "high" && decompStep >= 2) return "very_high";
+  return attrConf || "none";
+}
+
 function _combinedTierFor(kid, contrastId, cellType, attrConf) {
   if (attrConf !== "high") return attrConf || "none";
-  const step = _decompStepFor(kid, contrastId, cellType);
-  return step >= 2 ? "very_high" : "high";
+  return _upgradeTier(attrConf, _decompStepFor(kid, contrastId, cellType));
 }
 
 function getScopedAttribution(kinaseId, filter) {
@@ -5628,31 +5635,23 @@ function renderKinaseExplorer() {
 
     // Conf pill: highest tier present in scope, with contributing contrasts as chips.
     const scopedRows = getScopedAttribution(r.id, colFilter);
-    const veryHighCtx = new Set(), highCtx = new Set(), modCtx = new Set();
+    const ctxByTier = {very_high: new Set(), high: new Set(), moderate: new Set()};
     for (const e of scopedRows) {
-      if (e.combined_tier === "very_high")    veryHighCtx.add(e.contrast_id);
-      else if (e.combined_tier === "high")    highCtx.add(e.contrast_id);
-      else if (e.combined_tier === "moderate") modCtx.add(e.contrast_id);
+      if (ctxByTier[e.combined_tier]) ctxByTier[e.combined_tier].add(e.contrast_id);
     }
+    const tierSpec = [
+      {tier:"very_high", cls:"vhi", label:"VERY HIGH", suffix:" (attribution + decomp agreement)"},
+      {tier:"high",      cls:"hi",  label:"HIGH",      suffix:""},
+      {tier:"moderate",  cls:"mid", label:"MOD",       suffix:""},
+    ];
     let confBadge;
-    if (veryHighCtx.size > 0) {
-      const ctxs = Array.from(veryHighCtx).map(ci => CONTRASTS[ci]);
-      const shown = ctxs.slice(0, 3).map(c => `<span class="ctx-chip vhi">${shortContrast(c)}</span>`).join("");
+    const hit = tierSpec.find(s => ctxByTier[s.tier].size > 0);
+    if (hit) {
+      const ctxs = Array.from(ctxByTier[hit.tier]).map(ci => CONTRASTS[ci]);
+      const shown = ctxs.slice(0, 3).map(c => `<span class="ctx-chip ${hit.cls}">${shortContrast(c)}</span>`).join("");
       const overflow = ctxs.length > 3 ? `<span class="ctx-overflow">+${ctxs.length - 3}</span>` : "";
-      const tip = `VERY HIGH in ${ctxs.length} contrast${ctxs.length===1?"":"s"} (attribution + decomp agreement): ${ctxs.join(", ")}`;
-      confBadge = `<span class="badge vhi" title="${_escapeHtml(tip)}">VERY HIGH</span>${shown}${overflow}`;
-    } else if (highCtx.size > 0) {
-      const ctxs = Array.from(highCtx).map(ci => CONTRASTS[ci]);
-      const shown = ctxs.slice(0, 3).map(c => `<span class="ctx-chip hi">${shortContrast(c)}</span>`).join("");
-      const overflow = ctxs.length > 3 ? `<span class="ctx-overflow">+${ctxs.length - 3}</span>` : "";
-      const tip = `HIGH in ${ctxs.length} contrast${ctxs.length===1?"":"s"}: ${ctxs.join(", ")}`;
-      confBadge = `<span class="badge hi" title="${_escapeHtml(tip)}">HIGH</span>${shown}${overflow}`;
-    } else if (modCtx.size > 0) {
-      const ctxs = Array.from(modCtx).map(ci => CONTRASTS[ci]);
-      const shown = ctxs.slice(0, 3).map(c => `<span class="ctx-chip mid">${shortContrast(c)}</span>`).join("");
-      const overflow = ctxs.length > 3 ? `<span class="ctx-overflow">+${ctxs.length - 3}</span>` : "";
-      const tip = `MODERATE in ${ctxs.length} contrast${ctxs.length===1?"":"s"}: ${ctxs.join(", ")}`;
-      confBadge = `<span class="badge mid" title="${_escapeHtml(tip)}">MOD</span>${shown}${overflow}`;
+      const tip = `${hit.label} in ${ctxs.length} contrast${ctxs.length===1?"":"s"}${hit.suffix}: ${ctxs.join(", ")}`;
+      confBadge = `<span class="badge ${hit.cls}" title="${_escapeHtml(tip)}">${hit.label}</span>${shown}${overflow}`;
     } else {
       const tipScope = gridActive ? "in active filter scope" : "across all 9 contrasts";
       confBadge = `<span class="badge lo" title="No HIGH or MODERATE attribution ${tipScope}.">low</span>`;
@@ -6302,8 +6301,6 @@ const ATTR_VERDICT_COLS = [
   {key:"bulk_match",                   label:"vs Bulk",     type:"num", group:"decomp",
    title:"Sign agreement between Decomp NES and the bulk MEA NES for this kinase × contrast. Bold ✓/✗ when Decomp FDR < 0.25; muted when not. Hover any cell for the underlying values."},
 ];
-const ATTR_CONF_RANK = {very_high:4, high:3, moderate:2, low:1, none:0};
-
 function _attrVerdictCmp(a, b, key, type, asc) {
   let va, vb;
   if (type === "num") {
@@ -6311,8 +6308,8 @@ function _attrVerdictCmp(a, b, key, type, asc) {
     va = (va == null || !isFinite(va)) ? null : Number(va);
     vb = (vb == null || !isFinite(vb)) ? null : Number(vb);
   } else if (type === "conf") {
-    va = ATTR_CONF_RANK[a[key]] ?? -1;
-    vb = ATTR_CONF_RANK[b[key]] ?? -1;
+    va = _CONF_RANK[a[key]] ?? -1;
+    vb = _CONF_RANK[b[key]] ?? -1;
   } else {
     va = (a[key] || "").toString();
     vb = (b[key] || "").toString();
@@ -6375,35 +6372,12 @@ function _renderAttributionVerdict(hostId, ctx) {
       const sig = r.decomp_fdr != null && isFinite(r.decomp_fdr) && r.decomp_fdr < 0.25;
       r.bulk_match = agree ? (sig ? 2 : 1) : (sig ? -2 : -1);
     }
-    // decomp_step (Layer-2 ordinal vs bulk direction):
-    //   3 strong-agree (FDR<0.10, sign matches bulk)
-    //   2 sig-agree    (FDR<0.25, sign matches bulk)
-    //   1 nominal      (NES present, no sig)
-    //   0 absent
-    //  -2 sig-disagree (FDR<0.25, sign opposes bulk)
-    let decompStep = 0;
-    if (r.decomp_nes != null && isFinite(r.decomp_nes) && r.decomp_nes !== 0
-        && _bulkNes != null && isFinite(_bulkNes) && _bulkNes !== 0) {
-      const dAgree = (r.decomp_nes > 0) === (_bulkNes > 0);
-      const dFdr = r.decomp_fdr;
-      const dSig = dFdr != null && isFinite(dFdr) && dFdr < 0.25;
-      const dStrong = dFdr != null && isFinite(dFdr) && dFdr < 0.10;
-      if (dAgree) decompStep = dStrong ? 3 : (dSig ? 2 : 1);
-      else        decompStep = dSig ? -2 : 1;
-    } else if (r.decomp_nes != null && isFinite(r.decomp_nes)) {
-      decompStep = 1;
-    }
+    const decompStep = _decompStep(r.decomp_nes, r.decomp_fdr, _bulkNes);
     r.decomp_step = decompStep;
-    // combined_tier: upgrade attribution "high" to "very_high" when the decomp
-    // layer significantly agrees (FDR<0.25, sign matches bulk). Other tiers
-    // pass through unchanged for now.
-    r.combined_tier = (r.combined_confidence === "high" && decompStep >= 2)
-      ? "very_high"
-      : (r.combined_confidence || "none");
+    r.combined_tier = _upgradeTier(r.combined_confidence, decompStep);
     // cross_rank: combine combined_tier (0..4) and decomp step (-2..3) so
     // reinforcing rows sort first, conflicts demoted, single-layer in between.
-    const tierRank = ATTR_CONF_RANK[r.combined_tier] ?? 0;
-    r.cross_rank = tierRank * 6 + decompStep;
+    r.cross_rank = (_CONF_RANK[r.combined_tier] || 0) * 6 + decompStep;
   }
 
   const sortKey = host.dataset.sortKey || "combined_score";
