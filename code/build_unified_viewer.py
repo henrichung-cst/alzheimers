@@ -5112,7 +5112,7 @@ function _tv2Eval(series, kid, contrastIdx) {
 }
 
 function _tv2Counts(series) {
-  // Returns counts[g][t] = { up, down, total } of unique kinases.
+  // Returns counts[g][t] = { up, down, total, upIds, downIds, totalIds } of unique kinases.
   _tv2EnsureAttrIndex();
   const K = PAYLOAD.kinases;
   const DG = META.diseaseGroups;
@@ -5120,7 +5120,10 @@ function _tv2Counts(series) {
   const counts = {};
   for (const g of DG) {
     counts[g] = {};
-    for (const t of TPS) counts[g][t] = { up: 0, down: 0, total: 0 };
+    for (const t of TPS) counts[g][t] = {
+      up: 0, down: 0, total: 0,
+      upIds: [], downIds: [], totalIds: [],
+    };
   }
   const n = K.id.length;
   for (let i = 0; i < n; i++) {
@@ -5134,8 +5137,9 @@ function _tv2Counts(series) {
         if (!r) continue;
         const cell = counts[g][t];
         cell.total++;
-        if (r.sign > 0) cell.up++;
-        else if (r.sign < 0) cell.down++;
+        cell.totalIds.push(kid);
+        if (r.sign > 0) { cell.up++; cell.upIds.push(kid); }
+        else if (r.sign < 0) { cell.down++; cell.downIds.push(kid); }
       }
     }
   }
@@ -5338,7 +5342,9 @@ function renderTemporalV2() {
           marker: { color }, legendgroup: g + "-up",
           offsetgroup: g, alignmentgroup: "v" + s,
           xaxis: xAxis, yaxis: yAxis, showlegend: showLegend,
-          hovertemplate: `[S${s+1}] ${g} up @ %{x}: %{y}<extra></extra>`,
+          customdata: TPS.map(t => [counts[g][t].up, counts[g][t].upIds]),
+          meta: { s, g, sign: "up" },
+          hovertemplate: `[S${s+1}] ${g} up @ %{x}: %{customdata[0]} · click to open in Kinase tab<extra></extra>`,
         });
         traces.push({
           type: "bar", name: g + " down",
@@ -5346,8 +5352,9 @@ function renderTemporalV2() {
           marker: { color, opacity: 0.55 }, legendgroup: g + "-down",
           offsetgroup: g, alignmentgroup: "v" + s,
           xaxis: xAxis, yaxis: yAxis, showlegend: showLegend,
-          hovertemplate: `[S${s+1}] ${g} down @ %{x}: %{customdata}<extra></extra>`,
-          customdata: TPS.map(t => counts[g][t].down),
+          customdata: TPS.map(t => [counts[g][t].down, counts[g][t].downIds]),
+          meta: { s, g, sign: "down" },
+          hovertemplate: `[S${s+1}] ${g} down @ %{x}: %{customdata[0]} · click to open in Kinase tab<extra></extra>`,
         });
       } else {
         traces.push({
@@ -5356,7 +5363,9 @@ function renderTemporalV2() {
           marker: { color }, legendgroup: g,
           offsetgroup: g, alignmentgroup: "v" + s,
           xaxis: xAxis, yaxis: yAxis, showlegend: showLegend,
-          hovertemplate: `[S${s+1}] ${g} @ %{x}: %{y}<extra></extra>`,
+          customdata: TPS.map(t => [counts[g][t].total, counts[g][t].totalIds]),
+          meta: { s, g, sign: "total" },
+          hovertemplate: `[S${s+1}] ${g} @ %{x}: %{customdata[0]} · click to open in Kinase tab<extra></extra>`,
         });
       }
     }
@@ -5384,10 +5393,33 @@ function renderTemporalV2() {
     });
   }
   Plotly.react(el, traces, layout, { displaylogo: false, responsive: true });
+  el.removeAllListeners && el.removeAllListeners("plotly_click");
+  el.on && el.on("plotly_click", ev => {
+    if (!ev.points || !ev.points.length) return;
+    const p = ev.points[0];
+    const cd = p.customdata;
+    const meta = (p.data && p.data.meta) || {};
+    if (!cd || !Array.isArray(cd) || !cd[1] || !cd[1].length) return;
+    const ids = cd[1];
+    const ser = (_tv2State.series || [])[meta.s] || {};
+    const label = `Temporal v2 · ${_tv2SeriesLabel(ser)} · ${meta.g}_${p.x}` +
+                  (meta.sign === "total" ? "" : ` · ${meta.sign}`);
+    _openKinaseDeepDiveWithWhitelist(ids, label);
+  });
   if (sub) {
     sub.textContent = `${series.length} series · y = unique kinases per (genotype, timepoint) · `
-      + `signed series split up at +y, down at −y · scales independent across rows.`;
+      + `signed series split up at +y, down at −y · scales independent across rows · `
+      + `click any bar to open the Kinase deep dive filtered to that kinase set.`;
   }
+}
+
+function _openKinaseDeepDiveWithWhitelist(kinaseIds, sourceLabel) {
+  if (typeof KinaseFilter === "undefined" || !KinaseFilter.setWhitelist) {
+    console.warn("KinaseFilter whitelist not available");
+    return;
+  }
+  KinaseFilter.setWhitelist(kinaseIds.slice(), sourceLabel);
+  Store.dispatch({type:"SET_VIEW", key:"activeTab", value:"kinase"});
 }
 
 function wireTemporalV2() {
@@ -5448,11 +5480,30 @@ window.KinaseFilter = (function() {
     }
   } catch(e) {}
   const _subs = [];
+  // Whitelist is in-memory only (NOT persisted) — survives tab switches but not
+  // page reloads. Set by cross-tab handoffs (e.g. Temporal v2 bar click); when
+  // active, the kinase explorer bypasses attribution / n_sig / confidence gates
+  // and shows exactly the listed kinase IDs.
+  let _whitelist = null;       // null | Set<number>
+  let _whitelistLabel = "";    // human-readable source description
   function _save() {
     try { localStorage.setItem(_KEY, JSON.stringify(_state)); } catch(e) {}
   }
   return {
     get: function(k) { return k ? _state[k] : Object.assign({}, _state); },
+    getWhitelist: function() {
+      return _whitelist ? { ids: _whitelist, label: _whitelistLabel } : null;
+    },
+    setWhitelist: function(ids, label) {
+      _whitelist = new Set(ids);
+      _whitelistLabel = label || "";
+      for (const fn of _subs) fn();
+    },
+    clearWhitelist: function() {
+      if (_whitelist === null) return;
+      _whitelist = null; _whitelistLabel = "";
+      for (const fn of _subs) fn();
+    },
     set: function(patch) {
       let changed = false;
       for (const k of Object.keys(patch)) {
@@ -6018,6 +6069,34 @@ function _renderCellTypesCell(r, filter) {
   return `<span title="${_escapeHtml(tip)}"><strong>${n}</strong> ${topNames}${displayRows.length > 3 ? ` <span class="muted">+${displayRows.length - 3}</span>` : ""}</span>`;
 }
 
+function _renderKinaseWhitelistBanner(wl) {
+  const wrap = document.querySelector(".ke-table-wrap");
+  if (!wrap) return;
+  let banner = document.getElementById("ke-whitelist-banner");
+  if (!wl) {
+    if (banner) banner.remove();
+    return;
+  }
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "ke-whitelist-banner";
+    banner.style.cssText = "background:#fff3cd; border:1px solid #f0ad4e; "
+      + "color:#8a6d3b; padding:6px 10px; font-size:11px; border-radius:3px; "
+      + "margin-bottom:6px; display:flex; align-items:center; gap:10px;";
+    wrap.parentNode.insertBefore(banner, wrap);
+  }
+  const n = wl.ids.size;
+  const lbl = wl.label || "external whitelist";
+  banner.innerHTML = `<span><b>Filtered to ${n} kinases</b> from ${_escapeHtml(lbl)}. `
+    + `Other filters (disease/timepoint/cell type/confidence) are bypassed.</span>`
+    + `<button id="ke-whitelist-clear" class="chip">Clear filter</button>`;
+  const btn = document.getElementById("ke-whitelist-clear");
+  if (btn) btn.onclick = () => {
+    KinaseFilter.clearWhitelist();
+    renderKinaseExplorer();
+  };
+}
+
 function renderKinaseExplorer() {
   const tbody = document.querySelector("#ke-table tbody");
   if (!tbody) return;
@@ -6026,6 +6105,8 @@ function renderKinaseExplorer() {
   const fdr = kf.fdr || Store.state.filters.fdr || 0.25;
   const selKid = Store.state.selection.kinase;
   const q = (kf.search || "").trim().toLowerCase();
+  const wl = KinaseFilter.getWhitelist();
+  _renderKinaseWhitelistBanner(wl);
 
   _refreshSigCounts(fdr);
 
@@ -6041,14 +6122,16 @@ function renderKinaseExplorer() {
   const gridActive = dSet.size > 0 || tSet.size > 0 || cSet.size > 0 || !!kf.confidence;
   const nSigMin = Math.max(0, parseInt(kf.nSigMin, 10) || 0);
 
-  // First pass: collect visible rows.
-  // Text search is targeted lookup, not discovery browsing — it bypasses the
-  // significance gates so kinases with a strong external prior (e.g. EGFR
-  // when staining suggests it's relevant but bulk MEA misses FDR<0.25) still
-  // surface. Browsing without a query keeps the gates so the list isn't
-  // dominated by ~300 non-significant kinases.
+  // Whitelist mode (cross-tab handoff) bypasses every gate except itself, so
+  // decomp-only and otherwise-attribution-less kinases still appear. Banner
+  // makes the override explicit.
   const visible = [];
   for (const r of _keRows) {
+    if (wl) {
+      if (!wl.ids.has(r.id)) continue;
+      visible.push(r);
+      continue;
+    }
     // Text search
     if (q && !(r.name.toLowerCase().includes(q) ||
                r.gene_symbol.toLowerCase().includes(q))) continue;
