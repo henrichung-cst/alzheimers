@@ -2054,6 +2054,18 @@ main#app-main { padding:14px; }
 .detail-chips label { display:flex; gap:4px; align-items:center; }
 .chip { background:#fff3cd; color:#8a6d3b; border:1px solid #f0ad4e;
   border-radius:3px; padding:2px 8px; font-size:11px; cursor:pointer; }
+.tv2-row { display:flex; gap:8px; align-items:center; padding:6px 8px;
+  background:#f5f5f5; border:1px solid var(--border); border-radius:4px;
+  font-size:11px; flex-wrap:wrap; }
+.tv2-row label { display:flex; gap:4px; align-items:center; }
+.tv2-row select, .tv2-row input { font-size:11px; padding:1px 4px; }
+.tv2-row .tv2-rm { background:#fff; color:#b71c1c; border:1px solid #b71c1c;
+  border-radius:3px; padding:0 6px; font-size:11px; cursor:pointer;
+  margin-left:auto; }
+.tv2-row .tv2-rm:hover { background:#b71c1c; color:#fff; }
+.tv2-row .tv2-label { font-weight:600; min-width:54px; color:#37474f; }
+.tv2-row[data-disabled~="cells"] .tv2-cells { opacity:0.4; pointer-events:none; }
+.tv2-row[data-disabled~="agree"] .tv2-agree { opacity:0.4; pointer-events:none; }
 #graph-container { display:grid; grid-template-columns:1fr 320px; gap:12px;
   height:calc(100vh - 180px); }
 #cy { background:#fafafa; border:1px solid var(--border); border-radius:4px;
@@ -2115,6 +2127,7 @@ main#app-main { padding:14px; }
   <button id="tabbtn-senders" role="tab" aria-selected="false" aria-controls="tab-senders" data-tab="senders" data-tab-group="landscape">Sender&times;Receiver</button>
   <button id="tabbtn-temporal" role="tab" aria-selected="false" aria-controls="tab-temporal" data-tab="temporal" data-tab-group="landscape">Temporal</button>
   <button id="tabbtn-additivity" role="tab" aria-selected="false" aria-controls="tab-additivity" data-tab="additivity" data-tab-group="landscape">Additivity</button>
+  <button id="tabbtn-temporalv2" role="tab" aria-selected="false" aria-controls="tab-temporalv2" data-tab="temporalv2" data-tab-group="landscape">Temporal v2</button>
   <span class="tab-group-divider" aria-hidden="true"></span>
   <span class="tab-group-label">Drill-down</span>
   <button id="tabbtn-kinase" role="tab" aria-selected="false" aria-controls="tab-kinase" data-tab="kinase" data-tab-group="drilldown">Kinase</button>
@@ -2383,6 +2396,37 @@ main#app-main { padding:14px; }
       </div>
       <div id="add-plot" role="img" aria-label="Additivity scatter plot" style="width:100%; height:520px;"></div>
       <div class="muted" id="add-stats"></div>
+    </div>
+  </div>
+  <div id="tab-temporalv2" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-temporalv2" hidden>
+    <div class="card">
+      <div class="detail-chips" id="tv2-presets" style="flex-wrap:wrap;">
+        <span class="muted" style="margin-right:6px;">Presets:</span>
+        <button class="chip" data-tv2-preset="bulk_only">Bulk only</button>
+        <button class="chip" data-tv2-preset="bulk_corrob_contest">Bulk · Corroborated · Contested</button>
+        <button class="chip" data-tv2-preset="bulk_vs_decomp">Bulk vs Decomp-summed</button>
+        <button class="chip" data-tv2-preset="celltype_sweep">Per-cell-type sweep</button>
+        <span style="flex:1;"></span>
+        <button class="chip" id="tv2-add-series" title="Add a new series row">+ Add series</button>
+        <button class="chip" id="tv2-clear" title="Remove all series">Clear</button>
+      </div>
+      <div id="tv2-series-list" style="display:flex; flex-direction:column; gap:4px; margin:8px 0;"></div>
+      <div class="muted" id="tv2-subtitle" style="margin:4px 0 8px 0;"></div>
+      <div id="tv2-plot" role="img" aria-label="Temporal series builder plot" style="width:100%;"></div>
+      <details style="margin-top:10px;">
+        <summary class="muted">How this view counts kinases</summary>
+        <div class="muted" style="margin-top:6px; line-height:1.5;">
+          <p>Each <b>series</b> defines a predicate over (kinase, contrast) pairs. Bar height = <b>count of unique kinases</b> passing the predicate at that (genotype, timepoint). Series stack as small multiples (one row per series).</p>
+          <ul style="margin:4px 0 0 16px; padding:0;">
+            <li><b>Layer = bulk</b>: kinase passes if its bulk-MEA FDR at this contrast &lt; gate.</li>
+            <li><b>Layer = decomp</b>: kinase passes if at least one cell type in scope has decomp FDR &lt; gate (sign-agree with bulk optional).</li>
+            <li><b>Layer = bulk ∩ decomp</b>: both must pass; "Agree" requires NES sign match.</li>
+            <li><b>Layer = bulk \\ decomp</b>: bulk passes AND no cell type in scope passes decomp at the gate (bulk-only signal).</li>
+            <li><b>Sign = signed</b>: split bars (up at +y, down at −y). <b>up / down / either</b>: only one direction or unsigned total.</li>
+          </ul>
+          <p style="margin-top:6px;">Cell-type scope is one of: <b>any (OR)</b> across the 24 decomp-present WMB classes, or a single class. The decomp pipeline does not cover the remaining 10 WMB classes (sampling gaps).</p>
+        </div>
+      </details>
     </div>
   </div>
   <div id="tab-methods" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-methods" hidden>
@@ -4937,6 +4981,339 @@ function wireAdditivityControls() {
       Store.dispatch({type:"SET_VIEW", key:"additivityScoreMin",
                       value: Math.max(0, parseFloat(ev.target.value) || 0)}));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Temporal v2 — series builder (draft)
+// ---------------------------------------------------------------------------
+// Each series is a predicate over (kinase, contrast). Bar height = unique
+// kinases passing per (genotype, timepoint), split by NES sign when
+// requested. Series stack as small multiples (one row per series) so y-scales
+// stay independent.
+let _tv2State = null;
+let _tv2DecompCellsCache = null;
+
+function _tv2DecompCellTypes() {
+  if (_tv2DecompCellsCache) return _tv2DecompCellsCache;
+  const D = PAYLOAD.decomposition_index || {cell_type:[]};
+  const s = new Set();
+  for (const c of D.cell_type) s.add(c);
+  _tv2DecompCellsCache = Array.from(s).sort();
+  return _tv2DecompCellsCache;
+}
+
+function _tv2DefaultSeries(layer) {
+  return {
+    layer: layer || "bulk",
+    cells: "ALL",
+    sign: "signed",
+    fdrBulk: 0.25,
+    fdrDecomp: 0.25,
+    agree: true,
+  };
+}
+
+function _tv2InitState() {
+  if (_tv2State) return;
+  _tv2State = { series: [_tv2DefaultSeries("bulk")] };
+}
+
+function _tv2Eval(series, kid, contrastIdx) {
+  // Returns null if the kinase fails the predicate at this contrast,
+  // else { sign: -1|0|+1 } based on bulk NES (or decomp NES when bulk absent).
+  const K = PAYLOAD.kinases;
+  const cName = CONTRASTS[contrastIdx];
+  const bulkNesCol = K["NES_" + cName];
+  const bulkFdrCol = K["FDR_" + cName];
+  const bulkNes = bulkNesCol ? bulkNesCol[kid] : null;
+  const bulkFdr = bulkFdrCol ? bulkFdrCol[kid] : null;
+  const bulkSig = bulkFdr != null && isFinite(bulkFdr) && bulkFdr < series.fdrBulk;
+
+  let dRows = (_decompByKinCtx && _decompByKinCtx.get(kid + "|" + contrastIdx)) || [];
+  if (series.cells !== "ALL") dRows = dRows.filter(r => r.cell_type === series.cells);
+  // For each decomp row at this kinase × contrast: sig + sign-vs-bulk.
+  let decompAnyPass = false;        // any decomp row sig at fdrDecomp (sign-agnostic)
+  let decompAgreePass = false;      // ≥1 decomp row sig AND sign-matches bulk
+  let decompDisagreePass = false;   // ≥1 decomp row sig AND sign-disagrees with bulk
+  let decompSignNes = null;
+  for (const r of dRows) {
+    if (r.fdr == null || !isFinite(r.fdr) || r.fdr >= series.fdrDecomp) continue;
+    if (r.nes == null || !isFinite(r.nes) || r.nes === 0) continue;
+    decompAnyPass = true;
+    if (decompSignNes == null || Math.abs(r.nes) > Math.abs(decompSignNes)) {
+      decompSignNes = r.nes;
+    }
+    if (bulkNes != null && bulkNes !== 0) {
+      if ((r.nes > 0) === (bulkNes > 0)) decompAgreePass = true;
+      else decompDisagreePass = true;
+    }
+  }
+
+  let pass, refNes;
+  if (series.layer === "bulk") { pass = bulkSig; refNes = bulkNes; }
+  else if (series.layer === "decomp") { pass = decompAnyPass; refNes = decompSignNes; }
+  else if (series.layer === "intersect") {
+    pass = bulkSig && (series.agree ? decompAgreePass : decompAnyPass);
+    refNes = bulkNes;
+  }
+  else if (series.layer === "contested") { pass = bulkSig && decompDisagreePass; refNes = bulkNes; }
+  else if (series.layer === "diff") { pass = bulkSig && !decompAnyPass; refNes = bulkNes; }
+  else { pass = false; refNes = null; }
+  if (!pass) return null;
+
+  const sign = (refNes == null || refNes === 0) ? 0 : (refNes > 0 ? 1 : -1);
+  if (series.sign === "up" && sign < 0) return null;
+  if (series.sign === "down" && sign > 0) return null;
+  return { sign };
+}
+
+function _tv2Counts(series) {
+  // Returns counts[g][t] = { up, down, total } of unique kinases.
+  const K = PAYLOAD.kinases;
+  const DG = META.diseaseGroups;
+  const TPS = META.timepoints;
+  const counts = {};
+  for (const g of DG) {
+    counts[g] = {};
+    for (const t of TPS) counts[g][t] = { up: 0, down: 0, total: 0 };
+  }
+  const n = K.id.length;
+  for (let i = 0; i < n; i++) {
+    const kid = K.id[i];
+    for (const g of DG) {
+      for (const t of TPS) {
+        const c = g + "_" + t;
+        const cIdx = CONTRASTS.indexOf(c);
+        if (cIdx < 0) continue;
+        const r = _tv2Eval(series, kid, cIdx);
+        if (!r) continue;
+        const cell = counts[g][t];
+        cell.total++;
+        if (r.sign > 0) cell.up++;
+        else if (r.sign < 0) cell.down++;
+      }
+    }
+  }
+  return counts;
+}
+
+function _tv2SeriesLabel(series) {
+  const layerLabels = { bulk: "Bulk", decomp: "Decomp",
+                         intersect: "Bulk ∩ Decomp", contested: "Bulk vs Decomp (contested)",
+                         diff: "Bulk \\ Decomp" };
+  const parts = [layerLabels[series.layer] || series.layer];
+  if (series.layer !== "bulk") {
+    parts.push(series.cells === "ALL" ? "any cell type" : series.cells);
+  }
+  if (series.layer !== "decomp") parts.push(`bulk FDR<${series.fdrBulk}`);
+  if (series.layer !== "bulk") parts.push(`decomp FDR<${series.fdrDecomp}`);
+  if (series.layer === "intersect") parts.push(series.agree ? "sign agree" : "any sign");
+  if (series.sign !== "signed") parts.push(series.sign);
+  return parts.join(" · ");
+}
+
+function _tv2RenderSeriesRow(series, idx) {
+  const cells = _tv2DecompCellTypes();
+  const cellOpts = ['<option value="ALL">any (OR)</option>']
+    .concat(cells.map(c => `<option value="${c}">${c}</option>`)).join("");
+  const layerOpts = [
+    ['bulk', 'bulk'], ['decomp', 'decomp'],
+    ['intersect', 'bulk ∩ decomp (corroborated)'],
+    ['contested', 'bulk ∩ decomp (contested)'],
+    ['diff', 'bulk \\ decomp (bulk-only)'],
+  ].map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
+  const signOpts = [
+    ['signed', 'signed (up/down)'], ['up', 'up only'],
+    ['down', 'down only'], ['either', 'either (total)'],
+  ].map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
+  const cellsDisabled = (series.layer === "bulk");
+  const agreeDisabled = (series.layer !== "intersect");
+  const showBulkFdr = (series.layer !== "decomp");
+  const showDecompFdr = (series.layer !== "bulk");
+  const disParts = [];
+  if (cellsDisabled) disParts.push("cells");
+  if (agreeDisabled) disParts.push("agree");
+  const disAttr = disParts.length ? ` data-disabled="${disParts.join(' ')}"` : '';
+  return `<div class="tv2-row" data-idx="${idx}"${disAttr}>
+    <span class="tv2-label">Series ${idx + 1}</span>
+    <label>Layer <select class="tv2-layer">${layerOpts}</select></label>
+    <label class="tv2-cells">Cells <select class="tv2-cells-sel">${cellOpts}</select></label>
+    <label>Sign <select class="tv2-sign">${signOpts}</select></label>
+    ${showBulkFdr ? `<label>Bulk FDR<input class="tv2-fdr-bulk" type="number" min="0" max="1" step="0.01" style="width:54px;"></label>` : ''}
+    ${showDecompFdr ? `<label>Decomp FDR<input class="tv2-fdr-decomp" type="number" min="0" max="1" step="0.01" style="width:54px;"></label>` : ''}
+    <label class="tv2-agree" title="When on, decomp row must match bulk NES sign to count as corroboration."><input class="tv2-agree-cb" type="checkbox"> sign agree</label>
+    <button class="tv2-rm" title="Remove this series">×</button>
+  </div>`;
+}
+
+function _tv2WireSeriesRow(rowEl, idx) {
+  const s = _tv2State.series[idx];
+  const layerSel = rowEl.querySelector(".tv2-layer");
+  const cellsSel = rowEl.querySelector(".tv2-cells-sel");
+  const signSel = rowEl.querySelector(".tv2-sign");
+  const fdrB = rowEl.querySelector(".tv2-fdr-bulk");
+  const fdrD = rowEl.querySelector(".tv2-fdr-decomp");
+  const agreeCb = rowEl.querySelector(".tv2-agree-cb");
+  const rmBtn = rowEl.querySelector(".tv2-rm");
+  layerSel.value = s.layer;
+  cellsSel.value = s.cells;
+  signSel.value = s.sign;
+  if (fdrB) fdrB.value = s.fdrBulk;
+  if (fdrD) fdrD.value = s.fdrDecomp;
+  agreeCb.checked = !!s.agree;
+  layerSel.addEventListener("change", () => {
+    s.layer = layerSel.value;
+    if (s.layer === "bulk") s.cells = "ALL";
+    _tv2RenderUI(); renderTemporalV2();
+  });
+  cellsSel.addEventListener("change", () => { s.cells = cellsSel.value; renderTemporalV2(); });
+  signSel.addEventListener("change", () => { s.sign = signSel.value; renderTemporalV2(); });
+  if (fdrB) fdrB.addEventListener("change", () => {
+    const v = parseFloat(fdrB.value); if (isFinite(v) && v > 0 && v <= 1) {
+      s.fdrBulk = v; renderTemporalV2();
+    } else { fdrB.value = s.fdrBulk; }
+  });
+  if (fdrD) fdrD.addEventListener("change", () => {
+    const v = parseFloat(fdrD.value); if (isFinite(v) && v > 0 && v <= 1) {
+      s.fdrDecomp = v; renderTemporalV2();
+    } else { fdrD.value = s.fdrDecomp; }
+  });
+  agreeCb.addEventListener("change", () => { s.agree = agreeCb.checked; renderTemporalV2(); });
+  rmBtn.addEventListener("click", () => {
+    _tv2State.series.splice(idx, 1);
+    if (_tv2State.series.length === 0) _tv2State.series.push(_tv2DefaultSeries("bulk"));
+    _tv2RenderUI(); renderTemporalV2();
+  });
+}
+
+function _tv2RenderUI() {
+  const list = document.getElementById("tv2-series-list");
+  if (!list) return;
+  list.innerHTML = _tv2State.series.map((s, i) => _tv2RenderSeriesRow(s, i)).join("");
+  list.querySelectorAll(".tv2-row").forEach((row, i) => _tv2WireSeriesRow(row, i));
+}
+
+function _tv2ApplyPreset(name) {
+  const cells = _tv2DecompCellTypes();
+  if (name === "bulk_only") {
+    _tv2State.series = [_tv2DefaultSeries("bulk")];
+  } else if (name === "bulk_corrob_contest") {
+    const corrob = _tv2DefaultSeries("intersect"); corrob.agree = true;
+    const contest = _tv2DefaultSeries("contested");
+    _tv2State.series = [_tv2DefaultSeries("bulk"), corrob, contest];
+  } else if (name === "bulk_vs_decomp") {
+    _tv2State.series = [_tv2DefaultSeries("bulk"), _tv2DefaultSeries("decomp")];
+  } else if (name === "celltype_sweep") {
+    _tv2State.series = cells.slice(0, Math.min(4, cells.length)).map(c => {
+      const s = _tv2DefaultSeries("decomp"); s.cells = c; return s;
+    });
+    if (_tv2State.series.length === 0) _tv2State.series = [_tv2DefaultSeries("decomp")];
+  }
+  _tv2RenderUI();
+  renderTemporalV2();
+}
+
+function renderTemporalV2() {
+  const el = document.getElementById("tv2-plot");
+  const sub = document.getElementById("tv2-subtitle");
+  if (!el) return;
+  _ensureKinaseIndexes();
+  const series = _tv2State ? _tv2State.series : [];
+  if (!series.length) {
+    Plotly.purge(el);
+    if (sub) sub.textContent = "No series defined. Click + Add series or pick a preset.";
+    return;
+  }
+  const DG = META.diseaseGroups;
+  const TPS = META.timepoints;
+  const traces = [];
+  const layout = {
+    grid: { rows: series.length, columns: 1, pattern: "independent" },
+    margin: { l: 70, r: 20, t: 20, b: 50 },
+    height: Math.max(220, 200 * series.length + 40),
+    barmode: "group", bargap: 0.25,
+    legend: { orientation: "h", y: -0.1 / series.length },
+    annotations: [],
+  };
+  for (let s = 0; s < series.length; s++) {
+    const ser = series[s];
+    const counts = _tv2Counts(ser);
+    const sfx = (s === 0) ? "" : String(s + 1);
+    const xAxis = "x" + sfx, yAxis = "y" + sfx;
+    const showLegend = (s === 0);
+    for (const g of DG) {
+      const color = (META.diseaseColors || {})[g] || "#555";
+      if (ser.sign === "signed") {
+        traces.push({
+          type: "bar", name: g + " up",
+          x: TPS, y: TPS.map(t => counts[g][t].up),
+          marker: { color }, legendgroup: g + "-up",
+          xaxis: xAxis, yaxis: yAxis, showlegend: showLegend,
+          hovertemplate: `[S${s+1}] ${g} up @ %{x}: %{y}<extra></extra>`,
+        });
+        traces.push({
+          type: "bar", name: g + " down",
+          x: TPS, y: TPS.map(t => -counts[g][t].down),
+          marker: { color, opacity: 0.55 }, legendgroup: g + "-down",
+          xaxis: xAxis, yaxis: yAxis, showlegend: showLegend,
+          hovertemplate: `[S${s+1}] ${g} down @ %{x}: %{customdata}<extra></extra>`,
+          customdata: TPS.map(t => counts[g][t].down),
+        });
+      } else {
+        traces.push({
+          type: "bar", name: g,
+          x: TPS, y: TPS.map(t => counts[g][t].total),
+          marker: { color }, legendgroup: g,
+          xaxis: xAxis, yaxis: yAxis, showlegend: showLegend,
+          hovertemplate: `[S${s+1}] ${g} @ %{x}: %{y}<extra></extra>`,
+        });
+      }
+    }
+    layout["xaxis" + sfx] = {
+      title: (s === series.length - 1) ? "Timepoint" : "",
+      anchor: "y" + sfx,
+    };
+    layout["yaxis" + sfx] = {
+      title: "n kinases",
+      zeroline: true,
+      anchor: "x" + sfx,
+    };
+    if (ser.sign === "signed") {
+      layout["yaxis" + sfx].zerolinecolor = "#000";
+      layout["yaxis" + sfx].zerolinewidth = 1;
+    }
+    layout.annotations.push({
+      xref: "paper", yref: "paper",
+      x: 0, xanchor: "left",
+      y: 1 - (s / series.length) - 0.02 / series.length,
+      yanchor: "top",
+      text: `<b>S${s + 1}</b> · ${_tv2SeriesLabel(ser)}`,
+      showarrow: false, font: { size: 11, color: "#37474f" },
+    });
+  }
+  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true });
+  if (sub) {
+    sub.textContent = `${series.length} series · y = unique kinases per (genotype, timepoint) · `
+      + `signed series split up at +y, down at −y · scales independent across rows.`;
+  }
+}
+
+function wireTemporalV2() {
+  _tv2InitState();
+  _tv2RenderUI();
+  document.querySelectorAll("#tv2-presets [data-tv2-preset]").forEach(btn => {
+    btn.addEventListener("click", () => _tv2ApplyPreset(btn.dataset.tv2Preset));
+  });
+  const addBtn = document.getElementById("tv2-add-series");
+  if (addBtn) addBtn.addEventListener("click", () => {
+    _tv2State.series.push(_tv2DefaultSeries("bulk"));
+    _tv2RenderUI(); renderTemporalV2();
+  });
+  const clrBtn = document.getElementById("tv2-clear");
+  if (clrBtn) clrBtn.addEventListener("click", () => {
+    _tv2State.series = [_tv2DefaultSeries("bulk")];
+    _tv2RenderUI(); renderTemporalV2();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -8181,6 +8558,7 @@ function boot() {
   wireSenderMatrixKeyboard();
   wireTemporalControls();
   wireAdditivityControls();
+  wireTemporalV2();
   syncHeaderFromStore();
   syncTabsFromStore();
   applyMetricTooltips();
@@ -8215,6 +8593,7 @@ function boot() {
       if (activeTab === "senders") renderSenderMatrix();
       if (activeTab === "temporal") renderTemporal();
       if (activeTab === "additivity") renderAdditivity();
+      if (activeTab === "temporalv2") renderTemporalV2();
     }
     if (next.selection.kinase !== prev.selection.kinase) {
       syncHeaderFromStore();
@@ -8266,6 +8645,7 @@ function boot() {
         if (activeTab === "senders") renderSenderMatrix();
         if (activeTab === "temporal") renderTemporal();
         if (activeTab === "additivity") renderAdditivity();
+        if (activeTab === "temporalv2") renderTemporalV2();
         if (prev.view.activeTab === "graph" && activeTab !== "graph")
           _destroyCy();
       }
