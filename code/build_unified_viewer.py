@@ -6790,7 +6790,12 @@ async function renderActiveKinaseAuditTab(kinase_id) {
       _renderMeaScorecard("audit-mea-scorecard", leadRow, rawRow, ctx);
       _renderRunningEnrichmentPlot("audit-mea-running", ctx);
       _renderMeaTrajectory("audit-mea-trajectory", kinase_id, ctx);
-      _renderDecompPanel("audit-mea-decomp", kinase_id, ctx, leadRow);
+      try { _renderDecompPanel("audit-mea-decomp", kinase_id, ctx, leadRow); }
+      catch (decompErr) {
+        console.error("decomp panel failed", decompErr);
+        const dh = document.getElementById("audit-mea-decomp");
+        if (dh) dh.innerHTML = `<div class="muted">Decomposition panel failed: ${_escapeHtml(String(decompErr && decompErr.message || decompErr))}</div>`;
+      }
       const cmpRows = _buildMeaComparisonRows(leadRow, rawRow);
       const diag = _diagnoseRawAbsence(ctx, rawRow);
       const diagBanner = diag
@@ -6817,7 +6822,9 @@ async function renderActiveKinaseAuditTab(kinase_id) {
     }
   } catch (e) {
     if (seq !== _kinaseAuditSeq) return;
-    body.innerHTML = `<div class="muted">Audit table load failed: ${_escapeHtml(e.message)}</div>`;
+    console.error("audit tab failed", e);
+    const msg = e && (e.message || e.toString && e.toString()) || String(e);
+    body.innerHTML = `<div class="muted">Audit table load failed: ${_escapeHtml(msg)}</div>`;
   }
 }
 
