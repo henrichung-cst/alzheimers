@@ -1860,8 +1860,6 @@ main#app-main { padding:14px; }
 .attr-verdict-table tr.attr-verdict-row:hover { background:#f8fafc; }
 .attr-verdict-table tr.attr-verdict-selected { background:#e3f2fd; }
 .attr-verdict-table tr.attr-verdict-selected:hover { background:#dbeafe; }
-.attr-verdict-table tr.attr-verdict-dim td { color:#94a3b8; background:#fafafa; }
-.attr-verdict-table tr.attr-verdict-dim.attr-verdict-selected td { background:#e3f2fd; color:#475569; }
 .attr-verdict-toggle { padding:6px 0 0; font-size:11px; }
 .attr-verdict-toggle label { cursor:pointer; user-select:none; }
 .attr-explainer { margin-top:10px; padding:8px 12px; background:#f8fafc; border:1px solid var(--border);
@@ -6301,7 +6299,6 @@ function _renderAttributionVerdict(hostId, ctx) {
   const _K = PAYLOAD.kinases;
   const _bulkNes = (_K && _K["NES_" + ctx.contrast]) ? _K["NES_" + ctx.contrast][ctx.kinase_id] : null;
   const _bulkFdr = (_K && _K["FDR_" + ctx.contrast]) ? _K["FDR_" + ctx.contrast][ctx.kinase_id] : null;
-  const _bulkSig = _bulkFdr != null && isFinite(_bulkFdr) && _bulkFdr < 0.25;
   for (const r of rows) {
     const dk = `${ctx.kinase_id}|${r.contrast_id}|${r.cell_type}`;
     const d = _decompByKey ? _decompByKey.get(dk) : null;
@@ -6341,12 +6338,9 @@ function _renderAttributionVerdict(hostId, ctx) {
       ? `<td class="attr-num attr-empty">—</td>`
       : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(r.song_lfc)}">${num(r.song_lfc, 3)}</td>`;
     const songPvalSig = r.song_pval != null && isFinite(r.song_pval) && r.song_pval < 0.05;
-    const songPvalTip = (r.song_fdr != null && isFinite(r.song_fdr))
-      ? `BH FDR within (cell type × contrast) = ${num(r.song_fdr, 3)} — saturated at this n; flag uses uncorrected p only.`
-      : "";
     const songPvalCell = r.song_pval == null || !isFinite(r.song_pval)
       ? `<td class="attr-num attr-empty">—</td>`
-      : `<td class="attr-num"${songPvalSig ? ' style="font-weight:600"' : ''}${songPvalTip ? ` title="${_escapeHtml(songPvalTip)}"` : ''}>${num(r.song_pval, 3)}</td>`;
+      : `<td class="attr-num"${songPvalSig ? ' style="font-weight:600"' : ''}>${num(r.song_pval, 3)}</td>`;
     const decompNesCell = r.decomp_nes == null || !isFinite(r.decomp_nes)
       ? `<td class="attr-num attr-empty">—</td>`
       : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(r.decomp_nes)}">${num(r.decomp_nes, 2)}</td>`;
@@ -6376,11 +6370,10 @@ function _renderAttributionVerdict(hostId, ctx) {
     const expBadge = binFlag
       ? ""
       : `<span class="attr-badge attr-badge-warn" title="Mean log2 expression < 1 OR fewer than 10% of cells detect the gene in this cell type. The enrichment score may be elevated because the gene is barely expressed anywhere.">low expr</span>`;
-    const dimClass = !binFlag ? " attr-verdict-dim" : "";
     const _sbk = (PAYLOAD.subclass_breakdown || {})[String(ctx.kinase_id)] || {};
     const _sbTip = _sbk[r.cell_type] || "";
     const _sbAttr = _sbTip ? ` title="WMB subclass breakdown: ${_escapeHtml(_sbTip)}"` : "";
-    return `<tr data-cell-type="${_escapeHtml(r.cell_type)}" class="attr-verdict-row${i === 0 ? ' attr-verdict-selected' : ''}${dimClass}">` +
+    return `<tr data-cell-type="${_escapeHtml(r.cell_type)}" class="attr-verdict-row${i === 0 ? ' attr-verdict-selected' : ''}">` +
       `<td class="attr-celltype"${_sbAttr}>${_escapeHtml(r.cell_type)}${_sbTip ? ' <span class="attr-subclass-marker" aria-hidden="true">ⓘ</span>' : ''} ${expBadge}</td>` +
       `<td><span class="${_attrConfidenceClass(r.combined_confidence)}">${_escapeHtml(r.combined_confidence || '')}</span></td>` +
       `<td class="attr-num">${num(r.wmb_specificity, 3)}</td>` +
@@ -6405,7 +6398,7 @@ function _renderAttributionVerdict(hostId, ctx) {
       `<thead><tr>${headCells}</tr></thead><tbody>${tbody}</tbody>` +
     `</table>` +
     (hiddenCount > 0
-      ? `<div class="attr-verdict-toggle"><label><input type="checkbox" id="${showAllId}"${showAll ? " checked" : ""}> Show all 34 WMB classes <span class="muted">(${hiddenCount} hidden — none-confidence: WMB plausibility but no concordance signal)</span></label></div>`
+      ? `<div class="attr-verdict-toggle"><label><input type="checkbox" id="${showAllId}"${showAll ? " checked" : ""}> Show all 34 WMB classes <span class="muted">(${hiddenCount} hidden — low/none confidence)</span></label></div>`
       : (showAll && rows.length > 0
         ? `<div class="attr-verdict-toggle"><label><input type="checkbox" id="${showAllId}" checked> Showing all cell types</label></div>`
         : "")) +
@@ -6426,7 +6419,7 @@ function _renderAttributionVerdict(hostId, ctx) {
         `<li><strong><span class="badge lo">low</span></strong> — concordance is positive but the gene isn't expression-specific in WMB and no reference LFC clears the magnitude bar.</li>` +
         `<li><strong>none</strong> — concordance ≤ 0 (signs disagree). Row is excluded from <code>unified_attribution.csv</code> entirely.</li>` +
       `</ul>` +
-      `<p><strong>Higher score does not imply higher tier.</strong> A row with strong magnitudes but no within-cohort Song evidence stays at moderate regardless of score; a row with a modest score but Song support + WMB specificity above 0.083 reaches high. Read tier as evidence <em>type</em>, score as evidence <em>weight</em>.</p>` +
+      `<p><strong>Higher score does not imply higher tier.</strong> A row with strong magnitudes but no within-cohort Song evidence stays at moderate regardless of score; a row with a modest score but Song support + WMB specificity ≥ 0.059 reaches high. Read tier as evidence <em>type</em>, score as evidence <em>weight</em>.</p>` +
       `<p><strong>Combined score</strong> = <code>effective_concordance × (0.5 + wmb_specificity)</code> where <code>effective_concordance = sign(NES) × (3·song_lfc + 1·sea_ad_lfc) / 4</code>. Continuous; used to rank cell types within a kinase (tie-break within tier) and to weight kinase support in the Incytr cell–cell integration.</p>` +
       `</div></details>`;
   host.querySelectorAll("tr.attr-verdict-row").forEach(tr => tr.addEventListener("click", () => {
