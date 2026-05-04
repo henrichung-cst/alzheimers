@@ -309,6 +309,15 @@ def step_concordance() -> None:
     pb = pd.read_csv(PSEUDOBULK_FILE)
     gene_cols = [c for c in pb.columns if c not in ("sample", "cell_type")]
 
+    # Kinase-gene universe for FDR correction. snRNA OLS is computed for every
+    # detected gene (per-gene pvals are independent), but the FDR is corrected
+    # over the kinase subset only — that is the universe attribution actually
+    # consumes, and it keeps the BH q-values interpretable instead of saturated
+    # by ~13 K transcriptome-wide tests.
+    kinase_map = pd.read_csv(config.MAPPING_CACHE_FILE)
+    kinase_genes = set(kinase_map["gene_symbol"].dropna().astype(str).str.upper())
+    print(f"  Kinase-gene universe (FDR scope): {len(kinase_genes)} symbols")
+
     pb["sex"] = pb["sample"].str.split("_").str[1]
     pb["timepoint"] = pb["sample"].str.split("_").str[2]
     pb["genotype"] = pb["sample"].str.split("_").str[3]
@@ -415,11 +424,16 @@ def step_concordance() -> None:
               f"sig(p<.05) per contrast: {sig_counts}")
 
     df = pd.DataFrame(all_rows)
+    df["is_kinase"] = df["gene_symbol"].astype(str).str.upper().isin(kinase_genes)
 
-    # BH FDR correction per (cell_type, contrast)
-    print("\n  Applying BH FDR correction per (cell_type, contrast) ...")
+    # BH FDR correction per (cell_type, contrast), restricted to kinase genes.
+    # Non-kinase rows keep song_fdr = NaN; the viewer / attribution only joins
+    # on kinase symbols anyway.
+    print("\n  Applying BH FDR correction per (cell_type, contrast) over "
+          "kinase universe ...")
     df["song_fdr"] = np.nan
-    for (_ct, _cn), idx in df.groupby(["cell_type", "contrast"]).groups.items():
+    kin_df = df[df["is_kinase"]]
+    for (_ct, _cn), idx in kin_df.groupby(["cell_type", "contrast"]).groups.items():
         if len(idx) > 0:
             _, fdr_vals, _, _ = multipletests(
                 df.loc[idx, "song_pval"].values, alpha=0.05, method="fdr_bh",
@@ -430,9 +444,14 @@ def step_concordance() -> None:
     df.to_csv(CONCORDANCE_FILE, index=False)
     print(f"\n  Output: {len(df)} (gene × cell_type × contrast) rows → "
           f"{CONCORDANCE_FILE}")
-    n_sig = (df["song_fdr"] < 0.05).sum()
-    print(f"  Significant at FDR < 0.05: {n_sig}/{len(df)} "
-          f"({n_sig / max(len(df),1) * 100:.1f}%)")
+    n_kin = int(df["is_kinase"].sum())
+    n_sig = int((df["song_fdr"] < 0.05).sum())
+    n_sig_q25 = int((df["song_fdr"] < 0.25).sum())
+    print(f"  Kinase rows: {n_kin}/{len(df)}")
+    print(f"  Kinase-universe FDR < 0.05: {n_sig}/{n_kin} "
+          f"({n_sig / max(n_kin,1) * 100:.1f}%)")
+    print(f"  Kinase-universe FDR < 0.25: {n_sig_q25}/{n_kin} "
+          f"({n_sig_q25 / max(n_kin,1) * 100:.1f}%)")
 
 
 # ---------------------------------------------------------------------------
