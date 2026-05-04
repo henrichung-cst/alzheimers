@@ -2409,6 +2409,9 @@ main#app-main { padding:14px; }
         <span style="flex:1;"></span>
         <button class="chip" id="tv2-add-series" title="Add a new series row">+ Add series</button>
         <button class="chip" id="tv2-clear" title="Remove all series">Clear</button>
+        <label class="muted" style="margin-left:8px;" title="When on, every subplot uses the same y-axis range so heights are visually comparable across series.">
+          <input type="checkbox" id="tv2-share-y"> shared y-axis
+        </label>
       </div>
       <div id="tv2-series-list" style="display:flex; flex-direction:column; gap:4px; margin:8px 0;"></div>
       <div class="muted" id="tv2-subtitle" style="margin:4px 0 8px 0;"></div>
@@ -5015,7 +5018,7 @@ function _tv2DefaultSeries(layer) {
 
 function _tv2InitState() {
   if (_tv2State) return;
-  _tv2State = { series: [_tv2DefaultSeries("bulk")] };
+  _tv2State = { series: [_tv2DefaultSeries("bulk")], shareY: false };
 }
 
 function _tv2Eval(series, kid, contrastIdx) {
@@ -5235,9 +5238,30 @@ function renderTemporalV2() {
     legend: { orientation: "h", y: -0.1 / series.length },
     annotations: [],
   };
+  // First pass: compute counts per series and (if shared y) the global range.
+  const allCounts = series.map(ser => _tv2Counts(ser));
+  let sharedRange = null;
+  if (_tv2State.shareY) {
+    let lo = 0, hi = 0;
+    for (let s = 0; s < series.length; s++) {
+      const ser = series[s];
+      const counts = allCounts[s];
+      for (const g of DG) for (const t of TPS) {
+        const cell = counts[g][t];
+        if (ser.sign === "signed") {
+          if (cell.up > hi) hi = cell.up;
+          if (-cell.down < lo) lo = -cell.down;
+        } else {
+          if (cell.total > hi) hi = cell.total;
+        }
+      }
+    }
+    const pad = Math.max(1, Math.ceil(Math.max(hi, -lo) * 0.05));
+    sharedRange = [lo - (lo < 0 ? pad : 0), hi + pad];
+  }
   for (let s = 0; s < series.length; s++) {
     const ser = series[s];
-    const counts = _tv2Counts(ser);
+    const counts = allCounts[s];
     const sfx = (s === 0) ? "" : String(s + 1);
     const xAxis = "x" + sfx, yAxis = "y" + sfx;
     const showLegend = (s === 0);
@@ -5285,6 +5309,7 @@ function renderTemporalV2() {
       layout["yaxis" + sfx].zerolinecolor = "#000";
       layout["yaxis" + sfx].zerolinewidth = 1;
     }
+    if (sharedRange) layout["yaxis" + sfx].range = sharedRange;
     layout.annotations.push({
       xref: "paper", yref: "paper",
       x: 0, xanchor: "left",
@@ -5317,6 +5342,14 @@ function wireTemporalV2() {
     _tv2State.series = [_tv2DefaultSeries("bulk")];
     _tv2RenderUI(); renderTemporalV2();
   });
+  const shareCb = document.getElementById("tv2-share-y");
+  if (shareCb) {
+    shareCb.checked = !!_tv2State.shareY;
+    shareCb.addEventListener("change", () => {
+      _tv2State.shareY = shareCb.checked;
+      renderTemporalV2();
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
