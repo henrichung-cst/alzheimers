@@ -1800,7 +1800,9 @@ main#app-main { padding:14px; }
   border-left:1px solid var(--border); border-right:1px solid var(--border);
   margin:0 4px; transition:background 0.15s; }
 .kinase-audit-layout > .ka-splitter:hover, .kinase-audit-layout > .ka-splitter.dragging { background:#cfd8dc; }
-.kinase-audit-layout > .detail-card { flex:1 1 auto; min-width:0; position:relative; top:0; max-height:none; }
+.kinase-audit-layout > .detail-card { flex:1 1 auto; min-width:0;
+  position:sticky; top:8px; align-self:flex-start;
+  max-height:calc(100vh - 24px); overflow-y:auto; overflow-x:hidden; }
 .kinase-workbench-header { display:flex; align-items:flex-start; justify-content:space-between;
   gap:12px; padding-bottom:10px; border-bottom:1px solid var(--border); margin-bottom:10px; }
 .kinase-workbench-title h3 { margin:0 0 3px; }
