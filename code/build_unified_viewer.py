@@ -5404,7 +5404,10 @@ function renderTemporalV2() {
     const ser = (_tv2State.series || [])[meta.s] || {};
     const label = `Temporal v2 · ${_tv2SeriesLabel(ser)} · ${meta.g}_${p.x}` +
                   (meta.sign === "total" ? "" : ` · ${meta.sign}`);
-    _openKinaseDeepDiveWithWhitelist(ids, label);
+    _openKinaseDeepDiveWithWhitelist(ids, label, {
+      genotype: meta.g, timepoint: p.x,
+      cells: ser.cells, attrTier: ser.attrTier,
+    });
   });
   if (sub) {
     sub.textContent = `${series.length} series · y = unique kinases per (genotype, timepoint) · `
@@ -5413,13 +5416,36 @@ function renderTemporalV2() {
   }
 }
 
-function _openKinaseDeepDiveWithWhitelist(kinaseIds, sourceLabel) {
+function _openKinaseDeepDiveWithWhitelist(kinaseIds, sourceLabel, ctx) {
   if (typeof KinaseFilter === "undefined" || !KinaseFilter.setWhitelist) {
     console.warn("KinaseFilter whitelist not available");
     return;
   }
+  // Prefill the filter dropdowns from the bar's context so the user can see
+  // and edit the implied scope. The whitelist is stored separately and ANDs
+  // with these filters when "Stack with filters" is toggled on; otherwise
+  // the dropdowns are visible-but-inactive (the whitelist takes precedence).
+  if (ctx) {
+    const patch = {
+      disease:    ctx.genotype  ? [ctx.genotype]  : [],
+      timepoint:  ctx.timepoint ? [ctx.timepoint] : [],
+      celltype:   (ctx.cells && ctx.cells !== "ALL") ? [ctx.cells] : [],
+      confidence: ctx.attrTier || "",
+      // n_sig isn't part of the bar context; leave whatever the user had.
+    };
+    KinaseFilter.set(patch);
+  }
+  // New whitelists default to bypass mode (stack=false) so the user sees the
+  // full clicked set first, then opts into stacking with the toggle.
   KinaseFilter.setWhitelist(kinaseIds.slice(), sourceLabel);
+  KinaseFilter.setWhitelistStack(false);
   Store.dispatch({type:"SET_VIEW", key:"activeTab", value:"kinase"});
+  // Push the prefilled state into the visible toolbar inputs after the tab
+  // has been swapped in. Defer to next frame because syncTabsFromStore runs
+  // synchronously inside the dispatch handler and may unhide the panel.
+  if (typeof _syncKinaseFilterUI === "function") {
+    setTimeout(_syncKinaseFilterUI, 0);
+  }
 }
 
 function wireTemporalV2() {
@@ -5486,13 +5512,15 @@ window.KinaseFilter = (function() {
   // and shows exactly the listed kinase IDs.
   let _whitelist = null;       // null | Set<number>
   let _whitelistLabel = "";    // human-readable source description
+  let _whitelistStack = false; // false = whitelist bypass; true = AND with dropdowns
   function _save() {
     try { localStorage.setItem(_KEY, JSON.stringify(_state)); } catch(e) {}
   }
   return {
     get: function(k) { return k ? _state[k] : Object.assign({}, _state); },
     getWhitelist: function() {
-      return _whitelist ? { ids: _whitelist, label: _whitelistLabel } : null;
+      return _whitelist ? { ids: _whitelist, label: _whitelistLabel,
+                            stack: _whitelistStack } : null;
     },
     setWhitelist: function(ids, label) {
       _whitelist = new Set(ids);
@@ -5501,7 +5529,13 @@ window.KinaseFilter = (function() {
     },
     clearWhitelist: function() {
       if (_whitelist === null) return;
-      _whitelist = null; _whitelistLabel = "";
+      _whitelist = null; _whitelistLabel = ""; _whitelistStack = false;
+      for (const fn of _subs) fn();
+    },
+    setWhitelistStack: function(on) {
+      const v = !!on;
+      if (_whitelistStack === v) return;
+      _whitelistStack = v;
       for (const fn of _subs) fn();
     },
     set: function(patch) {
@@ -6082,14 +6116,27 @@ function _renderKinaseWhitelistBanner(wl) {
     banner.id = "ke-whitelist-banner";
     banner.style.cssText = "background:#fff3cd; border:1px solid #f0ad4e; "
       + "color:#8a6d3b; padding:6px 10px; font-size:11px; border-radius:3px; "
-      + "margin-bottom:6px; display:flex; align-items:center; gap:10px;";
+      + "margin-bottom:6px; display:flex; align-items:center; gap:10px; "
+      + "flex-wrap:wrap;";
     wrap.parentNode.insertBefore(banner, wrap);
   }
   const n = wl.ids.size;
   const lbl = wl.label || "external whitelist";
-  banner.innerHTML = `<span><b>Filtered to ${n} kinases</b> from ${_escapeHtml(lbl)}. `
-    + `Other filters (disease/timepoint/cell type/confidence) are bypassed.</span>`
+  const stackHint = wl.stack
+    ? "Dropdowns AND with this set — turning them off broadens the result."
+    : "Dropdowns are pre-filled with the click context but inactive. Toggle stack to apply them.";
+  banner.innerHTML =
+    `<span><b>Filtered to ${n} kinases</b> from ${_escapeHtml(lbl)}.</span>`
+    + `<label style="display:flex; gap:4px; align-items:center;">`
+    +   `<input type="checkbox" id="ke-whitelist-stack"${wl.stack ? " checked" : ""}> stack with filters`
+    + `</label>`
+    + `<span class="muted" style="flex:1; min-width:240px;">${stackHint}</span>`
     + `<button id="ke-whitelist-clear" class="chip">Clear filter</button>`;
+  const stackCb = document.getElementById("ke-whitelist-stack");
+  if (stackCb) stackCb.onchange = () => {
+    KinaseFilter.setWhitelistStack(stackCb.checked);
+    renderKinaseExplorer();
+  };
   const btn = document.getElementById("ke-whitelist-clear");
   if (btn) btn.onclick = () => {
     KinaseFilter.clearWhitelist();
@@ -6122,15 +6169,18 @@ function renderKinaseExplorer() {
   const gridActive = dSet.size > 0 || tSet.size > 0 || cSet.size > 0 || !!kf.confidence;
   const nSigMin = Math.max(0, parseInt(kf.nSigMin, 10) || 0);
 
-  // Whitelist mode (cross-tab handoff) bypasses every gate except itself, so
-  // decomp-only and otherwise-attribution-less kinases still appear. Banner
-  // makes the override explicit.
+  // Whitelist mode (cross-tab handoff) has two sub-modes:
+  //   stack=false (default): whitelist bypasses every other gate. Decomp-only
+  //     kinases that would normally fail the attribution grid still appear.
+  //   stack=true: whitelist ANDs with the normal filter chain. Useful for
+  //     narrowing within a click-through set, but the attribution grid will
+  //     drop kinases that lack attribution rows (interpretable empties).
   const visible = [];
   for (const r of _keRows) {
     if (wl) {
       if (!wl.ids.has(r.id)) continue;
-      visible.push(r);
-      continue;
+      if (!wl.stack) { visible.push(r); continue; }
+      // Stack mode: fall through to the normal predicate chain below.
     }
     // Text search
     if (q && !(r.name.toLowerCase().includes(q) ||
@@ -7738,6 +7788,10 @@ async function renderKinaseBackbones(kinase_id) {
   container.innerHTML = parts.join("");
 }
 
+// Module-level handle so _syncKinaseFilterUI can re-render multi-selects from
+// outside wireKinaseTable's closure (e.g. after a cross-tab handoff).
+let _kineRenderMultiselect = null;
+
 function wireKinaseTable() {
   const tbl = document.getElementById("ke-table");
   if (!tbl) return;
@@ -7862,6 +7916,7 @@ function wireKinaseTable() {
   }
 
   ["disease","timepoint","celltype"].forEach(_renderMultiselect);
+  _kineRenderMultiselect = _renderMultiselect;
 
   // Confidence (single, ordinal threshold).
   const confSel = document.getElementById("ke-filter-confidence");
@@ -7889,14 +7944,26 @@ function wireKinaseTable() {
   if (resetBtn) {
     resetBtn.addEventListener("click", () => {
       KinaseFilter.reset();
-      const inp = document.getElementById("ke-search");
-      if (inp) inp.value = KinaseFilter.get("search");
-      ["disease","timepoint","celltype"].forEach(_renderMultiselect);
-      if (confSel) confSel.value = KinaseFilter.get("confidence") || "";
-      if (nsigInp) nsigInp.value = String(KinaseFilter.get("nSigMin") || 0);
+      _syncKinaseFilterUI();
       renderKinaseExplorer();
     });
   }
+}
+
+// Re-pushes the persisted KinaseFilter state into all the toolbar inputs.
+// Used after programmatic mutations (e.g. cross-tab handoff prefilling
+// disease/timepoint from a Temporal v2 click) so the dropdowns reflect the
+// new state without a full page rebuild.
+function _syncKinaseFilterUI() {
+  const inp = document.getElementById("ke-search");
+  if (inp) inp.value = KinaseFilter.get("search") || "";
+  if (_kineRenderMultiselect) {
+    ["disease","timepoint","celltype"].forEach(k => _kineRenderMultiselect(k));
+  }
+  const confSel = document.getElementById("ke-filter-confidence");
+  if (confSel) confSel.value = KinaseFilter.get("confidence") || "";
+  const nsigInp = document.getElementById("ke-filter-nsig-min");
+  if (nsigInp) nsigInp.value = String(KinaseFilter.get("nSigMin") || 0);
 }
 
 // ---------------------------------------------------------------------------
