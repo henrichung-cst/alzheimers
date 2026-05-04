@@ -1744,8 +1744,6 @@ main#app-main { padding:14px; }
 .attr-verdict-table tr.attr-verdict-dim.attr-verdict-selected td { background:#e3f2fd; color:#475569; }
 .attr-verdict-toggle { padding:6px 0 0; font-size:11px; }
 .attr-verdict-toggle label { cursor:pointer; user-select:none; }
-.attr-verdict-banner { padding:6px 10px; margin:0 0 6px; font-size:11px;
-  background:#fef9c3; border:1px solid #fde68a; border-radius:4px; color:#713f12; }
 .attr-explainer { margin-top:10px; padding:8px 12px; background:#f8fafc; border:1px solid var(--border);
   border-radius:6px; font-size:12px; line-height:1.5; }
 .attr-explainer summary { cursor:pointer; font-weight:600; color:#334155; padding:2px 0;
@@ -6035,16 +6033,11 @@ function _renderAttributionVerdict(hostId, ctx) {
     || ATTR_VERDICT_COLS[ATTR_VERDICT_COLS.length - 1];
   rows.sort((a, b) => _attrVerdictCmp(a, b, sortCol.key, sortCol.type, sortAsc));
   const showAllId = `${hostId}-show-all`;
-  // Auto-fall-through: when nothing would render at the default tier (the
-  // kinase has rows but they are all none-confidence — typical for kinases
-  // whose bulk MEA missed FDR<0.25 in this contrast), expand to show-all so
-  // the reader still sees the per-cell-type evidence rather than an empty table.
-  const userShowAll = !!(host.dataset.showAll === "1");
-  const tierVisible = rows.filter(r => r.combined_confidence === "high"
-                                    || r.combined_confidence === "moderate");
-  const autoExpand = !userShowAll && tierVisible.length === 0 && rows.length > 0;
-  const showAll = userShowAll || autoExpand;
-  const visibleRows = showAll ? rows : tierVisible;
+  const showAll = !!(host.dataset.showAll === "1");
+  const visibleRows = showAll
+    ? rows
+    : rows.filter(r => r.combined_confidence === "high"
+                    || r.combined_confidence === "moderate");
   const hiddenCount = rows.length - visibleRows.length;
   const num = (v, d=3) => (v == null || !isFinite(v)) ? "" : Number(v).toFixed(d);
   const tbody = visibleRows.map((r, i) => {
@@ -6114,11 +6107,7 @@ function _renderAttributionVerdict(hostId, ctx) {
     const title = c.title ? ` title="${_escapeHtml(c.title)}"` : "";
     return `<th class="attr-verdict-th" data-sort-key="${c.key}"${title}>${c.label}${arrow}</th>`;
   }).join("");
-  const autoBanner = autoExpand
-    ? `<div class="attr-verdict-banner muted">No high/moderate-confidence rows in this contrast — bulk MEA did not reach FDR &lt; 0.25 here. Showing all ${rows.length} per-cell-type rows for transparency.</div>`
-    : "";
   host.innerHTML =
-    autoBanner +
     `<table class="attr-verdict-table">` +
       `<thead><tr>${headCells}</tr></thead><tbody>${tbody}</tbody>` +
     `</table>` +
