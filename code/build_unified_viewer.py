@@ -5312,8 +5312,10 @@ function renderKinaseExplorer() {
       if (scopedCtxIds.size > 0 && scopedSig === 0) continue;
     }
     // Attribution grid: cross-product AND coverage on disease × timepoint × celltype,
-    // with confidence as ordinal threshold (≥).
-    if (gridActive && !kinaseQualifies(r.id, kf)) continue;
+    // with confidence as ordinal threshold (≥). Skipped when text search is
+    // active so a targeted lookup (e.g. "EGFR") still surfaces the kinase even
+    // if persisted localStorage filters would otherwise disqualify it.
+    if (!q && gridActive && !kinaseQualifies(r.id, kf)) continue;
     visible.push(r);
   }
 

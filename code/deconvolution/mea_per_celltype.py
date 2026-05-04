@@ -16,12 +16,6 @@ import config
 from deconvolution import paths
 
 
-_TRACK_CFG = {
-    "st": {"kin_type": "ser_thr", "label": "Ser/Thr"},
-    "py": {"kin_type": "tyrosine", "label": "Tyr"},
-}
-
-
 def _winsorize(lfc: np.ndarray, pct: float):
     lo = np.nanpercentile(lfc, pct)
     hi = np.nanpercentile(lfc, 100 - pct)
@@ -42,7 +36,7 @@ def run_mea(site_ols: pd.DataFrame, track: str,
     """
     from kinase_library import RankedPhosData
 
-    track_cfg = _TRACK_CFG[track]
+    track_cfg = config.PHOSPHO_TRACKS[track]
     n_perm = permutation_num if permutation_num is not None else config.MEA_PERMUTATION_NUM
 
     site_ols = site_ols[site_ols["track"] == track]
