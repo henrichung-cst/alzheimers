@@ -80,7 +80,7 @@ def run_mea(site_ols: pd.DataFrame, track: str,
             result = rpd.mea(
                 kin_type=track_cfg["kin_type"],
                 kl_method=config.KL_METHOD,
-                kl_thresh=config.KL_THRESH,
+                kl_thresh=track_cfg["kl_thresh"],
                 permutation_num=n_perm,
                 seed=config.MEA_SEED,
             )

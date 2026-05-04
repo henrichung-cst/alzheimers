@@ -40,6 +40,8 @@ PHOSPHO_TRACKS = {
         "residue": "ST",              # central motif residue must be S or T
         "column_prefix": "p",         # p1_126c_sn_sum
         "site_id_source": "column",   # site_id column already present
+        "kl_thresh": 15,              # kinase-library default; within-family
+                                       # substrate Jaccard ~0.034 on this prerank
     },
     "py": {
         "name": "py",
@@ -51,6 +53,10 @@ PHOSPHO_TRACKS = {
         "residue": "Y",
         "column_prefix": "plex",      # plex1_126_sn_sum  → renamed to p1_126_sn_sum on load
         "site_id_source": "synthesize",  # site_id := f"{protein_id}_{site_position}"
+        "kl_thresh": 7,               # tightened from default 15 to bring
+                                       # within-family Jaccard from 0.244 to
+                                       # 0.122; controls Tyr-family co-firing
+                                       # (see docs/foundation/multiple_testing.md)
     },
 }
 SONG_TRANSCRIPTOMICS_DIR = os.path.join(SONG_WORKSPACE_DIR, "transcriptomics")
@@ -63,7 +69,7 @@ SONG_ANALYSIS_CACHE_DIR = os.path.join(SONG_WORKSPACE_DIR, "analysis_cache")
 EXTERNAL_DATA_DIR = os.path.join(REPO_ROOT, "data", "external")
 
 KL_METHOD = "percentile_rank"
-KL_THRESH = 15
+KL_THRESH = 15  # legacy ST default; tracks read kl_thresh from PHOSPHO_TRACKS
 MEA_FDR_THRESH = 0.25           # standard GSEA FDR threshold
 MEA_PERMUTATION_NUM = 1000      # GSEApy prerank permutations
 MEA_SEED = 112123               # GSEApy default seed

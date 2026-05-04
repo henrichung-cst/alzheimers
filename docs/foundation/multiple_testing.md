@@ -69,6 +69,44 @@ stringent gate.
   (`_storey_qvalue`); `data_ingest.py` has its own inlined Storey for
   marker assessment. Both use the same standard π₀ estimator at λ = 0.5–0.95.
 
+## Track-specific KL_THRESH (Ser/Thr vs Tyr MEA)
+
+Adjacent to MTC: substrate-set membership for MEA is governed by `KL_THRESH`,
+the percentile-rank cutoff for declaring a phosphosite a kinase's substrate.
+This is set **per track**, not globally:
+
+- Ser/Thr (`st`): `kl_thresh = 15` (kinase-library default)
+- Tyrosine  (`py`): `kl_thresh = 7` (tightened)
+
+The thresholds are different because the Ser/Thr and tyrosine kinomes have
+different intrinsic specificity. At the kinase-library default of 15, the
+median pairwise within-family Jaccard overlap of substrate sets is 0.034 on
+ST (kinase-specific signal) but 0.244 on Tyr (family-redundant signal —
+when one Tyr kinase moves, its family-mates move with it because they
+share motif features). Lowering the Tyr threshold to 7 brings Tyr's
+within-family overlap to 0.122, into the same interpretability regime as
+ST without making substrate sets too small for stable GSEA enrichment
+(median 84 substrates per kinase at thr=7).
+
+We did **not** raise the Ser/Thr threshold to equalize Jaccard exactly,
+because that would loosen ST substrate sets and introduce family co-firing
+on the track that does not currently have it. The goal is per-kinase NES
+interpretability on each track, not equalized Jaccard between tracks; MEA
+runs separately per track and never compares ST and Tyr NES directly.
+
+The asymmetry reflects published kinome biology: the tyrosine kinome
+(~90 kinases, recently expanded, structurally tighter) is more conserved
+within families than the Ser/Thr kinome (~390 kinases, ancient, more
+diverse), and Tyr-kinase substrate recognition relies on features
+(SH2 docking, +3 hydrophobic) more correlated across families than the
+flanking-residue signatures Ser/Thr kinases use.
+
+Implementation: `code/config.py:PHOSPHO_TRACKS[track]["kl_thresh"]`.
+Read by `code/kinase_attribution.py` (`step_enrich`) and
+`code/deconvolution/mea_per_celltype.py`. The legacy `config.KL_THRESH`
+constant is retained for backwards-compat but should not be added to
+new code paths.
+
 ## Things this policy does **not** do
 
 - It does not change MEA NES values or pvals (BH was already in use).

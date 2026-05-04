@@ -865,7 +865,7 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
         result = rpd.mea(
             kin_type=track_cfg["kin_type"],
             kl_method=config.KL_METHOD,
-            kl_thresh=config.KL_THRESH,
+            kl_thresh=track_cfg["kl_thresh"],
             permutation_num=config.MEA_PERMUTATION_NUM,
             seed=config.MEA_SEED,
         )
@@ -880,12 +880,12 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
         print(f"  {contrast_name}: {len(er)} kinases tested, "
               f"{n_sig} significant (FDR<{config.MEA_FDR_THRESH})")
 
-        # Substrate sets: kinase -> motifs that score past KL_THRESH against the
+        # Substrate sets: kinase -> motifs that score past kl_thresh against the
         # contrast's prerank universe. This is what GSEA actually walks for each
         # kinase; persisting it lets the unified viewer show kinase-conditional
         # MEA preparation without back-applying the leading-edge result.
         kin_sub_sets = create_kin_sub_sets(
-            rpd.data_kl_values, threshold=config.KL_THRESH,
+            rpd.data_kl_values, threshold=track_cfg["kl_thresh"],
             comp_direction=kl_comp_direction,
         )
         for kinase_name, motifs in kin_sub_sets.items():
