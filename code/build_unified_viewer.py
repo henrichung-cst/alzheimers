@@ -1979,6 +1979,13 @@ main#app-main { padding:14px; }
 .nes-profile-col-labels { display:flex; gap:1px; padding:0 1px; font-size:9px;
   color:#78909c; line-height:1; margin-bottom:1px; justify-content:space-around; }
 .nes-profile-wrap { display:inline-flex; align-items:center; gap:2px; }
+.agreement-profile-cell { display:inline-grid; grid-template-columns:repeat(3, 12px);
+  grid-auto-rows:12px; gap:1px; padding:1px; background:#eceff1;
+  border:1px solid #cfd8dc; border-radius:2px; vertical-align:middle; }
+.agreement-profile-cell .apc { width:12px; height:12px; box-sizing:border-box; background:#fff; }
+.agreement-profile-cell .apc.agree { background:#43a047; }
+.agreement-profile-cell .apc.disagree { background:#ef6c00; }
+.agreement-profile-wrap { display:inline-flex; align-items:center; gap:2px; }
 .ke-table-wrap { max-height:70vh; overflow-y:auto; }
 .data-table { border-collapse:collapse; font-size:12px; width:100%; }
 .data-table th, .data-table td { padding:4px 8px; border-bottom:1px solid var(--border);
@@ -2151,6 +2158,7 @@ main#app-main { padding:14px; }
               <th data-col="name" data-metric="kinaseName" title="Display label: Kinase&#10;Raw column: name&#10;Definition: Kinase identifier from the MEA / integration tables.">Kinase</th>
               <th data-col="gene_symbol" data-metric="kinaseGene" title="Display label: Gene&#10;Raw column: gene_symbol&#10;Definition: Gene symbol associated with the kinase.">Gene</th>
               <th data-col="nes_profile" data-metric="nesProfile" title="NES profile across 9 contrasts (3 diseases × 3 timepoints). Color = direction (red up, blue down), saturation = |NES|, black outline = FDR < threshold. Click to sort by max |NES| in scope.">NES Profile</th>
+              <th data-col="agreement_profile" data-metric="agreementProfile" title="Bulk-vs-decomp agreement across 9 contrasts. Green = both pipelines significant, same direction; orange = disagreement (decomp_only / bulk_only / mixed / pure disagreement); empty = neither significant. Click to sort by count of disagreement contrasts (in scope).">Agreement</th>
               <th data-col="peak_NES" data-metric="peakNes" title="Peak |NES| — max absolute NES across the active disease/timepoint scope (or all 9 contrasts if no scope). Click to sort.">|NES|</th>
               <th data-col="n_sig" data-metric="nSig" title="n_sig — count of contrasts where FDR < threshold, within the active disease/timepoint scope (or out of 9 if no scope). Click to sort.">n_sig</th>
               <th data-col="n_attributed_celltypes" data-metric="nAttributed" title="Cell types attributed at high or moderate confidence in the active scope. Click to sort by count (matches the pill column).">Cell types</th>
@@ -4993,6 +5001,8 @@ let _evidenceByKinase = null;
 let _presentKinaseSet = null;
 let _decompByKey = null;
 let _decompByKinCtx = null;
+let _agreementByKey = null;
+const _AGREEMENT_STATE_NAMES = ["neither_sig","agree","mixed","disagree","bulk_only","decomp_only"];
 
 // ---------------------------------------------------------------------------
 // Scoped attribution helpers (single source of truth: PAYLOAD.attribution_index)
@@ -5195,6 +5205,24 @@ function _ensureKinaseIndexes() {
     _decompByKey = m;
     _decompByKinCtx = m2;
   }
+  if (_agreementByKey === null) {
+    const A = PAYLOAD.agreement_index || {kinase_id:[]};
+    const m = new Map();
+    for (let k = 0; k < A.kinase_id.length; k++) {
+      const key = `${A.kinase_id[k]}|${A.contrast_id[k]}`;
+      m.set(key, {
+        state: A.state[k],
+        bulk_nes: A.bulk_nes[k],
+        bulk_fdr: A.bulk_fdr[k],
+        top_cell: A.top_cell[k],
+        top_cell_nes: A.top_cell_nes[k],
+        top_cell_fdr: A.top_cell_fdr[k],
+        n_match: A.n_cells_match[k],
+        n_oppose: A.n_cells_oppose[k],
+      });
+    }
+    _agreementByKey = m;
+  }
 }
 
 function _refreshSigCounts(fdr) {
@@ -5318,6 +5346,10 @@ function _makeKeCompare(scopedCtxIds) {
       va = _kineSigCountScoped(a, fdr, scopedCtxIds);
       vb = _kineSigCountScoped(b, fdr, scopedCtxIds);
     }
+    else if (col === "agreement_profile") {
+      va = _kineDisagreeCountScoped(a, scopedCtxIds);
+      vb = _kineDisagreeCountScoped(b, scopedCtxIds);
+    }
     else if (col === "peak_NES") {
       // Scope-aware to match the column's displayed value.
       va = _kineMaxAbsNesScoped(a, scopedCtxIds);
@@ -5364,6 +5396,62 @@ function _renderNesProfile(r, fdrThresh, maxAbs) {
   return `<div class="nes-profile-wrap">` +
     `<div class="nes-profile-row-labels">${rowLabels}</div>` +
     `<div class="nes-profile-cell">${cells.join("")}</div>` +
+    `</div>`;
+}
+
+function _agreementStateFor(kid, ci) {
+  if (!_agreementByKey) return null;
+  return _agreementByKey.get(`${kid}|${ci}`) || null;
+}
+
+function _kineDisagreeCountScoped(r, scopedCtxIds) {
+  let n = 0;
+  for (let ci = 0; ci < CONTRASTS.length; ci++) {
+    if (scopedCtxIds && scopedCtxIds.size > 0 && !scopedCtxIds.has(ci)) continue;
+    const a = _agreementStateFor(r.id, ci);
+    if (a && a.state >= 2) n++;
+  }
+  return n;
+}
+
+function _renderAgreementProfile(r) {
+  const DG = META.diseaseGroups || ["App","Tau","ApTt"];
+  const TPS = META.timepoints || ["2mo","4mo","6mo"];
+  const cells = [];
+  for (const d of DG) {
+    for (const t of TPS) {
+      const c = `${d}_${t}`;
+      const ci = CONTRASTS.indexOf(c);
+      const a = ci >= 0 ? _agreementStateFor(r.id, ci) : null;
+      let cls = "";
+      let tip;
+      if (!a) {
+        tip = `${c}: neither pipeline significant`;
+      } else {
+        const stateName = _AGREEMENT_STATE_NAMES[a.state] || "?";
+        if (a.state === 1) {
+          cls = " agree";
+          tip = `${c}: agree — bulk and decomp both significant, same direction`;
+        } else {
+          cls = " disagree";
+          let detail;
+          if (stateName === "decomp_only") detail = "bulk null, ≥1 decomp class significant";
+          else if (stateName === "bulk_only") detail = "bulk significant, no decomp class significant";
+          else if (stateName === "mixed") detail = "bulk significant, decomp classes split (some match, some oppose)";
+          else if (stateName === "disagree") detail = "bulk significant, all sig decomp classes oppose bulk sign";
+          else detail = stateName;
+          tip = `${c}: ${stateName} — ${detail}`;
+          if (a.top_cell) tip += ` · top decomp ${a.top_cell} NES ${Number(a.top_cell_nes).toFixed(2)}`;
+          if (a.bulk_nes != null && isFinite(a.bulk_nes)) tip += ` · bulk NES ${Number(a.bulk_nes).toFixed(2)}`;
+        }
+      }
+      cells.push(`<div class="apc${cls}" title="${_escapeHtml(tip)}"></div>`);
+    }
+  }
+  const rowLabels = DG.map(d => `<span>${_escapeHtml(d)}</span>`).join("");
+  return `<div class="agreement-profile-wrap">` +
+    `<div class="nes-profile-row-labels">${rowLabels}</div>` +
+    `<div class="agreement-profile-cell">${cells.join("")}</div>` +
     `</div>`;
 }
 
@@ -5516,12 +5604,14 @@ function renderKinaseExplorer() {
       ? ' <span class="track-badge track-y" title="Tyrosine kinase (pY track)">pY</span>'
       : "";
     const profile = _renderNesProfile(r, fdr, maxAbsNes);
+    const agreementProfile = _renderAgreementProfile(r);
     parts.push(
       `<tr class="ke-row${selCls}${subCls}${drvCls}" data-kid="${r.id}" ` +
       `tabindex="0" aria-label="Kinase ${r.name}; ${scopedSig} sig contrasts in scope">` +
       `<td>${r.name}${residueBadge}</td>` +
       `<td>${r.gene_symbol}</td>` +
       `<td>${profile}</td>` +
+      `<td>${agreementProfile}</td>` +
       `<td class="attr-num">${peakAbsNes != null ? peakAbsNes.toFixed(2) : '<span class="muted">—</span>'}</td>` +
       `<td class="attr-num">${scopedSig}<span class="muted" style="font-size:10px;"> / ${sigDenom}</span></td>` +
       `<td>${_renderCellTypesCell(r, colFilter)}</td>` +
