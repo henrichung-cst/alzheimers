@@ -1901,7 +1901,7 @@ main#app-main { padding:14px; }
 .attr-empty { color:#94a3b8; }
 .attr-conf { display:inline-block; padding:1px 7px; border-radius:9px; font-size:11px;
   font-weight:600; text-transform:lowercase; }
-.attr-conf-very-high { background:#7f1d1d; color:#fef2f2; }
+.attr-conf-very-high { background:#14532d; color:#f0fdf4; }
 .attr-conf-high { background:#dcfce7; color:#166534; }
 .attr-conf-moderate { background:#fef3c7; color:#92400e; }
 .attr-conf-low { background:#e2e8f0; color:#475569; }
@@ -6424,7 +6424,7 @@ function _renderAttributionVerdict(hostId, ctx) {
     const _sbk = (PAYLOAD.subclass_breakdown || {})[String(ctx.kinase_id)] || {};
     const _sbTip = _sbk[r.cell_type] || "";
     const _sbAttr = _sbTip ? ` title="WMB subclass breakdown: ${_escapeHtml(_sbTip)}"` : "";
-    const _tierTopColor = ({very_high:"#7f1d1d", high:"#b91c1c", moderate:"#f59e0b", low:"#fde68a", none:"#e5e7eb"})[r.combined_tier] || "#e5e7eb";
+    const _tierTopColor = ({very_high:"#14532d", high:"#b91c1c", moderate:"#f59e0b", low:"#fde68a", none:"#e5e7eb"})[r.combined_tier] || "#e5e7eb";
     const _decompBotColor = ({"3":"#b91c1c","2":"#f59e0b","1":"#f1f5f9","0":"#e5e7eb","-2":"#1d4ed8"})[String(r.decomp_step)] || "#e5e7eb";
     const _decompStepLabel = ({"3":"strong-agree (FDR<0.10)","2":"sig-agree (FDR<0.25)","1":"nominal","0":"absent","-2":"sig-disagree (opposes bulk)"})[String(r.decomp_step)] || "absent";
     const _crossTip = `Combined tier: ${r.combined_tier || 'none'} · Layer 1 (attribution): ${r.combined_confidence || 'none'} · Layer 2 (decomp): ${_decompStepLabel}`;
