@@ -4992,6 +4992,7 @@ let _backboneIdxById = null;
 let _evidenceByKinase = null;
 let _presentKinaseSet = null;
 let _decompByKey = null;
+let _decompByKinCtx = null;
 
 // ---------------------------------------------------------------------------
 // Scoped attribution helpers (single source of truth: PAYLOAD.attribution_index)
@@ -5182,11 +5183,17 @@ function _ensureKinaseIndexes() {
   if (_decompByKey === null) {
     const D = PAYLOAD.decomposition_index || {kinase_id:[]};
     const m = new Map();
+    const m2 = new Map();
     for (let k = 0; k < D.kinase_id.length; k++) {
       const key = `${D.kinase_id[k]}|${D.contrast_id[k]}|${D.cell_type[k]}`;
       m.set(key, {nes: D.decomp_nes[k], fdr: D.decomp_fdr[k]});
+      const k2 = `${D.kinase_id[k]}|${D.contrast_id[k]}`;
+      let arr = m2.get(k2);
+      if (!arr) { arr = []; m2.set(k2, arr); }
+      arr.push({cell_type: D.cell_type[k], nes: D.decomp_nes[k], fdr: D.decomp_fdr[k]});
     }
     _decompByKey = m;
+    _decompByKinCtx = m2;
   }
 }
 
@@ -5917,6 +5924,74 @@ function _renderMeaTrajectory(hostId, kinase_id, ctx) {
       });
     }
   });
+}
+
+function _renderDecompPanel(hostId, kinase_id, ctx, leadRow) {
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  _ensureKinaseIndexes();
+  const cid = CONTRASTS.indexOf(ctx.contrast);
+  if (cid < 0) {
+    host.innerHTML = `<div class="muted">No decomposition data for this contrast.</div>`;
+    return;
+  }
+  const rows = (_decompByKinCtx && _decompByKinCtx.get(`${kinase_id}|${cid}`)) || [];
+  if (!rows.length) {
+    host.innerHTML = `<div class="muted">No decomposition rows for this kinase &times; contrast.</div>`;
+    return;
+  }
+  const sorted = rows.slice().sort((a, b) => (a.nes ?? 0) - (b.nes ?? 0));
+  const fdrThresh = (Store.state.filters && Store.state.filters.fdr) || 0.25;
+  const bulkNes = leadRow && Number.isFinite(Number(leadRow.NES)) ? Number(leadRow.NES) : null;
+  const bulkFdr = leadRow && Number.isFinite(Number(leadRow.FDR)) ? Number(leadRow.FDR) : null;
+  const bulkSig = bulkFdr != null && bulkFdr < fdrThresh;
+  const cellTypes = sorted.map(r => r.cell_type);
+  const nes = sorted.map(r => (r.nes == null || !isFinite(r.nes)) ? 0 : r.nes);
+  const fdrs = sorted.map(r => r.fdr);
+  const sigMask = fdrs.map(v => v != null && isFinite(v) && v < fdrThresh);
+  const colors = nes.map((v, i) => {
+    const base = v >= 0 ? "#c8261c" : "#1f5fa6";
+    if (sigMask[i]) return base;
+    return v >= 0 ? "rgba(200,38,28,0.22)" : "rgba(31,95,166,0.22)";
+  });
+  const outlines = sigMask.map(s => s ? "#000" : "rgba(0,0,0,0)");
+  const lineWidths = sigMask.map(s => s ? 1.2 : 0);
+  const hovers = sorted.map((r, i) =>
+    `${r.cell_type}<br>decomp NES ${nes[i].toFixed(2)}` +
+    (r.fdr != null && isFinite(r.fdr) ? `<br>FDR ${Number(r.fdr).toExponential(2)}${sigMask[i] ? " (sig)" : ""}` : "")
+  );
+  const traces = [{
+    type: "bar", orientation: "h",
+    x: nes, y: cellTypes,
+    marker: {color: colors, line: {color: outlines, width: lineWidths}},
+    hovertemplate: "%{customdata}<extra></extra>",
+    customdata: hovers,
+    name: "decomp NES",
+  }];
+  const shapes = [];
+  const annotations = [];
+  if (bulkNes != null) {
+    shapes.push({
+      type: "line", xref: "x", yref: "paper",
+      x0: bulkNes, x1: bulkNes, y0: 0, y1: 1,
+      line: {color: bulkSig ? "#000" : "#888", width: 2, dash: bulkSig ? "solid" : "dash"},
+    });
+    annotations.push({
+      xref: "x", yref: "paper", x: bulkNes, y: 1.04,
+      text: `bulk NES ${bulkNes.toFixed(2)}${bulkSig ? "" : " (ns)"}`,
+      showarrow: false, font: {size: 11, color: "#000"},
+      xanchor: bulkNes >= 0 ? "left" : "right",
+    });
+  }
+  const height = Math.max(220, 22 * cellTypes.length + 60);
+  Plotly.react(hostId, traces, {
+    margin: {l: 180, r: 30, t: 30, b: 40},
+    height,
+    xaxis: {title: "NES", zeroline: true, zerolinecolor: "#bbb"},
+    yaxis: {automargin: true, tickfont: {size: 11}},
+    shapes, annotations,
+    showlegend: false,
+  }, {displaylogo: false, responsive: true});
 }
 
 function _buildPreparedMeaInput(ctx) {
@@ -6708,10 +6783,14 @@ async function renderActiveKinaseAuditTab(kinase_id) {
         `<div id="audit-mea-trajectory" style="height:220px"></div></section>` +
         `<section class="audit-panel"><h4>Stoichiometry vs raw phospho for ${_escapeHtml(ctx.contrast)} <span class="muted">(mea_stoichiometry.csv vs mea_raw_phospho.csv)</span></h4>` +
         `<p class="kinase-stage-note">Per-metric comparison of the same kinase &times; contrast scored against two preprocessing tracks. Stoichiometry is primary; raw phospho is the sensitivity check. Δ = stoichiometry − raw. Sign-flipping or significance divergence flags abundance-driven vs activity-driven signals.</p>` +
-        `<div id="audit-mea-comparison"></div></section>`;
+        `<div id="audit-mea-comparison"></div></section>` +
+        `<section class="audit-panel audit-wide"><h4>Per-cell-type decomposition for ${_escapeHtml(ctx.contrast)} <span class="muted">(kinase_enrichment_wmb.csv)</span></h4>` +
+        `<p class="kinase-stage-note">Pseudo-deconvoluted MEA NES per WMB class for this kinase &times; contrast, sorted by NES. Bars are filled when FDR &lt; threshold, faded otherwise. The vertical line marks the bulk NES from the live pipeline (solid black = bulk significant, dashed gray = ns). Comparing the spread of class bars to the bulk line shows whether the bulk signal localizes to a class, is averaged across many, or is masked by canceling classes.</p>` +
+        `<div id="audit-mea-decomp"></div></section>`;
       _renderMeaScorecard("audit-mea-scorecard", leadRow, rawRow, ctx);
       _renderRunningEnrichmentPlot("audit-mea-running", ctx);
       _renderMeaTrajectory("audit-mea-trajectory", kinase_id, ctx);
+      _renderDecompPanel("audit-mea-decomp", kinase_id, ctx, leadRow);
       const cmpRows = _buildMeaComparisonRows(leadRow, rawRow);
       const diag = _diagnoseRawAbsence(ctx, rawRow);
       const diagBanner = diag
