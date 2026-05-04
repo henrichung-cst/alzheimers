@@ -1901,6 +1901,7 @@ main#app-main { padding:14px; }
 .attr-empty { color:#94a3b8; }
 .attr-conf { display:inline-block; padding:1px 7px; border-radius:9px; font-size:11px;
   font-weight:600; text-transform:lowercase; }
+.attr-conf-very-high { background:#7f1d1d; color:#fef2f2; }
 .attr-conf-high { background:#dcfce7; color:#166534; }
 .attr-conf-moderate { background:#fef3c7; color:#92400e; }
 .attr-conf-low { background:#e2e8f0; color:#475569; }
@@ -6212,6 +6213,7 @@ function _attrLfcColor(lfc) {
 }
 
 function _attrConfidenceClass(conf) {
+  if (conf === "very_high") return "attr-conf attr-conf-very-high";
   if (conf === "high") return "attr-conf attr-conf-high";
   if (conf === "moderate") return "attr-conf attr-conf-moderate";
   if (conf === "low") return "attr-conf attr-conf-low";
@@ -6237,8 +6239,8 @@ const ATTR_VERDICT_COLS = [
    title:""},
   {key:"cross_rank",                   label:"Cross",       type:"num", group:"id",
    title:"Cross-layer signal at full resolution. Top half = attribution tier (gray=none, pale=low, amber=moderate, red=high). Bottom half = decomposition step vs bulk direction (gray=absent, pale=nominal, amber=sig-agree FDR<0.25, red=strong-agree FDR<0.10, blue=sig-disagree). Reinforcing rows are saturated top+bottom in warm tones; conflicts pair warm top with blue bottom; single-layer rows light up only one half."},
-  {key:"combined_confidence",          label:"Conf",        type:"conf", group:"attr",
-   title:"Combined confidence tier (high / moderate / low) from the unified attribution model."},
+  {key:"combined_tier",                label:"Conf",        type:"conf", group:"attr",
+   title:"Combined confidence tier. Starts from the attribution-only tier (high / moderate / low / none). Upgraded to 'very high' when the decomposition layer significantly agrees (Decomp FDR < 0.25 with sign matching bulk MEA)."},
   {key:"wmb_specificity",              label:"WMB enrich",  type:"num", group:"attr",
    title:"WMB enrichment: cell type's share of total log2 expression across 34 WMB classes (uniform = 1/34 ≈ 0.029). Higher = more concentrated in this cell type."},
   {key:"wmb_mean_log2_expression",     label:"log2 expr",   type:"num", group:"attr",
@@ -6260,7 +6262,7 @@ const ATTR_VERDICT_COLS = [
   {key:"bulk_match",                   label:"vs Bulk",     type:"num", group:"decomp",
    title:"Sign agreement between Decomp NES and the bulk MEA NES for this kinase × contrast. Bold ✓/✗ when Decomp FDR < 0.25; muted when not. Hover any cell for the underlying values."},
 ];
-const ATTR_CONF_RANK = {high:3, moderate:2, low:1, none:0};
+const ATTR_CONF_RANK = {very_high:4, high:3, moderate:2, low:1, none:0};
 
 function _attrVerdictCmp(a, b, key, type, asc) {
   let va, vb;
@@ -6352,9 +6354,15 @@ function _renderAttributionVerdict(hostId, ctx) {
       decompStep = 1;
     }
     r.decomp_step = decompStep;
-    // cross_rank: combine attribution tier (0..3) and decomp step (-2..3) so
+    // combined_tier: upgrade attribution "high" to "very_high" when the decomp
+    // layer significantly agrees (FDR<0.25, sign matches bulk). Other tiers
+    // pass through unchanged for now.
+    r.combined_tier = (r.combined_confidence === "high" && decompStep >= 2)
+      ? "very_high"
+      : (r.combined_confidence || "none");
+    // cross_rank: combine combined_tier (0..4) and decomp step (-2..3) so
     // reinforcing rows sort first, conflicts demoted, single-layer in between.
-    const tierRank = ATTR_CONF_RANK[r.combined_confidence] ?? 0;
+    const tierRank = ATTR_CONF_RANK[r.combined_tier] ?? 0;
     r.cross_rank = tierRank * 6 + decompStep;
   }
 
@@ -6368,8 +6376,9 @@ function _renderAttributionVerdict(hostId, ctx) {
   const showAll = !!(host.dataset.showAll === "1");
   const visibleRows = showAll
     ? rows
-    : rows.filter(r => r.combined_confidence === "high"
-                    || r.combined_confidence === "moderate");
+    : rows.filter(r => r.combined_tier === "very_high"
+                    || r.combined_tier === "high"
+                    || r.combined_tier === "moderate");
   const hiddenCount = rows.length - visibleRows.length;
   const num = (v, d=3) => (v == null || !isFinite(v)) ? "" : Number(v).toFixed(d);
   const tbody = visibleRows.map((r, i) => {
@@ -6415,10 +6424,10 @@ function _renderAttributionVerdict(hostId, ctx) {
     const _sbk = (PAYLOAD.subclass_breakdown || {})[String(ctx.kinase_id)] || {};
     const _sbTip = _sbk[r.cell_type] || "";
     const _sbAttr = _sbTip ? ` title="WMB subclass breakdown: ${_escapeHtml(_sbTip)}"` : "";
-    const _tierTopColor = ({high:"#b91c1c", moderate:"#f59e0b", low:"#fde68a", none:"#e5e7eb"})[r.combined_confidence] || "#e5e7eb";
+    const _tierTopColor = ({very_high:"#7f1d1d", high:"#b91c1c", moderate:"#f59e0b", low:"#fde68a", none:"#e5e7eb"})[r.combined_tier] || "#e5e7eb";
     const _decompBotColor = ({"3":"#b91c1c","2":"#f59e0b","1":"#f1f5f9","0":"#e5e7eb","-2":"#1d4ed8"})[String(r.decomp_step)] || "#e5e7eb";
     const _decompStepLabel = ({"3":"strong-agree (FDR<0.10)","2":"sig-agree (FDR<0.25)","1":"nominal","0":"absent","-2":"sig-disagree (opposes bulk)"})[String(r.decomp_step)] || "absent";
-    const _crossTip = `Layer 1 (attribution): ${r.combined_confidence || 'none'} · Layer 2 (decomp): ${_decompStepLabel}`;
+    const _crossTip = `Combined tier: ${r.combined_tier || 'none'} · Layer 1 (attribution): ${r.combined_confidence || 'none'} · Layer 2 (decomp): ${_decompStepLabel}`;
     const crossCell = `<td class="attr-num" title="${_escapeHtml(_crossTip)}">` +
       `<span class="attr-cross-glyph" aria-label="${_escapeHtml(_crossTip)}">` +
         `<span class="acg-top" style="background:${_tierTopColor}"></span>` +
@@ -6428,7 +6437,7 @@ function _renderAttributionVerdict(hostId, ctx) {
     return `<tr data-cell-type="${_escapeHtml(r.cell_type)}" class="attr-verdict-row${i === 0 ? ' attr-verdict-selected' : ''}">` +
       `<td class="attr-celltype"${_sbAttr}>${_escapeHtml(r.cell_type)}${_sbTip ? ' <span class="attr-subclass-marker" aria-hidden="true">ⓘ</span>' : ''} ${expBadge}</td>` +
       crossCell +
-      `<td><span class="${_attrConfidenceClass(r.combined_confidence)}">${_escapeHtml(r.combined_confidence || '')}</span></td>` +
+      `<td><span class="${_attrConfidenceClass(r.combined_tier)}" title="${_escapeHtml('Attribution: ' + (r.combined_confidence || 'none') + (r.combined_tier === 'very_high' ? ' · upgraded to very_high by significant decomp agreement' : ''))}">${_escapeHtml((r.combined_tier || '').replace('_', ' '))}</span></td>` +
       `<td class="attr-num">${num(r.wmb_specificity, 3)}</td>` +
       `<td class="attr-num">${num(r.wmb_mean_log2_expression, 2)}</td>` +
       `<td class="attr-num">${num(r.wmb_fraction_cells_expressing, 2)}</td>` +
@@ -6488,6 +6497,7 @@ function _renderAttributionVerdict(hostId, ctx) {
         `</tbody></table>` +
       `<p><strong>Confidence tier</strong> grades <em>which sources agree</em>, not how strong any one signal is:</p>` +
       `<ul>` +
+        `<li><strong><span class="attr-conf attr-conf-very-high">very high</span></strong> — a <em>high</em> attribution row that is also corroborated by the decomposition layer: Decomp FDR < 0.25 with the same sign as the bulk MEA NES. Both evidence streams reinforce one another.</li>` +
         `<li><strong><span class="badge hi">high</span></strong> — all three of these hold: <em>(a)</em> within-cohort Song supports the direction, <em>(b)</em> the gene is clearly cell-type-specific in WMB (specificity ≥ 2× uniform, i.e. ≈ 0.059 for 34 WMB classes), and <em>(c)</em> at least one reference shows real movement (|Song LFC| or |SEA-AD LFC| > 0.1).</li>` +
         `<li><strong><span class="badge mid">moderate</span></strong> — meaningful evidence but missing one strict gate. Two ways to land here: Song-supported but WMB specificity falls below the high threshold, <em>or</em> only SEA-AD reached concordance (no Song). SEA-AD-only is <strong>always</strong> capped at moderate — we won't promote a cross-species call to high.</li>` +
         `<li><strong><span class="badge lo">low</span></strong> — concordance is positive but the gene isn't expression-specific in WMB and no reference LFC clears the magnitude bar.</li>` +
