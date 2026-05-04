@@ -5294,17 +5294,23 @@ function renderKinaseExplorer() {
   const nSigMin = Math.max(0, parseInt(kf.nSigMin, 10) || 0);
 
   // First pass: collect visible rows.
+  // Text search is targeted lookup, not discovery browsing — it bypasses the
+  // significance gates so kinases with a strong external prior (e.g. EGFR
+  // when staining suggests it's relevant but bulk MEA misses FDR<0.25) still
+  // surface. Browsing without a query keeps the gates so the list isn't
+  // dominated by ~300 non-significant kinases.
   const visible = [];
   for (const r of _keRows) {
     // Text search
     if (q && !(r.name.toLowerCase().includes(q) ||
                r.gene_symbol.toLowerCase().includes(q))) continue;
-    // Pre-compute scoped n_sig once; reused for inclusion + display.
     const scopedSig = _kineSigCountScoped(r, fdr, scopedCtxIds);
-    // n_sig minimum (numeric filter).
-    if (scopedSig < nSigMin) continue;
-    // Disease/timepoint scope: require ≥1 sig contrast in scope.
-    if (scopedCtxIds.size > 0 && scopedSig === 0) continue;
+    if (!q) {
+      // n_sig minimum (numeric filter).
+      if (scopedSig < nSigMin) continue;
+      // Disease/timepoint scope: require ≥1 sig contrast in scope.
+      if (scopedCtxIds.size > 0 && scopedSig === 0) continue;
+    }
     // Attribution grid: cross-product AND coverage on disease × timepoint × celltype,
     // with confidence as ordinal threshold (≥).
     if (gridActive && !kinaseQualifies(r.id, kf)) continue;
