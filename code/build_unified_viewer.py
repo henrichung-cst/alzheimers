@@ -1291,6 +1291,118 @@ def _build_subclass_breakdown(kid: dict[str, int]) -> dict:
     return out
 
 
+_AGREEMENT_STATE_CODES = {
+    "neither_sig": 0,
+    "agree":       1,
+    "mixed":       2,
+    "disagree":    3,
+    "bulk_only":   4,
+    "decomp_only": 5,
+}
+
+
+def _build_agreement_index(
+    mea: pd.DataFrame,
+    decomp: pd.DataFrame,
+    kid: dict,
+    contrast_to_id: dict,
+    fdr_thresh: float,
+) -> dict:
+    """Per-(kinase, contrast) agreement state between bulk MEA and per-cell decomp MEA.
+
+    For each (kinase, contrast) where bulk and/or decomp data exist, classify:
+      - agree:       bulk sig, ≥1 cell sig, all sig cells match bulk sign
+      - mixed:       bulk sig, sig cells split (some match, some oppose)
+      - disagree:    bulk sig, sig cells all oppose bulk sign
+      - bulk_only:   bulk sig, no cell sig
+      - decomp_only: bulk insig, ≥1 cell sig
+      - neither_sig: bulk insig, no cell sig (NOT emitted; absence == this state)
+
+    Also reports the top decomp cell (largest |NES| among that kinase×contrast's
+    decomp rows) for the scatter plot.
+    """
+    if mea.empty or decomp.empty:
+        return {"kinase_id": [], "contrast_id": [], "state": [],
+                "bulk_nes": [], "bulk_fdr": [],
+                "top_cell": [], "top_cell_nes": [], "top_cell_fdr": [],
+                "n_cells_match": [], "n_cells_oppose": []}
+
+    b = mea[mea["kinase"].isin(kid) & mea["contrast"].isin(contrast_to_id)].copy()
+    b = b.rename(columns={"NES": "bulk_NES", "FDR": "bulk_FDR"})
+    b["bulk_sig"] = b["bulk_FDR"] < fdr_thresh
+    b["bulk_dir"] = np.sign(b["bulk_NES"])
+
+    d = decomp[decomp["kinase"].isin(kid) & decomp["contrast"].isin(contrast_to_id)].copy()
+    d["dec_sig"] = d["FDR"] < fdr_thresh
+    d["dec_dir"] = np.sign(d["NES"])
+    d["abs_nes"] = d["NES"].abs()
+
+    # Outer join so bulk-only and decomp-only rows are kept.
+    m = d.merge(b[["kinase", "contrast", "bulk_NES", "bulk_FDR", "bulk_sig", "bulk_dir"]],
+                on=["kinase", "contrast"], how="outer")
+    # Decomp side may be NaN for bulk-only (kinase, contrast); fill safe defaults.
+    m["dec_sig"] = m["dec_sig"].fillna(False)
+    m["dec_dir"] = m["dec_dir"].fillna(0)
+    m["bulk_sig"] = m["bulk_sig"].fillna(False)
+    m["bulk_dir"] = m["bulk_dir"].fillna(0)
+
+    # For sign comparisons, only count cells where bulk_dir != 0.
+    m["match"] = m["dec_sig"] & (m["bulk_dir"] != 0) & (m["dec_dir"] == m["bulk_dir"])
+    m["oppose"] = m["dec_sig"] & (m["bulk_dir"] != 0) & (m["dec_dir"] == -m["bulk_dir"])
+
+    # Top decomp cell by |NES| per (kinase, contrast).
+    has_dec = m["wmb_class"].notna()
+    top_idx = m[has_dec].groupby(["kinase", "contrast"])["abs_nes"].idxmax()
+    top = m.loc[top_idx, ["kinase", "contrast", "wmb_class", "NES", "FDR"]].rename(
+        columns={"wmb_class": "top_cell", "NES": "top_cell_nes", "FDR": "top_cell_fdr"}
+    )
+
+    agg = m.groupby(["kinase", "contrast"]).agg(
+        bulk_NES=("bulk_NES", "first"),
+        bulk_FDR=("bulk_FDR", "first"),
+        bulk_sig=("bulk_sig", "first"),
+        n_match=("match", "sum"),
+        n_oppose=("oppose", "sum"),
+        n_dec_sig=("dec_sig", "sum"),
+    ).reset_index()
+    agg = agg.merge(top, on=["kinase", "contrast"], how="left")
+
+    def _state(r):
+        if r.bulk_sig:
+            if r.n_dec_sig == 0:
+                return "bulk_only"
+            if r.n_match > 0 and r.n_oppose == 0:
+                return "agree"
+            if r.n_match == 0 and r.n_oppose > 0:
+                return "disagree"
+            return "mixed"
+        if r.n_dec_sig > 0:
+            return "decomp_only"
+        return "neither_sig"
+
+    agg["state"] = agg.apply(_state, axis=1)
+    # Drop neither_sig — absence in lookup table == that state.
+    agg = agg[agg["state"] != "neither_sig"].reset_index(drop=True)
+
+    print(f"  agreement_index: {len(agg):,} (kinase, contrast) cells "
+          f"(states: {agg['state'].value_counts().to_dict()})", flush=True)
+
+    state_codes = agg["state"].map(_AGREEMENT_STATE_CODES).astype("uint8").tolist()
+    return {
+        "kinase_id":   agg["kinase"].map(kid).astype("uint16").tolist(),
+        "contrast_id": agg["contrast"].map(contrast_to_id).astype("uint8").tolist(),
+        "state":       state_codes,
+        "bulk_nes":    agg["bulk_NES"].astype(float).round(4).tolist(),
+        "bulk_fdr":    agg["bulk_FDR"].astype(float).round(4).tolist(),
+        "top_cell":    agg["top_cell"].fillna("").astype(str).tolist(),
+        "top_cell_nes": agg["top_cell_nes"].astype(float).round(4).tolist(),
+        "top_cell_fdr": agg["top_cell_fdr"].astype(float).round(4).tolist(),
+        "n_cells_match":  agg["n_match"].astype(int).tolist(),
+        "n_cells_oppose": agg["n_oppose"].astype(int).tolist(),
+        "_state_codes": _AGREEMENT_STATE_CODES,
+    }
+
+
 def build_payload(data: UnifiedData) -> dict:
     """Assemble the full JSON payload (no edges — that's the sidecar)."""
     from kinase_library.utils._global_vars import family_colors as KL_FAMILY_COLORS
@@ -1447,6 +1559,11 @@ def build_payload(data: UnifiedData) -> dict:
     }
     print(f"  decomposition_index: {len(decomp):,} rows", flush=True)
 
+    agreement_index = _build_agreement_index(
+        data.mea_stoichiometry, data.decomposition,
+        kid, contrast_to_id, config.MEA_FDR_THRESH,
+    )
+
     payload = {
         "kinases": kinases_slice,
         "celltypes": celltypes_slice,
@@ -1459,6 +1576,7 @@ def build_payload(data: UnifiedData) -> dict:
         "kinase_celltype_evidence": kinase_celltype_evidence,
         "attribution_index": attribution_index,
         "decomposition_index": decomposition_index,
+        "agreement_index": agreement_index,
         "subclass_breakdown": _build_subclass_breakdown(kid),
         "audit_tables": build_audit_manifest(),
         "edge_slice_ref": {
