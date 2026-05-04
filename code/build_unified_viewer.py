@@ -1860,6 +1860,23 @@ main#app-main { padding:14px; }
 .attr-verdict-table tr.attr-verdict-row:hover { background:#f8fafc; }
 .attr-verdict-table tr.attr-verdict-selected { background:#e3f2fd; }
 .attr-verdict-table tr.attr-verdict-selected:hover { background:#dbeafe; }
+.attr-verdict-table thead tr.attr-verdict-supergroup th {
+  background:#eef2f7; border-bottom:1px solid #cbd5e1; font-weight:600;
+  text-align:center; font-size:11px; color:#334155; padding:4px 6px;
+  cursor:default;
+}
+.attr-verdict-table thead tr.attr-verdict-supergroup th.attr-supergroup-attr { background:#fef3c7; }
+.attr-verdict-table thead tr.attr-verdict-supergroup th.attr-supergroup-decomp { background:#dbeafe; }
+.attr-verdict-table thead tr.attr-verdict-supergroup th.attr-supergroup-spacer { background:transparent; border-bottom:none; }
+.attr-bulk-anchor { padding:4px 0 8px; font-size:12px; color:#334155; }
+.attr-bulk-anchor .attr-bulk-pill { display:inline-block; padding:2px 8px; border-radius:10px;
+  background:#f1f5f9; border:1px solid #cbd5e1; font-weight:600; }
+.attr-bulk-anchor .attr-bulk-up { color:#b91c1c; }
+.attr-bulk-anchor .attr-bulk-down { color:#1d4ed8; }
+.attr-bulk-anchor .attr-bulk-ns { color:#64748b; font-weight:500; }
+.attr-cross-glyph { display:inline-flex; flex-direction:column; width:18px; height:14px;
+  border:1px solid #94a3b8; border-radius:2px; overflow:hidden; vertical-align:middle; }
+.attr-cross-glyph .acg-top, .attr-cross-glyph .acg-bot { flex:1 1 50%; }
 .attr-verdict-toggle { padding:6px 0 0; font-size:11px; }
 .attr-verdict-toggle label { cursor:pointer; user-select:none; }
 .attr-explainer { margin-top:10px; padding:8px 12px; background:#f8fafc; border:1px solid var(--border);
@@ -6216,30 +6233,32 @@ function _allenABALink(gene) {
 }
 
 const ATTR_VERDICT_COLS = [
-  {key:"cell_type",                    label:"Cell type",   type:"str",
+  {key:"cell_type",                    label:"Cell type",   type:"str", group:"id",
    title:""},
-  {key:"combined_confidence",          label:"Conf",        type:"conf",
+  {key:"cross_rank",                   label:"Cross",       type:"num", group:"id",
+   title:"Cross-layer signal at full resolution. Top half = attribution tier (gray=none, pale=low, amber=moderate, red=high). Bottom half = decomposition step vs bulk direction (gray=absent, pale=nominal, amber=sig-agree FDR<0.25, red=strong-agree FDR<0.10, blue=sig-disagree). Reinforcing rows are saturated top+bottom in warm tones; conflicts pair warm top with blue bottom; single-layer rows light up only one half."},
+  {key:"combined_confidence",          label:"Conf",        type:"conf", group:"attr",
    title:"Combined confidence tier (high / moderate / low) from the unified attribution model."},
-  {key:"wmb_specificity",              label:"WMB enrich",  type:"num",
+  {key:"wmb_specificity",              label:"WMB enrich",  type:"num", group:"attr",
    title:"WMB enrichment: cell type's share of total log2 expression across 34 WMB classes (uniform = 1/34 ≈ 0.029). Higher = more concentrated in this cell type."},
-  {key:"wmb_mean_log2_expression",     label:"log2 expr",   type:"num",
+  {key:"wmb_mean_log2_expression",     label:"log2 expr",   type:"num", group:"attr",
    title:"WMB mean log2 expression in this cell type (Allen Whole Mouse Brain 10Xv3, pooled across 13 regions). Absolute level — low values flag the score as potentially noise-driven."},
-  {key:"wmb_fraction_cells_expressing",label:"% cells",     type:"num",
+  {key:"wmb_fraction_cells_expressing",label:"% cells",     type:"num", group:"attr",
    title:"WMB fraction of cells of this cell type with non-zero counts for this gene."},
-  {key:"sea_ad_lfc",                   label:"SEA-AD LFC",  type:"num",
+  {key:"sea_ad_lfc",                   label:"SEA-AD LFC",  type:"num", group:"attr",
    title:"SEA-AD log2 fold change in human AD vs control, median across SEA-AD supertypes mapped to this subclass. Stratum (early / late / full CPS) is selected from the contrast pathway. Color: red = up in AD, blue = down."},
-  {key:"song_lfc",                     label:"Song LFC",    type:"num",
+  {key:"song_lfc",                     label:"Song LFC",    type:"num", group:"attr",
    title:"Song log2 fold change from within-cohort snRNA-seq factorial OLS (β at this contrast — 10-param design, time-resolved). Color: red = up in disease genotype, blue = down."},
-  {key:"song_pval",                    label:"Song p",      type:"num",
+  {key:"song_pval",                    label:"Song p",      type:"num", group:"attr",
    title:"Two-sided t-test p-value for the Song β at this (gene, cell type, contrast). Uncorrected — n≈15 males with a 10-param design saturates BH FDR within (cell type × contrast) strata, so per-row FDR is not informative; uncorrected p<0.05 is the most useful directional flag the dataset supports. Bold when p<0.05."},
-  {key:"decomp_nes",                   label:"Decomp NES",  type:"num",
-   title:"Decomposition NES from the CTM-native proportional decomposition (per-cell-type kinase MEA on bulk phospho ranking weighted by snRNA share for the kinase's substrate set). Same join key as Song LFC. Hypothesis-strength signal — see Methods."},
-  {key:"decomp_fdr",                   label:"Decomp FDR",  type:"num",
-   title:"Decomposition MEA FDR for this (kinase, contrast, cell type) row. < 0.25 is the standard MEA gate."},
-  {key:"bulk_match",                   label:"vs Bulk",     type:"num",
-   title:"Sign agreement between Decomp NES and the bulk MEA NES for this kinase × contrast. Bold ✓/✗ when Decomp FDR < 0.25; muted when not. Hover any cell for the underlying values."},
-  {key:"combined_score",               label:"Score",       type:"num",
+  {key:"combined_score",               label:"Score",       type:"num", group:"attr",
    title:"Combined attribution score: effective concordance × (0.5 + WMB specificity). The unified attribution uses this for confidence tiers."},
+  {key:"decomp_nes",                   label:"Decomp NES",  type:"num", group:"decomp",
+   title:"Decomposition NES from the CTM-native proportional decomposition (per-cell-type kinase MEA on bulk phospho ranking weighted by snRNA share for the kinase's substrate set). Same join key as Song LFC. Hypothesis-strength signal — see Methods."},
+  {key:"decomp_fdr",                   label:"Decomp FDR",  type:"num", group:"decomp",
+   title:"Decomposition MEA FDR for this (kinase, contrast, cell type) row. < 0.25 is the standard MEA gate."},
+  {key:"bulk_match",                   label:"vs Bulk",     type:"num", group:"decomp",
+   title:"Sign agreement between Decomp NES and the bulk MEA NES for this kinase × contrast. Bold ✓/✗ when Decomp FDR < 0.25; muted when not. Hover any cell for the underlying values."},
 ];
 const ATTR_CONF_RANK = {high:3, moderate:2, low:1, none:0};
 
@@ -6304,8 +6323,8 @@ function _renderAttributionVerdict(hostId, ctx) {
     const d = _decompByKey ? _decompByKey.get(dk) : null;
     r.decomp_nes = d ? d.nes : null;
     r.decomp_fdr = d ? d.fdr : null;
-    // Encode agreement for sort: +2 sig-agree, +1 nonsig-agree, -1 nonsig-disagree,
-    // -2 sig-disagree, null when either side is missing/zero. "Sig" = Decomp FDR < 0.25.
+    // bulk_match: +2 sig-agree, +1 nonsig-agree, -1 nonsig-disagree, -2 sig-disagree,
+    // null when either side is missing. "Sig" here = Decomp FDR < 0.25.
     if (r.decomp_nes == null || !isFinite(r.decomp_nes) || r.decomp_nes === 0
         || _bulkNes == null || !isFinite(_bulkNes) || _bulkNes === 0) {
       r.bulk_match = null;
@@ -6314,6 +6333,29 @@ function _renderAttributionVerdict(hostId, ctx) {
       const sig = r.decomp_fdr != null && isFinite(r.decomp_fdr) && r.decomp_fdr < 0.25;
       r.bulk_match = agree ? (sig ? 2 : 1) : (sig ? -2 : -1);
     }
+    // decomp_step (Layer-2 ordinal vs bulk direction):
+    //   3 strong-agree (FDR<0.10, sign matches bulk)
+    //   2 sig-agree    (FDR<0.25, sign matches bulk)
+    //   1 nominal      (NES present, no sig)
+    //   0 absent
+    //  -2 sig-disagree (FDR<0.25, sign opposes bulk)
+    let decompStep = 0;
+    if (r.decomp_nes != null && isFinite(r.decomp_nes) && r.decomp_nes !== 0
+        && _bulkNes != null && isFinite(_bulkNes) && _bulkNes !== 0) {
+      const dAgree = (r.decomp_nes > 0) === (_bulkNes > 0);
+      const dFdr = r.decomp_fdr;
+      const dSig = dFdr != null && isFinite(dFdr) && dFdr < 0.25;
+      const dStrong = dFdr != null && isFinite(dFdr) && dFdr < 0.10;
+      if (dAgree) decompStep = dStrong ? 3 : (dSig ? 2 : 1);
+      else        decompStep = dSig ? -2 : 1;
+    } else if (r.decomp_nes != null && isFinite(r.decomp_nes)) {
+      decompStep = 1;
+    }
+    r.decomp_step = decompStep;
+    // cross_rank: combine attribution tier (0..3) and decomp step (-2..3) so
+    // reinforcing rows sort first, conflicts demoted, single-layer in between.
+    const tierRank = ATTR_CONF_RANK[r.combined_confidence] ?? 0;
+    r.cross_rank = tierRank * 6 + decompStep;
   }
 
   const sortKey = host.dataset.sortKey || "combined_score";
@@ -6373,8 +6415,19 @@ function _renderAttributionVerdict(hostId, ctx) {
     const _sbk = (PAYLOAD.subclass_breakdown || {})[String(ctx.kinase_id)] || {};
     const _sbTip = _sbk[r.cell_type] || "";
     const _sbAttr = _sbTip ? ` title="WMB subclass breakdown: ${_escapeHtml(_sbTip)}"` : "";
+    const _tierTopColor = ({high:"#b91c1c", moderate:"#f59e0b", low:"#fde68a", none:"#e5e7eb"})[r.combined_confidence] || "#e5e7eb";
+    const _decompBotColor = ({"3":"#b91c1c","2":"#f59e0b","1":"#f1f5f9","0":"#e5e7eb","-2":"#1d4ed8"})[String(r.decomp_step)] || "#e5e7eb";
+    const _decompStepLabel = ({"3":"strong-agree (FDR<0.10)","2":"sig-agree (FDR<0.25)","1":"nominal","0":"absent","-2":"sig-disagree (opposes bulk)"})[String(r.decomp_step)] || "absent";
+    const _crossTip = `Layer 1 (attribution): ${r.combined_confidence || 'none'} · Layer 2 (decomp): ${_decompStepLabel}`;
+    const crossCell = `<td class="attr-num" title="${_escapeHtml(_crossTip)}">` +
+      `<span class="attr-cross-glyph" aria-label="${_escapeHtml(_crossTip)}">` +
+        `<span class="acg-top" style="background:${_tierTopColor}"></span>` +
+        `<span class="acg-bot" style="background:${_decompBotColor}"></span>` +
+      `</span></td>`;
+    const scoreCell = `<td class="attr-num">${num(r.combined_score, 3)}</td>`;
     return `<tr data-cell-type="${_escapeHtml(r.cell_type)}" class="attr-verdict-row${i === 0 ? ' attr-verdict-selected' : ''}">` +
       `<td class="attr-celltype"${_sbAttr}>${_escapeHtml(r.cell_type)}${_sbTip ? ' <span class="attr-subclass-marker" aria-hidden="true">ⓘ</span>' : ''} ${expBadge}</td>` +
+      crossCell +
       `<td><span class="${_attrConfidenceClass(r.combined_confidence)}">${_escapeHtml(r.combined_confidence || '')}</span></td>` +
       `<td class="attr-num">${num(r.wmb_specificity, 3)}</td>` +
       `<td class="attr-num">${num(r.wmb_mean_log2_expression, 2)}</td>` +
@@ -6382,10 +6435,10 @@ function _renderAttributionVerdict(hostId, ctx) {
       seaCell +
       songCell +
       songPvalCell +
+      scoreCell +
       decompNesCell +
       decompFdrCell +
       bulkMatchCell +
-      `<td class="attr-num">${num(r.combined_score, 3)}</td>` +
       `</tr>`;
   }).join("");
   const headCells = ATTR_VERDICT_COLS.map(c => {
@@ -6393,9 +6446,30 @@ function _renderAttributionVerdict(hostId, ctx) {
     const title = c.title ? ` title="${_escapeHtml(c.title)}"` : "";
     return `<th class="attr-verdict-th" data-sort-key="${c.key}"${title}>${c.label}${arrow}</th>`;
   }).join("");
+  // Super-header groups the columns into Layer-1 (attribution) and Layer-2 (decomp).
+  const _grpCounts = ATTR_VERDICT_COLS.reduce((acc, c) => { acc[c.group] = (acc[c.group]||0)+1; return acc; }, {});
+  const superHead =
+    `<tr class="attr-verdict-supergroup">` +
+      `<th class="attr-supergroup-spacer" colspan="${_grpCounts.id || 0}"></th>` +
+      `<th class="attr-supergroup-attr" colspan="${_grpCounts.attr || 0}" title="Cell-type attribution evidence. Each component is compared against the bulk MEA direction at this contrast.">Attribution (vs bulk direction)</th>` +
+      `<th class="attr-supergroup-decomp" colspan="${_grpCounts.decomp || 0}" title="Per-cell-type pseudo-deconvolution MEA. A second look at the bulk phospho ranking re-projected by snRNA share.">Decomposition cross-check</th>` +
+    `</tr>`;
+  // Bulk anchor — both layers compare against this kinase's bulk MEA at this contrast.
+  const _bulkSig = _bulkFdr != null && isFinite(_bulkFdr) && _bulkFdr < 0.25;
+  const _bulkDir = (_bulkNes != null && isFinite(_bulkNes))
+    ? (_bulkNes > 0 ? `<span class="attr-bulk-up">↑ NES = +${num(_bulkNes, 2)}</span>`
+                    : `<span class="attr-bulk-down">↓ NES = ${num(_bulkNes, 2)}</span>`)
+    : `<span class="attr-bulk-ns">NES n/a</span>`;
+  const _bulkFdrTxt = (_bulkFdr != null && isFinite(_bulkFdr))
+    ? `FDR = ${num(_bulkFdr, 3)}${_bulkSig ? "" : " (n.s.)"}` : "FDR n/a";
+  const bulkAnchor =
+    `<div class="attr-bulk-anchor">Bulk MEA anchor for ${_escapeHtml(ctx.contrast || "")}: ` +
+    `<span class="attr-bulk-pill">${_bulkDir} · ${_bulkFdrTxt}</span> ` +
+    `<span class="muted">— sign of the bulk NES is the reference direction every column below is checked against.</span></div>`;
   host.innerHTML =
+    bulkAnchor +
     `<table class="attr-verdict-table">` +
-      `<thead><tr>${headCells}</tr></thead><tbody>${tbody}</tbody>` +
+      `<thead>${superHead}<tr>${headCells}</tr></thead><tbody>${tbody}</tbody>` +
     `</table>` +
     (hiddenCount > 0
       ? `<div class="attr-verdict-toggle"><label><input type="checkbox" id="${showAllId}"${showAll ? " checked" : ""}> Show all 34 WMB classes <span class="muted">(${hiddenCount} hidden — low/none confidence)</span></label></div>`
