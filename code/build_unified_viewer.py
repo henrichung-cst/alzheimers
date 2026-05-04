@@ -2405,6 +2405,7 @@ main#app-main { padding:14px; }
         <button class="chip" data-tv2-preset="bulk_only">Bulk only</button>
         <button class="chip" data-tv2-preset="bulk_corrob_contest">Bulk · Corroborated · Contested</button>
         <button class="chip" data-tv2-preset="bulk_vs_decomp">Bulk vs Decomp-summed</button>
+        <button class="chip" data-tv2-preset="bulk_attr_vs_decomp">Bulk · Bulk+attr≥high · Decomp</button>
         <button class="chip" data-tv2-preset="celltype_sweep">Per-cell-type sweep</button>
         <span style="flex:1;"></span>
         <button class="chip" id="tv2-add-series" title="Add a new series row">+ Add series</button>
@@ -4995,6 +4996,41 @@ function wireAdditivityControls() {
 // stay independent.
 let _tv2State = null;
 let _tv2DecompCellsCache = null;
+let _tv2AttrTierByKinCtx = null;  // Map<`${kid}|${cidx}`, Array<{cell, rank}>>
+
+function _tv2EnsureAttrIndex() {
+  if (_tv2AttrTierByKinCtx) return;
+  _ensureKinaseIndexes();
+  const AI = PAYLOAD.attribution_index || {kinase_id:[]};
+  const m = new Map();
+  for (let j = 0; j < AI.kinase_id.length; j++) {
+    const kid = AI.kinase_id[j];
+    const cidx = AI.contrast_id[j];
+    const cell = AI.cell_type[j];
+    const tier = _combinedTierFor(kid, cidx, cell, AI.combined_confidence[j]);
+    const rank = _CONF_RANK[tier] || 0;
+    const key = kid + "|" + cidx;
+    let arr = m.get(key);
+    if (!arr) { arr = []; m.set(key, arr); }
+    arr.push({ cell, rank });
+  }
+  _tv2AttrTierByKinCtx = m;
+}
+
+function _tv2AttrPasses(kid, contrastIdx, cellsScope, threshold) {
+  // Returns true if at least one attribution row at (kid, contrastIdx) within
+  // the cell-type scope reaches the requested tier rank. threshold "" → pass.
+  if (!threshold) return true;
+  const wantRank = _CONF_RANK[threshold] || 0;
+  if (wantRank <= 0) return true;
+  const arr = _tv2AttrTierByKinCtx.get(kid + "|" + contrastIdx);
+  if (!arr) return false;
+  for (const r of arr) {
+    if (cellsScope !== "ALL" && r.cell !== cellsScope) continue;
+    if (r.rank >= wantRank) return true;
+  }
+  return false;
+}
 
 function _tv2DecompCellTypes() {
   if (_tv2DecompCellsCache) return _tv2DecompCellsCache;
@@ -5013,6 +5049,7 @@ function _tv2DefaultSeries(layer) {
     fdrBulk: 0.25,
     fdrDecomp: 0.25,
     agree: true,
+    attrTier: "",   // "" any | "low" | "moderate" | "high" | "very_high"
   };
 }
 
@@ -5063,6 +5100,10 @@ function _tv2Eval(series, kid, contrastIdx) {
   else if (series.layer === "diff") { pass = bulkSig && !decompAnyPass; refNes = bulkNes; }
   else { pass = false; refNes = null; }
   if (!pass) return null;
+  // Attribution-tier gate: applies to any series, scoped to the same cells set.
+  if (series.attrTier && !_tv2AttrPasses(kid, contrastIdx, series.cells, series.attrTier)) {
+    return null;
+  }
 
   const sign = (refNes == null || refNes === 0) ? 0 : (refNes > 0 ? 1 : -1);
   if (series.sign === "up" && sign < 0) return null;
@@ -5072,6 +5113,7 @@ function _tv2Eval(series, kid, contrastIdx) {
 
 function _tv2Counts(series) {
   // Returns counts[g][t] = { up, down, total } of unique kinases.
+  _tv2EnsureAttrIndex();
   const K = PAYLOAD.kinases;
   const DG = META.diseaseGroups;
   const TPS = META.timepoints;
@@ -5111,6 +5153,11 @@ function _tv2SeriesLabel(series) {
   if (series.layer !== "decomp") parts.push(`bulk FDR<${series.fdrBulk}`);
   if (series.layer !== "bulk") parts.push(`decomp FDR<${series.fdrDecomp}`);
   if (series.layer === "intersect") parts.push(series.agree ? "sign agree" : "any sign");
+  if (series.attrTier) {
+    const lbl = { very_high: "attr=very_high", high: "attr≥high",
+                  moderate: "attr≥moderate", low: "attr≥low" };
+    parts.push(lbl[series.attrTier] || ("attr≥" + series.attrTier));
+  }
   if (series.sign !== "signed") parts.push(series.sign);
   return parts.join(" · ");
 }
@@ -5129,6 +5176,10 @@ function _tv2RenderSeriesRow(series, idx) {
     ['signed', 'signed (up/down)'], ['up', 'up only'],
     ['down', 'down only'], ['either', 'either (total)'],
   ].map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
+  const attrOpts = [
+    ['', 'Any'], ['very_high', 'very high (only)'], ['high', 'high+'],
+    ['moderate', 'moderate+'], ['low', 'low+'],
+  ].map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
   const cellsDisabled = (series.layer === "bulk");
   const agreeDisabled = (series.layer !== "intersect");
   const showBulkFdr = (series.layer !== "decomp");
@@ -5144,6 +5195,7 @@ function _tv2RenderSeriesRow(series, idx) {
     <label>Sign <select class="tv2-sign">${signOpts}</select></label>
     ${showBulkFdr ? `<label>Bulk FDR<input class="tv2-fdr-bulk" type="number" min="0" max="1" step="0.01" style="width:54px;"></label>` : ''}
     ${showDecompFdr ? `<label>Decomp FDR<input class="tv2-fdr-decomp" type="number" min="0" max="1" step="0.01" style="width:54px;"></label>` : ''}
+    <label title="Require ≥1 attribution row in scope reaching this confidence tier (very_high = high+decomp agree, high = WMB+concordance, etc.).">Attr <select class="tv2-attr">${attrOpts}</select></label>
     <label class="tv2-agree" title="When on, decomp row must match bulk NES sign to count as corroboration."><input class="tv2-agree-cb" type="checkbox"> sign agree</label>
     <button class="tv2-rm" title="Remove this series">×</button>
   </div>`;
@@ -5157,6 +5209,7 @@ function _tv2WireSeriesRow(rowEl, idx) {
   const fdrB = rowEl.querySelector(".tv2-fdr-bulk");
   const fdrD = rowEl.querySelector(".tv2-fdr-decomp");
   const agreeCb = rowEl.querySelector(".tv2-agree-cb");
+  const attrSel = rowEl.querySelector(".tv2-attr");
   const rmBtn = rowEl.querySelector(".tv2-rm");
   layerSel.value = s.layer;
   cellsSel.value = s.cells;
@@ -5164,6 +5217,7 @@ function _tv2WireSeriesRow(rowEl, idx) {
   if (fdrB) fdrB.value = s.fdrBulk;
   if (fdrD) fdrD.value = s.fdrDecomp;
   agreeCb.checked = !!s.agree;
+  if (attrSel) attrSel.value = s.attrTier || "";
   layerSel.addEventListener("change", () => {
     s.layer = layerSel.value;
     if (s.layer === "bulk") s.cells = "ALL";
@@ -5182,6 +5236,9 @@ function _tv2WireSeriesRow(rowEl, idx) {
     } else { fdrD.value = s.fdrDecomp; }
   });
   agreeCb.addEventListener("change", () => { s.agree = agreeCb.checked; renderTemporalV2(); });
+  if (attrSel) attrSel.addEventListener("change", () => {
+    s.attrTier = attrSel.value; renderTemporalV2();
+  });
   rmBtn.addEventListener("click", () => {
     _tv2State.series.splice(idx, 1);
     if (_tv2State.series.length === 0) _tv2State.series.push(_tv2DefaultSeries("bulk"));
@@ -5206,6 +5263,13 @@ function _tv2ApplyPreset(name) {
     _tv2State.series = [_tv2DefaultSeries("bulk"), corrob, contest];
   } else if (name === "bulk_vs_decomp") {
     _tv2State.series = [_tv2DefaultSeries("bulk"), _tv2DefaultSeries("decomp")];
+  } else if (name === "bulk_attr_vs_decomp") {
+    const bulkAttr = _tv2DefaultSeries("bulk"); bulkAttr.attrTier = "high";
+    _tv2State.series = [
+      _tv2DefaultSeries("bulk"),
+      bulkAttr,
+      _tv2DefaultSeries("decomp"),
+    ];
   } else if (name === "celltype_sweep") {
     _tv2State.series = cells.slice(0, Math.min(4, cells.length)).map(c => {
       const s = _tv2DefaultSeries("decomp"); s.cells = c; return s;
