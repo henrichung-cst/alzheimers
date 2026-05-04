@@ -1980,6 +1980,7 @@ main#app-main { padding:14px; }
 .ctx-chip { display:inline-block; padding:0 5px; margin-left:3px; border-radius:8px;
   font-size:9px; font-weight:600; letter-spacing:0.2px; background:#eceff1;
   color:#37474f; border:1px solid #cfd8dc; vertical-align:middle; }
+.ctx-chip.vhi { background:#14532d; color:#f0fdf4; border-color:#14532d; }
 .ctx-chip.hi { background:#c8e6c9; color:#1b5e20; border-color:#a5d6a7; }
 .ctx-chip.mid { background:#fff3cd; color:#7a5a00; border-color:#ffe082; }
 .ctx-overflow { display:inline-block; margin-left:3px; font-size:9px; color:#78909c;
@@ -2018,6 +2019,7 @@ main#app-main { padding:14px; }
 .data-table tbody tr.driver { box-shadow:inset 3px 0 0 #e65100; }
 .badge { display:inline-block; padding:1px 6px; border-radius:9px; font-size:10px;
   font-weight:600; letter-spacing:0.2px; }
+.badge.vhi { background:#14532d; color:#f0fdf4; }
 .badge.hi { background:#c8e6c9; color:#1b5e20; }
 .badge.lo { background:#eceff1; color:#546e7a; }
 .badge.mid { background:#fff3cd; color:#7a5a00; }
@@ -2155,9 +2157,10 @@ main#app-main { padding:14px; }
           <span class="ke-filter-label" id="ke-ms-confidence-wrap">
             <label class="ke-filter-label">Confidence
               <select id="ke-filter-confidence" aria-label="Minimum confidence tier"
-                      title="Minimum confidence tier. Threshold (≥): high = high only, moderate = high+moderate, low = high+moderate+low.">
+                      title="Minimum combined tier. Threshold (≥): very high = upgraded by decomp agreement only; high = high+very high; moderate = +moderate; low = +low.">
                 <option value="">Any</option>
-                <option value="high">high (only)</option>
+                <option value="very_high">very high (only)</option>
+                <option value="high">high+</option>
                 <option value="moderate">moderate+</option>
                 <option value="low">low+</option>
               </select>
@@ -5056,13 +5059,40 @@ function getScopedContrastIds(filter) {
 }
 
 // Confidence threshold: a row passes if its tier rank ≥ requested rank.
-// high(3) > moderate(2) > low(1). "" / undefined → no constraint.
-const _CONF_RANK = {high: 3, moderate: 2, low: 1};
+// very_high(4) > high(3) > moderate(2) > low(1). "" / undefined → no constraint.
+const _CONF_RANK = {very_high: 4, high: 3, moderate: 2, low: 1};
 function _confPass(rowConf, threshold) {
   if (!threshold) return true;
   const r = _CONF_RANK[rowConf] || 0;
   const t = _CONF_RANK[threshold] || 0;
   return r >= t;
+}
+
+// Compute decomp step (-2..3) for a (kinase, contrast_id, cell_type) row,
+// mirroring the logic in _renderAttributionVerdict. Bulk NES is read from
+// PAYLOAD.kinases.NES_<contrast>. Returns 0 when decomp NES is missing.
+function _decompStepFor(kid, contrastId, cellType) {
+  if (!_decompByKey) return 0;
+  const d = _decompByKey.get(`${kid}|${contrastId}|${cellType}`);
+  if (!d || d.nes == null || !isFinite(d.nes) || d.nes === 0) return 0;
+  const cName = CONTRASTS[contrastId];
+  const _K = PAYLOAD.kinases;
+  const bulkNes = (_K && cName && _K["NES_" + cName]) ? _K["NES_" + cName][kid] : null;
+  if (bulkNes == null || !isFinite(bulkNes) || bulkNes === 0) return 1;
+  const agree = (d.nes > 0) === (bulkNes > 0);
+  const sig = d.fdr != null && isFinite(d.fdr) && d.fdr < 0.25;
+  const strong = d.fdr != null && isFinite(d.fdr) && d.fdr < 0.10;
+  if (agree) return strong ? 3 : (sig ? 2 : 1);
+  return sig ? -2 : 1;
+}
+
+// Combine attribution tier with decomp-step to produce displayed tier.
+// Currently: only the "very_high" upgrade (high + decomp sig-agree). Lower tiers
+// pass through unchanged.
+function _combinedTierFor(kid, contrastId, cellType, attrConf) {
+  if (attrConf !== "high") return attrConf || "none";
+  const step = _decompStepFor(kid, contrastId, cellType);
+  return step >= 2 ? "very_high" : "high";
 }
 
 function getScopedAttribution(kinaseId, filter) {
@@ -5079,11 +5109,15 @@ function getScopedAttribution(kinaseId, filter) {
     if (AI.kinase_id[j] !== kinaseId) continue;
     if (scopedCtx.size > 0 && !scopedCtx.has(AI.contrast_id[j])) continue;
     if (ctSet.size && !ctSet.has(AI.cell_type[j]))                continue;
-    if (!_confPass(AI.combined_confidence[j], confidence))        continue;
+    const _attrConf = AI.combined_confidence[j];
+    const _tier = _combinedTierFor(kinaseId, AI.contrast_id[j], AI.cell_type[j], _attrConf);
+    // Confidence threshold tests the upgraded tier so "very_high" filters work.
+    if (!_confPass(_tier, confidence))                            continue;
     out.push({
       contrast_id:               AI.contrast_id[j],
       cell_type:                 AI.cell_type[j],
-      combined_confidence:       AI.combined_confidence[j],
+      combined_confidence:       _attrConf,
+      combined_tier:             _tier,
       combined_score:            AI.combined_score[j],
       wmb_specificity:           AI.wmb_specificity            ? AI.wmb_specificity[j]            : null,
       wmb_mean_log2_expression:  AI.wmb_mean_log2_expression   ? AI.wmb_mean_log2_expression[j]   : null,
@@ -5331,12 +5365,11 @@ function _makeKeCompare(scopedCtxIds) {
     }
     else if (col === "n_attributed_celltypes") {
       // Match what the Cell types pill column displays: dedup by cell_type
-      // keeping best tier, then count rows at high or moderate confidence.
+      // keeping best tier, then count rows at moderate-or-better.
       const _bestTierByCT = (kid) => {
         const m = new Map();
-        const _rank = c => c === "high" ? 3 : c === "moderate" ? 2 : c === "low" ? 1 : 0;
         for (const e of getScopedAttribution(kid, kf)) {
-          const r = _rank(e.combined_confidence);
+          const r = _CONF_RANK[e.combined_tier] || 0;
           if (r > (m.get(e.cell_type) || 0)) m.set(e.cell_type, r);
         }
         let n = 0;
@@ -5347,12 +5380,11 @@ function _makeKeCompare(scopedCtxIds) {
       vb = _bestTierByCT(b.id);
     }
     else if (col === "conf") {
-      // Sort by max tier reached in scope: high(3) > moderate(2) > low(1) > none(0).
-      const _rank = c => c === "high" ? 3 : c === "moderate" ? 2 : c === "low" ? 1 : 0;
+      // Sort by max tier reached in scope: very_high(4) > high(3) > moderate(2) > low(1) > none(0).
       const _maxTier = (kid) => {
         let m = 0;
         for (const e of getScopedAttribution(kid, kf)) {
-          const r = _rank(e.combined_confidence);
+          const r = _CONF_RANK[e.combined_tier] || 0;
           if (r > m) m = r;
         }
         return m;
@@ -5482,20 +5514,21 @@ function _renderCellTypesCell(r, filter) {
     if (!prev || e.combined_score > prev.combined_score) byCell.set(e.cell_type, e);
   }
   const displayRows = Array.from(byCell.values()).filter(e =>
-    e.combined_confidence === "high" || e.combined_confidence === "moderate");
-  // Sort: confidence tier first (high → moderate), then score desc within tier.
-  const _tierRank = c => c === "high" ? 2 : c === "moderate" ? 1 : 0;
+    e.combined_tier === "very_high" || e.combined_tier === "high" || e.combined_tier === "moderate");
+  // Sort: tier first (very_high → high → moderate), then score desc within tier.
   displayRows.sort((a, b) => {
-    const dt = _tierRank(b.combined_confidence) - _tierRank(a.combined_confidence);
+    const dt = (_CONF_RANK[b.combined_tier] || 0) - (_CONF_RANK[a.combined_tier] || 0);
     if (dt !== 0) return dt;
     return b.combined_score - a.combined_score;
   });
   const n = displayRows.length;
   if (n === 0) return `<span class="muted">—</span>`;
   const top = displayRows.slice(0, 3);
-  const tip = displayRows.map(e => `${e.cell_type} (${e.combined_confidence}, ${e.combined_score.toFixed(2)})`).join("\n");
+  const tip = displayRows.map(e => `${e.cell_type} (${(e.combined_tier || '').replace('_', ' ')}, ${e.combined_score.toFixed(2)})`).join("\n");
   const topNames = top.map(e => {
-    const cls = e.combined_confidence === "high" ? "hi" : "mid";
+    const cls = e.combined_tier === "very_high" ? "vhi"
+              : e.combined_tier === "high"      ? "hi"
+              : "mid";
     return `<span class="badge ${cls}">${_escapeHtml(e.cell_type)}</span>`;
   }).join(" ");
   return `<span title="${_escapeHtml(tip)}"><strong>${n}</strong> ${topNames}${displayRows.length > 3 ? ` <span class="muted">+${displayRows.length - 3}</span>` : ""}</span>`;
@@ -5595,13 +5628,20 @@ function renderKinaseExplorer() {
 
     // Conf pill: highest tier present in scope, with contributing contrasts as chips.
     const scopedRows = getScopedAttribution(r.id, colFilter);
-    const highCtx = new Set(), modCtx = new Set();
+    const veryHighCtx = new Set(), highCtx = new Set(), modCtx = new Set();
     for (const e of scopedRows) {
-      if (e.combined_confidence === "high")     highCtx.add(e.contrast_id);
-      else if (e.combined_confidence === "moderate") modCtx.add(e.contrast_id);
+      if (e.combined_tier === "very_high")    veryHighCtx.add(e.contrast_id);
+      else if (e.combined_tier === "high")    highCtx.add(e.contrast_id);
+      else if (e.combined_tier === "moderate") modCtx.add(e.contrast_id);
     }
     let confBadge;
-    if (highCtx.size > 0) {
+    if (veryHighCtx.size > 0) {
+      const ctxs = Array.from(veryHighCtx).map(ci => CONTRASTS[ci]);
+      const shown = ctxs.slice(0, 3).map(c => `<span class="ctx-chip vhi">${shortContrast(c)}</span>`).join("");
+      const overflow = ctxs.length > 3 ? `<span class="ctx-overflow">+${ctxs.length - 3}</span>` : "";
+      const tip = `VERY HIGH in ${ctxs.length} contrast${ctxs.length===1?"":"s"} (attribution + decomp agreement): ${ctxs.join(", ")}`;
+      confBadge = `<span class="badge vhi" title="${_escapeHtml(tip)}">VERY HIGH</span>${shown}${overflow}`;
+    } else if (highCtx.size > 0) {
       const ctxs = Array.from(highCtx).map(ci => CONTRASTS[ci]);
       const shown = ctxs.slice(0, 3).map(c => `<span class="ctx-chip hi">${shortContrast(c)}</span>`).join("");
       const overflow = ctxs.length > 3 ? `<span class="ctx-overflow">+${ctxs.length - 3}</span>` : "";
