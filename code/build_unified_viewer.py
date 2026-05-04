@@ -5248,6 +5248,7 @@ function renderTemporalV2() {
           type: "bar", name: g + " up",
           x: TPS, y: TPS.map(t => counts[g][t].up),
           marker: { color }, legendgroup: g + "-up",
+          offsetgroup: g, alignmentgroup: "v" + s,
           xaxis: xAxis, yaxis: yAxis, showlegend: showLegend,
           hovertemplate: `[S${s+1}] ${g} up @ %{x}: %{y}<extra></extra>`,
         });
@@ -5255,6 +5256,7 @@ function renderTemporalV2() {
           type: "bar", name: g + " down",
           x: TPS, y: TPS.map(t => -counts[g][t].down),
           marker: { color, opacity: 0.55 }, legendgroup: g + "-down",
+          offsetgroup: g, alignmentgroup: "v" + s,
           xaxis: xAxis, yaxis: yAxis, showlegend: showLegend,
           hovertemplate: `[S${s+1}] ${g} down @ %{x}: %{customdata}<extra></extra>`,
           customdata: TPS.map(t => counts[g][t].down),
@@ -5264,6 +5266,7 @@ function renderTemporalV2() {
           type: "bar", name: g,
           x: TPS, y: TPS.map(t => counts[g][t].total),
           marker: { color }, legendgroup: g,
+          offsetgroup: g, alignmentgroup: "v" + s,
           xaxis: xAxis, yaxis: yAxis, showlegend: showLegend,
           hovertemplate: `[S${s+1}] ${g} @ %{x}: %{y}<extra></extra>`,
         });
