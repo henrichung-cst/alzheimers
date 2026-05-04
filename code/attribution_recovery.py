@@ -121,11 +121,20 @@ def _build_celltype_evidence(uaf_full):
     """Build Table 2: one row per (kinase, cell_type) above WMB expression gate.
 
     wmb_specificity and sea_ad_lfc are static per pair (same across all
-    contrasts). Deduplicate by taking the row with max wmb_specificity for
-    each pair (any row gives identical values; idxmax is deterministic).
-    Filter to pairs where wmb_specificity >= SPECIFICITY_LOW (1/24).
+    contrasts). Deduplicate by taking the row with the highest
+    combined_score (ties broken by wmb_specificity), so the surviving row
+    reflects the contrast where the joint attribution evidence is
+    strongest. Filter to pairs where wmb_specificity >= SPECIFICITY_LOW
+    (1 / N_CELL_TYPES; 1/34 ≈ 0.029 under the WMB-class spine).
     """
-    idx = uaf_full.groupby(["kinase", "cell_type"])["wmb_specificity"].idxmax()
+    if "combined_score" in uaf_full.columns:
+        idx = (uaf_full
+               .sort_values(["combined_score", "wmb_specificity"],
+                            ascending=[False, False])
+               .groupby(["kinase", "cell_type"], sort=False)
+               .head(1).index)
+    else:
+        idx = uaf_full.groupby(["kinase", "cell_type"])["wmb_specificity"].idxmax()
     deduped = uaf_full.loc[idx].reset_index(drop=True)
 
     filtered = deduped[
@@ -157,6 +166,9 @@ def _build_celltype_evidence(uaf_full):
         "concordance_direction", "evidence_basis", "wmb_tier",
         "song_lfc", "song_concordance_direction",
     ]
+    for extra in ("combined_score", "combined_confidence", "contrast"):
+        if extra in filtered.columns and extra not in cols:
+            cols.append(extra)
     return filtered[cols]
 
 
@@ -268,8 +280,12 @@ def _build_kinase_activity_matrix(mea, gene_map):
 def _build_kinase_hypothesis_table(t1, t2):
     """Build Table 3: kinase-first synthesis joining activity profile + top cell types.
 
-    Cell types ranked by wmb_fold_over_uniform desc, then weighted concordance
-    desc (Song 3× + SEA-AD 1×, matching the pipeline's concordance model).
+    Cell types ranked by combined_score desc (effective concordance × WMB
+    multiplier — the same score the unified attribution uses for confidence
+    tiers). Ties broken by weighted concordance, then WMB enrichment. None-
+    confidence cells are dropped from the ranking when at least one
+    high/moderate cell exists for that kinase, so the kinase-list "Top cell"
+    reflects an actual attribution claim rather than a WMB plausibility floor.
     """
     t2_work = t2.copy()
     w_song = config.SONG_CONCORDANCE_WEIGHT
@@ -279,10 +295,22 @@ def _build_kinase_hypothesis_table(t1, t2):
                 if "song_lfc" in t2_work.columns else 0)
     t2_work["_weighted_concordance"] = (
         (w_song * abs_song + w_sea_ad * abs_sea_ad) / (w_song + w_sea_ad))
-    t2_sorted = t2_work.sort_values(
-        ["kinase", "wmb_fold_over_uniform", "_weighted_concordance"],
-        ascending=[True, False, False],
-    )
+
+    if "combined_confidence" in t2_work.columns:
+        attributable = t2_work["combined_confidence"].isin(["high", "moderate"])
+        kinases_with_attribution = set(
+            t2_work.loc[attributable, "kinase"].unique())
+        keep_mask = attributable | (~t2_work["kinase"].isin(kinases_with_attribution))
+        t2_work = t2_work[keep_mask].copy()
+
+    if "combined_score" in t2_work.columns:
+        sort_keys = ["kinase", "combined_score",
+                     "_weighted_concordance", "wmb_fold_over_uniform"]
+        ascending = [True, False, False, False]
+    else:
+        sort_keys = ["kinase", "wmb_fold_over_uniform", "_weighted_concordance"]
+        ascending = [True, False, False]
+    t2_sorted = t2_work.sort_values(sort_keys, ascending=ascending)
 
     n_cands = t2.groupby("kinase").size().rename("n_celltype_candidates")
 
@@ -312,13 +340,19 @@ def _build_kinase_hypothesis_table(t1, t2):
                .apply(_top3, include_groups=False)
                .reset_index())
 
-    has_concordance = (t2["sea_ad_lfc"].abs().fillna(0) > config.SEA_AD_LFC_MIN)
-    if "song_lfc" in t2.columns:
-        has_concordance = has_concordance | (t2["song_lfc"].abs().fillna(0) > config.SONG_LFC_MIN)
-    high_conf = (
-        t2[(t2["wmb_tier"] == "high") & has_concordance]
-        .groupby("kinase").size().gt(0).rename("has_high_conf_attribution")
-    )
+    # Single source of truth: the pill mirrors the per-row combined_confidence
+    # from unified_attribution_full (set by _assign_confidence_and_basis_vectorized
+    # in kinase_attribution.py). Pill = True iff at least one (kinase, cell_type)
+    # row reaches "high" — the same tier rendered in the Attribution verdict
+    # table. Tier-by-tier evidence is shown in the Attribution tab; the pill is
+    # only a binary "has at least one HIGH row" indicator.
+    if "combined_confidence" in t2.columns:
+        high_conf = (
+            t2[t2["combined_confidence"] == "high"]
+            .groupby("kinase").size().gt(0).rename("has_high_conf_attribution")
+        )
+    else:
+        high_conf = pd.Series(dtype=bool, name="has_high_conf_attribution")
 
     t1_cols = ["kinase", "gene_symbol", "residue_type",
                "n_sig_contrasts", "sig_conditions",

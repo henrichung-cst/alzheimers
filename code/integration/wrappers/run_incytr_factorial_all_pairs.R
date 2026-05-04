@@ -741,9 +741,6 @@ for (recv in receivers_in_order) {
   cat(sprintf("    OLS: %d pathways x %d contrasts (%.1fs)\n",
               nrow(dt), length(contrast_names), t_ols))
 
-  # --- Pathway evidence labels ---
-  dt[, pathway_evidence := "expression-confirmed"]
-
   # Per-pathway labels of receiver-side nodes that came from kinase imputation
   # (Receptor / EM / Target). Ligand is sender-side and not imputed here.
   # String format ("" or e.g. "Receptor;EM") matches single-contrast schema in
@@ -754,6 +751,9 @@ for (recv in receivers_in_order) {
   dt[, imputed_nodes := gsub("^;+|;+$", "", gsub(";{2,}", ";",
     paste(imp_r, imp_e, imp_t, sep = ";")))]
   dt[, c("imp_r", "imp_e", "imp_t") := NULL]
+  dt[, pathway_evidence := fifelse(
+    imputed_nodes == "", "expression-confirmed", "kinase-imputed"
+  )]
 
   # --- Write Parquet (atomic) ---
   # Select output columns

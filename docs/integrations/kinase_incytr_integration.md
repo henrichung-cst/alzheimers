@@ -6,7 +6,9 @@ Source of truth for the integration layer that connects the live kinase-attribut
 
 Bridge bulk kinase activity (MEA on stoichiometry β values across 9 disease×timepoint contrasts) with Incytr's snRNA-seq–based intercellular pathway inference across 462 sender-receiver pairs (22 SEA-AD subclasses × 21, excluding self-pairs).
 
-- **Cell types:** 22 SEA-AD-mapped subclasses with snRNA-seq coverage.
+> **Migration note (2026-04-30):** the live kinase pipeline now reports cell types at the **34 WMB class** level (see `docs/foundation/concordance.md`). The Incytr integration here continues to operate against the prior **22-SEA-AD-subclass** vocabulary because the Incytr per-pair output directories were enumerated under those names. The integration adapters (`code/integration/adapters/`) read `config.SEA_AD_SUBCLASSES` and `config.SONG_SUBCLASS_MAP` (kept transitional in `config.py` for this purpose) and consume the existing `unified_attribution.csv` by re-collapsing WMB classes back to SEA-AD-subclass names where applicable. Re-running Incytr against the WMB-class taxonomy is a separate scoped follow-up.
+
+- **Cell types:** 22 SEA-AD-mapped subclasses with snRNA-seq coverage (Incytr-side; the kinase pipeline reports at WMB class level).
 - **Pairs:** 462 sender-receiver combinations.
 - **Contrasts:** 9 (factorial primary mode) — `App_2mo, App_4mo, App_6mo, Tau_2mo, Tau_4mo, Tau_6mo, ApTt_2mo, ApTt_4mo, ApTt_6mo`. Single-contrast mode covers `App_4mo` only.
 - **Sample filter:** males-only, matching the primary kinase-attribution analysis.

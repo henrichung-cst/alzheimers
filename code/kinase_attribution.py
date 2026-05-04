@@ -800,12 +800,15 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
     The median offset removed in step 1 is recorded in
     ``mea_global_shift.csv`` for transparency.
     """
-    from kinase_library import RankedPhosData
+    from kinase_library import RankedPhosData, create_kin_sub_sets
+    from kinase_library.utils._global_vars import kl_method_comp_direction_dict
 
     track_cfg = _resolve_track(track)
     enrichment_results = {}
     outlier_records = []
     shift_records = []
+    substrate_records = []
+    kl_comp_direction = kl_method_comp_direction_dict[config.KL_METHOD]
     for contrast_name, res in results_by_contrast.items():
         raw_lfc = res[lfc_key].copy()
 
@@ -877,6 +880,24 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
         print(f"  {contrast_name}: {len(er)} kinases tested, "
               f"{n_sig} significant (FDR<{config.MEA_FDR_THRESH})")
 
+        # Substrate sets: kinase -> motifs that score past KL_THRESH against the
+        # contrast's prerank universe. This is what GSEA actually walks for each
+        # kinase; persisting it lets the unified viewer show kinase-conditional
+        # MEA preparation without back-applying the leading-edge result.
+        kin_sub_sets = create_kin_sub_sets(
+            rpd.data_kl_values, threshold=config.KL_THRESH,
+            comp_direction=kl_comp_direction,
+        )
+        for kinase_name, motifs in kin_sub_sets.items():
+            for motif in motifs:
+                substrate_records.append({
+                    "kinase": kinase_name,
+                    "contrast": contrast_name,
+                    "motif": motif,
+                    "residue_type": track_cfg["residue"],
+                    "track": track_cfg["name"],
+                })
+
     # Save winsorized-site log
     if outlier_records:
         outlier_df = pd.DataFrame(outlier_records)
@@ -890,6 +911,14 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
         shift_path = _track_output("mea_global_shift.csv", track_cfg)
         shift_df.to_csv(shift_path, index=False)
         print(f"  Saved {shift_path} (median offsets removed per contrast)")
+
+    # Save kinase -> substrate-set membership per contrast for audit traceability.
+    if substrate_records:
+        subs_df = pd.DataFrame(substrate_records)
+        subs_path = _track_output("mea_substrate_sets.csv", track_cfg)
+        subs_df.to_csv(subs_path, index=False)
+        print(f"  Saved {subs_path} ({len(subs_df):,} kinase-motif rows "
+              f"across {subs_df['kinase'].nunique()} kinases)")
 
     if enrichment_results:
         return pd.concat(enrichment_results.values(), ignore_index=True)
@@ -1211,14 +1240,20 @@ def step_attribute():
             f"No MEA outputs found under {OUTPUT_DIR}; run --enrich first."
         )
     mea = pd.concat(mea_frames, ignore_index=True, sort=False)
-    sig = mea[mea["FDR"] < config.MEA_FDR_THRESH].copy()
-    print(f"  MEA results (combined): {len(mea)} total, {len(sig)} significant "
-          f"(FDR<{config.MEA_FDR_THRESH})")
+    # Drop the MEA-significance gate: build attribution for every
+    # (kinase × contrast) so the unified table can serve as the full
+    # evidence-grid for downstream views. Confidence tiers in the output
+    # still reflect MEA significance + concordance + WMB support, so
+    # readers that care about the gate filter on `combined_confidence`.
+    n_sig = (mea["FDR"] < config.MEA_FDR_THRESH).sum()
+    print(f"  MEA results (combined): {len(mea)} total, {n_sig} significant "
+          f"(FDR<{config.MEA_FDR_THRESH}) — building attribution from full grid")
+    sig = mea.copy()
     if "residue_type" in sig.columns:
         residue_breakdown = sig["residue_type"].value_counts().to_dict()
         print(f"  By residue_type: {residue_breakdown}")
     if len(sig) == 0:
-        print("  No significant kinases found. Stage 3 complete.")
+        print("  No MEA rows found. Stage 3 complete.")
         return
 
     # 3b. Map kinases to genes
@@ -1231,6 +1266,8 @@ def step_attribute():
     # Load pathway-matched effect sizes: App→early CPS (amyloid-dominant),
     # Tau→late CPS (tau-dominant), ApTt→full CPS (combined pathology).
     sea_ad_rows = []
+    supertype_rows = []  # per-(gene, stratum, supertype) audit artifact
+    _supertype_emitted = set()  # (stratum, gene_idx) pairs already emitted
     try:
         import anndata as ad
 
@@ -1263,23 +1300,49 @@ def step_attribute():
         st_to_subclass = dict(zip(ref_adata.var_names, ref_adata.var["Subclass"]))
         gene_to_idx = {g: i for i, g in enumerate(ref_adata.obs_names)}
 
-        def _subclass_lfcs(adata, gene_idx):
-            """Aggregate supertype effects to subclass-level median LFCs."""
+        # Load SEA-AD subclass → WMB class mapping (≈ 24 → 9)
+        if not os.path.exists(config.SEAAD_TO_WMB_CLASS_FILE):
+            raise FileNotFoundError(
+                f"SEA-AD → WMB class mapping not found at "
+                f"{config.SEAAD_TO_WMB_CLASS_FILE}. Generate via Phase 1c."
+            )
+        seaad_to_class_df = pd.read_csv(config.SEAAD_TO_WMB_CLASS_FILE)
+        seaad_to_class = dict(
+            zip(seaad_to_class_df["seaad_subclass"],
+                seaad_to_class_df["wmb_class_label"])
+        )
+        # Build supertype → WMB class (composed mapping)
+        st_to_wmb_class = {
+            st: seaad_to_class.get(sc) for st, sc in st_to_subclass.items()
+        }
+        n_st_mapped = sum(1 for v in st_to_wmb_class.values() if v is not None)
+        print(f"  SEA-AD supertypes mapped to WMB class: "
+              f"{n_st_mapped}/{len(supertypes)}")
+
+        def _class_lfcs(adata, gene_idx):
+            """Aggregate supertype effects to WMB class-level median LFCs.
+
+            Uses median over all contributing supertypes (option B from the
+            taxonomy migration plan — no precision loss from median-of-medians).
+            Returns (class_lfcs, class_counts) keyed on WMB class label.
+            """
             effects = adata.X[gene_idx, :]
             if hasattr(effects, "toarray"):
                 effects = effects.toarray().flatten()
             else:
                 effects = np.asarray(effects).flatten()
-            sc_vals, sc_counts = {}, {}
+            cls_vals, cls_counts = {}, {}
             for i, st in enumerate(supertypes):
-                subclass = st_to_subclass[st]
+                wmb_class = st_to_wmb_class.get(st)
+                if wmb_class is None:
+                    continue
                 val = effects[i]
                 if np.isfinite(val):
-                    sc_vals.setdefault(subclass, []).append(val)
-                    sc_counts[subclass] = sc_counts.get(subclass, 0) + 1
+                    cls_vals.setdefault(wmb_class, []).append(val)
+                    cls_counts[wmb_class] = cls_counts.get(wmb_class, 0) + 1
             return (
-                {sc: float(np.median(v)) for sc, v in sc_vals.items()},
-                sc_counts,
+                {c: float(np.median(v)) for c, v in cls_vals.items()},
+                cls_counts,
             )
 
         # Cache (stratum, gene_idx) → (sc_lfcs, sc_counts) to avoid
@@ -1302,13 +1365,35 @@ def step_attribute():
 
             cache_key = (stratum, gene_idx)
             if cache_key not in _lfc_cache:
-                _lfc_cache[cache_key] = _subclass_lfcs(
+                _lfc_cache[cache_key] = _class_lfcs(
                     adata_by_stratum[stratum], gene_idx)
-            sc_lfcs, sc_counts = _lfc_cache[cache_key]
+            cls_lfcs, cls_counts = _lfc_cache[cache_key]
+
+            # Emit per-supertype rows for this (gene, stratum) once.
+            # The supertype-level values are independent of contrast and NES;
+            # one (gene, stratum, supertype) tuple per unique combination.
+            if cache_key not in _supertype_emitted:
+                _supertype_emitted.add(cache_key)
+                effects = adata_by_stratum[stratum].X[gene_idx, :]
+                if hasattr(effects, "toarray"):
+                    effects = effects.toarray().flatten()
+                else:
+                    effects = np.asarray(effects).flatten()
+                for i, st in enumerate(supertypes):
+                    val = effects[i]
+                    if not np.isfinite(val):
+                        continue
+                    supertype_rows.append({
+                        "gene_symbol": gene,
+                        "stratum": stratum,
+                        "supertype": st,
+                        "subclass": st_to_subclass[st],
+                        "supertype_lfc": float(val),
+                    })
 
             residue_type = row.get("residue_type", "ST")
             track_name = row.get("track", "st")
-            for subclass, median_lfc in sc_lfcs.items():
+            for wmb_class, median_lfc in cls_lfcs.items():
                 concordance = np.sign(nes) * median_lfc
                 sea_ad_rows.append({
                     "kinase": kinase,
@@ -1318,9 +1403,9 @@ def step_attribute():
                     "FDR": fdr,
                     "residue_type": residue_type,
                     "track": track_name,
-                    "cell_type": subclass,
+                    "cell_type": wmb_class,
                     "sea_ad_lfc": median_lfc,
-                    "sea_ad_n_supertypes": sc_counts[subclass],
+                    "sea_ad_n_supertypes": cls_counts[wmb_class],
                     "sea_ad_stratum": stratum,
                     "concordance_score": concordance,
                 })
@@ -1333,14 +1418,36 @@ def step_attribute():
 
     sea_ad_df = pd.DataFrame(sea_ad_rows)
 
+    # Audit artifact: per-(gene, stratum, supertype) LFCs.
+    # Used by the unified viewer Attribution drawer to render a supertype
+    # heatmap grouped by subclass.
+    if supertype_rows:
+        supertype_df = pd.DataFrame(supertype_rows)
+        supertype_path = os.path.join(OUTPUT_DIR, "sea_ad_supertype_lfc.csv")
+        supertype_df.to_csv(supertype_path, index=False)
+        print(f"  SEA-AD supertype LFCs: {len(supertype_df)} rows → "
+              f"{supertype_path}")
+
     # 3d. WMB expression specificity (per kinase × subclass)
+    # Specificity is a relative ratio (cell-type mean log2 / sum across 24
+    # subclasses), so it can flag genes as "specific" while their absolute
+    # expression is in the noise floor — common with mitotic kinases in OPC.
+    # We carry the absolute expression columns through to the attribution
+    # output so downstream consumers can audit this.
     wmb_spec = {}
+    wmb_mean_log2 = {}
+    wmb_frac_cells = {}
+    wmb_binary = {}
     if os.path.exists(WMB_EXPRESSION_FILE):
         wmb = pd.read_csv(WMB_EXPRESSION_FILE)
-        wmb_grouped = wmb.groupby(
-            [wmb["gene_symbol"].str.upper(), "cell_type"]
-        )["specificity_score"].max()
-        wmb_spec = wmb_grouped.to_dict()
+        wmb_key = list(zip(wmb["gene_symbol"].str.upper(), wmb["cell_type"]))
+        wmb["_key"] = wmb_key
+        wmb_max_idx = wmb.groupby("_key")["specificity_score"].idxmax()
+        wmb_top = wmb.loc[wmb_max_idx]
+        wmb_spec = dict(zip(wmb_top["_key"], wmb_top["specificity_score"]))
+        wmb_mean_log2 = dict(zip(wmb_top["_key"], wmb_top["mean_log2_expression"]))
+        wmb_frac_cells = dict(zip(wmb_top["_key"], wmb_top["fraction_cells_expressing"]))
+        wmb_binary = dict(zip(wmb_top["_key"], wmb_top["binary_expressed"]))
         print(f"  WMB specificity: {len(wmb_spec)} (gene, cell_type) pairs loaded")
     else:
         print(f"  WMB expression file not found at {WMB_EXPRESSION_FILE}")
@@ -1356,110 +1463,137 @@ def step_attribute():
         print(f"  Song specificity: {len(song_spec)} (gene, cell_type) pairs loaded")
 
     song_conc = {}
+    song_conc_pval = {}
+    song_conc_fdr = {}
     if os.path.exists(config.SONG_CONCORDANCE_FILE):
         song_cd = pd.read_csv(config.SONG_CONCORDANCE_FILE)
+        # snRNA OLS now emits 9 time-resolved contrasts, matching the bulk
+        # pipeline. Backwards compatible with the legacy 3-pathway schema.
+        contrast_col = "contrast" if "contrast" in song_cd.columns else "pathway"
         song_cd["_key"] = list(zip(
             song_cd["gene_symbol"].str.upper(),
             song_cd["cell_type"],
-            song_cd["pathway"],
+            song_cd[contrast_col],
         ))
         song_conc = dict(zip(song_cd["_key"], song_cd["song_lfc"]))
-        print(f"  Song concordance: {len(song_conc)} (gene, cell_type, pathway) entries loaded")
+        if "song_pval" in song_cd.columns:
+            song_conc_pval = dict(zip(song_cd["_key"], song_cd["song_pval"]))
+        if "song_fdr" in song_cd.columns:
+            song_conc_fdr = dict(zip(song_cd["_key"], song_cd["song_fdr"]))
+        print(f"  Song concordance: {len(song_conc)} (gene, cell_type, "
+              f"{contrast_col}) entries loaded")
+        _song_key_is_contrast = (contrast_col == "contrast")
 
-    # 3e. Combine into unified attribution table
-    if len(sea_ad_df) == 0:
-        print("  No SEA-AD data available — building WMB-only attributions")
-        attribution_rows = []
-        for _, row in sig.iterrows():
-            gene_upper = row["gene_symbol"].upper() if isinstance(
-                row["gene_symbol"], str) else ""
-            for subclass in config.SEA_AD_SUBCLASSES:
-                spec = wmb_spec.get((gene_upper, subclass), 0.0)
-                pathway = row["contrast"].split("_")[0]
-                s_lfc = song_conc.get(
-                    (gene_upper, subclass, pathway), np.nan)
-                eff_cs, cs_source = _compute_effective_concordance(
-                    row["NES"], np.nan, s_lfc)
-                attribution_rows.append({
-                    "kinase": row["kinase"],
-                    "gene_symbol": row["gene_symbol"],
-                    "contrast": row["contrast"],
-                    "NES": row["NES"],
-                    "FDR": row["FDR"],
-                    "residue_type": row.get("residue_type", "ST"),
-                    "track": row.get("track", "st"),
-                    "cell_type": subclass,
-                    "sea_ad_lfc": np.nan,
-                    "sea_ad_n_supertypes": 0,
-                    "wmb_specificity": spec,
-                    "song_specificity": song_spec.get(
-                        (gene_upper, subclass), np.nan),
-                    "song_lfc": s_lfc,
-                    "song_concordance_score": (
-                        np.sign(row["NES"]) * s_lfc
-                        if np.isfinite(s_lfc) else np.nan),
-                    "concordance_score": 0.0,
-                    "effective_concordance": eff_cs,
-                    "concordance_source": cs_source,
-                    "combined_score": eff_cs * (0.5 + spec),
-                    "combined_confidence": "none",  # reassigned below
-                    "evidence_basis": "weak",
-                })
-        unified = pd.DataFrame(attribution_rows)
-        # Re-assign confidence/basis using Song-primary logic
-        conf, basis = _assign_confidence_and_basis_vectorized(unified)
-        unified["combined_confidence"] = conf
-        unified["evidence_basis"] = basis
+    # 3e. Combine into unified attribution table.
+    # Build a sig × WMB_CLASSES base so every (kinase, contrast) gets a row
+    # for every WMB class. SEA-AD evidence is left-joined where it exists
+    # (≈ 9 of 34 classes); Song concordance + WMB specificity always join.
+    print(f"  Building unified base: {len(sig)} sig rows × "
+          f"{len(config.WMB_CLASSES)} WMB classes")
+    base_rows = []
+    for _, row in sig.iterrows():
+        gene_upper = row["gene_symbol"].upper() if isinstance(
+            row["gene_symbol"], str) else ""
+        is_sig = bool(np.isfinite(row["FDR"]) and row["FDR"] < config.MEA_FDR_THRESH)
+        for cell_type in config.WMB_CLASSES:
+            base_rows.append({
+                "kinase": row["kinase"],
+                "gene_symbol": row["gene_symbol"],
+                "_gene_upper": gene_upper,
+                "contrast": row["contrast"],
+                "NES": row["NES"],
+                "FDR": row["FDR"],
+                "mea_significant": is_sig,
+                "residue_type": row.get("residue_type", "ST"),
+                "track": row.get("track", "st"),
+                "cell_type": cell_type,
+            })
+    unified = pd.DataFrame(base_rows)
+
+    # Left-join SEA-AD evidence (only present for SEA-AD-covered classes)
+    if len(sea_ad_df) > 0:
+        sea_ad_join = sea_ad_df[[
+            "kinase", "contrast", "cell_type",
+            "sea_ad_lfc", "sea_ad_n_supertypes", "sea_ad_stratum",
+            "concordance_score",
+        ]].copy()
+        unified = unified.merge(
+            sea_ad_join, on=["kinase", "contrast", "cell_type"], how="left"
+        )
     else:
-        unified = sea_ad_df.copy()
-        genes_upper = unified["gene_symbol"].fillna("").str.upper()
-        keys = list(zip(genes_upper, unified["cell_type"]))
-        unified["wmb_specificity"] = [wmb_spec.get(k, 0.0) for k in keys]
+        unified["sea_ad_lfc"] = np.nan
+        unified["sea_ad_n_supertypes"] = 0
+        unified["sea_ad_stratum"] = ""
+        unified["concordance_score"] = 0.0
 
-        # Song within-cohort evidence
-        unified["song_specificity"] = [song_spec.get(k, np.nan) for k in keys]
-        # Song concordance: map contrast → pathway, then look up
-        def _get_song_lfc(gene_upper, cell_type, contrast):
-            pathway = contrast.split("_")[0]
-            return song_conc.get((gene_upper, cell_type, pathway), np.nan)
-        unified["song_lfc"] = [
-            _get_song_lfc(gu, ct, con)
-            for gu, ct, con in zip(genes_upper, unified["cell_type"],
-                                   unified["contrast"])
-        ]
-        unified["song_concordance_score"] = np.where(
-            np.isfinite(unified["song_lfc"]),
-            np.sign(unified["NES"]) * unified["song_lfc"],
-            np.nan,
-        )
+    # WMB specificity + raw absolute expression
+    keys = list(zip(unified["_gene_upper"], unified["cell_type"]))
+    unified["wmb_specificity"] = [wmb_spec.get(k, 0.0) for k in keys]
+    unified["wmb_mean_log2_expression"] = [wmb_mean_log2.get(k, np.nan) for k in keys]
+    unified["wmb_fraction_cells_expressing"] = [wmb_frac_cells.get(k, np.nan) for k in keys]
+    unified["wmb_binary_expressed"] = [bool(wmb_binary.get(k, False)) for k in keys]
 
-        # Weighted concordance: Song (3×) + SEA-AD (1×), neither has veto
-        w_song = config.SONG_CONCORDANCE_WEIGHT
-        w_sea_ad = config.SEA_AD_CONCORDANCE_WEIGHT
-        song_cs = unified["song_concordance_score"]
-        sea_ad_cs = unified["concordance_score"]
-        has_song_v = np.isfinite(song_cs)
-        has_sea_ad_v = np.isfinite(sea_ad_cs) & (sea_ad_cs != 0)
-        has_both = has_song_v & has_sea_ad_v
-        has_song_only = has_song_v & ~has_sea_ad_v
-        has_sea_ad_only = ~has_song_v & has_sea_ad_v
-        unified["effective_concordance"] = np.select(
-            [has_both, has_song_only, has_sea_ad_only],
-            [(w_song * song_cs + w_sea_ad * sea_ad_cs) / (w_song + w_sea_ad),
-             song_cs, sea_ad_cs],
-            default=0.0,
-        )
-        unified["concordance_source"] = np.select(
-            [has_both, has_song_only, has_sea_ad_only],
-            ["both", "song", "sea_ad"],
-            default="none",
-        )
+    # Song within-cohort evidence — keyed on contrast when the snRNA OLS
+    # produced per-contrast rows; falls back to pathway prefix for the legacy
+    # 3-pathway schema.
+    unified["song_specificity"] = [song_spec.get(k, np.nan) for k in keys]
+    if locals().get("_song_key_is_contrast", False):
+        song_keys = list(zip(unified["_gene_upper"], unified["cell_type"],
+                             unified["contrast"]))
+    else:
+        pathways = unified["contrast"].str.split("_").str[0]
+        song_keys = list(zip(unified["_gene_upper"], unified["cell_type"], pathways))
+    unified["song_lfc"] = [song_conc.get(k, np.nan) for k in song_keys]
+    # Per-row p-value/FDR from the snRNA OLS — surfaced for downstream
+    # interpretability. With n≈15 males and a 10-param design, BH FDR within
+    # (cell_type × contrast) strata saturates near 1.0; uncorrected p<0.05 is
+    # the most useful directional flag the dataset can support, and consumers
+    # should treat it as such (see snrna_integration.step_concordance).
+    unified["song_pval"] = [song_conc_pval.get(k, np.nan) for k in song_keys]
+    unified["song_fdr"]  = [song_conc_fdr.get(k, np.nan) for k in song_keys]
+    unified["song_concordance_score"] = np.where(
+        np.isfinite(unified["song_lfc"]),
+        np.sign(unified["NES"]) * unified["song_lfc"],
+        np.nan,
+    )
 
-        unified["combined_score"] = (
-            unified["effective_concordance"] * (0.5 + unified["wmb_specificity"]))
-        conf, basis = _assign_confidence_and_basis_vectorized(unified)
-        unified["combined_confidence"] = conf
-        unified["evidence_basis"] = basis
+    # Weighted concordance: Song (3×) + SEA-AD (1×), neither has veto
+    w_song = config.SONG_CONCORDANCE_WEIGHT
+    w_sea_ad = config.SEA_AD_CONCORDANCE_WEIGHT
+    song_cs = unified["song_concordance_score"]
+    sea_ad_cs = unified["concordance_score"]
+    has_song_v = np.isfinite(song_cs)
+    has_sea_ad_v = np.isfinite(sea_ad_cs) & (sea_ad_cs != 0)
+    has_both = has_song_v & has_sea_ad_v
+    has_song_only = has_song_v & ~has_sea_ad_v
+    has_sea_ad_only = ~has_song_v & has_sea_ad_v
+    unified["effective_concordance"] = np.select(
+        [has_both, has_song_only, has_sea_ad_only],
+        [(w_song * song_cs + w_sea_ad * sea_ad_cs) / (w_song + w_sea_ad),
+         song_cs, sea_ad_cs],
+        default=0.0,
+    )
+    unified["concordance_source"] = np.select(
+        [has_both, has_song_only, has_sea_ad_only],
+        ["both", "song", "sea_ad"],
+        default="none",
+    )
+
+    unified["combined_score"] = (
+        unified["effective_concordance"] * (0.5 + unified["wmb_specificity"]))
+    conf, basis = _assign_confidence_and_basis_vectorized(unified)
+    # Confidence labels (high/moderate/low) require MEA significance —
+    # they describe how well evidence supports an *enrichment hit*. Rows
+    # below the MEA FDR gate are kept in the table for visibility but
+    # carry confidence "none" so downstream filters preserve their meaning.
+    not_mea_sig = ~unified["mea_significant"].astype(bool)
+    conf = conf.where(~not_mea_sig, "none")
+    basis = basis.where(~not_mea_sig, "weak")
+    unified["combined_confidence"] = conf
+    unified["evidence_basis"] = basis
+
+    # Drop helper column before saving
+    unified = unified.drop(columns=["_gene_upper"], errors="ignore")
 
     # Filter to attributed rows (confidence != none)
     attributed = unified[unified["combined_confidence"] != "none"].copy()
@@ -1484,7 +1618,7 @@ def step_attribute():
         for conf, cnt in attributed[
                 "combined_confidence"].value_counts().items():
             print(f"    {conf}: {cnt}")
-        print(f"\n  By cell type (subclass):")
+        print(f"\n  By cell type (WMB class):")
         for ct, cnt in attributed[
                 "cell_type"].value_counts().items():
             print(f"    {ct}: {cnt}")
@@ -1513,46 +1647,64 @@ def step_attribute():
 # ===========================================================================
 
 def step_mechanism_annotation():
-    """Optional: Run raw phospho MEA and classify abundance/activity/both."""
+    """Optional: Run raw phospho MEA and classify abundance/activity/both.
+
+    Runs raw-phospho MEA for every track (ST + pY) so the audit chain has a
+    raw-phospho counterpart for every kinase that has a stoichiometry score.
+    Mechanism annotation is computed per track and concatenated.
+    """
     _ensure_output_dir()
     print(f"\n=== Mechanism Annotation ({config.ANALYSIS_MODE}) ===\n")
 
-    # Load data — filter samples for outlier exclusion + sex subsetting
     mapping_full = load_sample_mapping()
     mapping = _filter_samples(mapping_full)
     bio_cols = mapping["column_name"].tolist()
-    raw_path = os.path.join(OUTPUT_DIR, "raw_phospho_normalized.csv")
-    if not os.path.exists(raw_path):
-        raise FileNotFoundError(f"{raw_path} not found. Run --normalize first.")
-    raw_df = pd.read_csv(raw_path)
 
-    # Build design matrix and run OLS on raw phospho
-    X, X_np, param_names, Y_raw, betas_r, pvals_r, nobs_r = _prepare_raw_ols(
-        mapping, bio_cols, raw_df)
+    tracks = [_resolve_track(t) for t in ("st", "py")]
+    raw_mea_by_track = {}
+    for track_cfg in tracks:
+        raw_path = _track_output("raw_phospho_normalized.csv", track_cfg)
+        if not os.path.exists(raw_path):
+            print(f"  [{track_cfg['name']}] {raw_path} missing; skip raw MEA "
+                  "(run --normalize for this track first).")
+            continue
+        raw_df = pd.read_csv(raw_path)
+        if raw_df.empty:
+            print(f"  [{track_cfg['name']}] raw normalized file empty; skip.")
+            continue
+        print(f"  [{track_cfg['name']}] OLS on raw phospho ({len(raw_df)} sites)...")
+        X, X_np, param_names, Y_raw, betas_r, pvals_r, nobs_r = _prepare_raw_ols(
+            mapping, bio_cols, raw_df)
+        results_by_contrast = {}
+        for contrast_name, coefs in CONTRAST_COEFS.items():
+            c_vec = np.zeros(len(param_names))
+            for param, weight in coefs.items():
+                c_vec[param_names.index(param)] = weight
+            results_by_contrast[contrast_name] = {"raw_lfc": betas_r @ c_vec}
+        print(f"  [{track_cfg['name']}] running MEA on raw phospho...")
+        mea_raw = _run_mea(raw_df["motif"], results_by_contrast, "raw_lfc",
+                           site_ids=raw_df["site_id"].values,
+                           gene_symbols=raw_df["gene_symbol"].values,
+                           track=track_cfg["name"])
+        mea_raw_path = _track_output("mea_raw_phospho.csv", track_cfg)
+        mea_raw.to_csv(mea_raw_path, index=False)
+        print(f"  Saved {mea_raw_path} ({len(mea_raw)} rows)")
+        raw_mea_by_track[track_cfg["name"]] = mea_raw
 
-    # Compute contrast LFCs for raw phospho
-    results_by_contrast = {}
-    for contrast_name, coefs in CONTRAST_COEFS.items():
-        c_vec = np.zeros(len(param_names))
-        for param, weight in coefs.items():
-            c_vec[param_names.index(param)] = weight
-        lfc_r = betas_r @ c_vec
-        results_by_contrast[contrast_name] = {"raw_lfc": lfc_r}
+    if not raw_mea_by_track:
+        print("\n  No raw-phospho tracks were processed; skipping mechanism table.")
+        return
 
-    # Run MEA on raw phospho
-    print("  Running MEA on raw phospho...")
-    mea_raw = _run_mea(raw_df["motif"], results_by_contrast, "raw_lfc",
-                       site_ids=raw_df["site_id"].values,
-                       gene_symbols=raw_df["gene_symbol"].values)
-    mea_raw_path = os.path.join(OUTPUT_DIR, "mea_raw_phospho.csv")
-    mea_raw.to_csv(mea_raw_path, index=False)
-    print(f"  Saved {mea_raw_path} ({len(mea_raw)} rows)")
+    # Concatenate ST + pY for downstream mechanism classification.
+    mea_raw = pd.concat(list(raw_mea_by_track.values()), ignore_index=True)
 
-    # Load stoichiometry MEA
-    mea_stoich_path = os.path.join(OUTPUT_DIR, "mea_stoichiometry.csv")
-    if not os.path.exists(mea_stoich_path):
-        raise FileNotFoundError(f"{mea_stoich_path} not found. Run --enrich first.")
-    mea_stoich = pd.read_csv(mea_stoich_path)
+    # Load stoichiometry MEA from every track (ST + pY) so tyrosine kinases
+    # are included in the mechanism table.
+    stoich_paths = [_track_output("mea_stoichiometry.csv", t) for t in tracks]
+    stoich_paths = [p for p in stoich_paths if os.path.exists(p)]
+    if not stoich_paths:
+        raise FileNotFoundError("No mea_stoichiometry*.csv found. Run --enrich first.")
+    mea_stoich = pd.concat([pd.read_csv(p) for p in stoich_paths], ignore_index=True)
 
     # Classify mechanism
     annotation_rows = []

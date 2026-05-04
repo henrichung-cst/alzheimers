@@ -6,7 +6,7 @@ Read by analytical role, not creation order.
 
 | File | Role |
 |:---|:---|
-| [`pipeline_overview.md`](./pipeline_overview.md) | End-to-end narrative of the full pipeline (bulk + Incytr) with cross-references into every foundation spec |
+| [`pipeline_overview.qmd`](./pipeline_overview.qmd) | End-to-end narrative of the full pipeline (bulk + Incytr) with cross-references into every foundation spec (renders to `pipeline_overview.html`) |
 
 ## Foundation (start here for live work)
 
@@ -87,6 +87,13 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 | Bundled | — | `runners/main/run_live_pipeline.sh` | all of the above |
 | Dual-track | — | `runners/main/run_dual_analysis.sh` | `*_males_only/`, `*_full_cohort/` |
 
+### Standalone utilities (`code/`)
+| Script | Purpose |
+|:---|:---|
+| `map_kinases_to_genes.py` | Kinase → gene symbol mapping utility |
+| `lucie_5xfad_manifest.py` | Proteomics manifest builder for Lucie 5xFAD integration |
+| `build_unified_viewer.py` | See Viewers section below |
+
 ### Supporting (`code/`)
 | Script | Runner | Output dir |
 |:---|:---|:---|
@@ -94,17 +101,21 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 | `wmb_expression.py` | `runners/supporting/run_wmb_expression.sh` | `outputs/reports/wmb_expression/` |
 | `snrna_integration.py` | `runners/supporting/run_snrna_integration.sh` | `outputs/reports/snrna_integration/` |
 
+Additional supporting runners (ops utilities, no Python counterpart): `runners/supporting/compress_atlas_cache.sh`, `decompress_atlas_cache.sh`, `run_wmb_download.sh`, `run_extract_wmb_subset.sh`.
+
 ### Supplementary diagnostics (`code/supplementary/`)
-`fdr_stringent.py`, `threshold_sensitivity.py`, `aggregation_robustness.py`, `parent_protein_qc.py` — run via `runners/supplementary/run_reviewer_diagnostics.sh`. Output: `outputs/reports/supplementary/`.
+`fdr_stringent.py`, `threshold_sensitivity.py`, `aggregation_robustness.py`, `parent_protein_qc.py`, `deconvolution_infeasibility.py` — run via `runners/supplementary/run_reviewer_diagnostics.sh`. Output: `outputs/reports/supplementary/`.
 
 ### Integration pipeline (`code/integration/`)
 Python adapters + R wrappers; config in `config_integration.py`.
 
 | Component | Files |
 |:---|:---|
-| Python adapters | `adapters/export_expression{,_factorial}.py`, `export_phospho.py`, `export_kldata.py`, `export_kl_output{,_factorial}.py`, `export_kinase_imputed_genes{,_factorial}.py`, `compute_kinase_support{,_all_pairs,_factorial}.py`, `aggregate_cross_pair.py`, `aggregate_factorial.py`, `examine_factorial.py` |
+| Python adapters | `adapters/export_expression{,_factorial}.py`, `export_phospho.py`, `export_kldata.py`, `export_kl_output{,_factorial}.py`, `export_kinase_imputed_genes{,_factorial}.py`, `compute_kinase_support{,_all_pairs,_factorial}.py`, `aggregate_cross_pair.py`, `aggregate_factorial.py`, `examine_factorial.py`, `build_edge_index.py`, `build_edge_shards.py`, `common.py` |
 | R wrappers | `wrappers/duckdb_enumeration.R`, `receiver_scoring.R`, `run_incytr{,_all_pairs,_factorial_all_pairs}.R`, `postprocess.R`, `verify_phase2.R`, `bootstrap_sensitivity.R` |
-| Runners | `run_all_pairs.sh` (single-contrast), `run_factorial_all_pairs.sh`, `run_factorial_memory_gated.sh`, `run_factorial_permutations.sh`, `run_imputation_verification.sh`, `run_phase1.sh` |
+| Runners | `run_all_pairs.sh` (single-contrast), `run_factorial_all_pairs.sh`, `run_factorial_memory_gated.sh`, `run_factorial_permutations.sh`, `run_imputation_verification.sh` |
+| Tests | `tests/edge_pruning/` — R-based diagnostic/validation scripts for enumeration scaling |
+| README | `code/integration/README.md` — integration methodology overview |
 
 ## Outputs
 
@@ -130,4 +141,4 @@ Python adapters + R wrappers; config in `config_integration.py`.
 
 | Viewer | Builder | Input | Output |
 |:---|:---|:---|:---|
-| Unified (kinase + pathway) | `code/build_unified_viewer.py` | `kinase_hypothesis_table.csv`, `kinase_activity_matrix.csv`, `celltype_evidence_table.csv`, `mea_stoichiometry.csv`, `site_level_ols.csv`, `backbone_recurrence_by_contrast.csv`, `backbone_permutation_pvalues_by_contrast.csv`, `unified_attribution.csv`, `kinase_backbone_edges.parquet` | `outputs/reports/unified_viewer/index.html` + payload JSON + sharded edge slices |
+| Kinase + pathway | `code/build_unified_viewer.py` | `kinase_hypothesis_table.csv`, `kinase_activity_matrix.csv`, `celltype_evidence_table.csv`, `mea_stoichiometry.csv`, `site_level_ols.csv`, `backbone_recurrence_by_contrast.csv`, `backbone_permutation_pvalues_by_contrast.csv`, `unified_attribution.csv`, `kinase_backbone_edges.parquet` | `outputs/reports/unified_viewer/index.html` + payload JSON + sharded edge slices |

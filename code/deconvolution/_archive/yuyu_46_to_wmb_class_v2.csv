@@ -1,0 +1,47 @@
+cluster_name,wmb_class_v2,plurality_fraction,n_nuclei,n_plurality,second_class,second_fraction,unmapped_fraction,wmb_class_v1_hand,v1_confidence,v1_notes,agrees_with_v1
+Excitatory-Pyramidal-Satb2-Cux2,01 IT-ET Glut,0.999,5023,5018,02 NP-CT-L6b Glut,0.0004,0.0,01 IT-ET Glut,clean,Upper-layer cortical IT,True
+Excitatory-Rorb,01 IT-ET Glut,1.0,3582,3582,17 MH-LH Glut,0.0,0.0,01 IT-ET Glut,clean,Rorb is canonical L4 IT marker,True
+Excitatory-Pyramidal,01 IT-ET Glut,0.9899,2570,2544,13 CNU-HYa Glut,0.0054,0.0,01 IT-ET Glut,clean,Cortical pyramidal IT/ET,True
+Excitatory-neurons,01 IT-ET Glut,0.7012,1526,1070,02 NP-CT-L6b Glut,0.2929,0.0,01 IT-ET Glut,ambiguous,Generic excitatory; defaulted to cortical IT-ET,True
+cluster-27,01 IT-ET Glut,0.4058,823,334,30 Astro-Epen,0.3718,0.0,Unclassified,unmapped,Unnamed reclustered cluster,False
+Basal-Ganglia-GABAergic-Neurons,01 IT-ET Glut,0.9768,561,548,07 CTX-MGE GABA,0.0071,0.0,09 CNU-LGE GABA,ambiguous,Basal ganglia GABA; CNU-LGE most common,False
+cluster-64,01 IT-ET Glut,0.9776,402,393,13 CNU-HYa Glut,0.0124,0.0,Unclassified,unmapped,Unnamed reclustered cluster,False
+cluster-69,01 IT-ET Glut,0.9972,357,356,02 NP-CT-L6b Glut,0.0028,0.0,Unclassified,unmapped,Unnamed reclustered cluster,False
+cluster-76,01 IT-ET Glut,0.5325,323,172,30 Astro-Epen,0.1362,0.0,Unclassified,unmapped,Unnamed reclustered cluster,False
+cluster-90,01 IT-ET Glut,0.2791,172,48,04 DG-IMN Glut,0.2267,0.0,Unclassified,unmapped,Unnamed reclustered cluster,False
+cluster-94,01 IT-ET Glut,0.987,154,152,02 NP-CT-L6b Glut,0.013,0.0,Unclassified,unmapped,Unnamed reclustered cluster,False
+cluster-97,01 IT-ET Glut,0.7895,114,90,10 LSX GABA,0.0614,0.0,Unclassified,unmapped,Unnamed reclustered cluster,False
+cluster-109,01 IT-ET Glut,1.0,27,27,17 MH-LH Glut,0.0,0.0,Unclassified,unmapped,Unnamed reclustered cluster,False
+Foxp2-Excitatory-Neurons-layers-6-and-2-3,02 NP-CT-L6b Glut,0.9968,2774,2765,01 IT-ET Glut,0.0022,0.0,02 NP-CT-L6b Glut,ambiguous,Foxp2 marks L6 CT/NP — closer to NP-CT-L6b than IT-ET,True
+Excitatory-neurons-Cajal-Retzius-cells-layer-I-Reelin,03 OB-CR Glut,0.993,286,284,11 CNU-HYa GABA,0.0035,0.0,03 OB-CR Glut,clean,Cajal-Retzius cells under OB-CR class,True
+cluster-86,03 OB-CR Glut,0.8,225,180,01 IT-ET Glut,0.0267,0.0,Unclassified,unmapped,Unnamed reclustered cluster,False
+cluster-105,03 OB-CR Glut,1.0,59,59,01 IT-ET Glut,0.0,0.0,Unclassified,unmapped,Unnamed reclustered cluster,False
+Excitatory principal neurons in the hippocampal dentate gyrus,04 DG-IMN Glut,0.9994,1583,1582,01 IT-ET Glut,0.0006,0.0,04 DG-IMN Glut,clean,Dentate granule neurons,True
+Erbb4-VIP-inhibitory-neurons,05 OB-IMN GABA,0.999,8091,8083,31 OPC-Oligo,0.0004,0.0,06 CTX-CGE GABA,clean,VIP+ CGE-derived inhibitory,False
+VIP-positive-interneuron,05 OB-IMN GABA,0.7222,1386,1001,06 CTX-CGE GABA,0.2763,0.0,06 CTX-CGE GABA,clean,VIP+ CGE-derived inhibitory,False
+Ndnf-positive-neurogliaform-inhibitory-interneurons-GABAergic,05 OB-IMN GABA,1.0,751,751,01 IT-ET Glut,0.0,0.0,06 CTX-CGE GABA,clean,Ndnf+ neurogliaform under Lamp5/CGE,False
+GABAergic-inhibitory-interneurons-Dlx6os1-Erbb4,05 OB-IMN GABA,1.0,421,421,01 IT-ET Glut,0.0,0.0,07 CTX-MGE GABA,ambiguous,Dlx6os1+Erbb4; defaulted to MGE,False
+cluster-85,05 OB-IMN GABA,0.9959,244,243,09 CNU-LGE GABA,0.0041,0.0,Unclassified,unmapped,Unnamed reclustered cluster,False
+cluster-93,05 OB-IMN GABA,0.9873,158,156,09 CNU-LGE GABA,0.0127,0.0,Unclassified,unmapped,Unnamed reclustered cluster,False
+GABAergic-inhibitory-interneurons-VIP-positive,05 OB-IMN GABA,1.0,66,66,01 IT-ET Glut,0.0,0.0,06 CTX-CGE GABA,clean,VIP+ CGE-derived inhibitory,False
+Reln-neurons,06 CTX-CGE GABA,0.6591,1100,725,07 CTX-MGE GABA,0.1891,0.0,03 OB-CR Glut,ambiguous,Reelin+ neurons; assumed CR-like,False
+Erbb4-inhibitory-neurons,07 CTX-MGE GABA,0.9785,1579,1545,08 CNU-MGE GABA,0.0095,0.0,07 CTX-MGE GABA,ambiguous,Erbb4 alone is ambiguous; defaulted to MGE,True
+cluster-108,07 CTX-MGE GABA,1.0,53,53,01 IT-ET Glut,0.0,0.0,Unclassified,unmapped,Unnamed reclustered cluster,False
+Inhibitory-Neurons,08 CNU-MGE GABA,0.3076,543,167,10 LSX GABA,0.2026,0.0,07 CTX-MGE GABA,ambiguous,Generic inhibitory; defaulted to cortical MGE,False
+cluster-102,08 CNU-MGE GABA,0.9882,85,84,07 CTX-MGE GABA,0.0118,0.0,Unclassified,unmapped,Unnamed reclustered cluster,False
+Cholinergic-Neurons,08 CNU-MGE GABA,0.8448,58,49,18 TH Glut,0.0345,0.0,11 CNU-HYa GABA,ambiguous,Striatal/basal forebrain cholinergic; CNU-HYa best fit,False
+Striatal-medium-spiny-neuron,09 CNU-LGE GABA,0.988,4506,4452,11 CNU-HYa GABA,0.0107,0.0,09 CNU-LGE GABA,clean,MSN under CNU-LGE,True
+GABAergic inhibitory interneurons,09 CNU-LGE GABA,0.9794,339,332,11 CNU-HYa GABA,0.0118,0.0,07 CTX-MGE GABA,ambiguous,Generic GABAergic; defaulted to cortical MGE,False
+cluster-81,09 CNU-LGE GABA,1.0,281,281,01 IT-ET Glut,0.0,0.0,Unclassified,unmapped,Unnamed reclustered cluster,False
+glutamatergic-excitatory-neurons,11 CNU-HYa GABA,0.3245,1707,554,18 TH Glut,0.1974,0.0,01 IT-ET Glut,ambiguous,Generic cortical excitatory; defaulted to IT-ET,False
+Glutamatergic-excitatory-neurons-Cortical-layer-2-4-pyramidal-neurons,13 CNU-HYa Glut,0.5446,112,61,03 OB-CR Glut,0.4018,0.0,01 IT-ET Glut,clean,Cortical L2-4 IT,False
+Astrocytes,30 Astro-Epen,0.9245,6954,6429,01 IT-ET Glut,0.0674,0.0,30 Astro-Epen,clean,Astrocyte; direct match,True
+Ependymal-cell,30 Astro-Epen,0.9894,472,467,18 TH Glut,0.0021,0.0,30 Astro-Epen,clean,Direct match,True
+Choroid-Plexus-Epithelial-Cells,30 Astro-Epen,1.0,245,245,01 IT-ET Glut,0.0,0.0,30 Astro-Epen,clean,Ependymal lineage,True
+Oligodendrocytes,31 OPC-Oligo,0.9981,6394,6382,05 OB-IMN GABA,0.0005,0.0,31 OPC-Oligo,clean,Direct match,True
+OPC,31 OPC-Oligo,0.9969,1636,1631,01 IT-ET Glut,0.0006,0.0,31 OPC-Oligo,clean,Direct match (OPC subclass within OPC-Oligo),True
+Ptprz1-protoplasmic-astrocytes,32 OEC,0.9984,609,608,03 OB-CR Glut,0.0016,0.0,30 Astro-Epen,clean,Protoplasmic astrocyte subtype,False
+Endothelial-cell,33 Vascular,0.9953,1485,1478,09 CNU-LGE GABA,0.0013,0.0,33 Vascular,clean,Direct match,True
+Pericyte,33 Vascular,0.997,1014,1011,04 DG-IMN Glut,0.001,0.0,33 Vascular,clean,Mural cells fall under Vascular class,True
+Vascular-Leptomeningeal-Cells,33 Vascular,0.9982,559,558,31 OPC-Oligo,0.0018,0.0,33 Vascular,clean,VLMC under Vascular class,True
+Microglia,34 Immune,0.9926,2286,2269,31 OPC-Oligo,0.0022,0.0,34 Immune,clean,Direct match,True

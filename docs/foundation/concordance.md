@@ -204,16 +204,28 @@ symbol name, which holds for the conserved kinome.
 
 ## Cell type taxonomy
 
-All three expression sources are mapped to a common set of 24 SEA-AD
-subclasses defined in `config.SEA_AD_SUBCLASSES`:
+All three evidence sources are mapped to a common spine of **34 WMB
+classes** defined in `config.WMB_CLASSES` and `data/external/allen_abc/
+wmb_class_manifest.csv`. Each evidence source provides what it can and
+contributes `n/a` for cell types it cannot witness, rather than being
+silently dropped.
 
-- **SEA-AD:** 139 supertypes → 24 subclasses via `adata.var["Subclass"]`
-  metadata (median aggregation)
-- **WMB:** 338 region-specific subclasses → 24 subclasses via keyword
-  matching in `atlas_reference.match_subclass()`
-- **Song:** 210 Allen Cell Type Mapper labels → 22/24 subclasses via
-  `config.SONG_SUBCLASS_MAP` (Pax6 and L5/6 NP are absent from the paired
-  snRNA-seq data)
+- **WMB (spine):** 338 region-specific subclasses → 34 classes via direct
+  group-by on `wmb_meta["class"]` (no keyword matching, no silent drops).
+  Subclass-level data preserved in `wmb_kinase_expression_subclass.csv`
+  for audit/tooltip.
+- **SEA-AD:** 139 supertypes → 9 WMB classes via the chained mapping
+  `var["Subclass"]` (24 SEA-AD subclasses) → `seaad_subclass_to_wmb_class.csv`
+  (cortical neurons + glia + vascular + immune). Median LFC across all
+  contributing supertypes per WMB class. SEA-AD has no MTG coverage of
+  hippocampal CA, dentate granule, striatum, olfactory bulb, or cerebellum,
+  so those classes carry `sea_ad_lfc = n/a`.
+- **Song:** Allen Cell Type Mapper `class_name` column maps directly into
+  the 34-class vocabulary (the prefix code is added via the manifest).
+  Approximately 21 of 34 classes pass Song's confidence + animal-count
+  gates; the rest carry `song_lfc = n/a` honestly. See
+  `outputs/reports/snrna_integration/active_classes.csv` for the per-class
+  Song coverage manifest.
 
 ## Implementation locations
 

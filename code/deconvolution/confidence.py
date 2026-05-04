@@ -1,30 +1,25 @@
-"""Stage 5: per-row confidence calibration.
+"""Stage 5: attach per-row evidence columns to the Stage 4 MEA table.
 
-| Confidence  | Condition                                                                  |
-|-------------|----------------------------------------------------------------------------|
-| High        | deconv FDR < 0.25 + snRNA FDR < 0.10 + direction_match = "match"           |
-| Moderate    | deconv FDR < 0.25 + snRNA flat or n/a                                      |
-| Low         | deconv FDR < 0.25 + snRNA significant in opposite direction                |
-| Insufficient| any sample group has < MIN_CELLS_PER_GROUP cells in this cluster/contrast  |
+Joins the numeric/boolean columns a downstream reader needs to decide
+whether to act on a row — but does **not** assign a categorical label.
+Readers gate on the underlying columns directly:
 
-The Insufficient gate is computed from yuyu_clustersize.csv: for each
-(cluster, contrast) we compute the minimum cell count across the four
-sample groups participating in that contrast (the contrast's WT
-references plus its disease arm at the relevant timepoint).
+- ``FDR`` (bulk MEA)
+- ``n_cells_min`` (per-row floor across the contrast's two groups)
+- ``cohort_concordant`` / ``frac_match`` / ``cohort_fdr`` (stratum-level
+  binomial against snRNA kinase-gene LFC)
+- ``expressed`` (kinase mRNA above ``EXPR_PRESENCE_FLOOR`` in this WMB class)
+- ``kinase_gene_LFC_snRNA`` / ``direction_match`` (per-row sign agreement)
+
+Per-row snRNA FDR is not used as a gate: the n≈15-male snRNA cohort
+produces saturated per-row FDRs. Cohort-level binomial concordance and
+expression presence are the surviving signals.
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from deconvolution import paths
-
-# Each contrast (e.g. App_4mo) compares WT vs disease at one timepoint.
-# The cell-count floor must hold across the male WT references AND the
-# disease arm of the contrast. For factorial OLS the relevant samples
-# are all male animals at any timepoint contributing to the design,
-# but the disease-specific cell count is the binding constraint, so we
-# check the disease arm at the contrast timepoint.
 
 CONTRAST_GROUPS = {
     "App_2mo":  ["ma_2mo_AppP", "ma_2mo_WTyp"],
@@ -39,37 +34,41 @@ CONTRAST_GROUPS = {
 }
 
 
-def compute_min_cells(cluster_size_df: pd.DataFrame) -> pd.DataFrame:
-    """Return long DataFrame: cluster × contrast → n_cells_min."""
+def compute_min_cells(group_class_counts: pd.DataFrame) -> pd.DataFrame:
+    """Return long DataFrame: wmb_class × contrast → n_cells_min.
+
+    ``group_class_counts`` rows are WMB classes, columns are group sample
+    IDs (e.g. ``ma_2mo_AppP``). Each contrast's floor is the minimum
+    nucleus count across its two groups.
+    """
     rows = []
-    for cluster in cluster_size_df.index:
+    for wmb_class in group_class_counts.index:
         for contrast, groups in CONTRAST_GROUPS.items():
-            counts = []
-            for g in groups:
-                if g in cluster_size_df.columns:
-                    counts.append(int(cluster_size_df.loc[cluster, g]))
-            n_min = min(counts) if counts else 0
+            counts = [
+                int(group_class_counts.loc[wmb_class, g])
+                for g in groups if g in group_class_counts.columns
+            ]
             rows.append({
-                "cluster": cluster, "contrast": contrast, "n_cells_min": n_min,
+                "wmb_class": wmb_class, "contrast": contrast,
+                "n_cells_min": min(counts) if counts else 0,
             })
     return pd.DataFrame(rows)
 
 
-def label(merged: pd.DataFrame, cluster_size_df: pd.DataFrame) -> pd.DataFrame:
-    """Add `confidence` and `n_cells_min` columns to the Stage 4 table."""
-    floor = compute_min_cells(cluster_size_df)
-    df = merged.merge(floor, how="left", on=["cluster", "contrast"])
+def attach_evidence(merged: pd.DataFrame, group_class_counts: pd.DataFrame,
+                    cohort_df: pd.DataFrame,
+                    expressed: pd.Series) -> pd.DataFrame:
+    """Add ``n_cells_min``, ``cohort_concordant``, ``frac_match``,
+    ``cohort_fdr``, and ``expressed`` to the Stage 4 table. No categorical
+    label is assigned; downstream readers gate on these columns directly.
+    """
+    floor = compute_min_cells(group_class_counts)
+    df = merged.merge(floor, how="left", on=["wmb_class", "contrast"])
 
-    deconv_sig = df["FDR"] < paths.DECON_FDR_THRESH
-    snrna_sig = df["kinase_gene_FDR_snRNA"] < paths.SNRNA_FDR_HIGH
-    insufficient = df["n_cells_min"].fillna(0) < paths.MIN_CELLS_PER_GROUP
-
-    conf = np.full(len(df), "Low", dtype=object)
-    conf[deconv_sig & snrna_sig & (df["direction_match"] == "match")] = "High"
-    conf[deconv_sig & df["direction_match"].isin(["flat", "n/a"])] = "Moderate"
-    # "opposite" → Low (already default for deconv_sig rows)
-    conf[~deconv_sig] = "NotSig"
-    conf[insufficient] = "Insufficient"
-
-    df["confidence"] = conf
+    cohort_keep = cohort_df.reindex(
+        columns=["wmb_class", "contrast", "frac_match",
+                 "cohort_fdr", "cohort_concordant"])
+    df = df.merge(cohort_keep, how="left", on=["wmb_class", "contrast"])
+    df["cohort_concordant"] = df["cohort_concordant"].fillna(False).astype(bool)
+    df["expressed"] = expressed.reindex(df.index).fillna(False).astype(bool)
     return df

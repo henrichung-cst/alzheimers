@@ -61,11 +61,11 @@ def step_run():
     df = pd.read_csv(full_path)
     print(f"  Loaded {len(df)} rows from unified_attribution_full.csv")
 
-    n = config.N_CELL_TYPES  # 24
+    n = config.N_CELL_TYPES  # 34 under WMB-class spine
 
     # Current defaults
-    default_spec_high = config.SPECIFICITY_HIGH  # 2.0/24
-    default_spec_low = config.SPECIFICITY_LOW    # 1.0/24
+    default_spec_high = config.SPECIFICITY_HIGH  # 2.0 / N_CELL_TYPES
+    default_spec_low = config.SPECIFICITY_LOW    # 1.0 / N_CELL_TYPES
     default_lfc = config.SEA_AD_LFC_MIN          # 0.1
 
     # Pre-extract arrays once for vectorized sweep.

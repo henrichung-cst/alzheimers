@@ -38,7 +38,7 @@ def run_mea(site_ols: pd.DataFrame, track: str,
     track : "st" or "py"
     permutation_num : override config.MEA_PERMUTATION_NUM if given
 
-    Returns DataFrame: kinase × cluster × contrast → NES, FDR, pval, track.
+    Returns DataFrame: kinase × wmb_class × contrast → NES, FDR, pval, track.
     """
     from kinase_library import RankedPhosData
 
@@ -50,8 +50,8 @@ def run_mea(site_ols: pd.DataFrame, track: str,
         return pd.DataFrame()
 
     out_rows = []
-    groups = list(site_ols.groupby(["cluster", "contrast"]))
-    for i, ((cluster, contrast), sub) in enumerate(groups, 1):
+    groups = list(site_ols.groupby(["wmb_class", "contrast"]))
+    for i, ((wmb_class, contrast), sub) in enumerate(groups, 1):
         if sub.empty:
             continue
 
@@ -85,19 +85,19 @@ def run_mea(site_ols: pd.DataFrame, track: str,
                 seed=config.MEA_SEED,
             )
         except Exception as e:
-            print(f"    MEA FAILED [{track}][{cluster}][{contrast}]: {e}")
+            print(f"    MEA FAILED [{track}][{wmb_class}][{contrast}]: {e}")
             continue
 
         er = result.enrichment_results.copy()
         er.index.name = "kinase"
         er = er.reset_index()
-        er["cluster"] = cluster
+        er["wmb_class"] = wmb_class
         er["contrast"] = contrast
         er["track"] = track
         out_rows.append(er)
 
         if i % 25 == 0 or i == len(groups):
-            print(f"    [{track}] MEA {i}/{len(groups)} (cluster, contrast) pairs")
+            print(f"    [{track}] MEA {i}/{len(groups)} (wmb_class, contrast) pairs")
 
     if not out_rows:
         return pd.DataFrame()

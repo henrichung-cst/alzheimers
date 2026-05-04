@@ -95,7 +95,7 @@ python code/wmb_expression.py --summary   # Print cached results
 # Runner: bash code/runners/supporting/run_wmb_expression.sh
 
 # Song snRNA-seq Integration (within-cohort evidence from paired animals)
-python code/snrna_integration.py --pseudobulk    # S1: pseudobulk from 170 h5ad (28 animals → 22 subclasses)
+python code/snrna_integration.py --pseudobulk    # S1: pseudobulk from 170 h5ad (28 animals → ~21 of 34 WMB classes)
 python code/snrna_integration.py --specificity   # S2: within-cohort expression specificity
 python code/snrna_integration.py --concordance   # S3: within-cohort transcriptomic concordance (males-only OLS)
 python code/snrna_integration.py --run           # All stages in order
@@ -120,7 +120,7 @@ python code/supplementary/parent_protein_qc.py --run          # Q5: Activity-dri
 
 ```bash
 python code/map_kinases_to_genes.py       # Kinase→gene symbol mapping
-python code/build_unified_viewer.py       # Unified interactive HTML viewer (kinase + pathway + cross-entity)
+python code/build_unified_viewer.py       # Interactive HTML viewer (kinase + pathway + cross-entity)
 python code/lucie_5xfad_manifest.py       # Lucie 5xFAD proteomics manifest builder
 ```
 
@@ -147,7 +147,7 @@ The live pipeline is a 3-stage stoichiometry-corrected MEA enrichment + unified 
 - **Sample filtering**: `ANALYSIS_MODE` env var (default `males_only`); IRS normalization always uses all 72 samples, filtering applies at OLS time
 - **OLS model**: disease×timepoint interactions → 9 contrasts (3 diseases × 3 timepoints). Design matrix: const, App, Tau, Int, [female], time_4mo, time_6mo, App×time4, App×time6, Tau×time4, Tau×time6
 - **MEA**: GSEA pre-ranked on stoichiometry β values; median-centered then winsorized (1st/99th percentile) before ranking; FDR < 0.25
-- **Attribution**: 3 evidence sources (SEA-AD concordance, WMB specificity, Song within-cohort) weighted Song 3× : SEA-AD 1×; 24 subclasses; confidence tiers (high/moderate/low)
+- **Attribution**: 3 evidence sources (Song within-cohort, SEA-AD concordance, WMB specificity) weighted Song 3× : SEA-AD 1×; 34 WMB classes (Allen WMB published taxonomy, no silent drops); confidence tiers (high/moderate/low)
 
 ### Dependency Graph
 
@@ -164,24 +164,24 @@ kinase_attribution.py + snrna_integration.py  ←  code/integration/
 
 ### Live Code
 
-- `config.py` — Shared configuration: file paths, thresholds, enrichment method params, `SEA_AD_SUBCLASSES` list (24 subclasses, single source of truth), sample filtering params (`OUTLIER_ZSCORE_THRESH`, `ANALYSIS_MODE`). Still structurally mixed with legacy settings.
+- `config.py` — Shared configuration: file paths, thresholds, enrichment method params, `WMB_CLASSES` list (34 WMB classes, single source of truth for the cell-type spine), `SEA_AD_SUBCLASSES` (transitional, used only by Incytr-integration adapters and supplementary scripts), sample filtering params (`OUTLIER_ZSCORE_THRESH`, `ANALYSIS_MODE`). Still structurally mixed with legacy settings.
 - `data_ingest.py` — TMT channel mapping, phosphosite-to-protein matching, marker assessment, PCA quality control, outlier detection. Outputs to `outputs/reports/data_ingest/`. Requires: `scikit-learn`, `matplotlib`.
 - `kinase_attribution.py` — IRS normalization (all 72 samples), sample filtering (outlier exclusion + sex filter), stoichiometry computation, factorial OLS with disease×timepoint interactions (9 contrasts), MEA kinase enrichment (median-centered + winsorized), unified cell-type attribution (SEA-AD concordance + WMB expression specificity). Outputs to `outputs/reports/kinase_attribution/`. Requires: `kinase-library`, `gseapy`, `scikit-learn`, `matplotlib`, `anndata`.
 - `attribution_recovery.py` — Cross-contrast consistency analysis, final unified attribution table. Outputs to `outputs/reports/attribution_recovery/`. Requires: `matplotlib`.
 - `plot_attribution_bubbles.py` — Per-tissue heatmaps, direction-over-time diverging bars, ApTt additivity scatter, winsorization diagnostic. Outputs to `outputs/reports/attribution_recovery/bubble_plots/`. Requires: `matplotlib`, `scipy`.
-- `build_unified_viewer.py` — Generates the unified interactive HTML viewer (kinase activity → cell-type attribution → pathway backbones → cross-entity views). Reads attribution-recovery tables, MEA stoichiometry, site-level OLS, factorial backbone recurrence + permutation pvalues, and the `kinase_backbone_edges.parquet` edge index. Emits `outputs/reports/unified_viewer/index.html` + a shared JSON payload plus sharded per-entity edge slices under `edge_slices/{kinase,backbone}/` fetched on demand via `SliceCache`. Requires: `kinase-library`, `scipy`, `pyarrow`.
+- `build_unified_viewer.py` — Generates the interactive HTML viewer (kinase activity → cell-type attribution → pathway backbones → cross-entity views). Reads attribution-recovery tables, MEA stoichiometry, site-level OLS, factorial backbone recurrence + permutation pvalues, and the `kinase_backbone_edges.parquet` edge index. Emits `outputs/reports/unified_viewer/index.html` + a shared JSON payload plus sharded per-entity edge slices under `edge_slices/{kinase,backbone}/` fetched on demand via `SliceCache`. Requires: `kinase-library`, `scipy`, `pyarrow`.
 - `lucie_5xfad_manifest.py` — Builds a proteomics manifest for Lucie 5xFAD data integration.
 
 ### Supporting Code
 
 - `atlas_reference.py` — External atlas acquisition: downloads WMB, Aging Mouse, and SEA-AD from Allen Institute. Produces structure reports, taxonomy mapping, kinase gene coverage. Exports cell-type taxonomy constants (`SUBCLASS_KEYWORDS`, `SEA_AD_SUBCLASSES`, `SUBCLASS_TO_5PLUS1`, `match_subclass`). Outputs to `outputs/reports/atlas_reference/`. Requires: `abc_atlas_access`, `anndata`, `boto3`.
-- `wmb_expression.py` — WMB expression export: per-subclass kinase/phosphatase expression from Allen WMB 10Xv3 HPF (24 SEA-AD subclasses). Produces `outputs/reports/wmb_expression/wmb_kinase_expression.csv` consumed by kinase_attribution.py unified attribution. Requires: `anndata`, `abc_atlas_access`.
-- `snrna_integration.py` — Song snRNA-seq integration: computes pseudobulk expression from paired 170_gex_celltypes_00.h5ad (63K nuclei, 28 animals, Allen Cell Type Mapper annotations → 22/24 SEA-AD subclasses), within-cohort expression specificity, and within-cohort transcriptomic concordance via factorial OLS (males-only, pooled across timepoints). Outputs to `outputs/reports/snrna_integration/`. Requires: `anndata`, `scipy`, `statsmodels`.
+- `wmb_expression.py` — WMB expression export: per-class kinase/phosphatase expression from Allen WMB 10Xv3 (34 WMB classes, group-by on `wmb_meta["class"]`, no silent drops). Emits `outputs/reports/wmb_expression/wmb_kinase_expression.csv` (primary, class-level) + `wmb_kinase_expression_subclass.csv` (audit sidecar at WMB subclass level). Consumed by kinase_attribution.py unified attribution. Requires: `anndata`.
+- `snrna_integration.py` — Song snRNA-seq integration: computes pseudobulk expression from paired 170_gex_celltypes_00.h5ad (63K nuclei, 28 animals) keyed on Allen Cell Type Mapper `class_name` (rolled up to 34 WMB classes via `wmb_class_manifest.csv`); ~21 of 34 classes pass Song's confidence + animal-count gates. Within-cohort expression specificity and transcriptomic concordance via factorial OLS (males-only, pooled across timepoints). Outputs to `outputs/reports/snrna_integration/`. Requires: `anndata`, `scipy`, `statsmodels`.
 - `map_kinases_to_genes.py` — Kinase→gene symbol mapping utility.
 
 ### Integration Code (Incytr)
 
-Cell-cell signaling integration under `code/integration/`. Connects bulk kinase activity (from live pipeline) with Incytr's snRNA-seq-based intercellular pathway inference across 462 sender-receiver pairs (22 subclasses). See `code/integration/README.md` for full methodology.
+Cell-cell signaling integration under `code/integration/`. Connects bulk kinase activity (from live pipeline) with Incytr's snRNA-seq-based intercellular pathway inference across 462 sender-receiver pairs (22 subclasses). **Note:** the Incytr per-pair output directories use the prior 22-SEA-AD-subclass vocabulary; the integration adapters under `code/integration/adapters/` therefore continue to consume `config.SEA_AD_SUBCLASSES` and `config.SONG_SUBCLASS_MAP` (kept transitional for this purpose) until Incytr is re-run against the WMB-class taxonomy. See `code/integration/README.md` for full methodology.
 
 - `config_integration.py` — Integration-specific config (paths, thresholds, 10% detection threshold)
 - `adapters/` — Python data adapters: export expression, phospho, kinase-library data for R; compute kinase support scores; aggregate cross-pair results
@@ -220,9 +220,13 @@ Operational shell wrappers under `code/runners/`:
 - `data/incytr_collections/song/analysis_cache/allen_expression_cache.csv` — Cached Allen Brain Atlas expression results
 - `outputs/reports/wmb_expression/wmb_kinase_expression.csv` — WMB expression matrix (required for unified attribution)
 
-### Archived Inputs (used by archived code only)
-- `data/incytr_collections/song/proteomics/ps_yuyu_deconvoluted.csv` — Deconvoluted ser/thr (archived pipeline)
-- `data/incytr_collections/song/proteomics/source/imac_median.csv` — Bulk ser/thr phosphoproteomics (archived)
+### Decomposition (CTM-native, branch-only — not in live pipeline)
+- `data/incytr_collections/song/proteomics/source/imac_median.csv` — Per-(site, group) Ser/Thr bulk medians; input to `code/deconvolution/build_wmb_decomposition.py`
+- `data/incytr_collections/song/proteomics/source/py_median.csv` — Same, Tyr track
+- `data/incytr_collections/song/proteomics/source/pr_median.csv` — Same, total proteome (gene-level)
+- `data/incytr_collections/song/proteomics/source/yuyu_samplekey.csv` — MS\_ID ↔ SCRNA Group bridge
+- `outputs/reports/deconvolution/wmb_decomposition/{ps,py,pr}_wmb_decomposition.csv` — Generated; per-(site, group, WMB class) decomposition
+- `outputs/reports/deconvolution/wmb_decomposition/wmb_class_size.csv` — Generated; WMB-class × group nucleus counts
 
 ## Output
 
@@ -306,6 +310,7 @@ Docs under `docs/integrations/` and `docs/archive/` that reference paths under `
 - After any implementation phase, run the full test suite (`pytest` for Python, `devtools::test()` for R) and report pass/fail counts before declaring done.
 - When auditing for performance or consolidation, produce the audit document FIRST and get approval before editing files — do not dive into exploratory Read/Bash loops.
 - For multi-phase work (audit → plan → implement → simplify), write the plan to a file the user can approve.
+- Do not enumerate options, methods, or alternatives as filler. Only list candidates that are genuinely under consideration. If one option is obviously correct, state it directly. Padding answers with inapplicable alternatives wastes the user's time and obscures the real decision.
 
 ## Workflow rules
 

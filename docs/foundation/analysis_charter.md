@@ -20,6 +20,7 @@ These paths are closed and should not drive new code. See [`analysis_rationale.m
 | Path | Status |
 |:---|:---|
 | Direct cell-type deconvolution from the 24-group design | Closed — not identifiable |
+| Proportional decomposition with snRNA-seq prior (`code/deconvolution/`) | Branch-only, not in live path; CTM-native on WMB-class spine; uses the snRNA pseudobulk as a per-(group, WMB class, gene) prior rather than inferring cell-type effects from `A_obs + bulk` alone |
 | Joint kinase-activity factor model | Closed — composition bottleneck |
 | Two-compartment neuronal/glial simplification | Closed — failed validation |
 | Transcript-only rescue | Closed — no defensible attribution |
@@ -55,16 +56,20 @@ All stoichiometry beta values are submitted to MEA (Motif Enrichment Analysis, G
 
 ### 4. Unified cell-type attribution
 
-All MEA-significant kinases are evaluated against both evidence sources at the subclass level (24 SEA-AD subclasses):
+All MEA-significant kinases are evaluated against three evidence sources at the **WMB class level (34 classes)** — the published Allen Whole Mouse Brain class taxonomy, used directly to avoid silent dropping of cells outside cortical/glial coverage (e.g., hippocampal CA, dentate granule, striatal MSN, olfactory bulb, cerebellar):
 
-1. **SEA-AD concordance**: For each kinase gene, look up its differential expression in human AD (SEA-AD, 139 supertypes aggregated to 24 subclasses). Concordance score = `sign(NES) * median(sea_ad_lfc)` — positive when kinase activity direction matches human AD transcriptomic change in that subclass.
+1. **WMB expression specificity** (Allen WMB 10Xv3, ~4M cells brain-wide): cell-type mean log2 expression divided by the sum across all 34 WMB classes — a share-of-total measure of cell-type concentration. Spine evidence; always present.
 
-2. **WMB expression specificity**: How specifically each kinase gene is expressed in each of the 24 subclasses (Allen WMB 10Xv3 HPF dataset).
+2. **Song within-cohort concordance** (paired snRNA-seq, 28 animals): per-class disease LFC from factorial OLS. Present for ~21 of 34 classes (those Song's dissection captures with ≥10 male animals); `n/a` otherwise.
 
-Combined confidence (thresholds expressed as multiples of uniform = 1/24):
-- **High**: Concordant SEA-AD signal + WMB specificity >= 2x uniform + |LFC| > 0.1
-- **Moderate**: Either SEA-AD or WMB evidence is strong
-- **Low**: Weak evidence from both sources
+3. **SEA-AD cross-species concordance** (human AD MTG, 139 supertypes): supertypes aggregated to WMB class via `seaad_subclass_to_wmb_class.csv`. Present for ~9 of 34 classes (cortical neurons + glia + vascular + immune); `n/a` for non-MTG classes (hippocampal pyramidals, subcortical, brainstem, cerebellar).
+
+Combined confidence (thresholds expressed as multiples of uniform = 1/34):
+- **High**: Within-cohort Song supports the direction + WMB specificity ≥ 2× uniform + at least one |LFC| > 0.1
+- **Moderate**: Either Song or SEA-AD provides directional evidence with WMB plausibility
+- **Low**: Weak evidence from all sources
+
+SEA-AD `n/a` (out-of-MTG classes) does not preclude high confidence — Song + WMB alone suffice when Song concordance is significant.
 
 ### 5. Mechanism annotation (supplementary)
 

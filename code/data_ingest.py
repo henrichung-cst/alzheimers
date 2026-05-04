@@ -490,40 +490,47 @@ def step_phospho_match():
 # ===========================================================================
 
 
-def _compute_subclass_fractions():
-    """Recompute snRNA composition fractions at SEA-AD subclass resolution.
+def _compute_class_fractions():
+    """Recompute snRNA composition fractions at WMB-class resolution.
 
     Reads per-cluster-label cell counts from yuyu_clustersize.csv (46 labels ×
-    24 sample groups), maps labels to SEA-AD subclasses via
-    config.SNRNA_CLUSTER_TAXONOMY, sums counts per subclass per group, and
-    returns fractions (each group sums to 1).
+    24 sample groups), maps labels through SNRNA_CLUSTER_TAXONOMY (label →
+    SEA-AD subclass) and seaad_subclass_to_wmb_class.csv (subclass → WMB
+    class), then sums counts per WMB class per group. Labels with no SEA-AD
+    or WMB-class equivalent (subcortical, hippocampal, choroid, etc.) roll
+    into "Other".
 
     Returns
     -------
     pd.DataFrame
         Index: sample group IDs (24 rows, e.g., "fe_2mo_AppP").
-        Columns: subclass names that have nonzero counts (SEA-AD subclasses +
-        researcher categories like "Generic_excitatory", "Medium spiny neurons").
+        Columns: WMB class labels with nonzero counts (subset of
+        config.WMB_CLASSES + "Other").
     """
     raw = pd.read_csv(config.CLUSTERSIZE_FILE, index_col=0)
     # raw: rows = cluster labels, columns = 24 sample groups
 
-    # Map each row label → sea_ad_subclass
+    seaad_map = pd.read_csv(config.SEAAD_TO_WMB_CLASS_FILE)
+    subclass_to_class = dict(
+        zip(seaad_map["seaad_subclass"], seaad_map["wmb_class_label"])
+    )
+
     taxonomy = config.SNRNA_CLUSTER_TAXONOMY
-    label_to_subclass = {}
+    label_to_class = {}
     for label in raw.index:
         if label.startswith("cluster-"):
-            label_to_subclass[label] = "Other"
-        elif label in taxonomy:
-            label_to_subclass[label] = taxonomy[label]["sea_ad_subclass"]
-        else:
+            label_to_class[label] = "Other"
+            continue
+        if label not in taxonomy:
             raise ValueError(
                 f"SNRNA_CLUSTER_TAXONOMY is missing label: {label!r}. "
                 "Update config.SNRNA_CLUSTER_TAXONOMY to include this cluster."
             )
+        sea_subclass = taxonomy[label]["sea_ad_subclass"]
+        label_to_class[label] = subclass_to_class.get(sea_subclass, "Other")
 
-    raw["_subclass"] = raw.index.map(label_to_subclass)
-    grouped = raw.groupby("_subclass").sum()
+    raw["_class"] = raw.index.map(label_to_class)
+    grouped = raw.groupby("_class").sum()
 
     # Convert counts → fractions (each sample group sums to 1)
     fractions = grouped.div(grouped.sum(axis=0), axis=1).T
@@ -532,11 +539,11 @@ def _compute_subclass_fractions():
     # Drop columns that are all zero (no cells in any group)
     fractions = fractions.loc[:, (fractions > 0).any(axis=0)]
 
-    n_subclasses = len(fractions.columns)
-    n_from_sea_ad = sum(1 for c in fractions.columns if c in config.SEA_AD_SUBCLASSES)
-    print(f"  Subclass fractions: {n_subclasses} categories "
-          f"({n_from_sea_ad} SEA-AD subclasses, "
-          f"{n_subclasses - n_from_sea_ad} researcher categories)")
+    n_classes = len(fractions.columns)
+    n_from_wmb = sum(1 for c in fractions.columns if c in config.WMB_CLASSES)
+    print(f"  Class fractions: {n_classes} categories "
+          f"({n_from_wmb} WMB classes, "
+          f"{n_classes - n_from_wmb} other)")
     return fractions
 
 
@@ -563,16 +570,15 @@ def step_markers():
     meta, quant, mapping = load_total_proteome()
     gene_upper = meta["Gene Symbol"].astype(str).str.upper()
 
-    # Recompute snRNA composition fractions at subclass resolution
-    subclass_fracs = _compute_subclass_fractions()
-    available_frac_cols = set(subclass_fracs.columns)
+    # Recompute snRNA composition fractions at WMB-class resolution
+    class_fracs = _compute_class_fractions()
+    available_frac_cols = set(class_fracs.columns)
 
-    # Map each WMB cell type → composition column.  For SEA-AD subclasses with
-    # cluster data the column is the subclass name itself; for subclasses with
-    # no snRNA clusters mapped (e.g., Pvalb, Sst, Chandelier) → None.
-    subclass_to_frac_col = {}
-    for sc in config.SEA_AD_SUBCLASSES:
-        subclass_to_frac_col[sc] = sc if sc in available_frac_cols else None
+    # Map each WMB class → composition column. Classes with no snRNA clusters
+    # mapped (e.g., subcortical, brainstem, cerebellum) → None.
+    class_to_frac_col = {}
+    for cls in config.WMB_CLASSES:
+        class_to_frac_col[cls] = cls if cls in available_frac_cols else None
 
     # Pre-compute lookups used in the inner loop
     col_to_idx = {col: i for i, col in enumerate(quant.columns)}
@@ -586,7 +592,7 @@ def step_markers():
     for _, srow in snrna_animals.iterrows():
         col = srow["column_name"]
         gid = srow["phospho_group_id"]
-        if col in col_to_idx and gid in subclass_fracs.index:
+        if col in col_to_idx and gid in class_fracs.index:
             snrna_pairs.append((col_to_idx[col], gid))
 
     records = []
@@ -598,12 +604,12 @@ def step_markers():
         ct_expr = ct_df[ct_df["binary_expressed"]].copy()
         ct_expr = ct_expr.sort_values("specificity_score", ascending=False)
 
-        frac_col = subclass_to_frac_col.get(ct)
+        frac_col = class_to_frac_col.get(ct)
         has_composition = frac_col is not None
 
         # Pre-extract composition values for this cell type (constant across genes)
         if has_composition and snrna_pairs:
-            frac_dict = subclass_fracs[frac_col].to_dict()
+            frac_dict = class_fracs[frac_col].to_dict()
             comp_by_pair = [(ci, frac_dict[gid])
                            for ci, gid in snrna_pairs
                            if not np.isnan(frac_dict.get(gid, np.nan))]
@@ -629,7 +635,7 @@ def step_markers():
                 "mean_intensity": np.nan,
                 "correlation_with_snrna_composition": np.nan,
                 "correlation_pvalue": np.nan,
-                "composition_resolution": "subclass" if has_composition else "none",
+                "composition_resolution": "class" if has_composition else "none",
             }
 
             if found:
@@ -696,7 +702,7 @@ def step_markers():
         print(f"  {ct}: π₀={pi0_hat:.3f} ({len(pvals)} tests)")
 
     # Add tissue category for researcher-level reporting
-    df["tissue_category"] = df["cell_type"].map(config.SUBCLASS_TO_TISSUE_CATEGORY)
+    df["tissue_category"] = df["cell_type"].map(config.CLASS_TO_TISSUE_CATEGORY)
 
     out_path = os.path.join(OUTPUT_DIR, "datadriven_marker_assessment.csv")
     df.to_csv(out_path, index=False)

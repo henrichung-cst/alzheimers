@@ -8,36 +8,40 @@ import config  # noqa: E402 — repo-level config, available because callers run
 REPO_ROOT = config.REPO_ROOT
 
 DECON_INPUT_DIR = os.path.join(
-    REPO_ROOT, "data", "raw", "external", "gdrive_shared",
-    "integrations", "yuyu01", "documentation", "incytr",
-    "deconvolution", "deconvolution_with_new_clusters_20250721",
+    REPO_ROOT, "outputs", "reports", "deconvolution", "wmb_decomposition",
 )
-PS_DECONVOLUTED_FILE = os.path.join(DECON_INPUT_DIR, "ps_yuyu_deconvoluted.csv")
-PY_DECONVOLUTED_FILE = os.path.join(DECON_INPUT_DIR, "py_yuyu_deconvoluted.csv")
-CLUSTER_SIZE_FILE = os.path.join(DECON_INPUT_DIR, "yuyu_clustersize.csv")
-SAMPLE_KEY_FILE = os.path.join(
-    REPO_ROOT, "data", "raw", "external", "gdrive_shared",
-    "integrations", "yuyu01", "documentation", "incytr",
-    "deconvolution", "yuyu_samplekey.csv",
-)
-
-CODE_DIR = os.path.dirname(os.path.abspath(__file__))
-CLUSTER_MAPPING_FILE = os.path.join(CODE_DIR, "yuyu_46_to_wmb_class.csv")
+PS_DECONVOLUTED_FILE = os.path.join(DECON_INPUT_DIR, "ps_wmb_decomposition.csv")
+PY_DECONVOLUTED_FILE = os.path.join(DECON_INPUT_DIR, "py_wmb_decomposition.csv")
+PR_DECONVOLUTED_FILE = os.path.join(DECON_INPUT_DIR, "pr_wmb_decomposition.csv")
+WMB_CLASS_SIZE_FILE = os.path.join(DECON_INPUT_DIR, "wmb_class_size.csv")
 
 OUTPUT_DIR = os.path.join(REPO_ROOT, "outputs", "reports", "deconvolution")
 SITE_OLS_FILE = os.path.join(OUTPUT_DIR, "site_level_ols.parquet")
 MEA_FILE = os.path.join(OUTPUT_DIR, "kinase_enrichment_raw.csv")
-PRIMARY_TABLE = os.path.join(OUTPUT_DIR, "kinase_enrichment_46clusters.csv")
-ROLLUP_TABLE = os.path.join(OUTPUT_DIR, "kinase_enrichment_wmb_rollup.csv")
+PRIMARY_TABLE = os.path.join(OUTPUT_DIR, "kinase_enrichment_wmb.csv")
 SUMMARY_JSON = os.path.join(OUTPUT_DIR, "summary.json")
 
 # Power floor: any sample group with fewer cells than this in a given
-# cluster marks that (cluster, contrast) pair as "Insufficient" confidence.
+# (wmb_class, contrast) pair is reported as the row's `n_cells_min`; readers
+# typically drop rows below this threshold.
 MIN_CELLS_PER_GROUP = 20
 
-# snRNA cross-check thresholds (kinase gene LFC concordance).
-SNRNA_FDR_HIGH = 0.10     # FDR ceiling for direction-match → High confidence
-SNRNA_LFC_FLAT = 0.05     # |LFC| below this is treated as "flat"
+# Direction-match thresholds for the per-row "match"/"opposite"/"flat"
+# annotation produced by snrna_concordance.py — describes whether snRNA
+# evidence agrees in sign with the bulk NES at this row. Not a gate.
+SNRNA_FDR_HIGH = 0.10
+SNRNA_LFC_FLAT = 0.05
+
+# Cohort-concordance gate (one binomial test per (wmb_class, contrast)
+# stratum, BH across strata). 0.25 was chosen because the calibration
+# audit found 0/43 strata passed at FDR<0.10. See
+# outputs/reports/deconvolution/per_animal/cohort_concordance_calibration.md
+COHORT_FDR_THRESH = 0.25
+
+# Hard expression-presence floor (log2(CPM+1) in snRNA pseudobulk).
+# Chosen as ~1.7% of bulk-sig rows fall below 0.5; the 0.10 5th-percentile
+# auto-pick was effectively no filter.
+EXPR_PRESENCE_FLOOR = 0.5
 
 # Deconvolution-side significance threshold (matches live MEA gate).
 DECON_FDR_THRESH = 0.25

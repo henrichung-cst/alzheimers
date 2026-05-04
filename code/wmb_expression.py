@@ -2,15 +2,18 @@
 """WMB Expression Export: supporting surface for unified cell-type attribution.
 
 Computes per-cell-type kinase/phosphatase expression from the Allen Institute
-Whole Mouse Brain (WMB) 10Xv3 HPF dataset.  The output file
-(wmb_kinase_expression.csv) is consumed by kinase_attribution.py unified
-attribution and attribution_recovery.py.
+Whole Mouse Brain (WMB) 10Xv3 dataset, pooled across all 13 anatomical
+regions (cerebellum, cortical subplate, hippocampal formation, hypothalamus,
+isocortex, midbrain, medulla, olfactory, pons, pallidum, striatum,
+thalamus). The output file (wmb_kinase_expression.csv) is consumed by
+kinase_attribution.py unified attribution and attribution_recovery.py.
 
 Extracted from the archived pre-stoichiometry concordance logic to isolate
 the live supporting dependency.
 
 Inputs:
-  data/external/allen_abc/  (WMB 10Xv3 cell metadata + HPF h5ad, via ABC Atlas cache)
+  data/external/allen_abc/  (WMB 10Xv3 cell metadata + per-region h5ad files
+                             across all 13 regions, via ABC Atlas cache)
   data/incytr_collections/song/kinase/kldata.csv  (kinase substrate library)
 
 Outputs:
@@ -42,9 +45,7 @@ import config
 from atlas_reference import (
     get_all_kinase_genes,
     get_phosphatase_genes_from_genelist,
-    get_abc_cache,
     _extract_gene_symbols,
-
 )
 
 # ---------------------------------------------------------------------------
@@ -54,38 +55,10 @@ from atlas_reference import (
 OUTPUT_DIR = config.WMB_EXPRESSION_OUTPUT_DIR
 WMB_EXPR_FILE = config.WMB_EXPRESSION_FILE
 
-# SEA-AD subclass keyword patterns for matching WMB subclass labels.
-# Order matters: more specific patterns must come before general ones.
-# Each entry: (sea_ad_subclass, [keywords_to_match_in_wmb_label])
-_SEA_AD_SUBCLASS_PATTERNS = [
-    # GABAergic — specific before general
-    ("Chandelier", ["chandelier"]),
-    ("Lamp5 Lhx6", ["lamp5 lhx6", "lamp5_lhx6"]),
-    ("Lamp5", ["lamp5"]),
-    ("Sst Chodl", ["sst chodl", "sst_chodl"]),
-    ("Sst", ["sst"]),
-    ("Pax6", ["pax6"]),
-    ("Pvalb", ["pvalb"]),
-    ("Sncg", ["sncg"]),
-    ("Vip", ["vip"]),
-    # Glutamatergic — specific before general
-    ("L6 IT Car3", ["car3"]),
-    ("L6 CT", ["l6 ct", "l6_ct"]),
-    ("L6 IT", ["l6 it", "l6_it"]),
-    ("L6b", ["l6b"]),
-    ("L5 ET", ["l5 et", "l5_et"]),
-    ("L5 IT", ["l5 it", "l5_it"]),
-    ("L5/6 NP", ["l5/6 np", "np "]),
-    ("L4 IT", ["l4 it", "l4_it", "l4/5 it"]),
-    ("L2/3 IT", ["l2/3 it", "l2/3_it", "l2 it"]),
-    # Non-neuronal
-    ("Astrocyte", ["astro"]),
-    ("Microglia-PVM", ["micro", "pvm"]),
-    ("OPC", ["opc", "cop ", "nfol", "mfol"]),
-    ("Oligodendrocyte", ["oligo", " mol "]),
-    ("Endothelial", ["endo"]),
-    ("VLMC", ["vlmc"]),
-]
+# Cell-type vocabulary: WMB classes (34, from wmb_meta["class"] column).
+# We group cells by their published WMB class label directly — no keyword
+# matching, no silent dropping. The "Other" sentinel only appears for cells
+# with NaN class metadata (rare/never).
 
 # ---------------------------------------------------------------------------
 # Auto-decompress / recompress for compressed subset files
@@ -154,19 +127,12 @@ def _ensure_subsets_decompressed():
             print("  Subsets re-compressed.")
 
 
-def _match_sea_ad_subclass(label: str) -> str:
-    """Map a WMB subclass label to a SEA-AD subclass name.
-
-    WMB has 338 region-specific subclasses (e.g. '052 Pvalb Gaba').
-    SEA-AD has 24 subclasses (e.g. 'Pvalb').  This function maps WMB → SEA-AD
-    via case-insensitive keyword matching, returning 'Other' for unmatched.
-    """
-    label_lower = label.lower()
-    for sea_ad_name, keywords in _SEA_AD_SUBCLASS_PATTERNS:
-        for kw in keywords:
-            if kw in label_lower:
-                return sea_ad_name
-    return "Other"
+def _wmb_class_label(value) -> str:
+    """Return the WMB class label for a cell, or 'Other' if NaN/missing."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "Other"
+    s = str(value).strip()
+    return s if s else "Other"
 
 
 def _human_to_mouse(symbol: str) -> str:
@@ -282,29 +248,30 @@ def _stream_wmb_expression(
 ) -> tuple:
     """Stream through all 13 WMB regions, accumulating per-cell-type expression.
 
-    Uses the 24 SEA-AD subclasses as cell-type categories.
+    Cell types are the 34 WMB classes from the published Allen taxonomy
+    (wmb_meta["class"] column). A per-WMB-subclass accumulator is also
+    maintained in parallel for the audit sidecar.
 
-    Returns (accum, regional_rows) where accum is {ct: {expr_sum, nonzero_count,
-    n_cells}} and regional_rows is a list of per-region per-gene dicts.
+    Returns (accum, regional_rows, subclass_accum) where accum and
+    subclass_accum are {ct: {expr_sum, nonzero_count, n_cells}} keyed on
+    class label and subclass label respectively.
     """
     import anndata as ad
 
-    cache = get_abc_cache()
     n_genes = len(gene_indices)
 
-    ct_list = config.SEA_AD_SUBCLASSES
-    map_fn = _match_sea_ad_subclass
+    ct_list = list(config.WMB_CLASSES) + ["Other"]
 
-    # Load WMB cell metadata (shared across all regions)
+    # Load WMB cell metadata directly from cached CSV — avoids hard dependency
+    # on abc_atlas_access (the cache wrapper merely returns this CSV).
     print("  Loading WMB cell metadata ...")
-    wmb_meta = cache.get_metadata_dataframe(
-        directory="WMB-10X", file_name="cell_metadata_with_cluster_annotation"
-    )
+    wmb_meta = pd.read_csv(config.WMB_METADATA_CSV, low_memory=False)
+    if "cell_label" in wmb_meta.columns:
+        wmb_meta = wmb_meta.set_index("cell_label", drop=False)
     print(f"  Total WMB cells: {len(wmb_meta):,}")
 
-    wmb_meta["_ct_mapped"] = wmb_meta["subclass"].apply(
-        lambda s: map_fn(s) if pd.notna(s) else "Other"
-    )
+    wmb_meta["_ct_mapped"] = wmb_meta["class"].apply(_wmb_class_label)
+    wmb_meta["_subclass_mapped"] = wmb_meta["subclass"].apply(_wmb_class_label)
 
     meta_index_set = set(wmb_meta.index.tolist())
     wmb_meta_by_label = None
@@ -327,9 +294,9 @@ def _stream_wmb_expression(
                   f"({_max_col - _min_col + 1} cols for {n_genes} genes)")
 
     print(f"  Target {label}: {n_genes}")
-    print(f"  Cell type set: 24 SEA-AD subclasses ({len(ct_list)} categories)")
+    print(f"  Cell type set: {len(config.WMB_CLASSES)} WMB classes (+ Other)")
 
-    # Per-cell-type accumulators
+    # Per-class accumulators (primary)
     accum: Dict[str, Dict] = {}
     for ct in ct_list:
         accum[ct] = {
@@ -337,6 +304,9 @@ def _stream_wmb_expression(
             "nonzero_count": np.zeros(n_genes, dtype=np.int64),
             "n_cells": 0,
         }
+
+    # Per-subclass accumulators (audit sidecar; lazy init as we encounter them)
+    subclass_accum: Dict[str, Dict] = {}
 
     regional_rows = []
 
@@ -381,11 +351,13 @@ def _stream_wmb_expression(
         common = sorted(h5ad_cells & set(use_meta.index.tolist()))
 
         if len(common) < 100:
-            if "subclass" in adata.obs.columns:
-                print(f"    Low metadata overlap ({len(common)}) — using h5ad subclass")
-                cell_ct_map = adata.obs["subclass"].apply(
-                    lambda s: map_fn(s) if pd.notna(s) else "Other"
-                ).to_dict()
+            if "class" in adata.obs.columns:
+                print(f"    Low metadata overlap ({len(common)}) — using h5ad class")
+                cell_ct_map = adata.obs["class"].apply(_wmb_class_label).to_dict()
+                if "subclass" in adata.obs.columns:
+                    cell_subclass_map = adata.obs["subclass"].apply(_wmb_class_label).to_dict()
+                else:
+                    cell_subclass_map = {c: "Other" for c in adata.obs.index}
                 common = list(adata.obs.index)
             else:
                 print(f"    WARNING: Insufficient cell overlap for {region}, skipping")
@@ -394,27 +366,31 @@ def _stream_wmb_expression(
                 continue
         else:
             cell_ct_map = use_meta.loc[common, "_ct_mapped"].to_dict()
+            cell_subclass_map = use_meta.loc[common, "_subclass_mapped"].to_dict()
 
         print(f"    Matched cells: {len(common):,}")
 
         h5ad_obs_list = list(adata.obs.index)
         h5ad_cell_to_row = {c: i for i, c in enumerate(h5ad_obs_list)}
 
-        row_ct_pairs = []
+        row_records = []
         for c in common:
+            if c not in h5ad_cell_to_row:
+                continue
             ct = cell_ct_map.get(c, "Other")
-            if ct != "Other" and c in h5ad_cell_to_row:
-                row_ct_pairs.append((h5ad_cell_to_row[c], ct))
-        row_ct_pairs.sort(key=lambda x: x[0])
+            sc = cell_subclass_map.get(c, "Other")
+            row_records.append((h5ad_cell_to_row[c], ct, sc))
+        row_records.sort(key=lambda x: x[0])
 
-        if not row_ct_pairs:
-            print("    No matched cells in target cell types")
+        if not row_records:
+            print("    No matched cells")
             if hasattr(adata, "file") and adata.file is not None:
                 adata.file.close()
             continue
 
-        all_row_indices = np.array([p[0] for p in row_ct_pairs])
-        all_row_cts = [p[1] for p in row_ct_pairs]
+        all_row_indices = np.array([r[0] for r in row_records])
+        all_row_cts = [r[1] for r in row_records]
+        all_row_subs = [r[2] for r in row_records]
 
         region_accum: Dict[str, Dict] = {}
         for ct in ct_list:
@@ -423,17 +399,16 @@ def _stream_wmb_expression(
                 "nonzero_count": np.zeros(n_genes, dtype=np.int64),
                 "n_cells": 0,
             }
+        region_subclass_accum: Dict[str, Dict] = {}
 
         for start in range(0, len(all_row_indices), chunk_size):
             chunk_rows = all_row_indices[start:start + chunk_size]
             chunk_cts = all_row_cts[start:start + chunk_size]
+            chunk_subs = all_row_subs[start:start + chunk_size]
 
             if using_subsets:
-                # Subset files contain only target genes — read all columns
                 chunk_data = adata.X[chunk_rows][:, gene_indices]
             else:
-                # Full files: use contiguous column slice for HDF5 efficiency,
-                # then pick needed columns in memory
                 chunk_slice = adata.X[chunk_rows, _min_col:_max_col + 1]
                 if hasattr(chunk_slice, "toarray"):
                     chunk_slice = chunk_slice.toarray()
@@ -442,32 +417,58 @@ def _stream_wmb_expression(
             if hasattr(chunk_data, "toarray"):
                 chunk_data = chunk_data.toarray()
 
-            # Vectorized: one np.unique pass instead of N per-type scans
+            # Class-level accumulation (vectorized)
             chunk_cts_arr = np.array(chunk_cts)
             unique_cts, inverse = np.unique(chunk_cts_arr, return_inverse=True)
             for ct_idx, ct in enumerate(unique_cts):
                 if ct not in region_accum:
-                    continue
+                    region_accum[ct] = {
+                        "expr_sum": np.zeros(n_genes, dtype=np.float64),
+                        "nonzero_count": np.zeros(n_genes, dtype=np.int64),
+                        "n_cells": 0,
+                    }
                 ct_mask = (inverse == ct_idx)
                 ct_data = chunk_data[ct_mask]
                 region_accum[ct]["expr_sum"] += ct_data.sum(axis=0)
                 region_accum[ct]["nonzero_count"] += (ct_data > 0).sum(axis=0)
                 region_accum[ct]["n_cells"] += int(ct_mask.sum())
 
-        for ct in ct_list:
-            n_cells = region_accum[ct]["n_cells"]
+            # Subclass-level accumulation (audit sidecar)
+            chunk_subs_arr = np.array(chunk_subs)
+            unique_subs, inv_sub = np.unique(chunk_subs_arr, return_inverse=True)
+            for sub_idx, sub in enumerate(unique_subs):
+                if sub not in region_subclass_accum:
+                    region_subclass_accum[sub] = {
+                        "expr_sum": np.zeros(n_genes, dtype=np.float64),
+                        "nonzero_count": np.zeros(n_genes, dtype=np.int64),
+                        "n_cells": 0,
+                    }
+                sub_mask = (inv_sub == sub_idx)
+                sub_data = chunk_data[sub_mask]
+                region_subclass_accum[sub]["expr_sum"] += sub_data.sum(axis=0)
+                region_subclass_accum[sub]["nonzero_count"] += (sub_data > 0).sum(axis=0)
+                region_subclass_accum[sub]["n_cells"] += int(sub_mask.sum())
+
+        for ct, ra in region_accum.items():
+            n_cells = ra["n_cells"]
             if n_cells == 0:
                 continue
 
             print(f"    {ct}: {n_cells:,} cells")
 
-            accum[ct]["expr_sum"] += region_accum[ct]["expr_sum"]
-            accum[ct]["nonzero_count"] += region_accum[ct]["nonzero_count"]
+            if ct not in accum:
+                accum[ct] = {
+                    "expr_sum": np.zeros(n_genes, dtype=np.float64),
+                    "nonzero_count": np.zeros(n_genes, dtype=np.int64),
+                    "n_cells": 0,
+                }
+            accum[ct]["expr_sum"] += ra["expr_sum"]
+            accum[ct]["nonzero_count"] += ra["nonzero_count"]
             accum[ct]["n_cells"] += n_cells
 
             if not skip_regional:
-                region_mean = region_accum[ct]["expr_sum"] / n_cells
-                region_frac = region_accum[ct]["nonzero_count"] / n_cells
+                region_mean = ra["expr_sum"] / n_cells
+                region_frac = ra["nonzero_count"] / n_cells
                 for i, gene in enumerate(gene_names):
                     regional_rows.append({
                         "region": region,
@@ -478,10 +479,24 @@ def _stream_wmb_expression(
                         "n_cells": n_cells,
                     })
 
+        for sub, ra in region_subclass_accum.items():
+            n_cells = ra["n_cells"]
+            if n_cells == 0:
+                continue
+            if sub not in subclass_accum:
+                subclass_accum[sub] = {
+                    "expr_sum": np.zeros(n_genes, dtype=np.float64),
+                    "nonzero_count": np.zeros(n_genes, dtype=np.int64),
+                    "n_cells": 0,
+                }
+            subclass_accum[sub]["expr_sum"] += ra["expr_sum"]
+            subclass_accum[sub]["nonzero_count"] += ra["nonzero_count"]
+            subclass_accum[sub]["n_cells"] += n_cells
+
         if hasattr(adata, "file") and adata.file is not None:
             adata.file.close()
 
-    return accum, regional_rows
+    return accum, regional_rows, subclass_accum
 
 
 def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
@@ -519,14 +534,17 @@ def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
         kinase_genes = sorted(all_kp & set(gene_to_idx.keys()))
         kinase_idx = np.array([gene_to_idx[g] for g in kinase_genes])
 
-        accum, regional_rows = _stream_wmb_expression(
+        accum, regional_rows, subclass_accum = _stream_wmb_expression(
             kinase_genes, kinase_idx, label="kinase/phosphatase",
         )
 
-        # Compute global whole-brain means
+        # Compute global whole-brain means at WMB class level
         print("\n  Computing whole-brain aggregates ...")
         rows = []
-        for ct in config.SEA_AD_SUBCLASSES:
+        ct_universe = list(config.WMB_CLASSES) + ["Other"]
+        for ct in ct_universe:
+            if ct not in accum:
+                continue
             n_total = accum[ct]["n_cells"]
             if n_total == 0:
                 continue
@@ -544,13 +562,17 @@ def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
                     "fraction_cells_expressing": round(float(frac_expr[i]), 6),
                     "specificity_score": np.nan,
                     "binary_expressed": bool(mean_expr[i] > 1 and frac_expr[i] > 0.10),
+                    "n_cells": int(n_total),
                 })
 
         df = pd.DataFrame(rows)
 
-        # Compute specificity scores (across all 24 subclasses per gene)
+        # Specificity = share-of-total across the 34 WMB classes (excludes "Other"
+        # so a gene's specificity reflects its concentration among named classes;
+        # "Other" rows still exist for visibility but don't dilute the score).
+        named_mask = df["cell_type"].isin(config.WMB_CLASSES)
         for gene in kinase_genes:
-            gene_mask = df["gene_symbol"] == gene
+            gene_mask = (df["gene_symbol"] == gene) & named_mask
             gene_df = df.loc[gene_mask]
             total_expr = gene_df["mean_log2_expression"].sum()
             if total_expr > 0:
@@ -558,9 +580,34 @@ def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
                 df.loc[gene_mask, "specificity_score"] = spec.values
             else:
                 df.loc[gene_mask, "specificity_score"] = 0.0
+        # "Other" rows: specificity not defined under the 34-class denominator
+        df.loc[~named_mask, "specificity_score"] = 0.0
 
         df.to_csv(WMB_EXPR_FILE, index=False)
         print(f"\n  Saved {len(df)} rows to {WMB_EXPR_FILE}")
+
+        # Audit sidecar: per-WMB-subclass expression
+        sub_rows = []
+        for sub_label, sa in subclass_accum.items():
+            n_total = sa["n_cells"]
+            if n_total == 0:
+                continue
+            mean_expr = sa["expr_sum"] / n_total
+            frac_expr = sa["nonzero_count"] / n_total
+            for i, gene in enumerate(kinase_genes):
+                sub_rows.append({
+                    "kinase_id": _mouse_to_human(gene),
+                    "gene_symbol": gene,
+                    "wmb_subclass": sub_label,
+                    "mean_log2_expression": round(float(mean_expr[i]), 6),
+                    "fraction_cells_expressing": round(float(frac_expr[i]), 6),
+                    "n_cells": int(n_total),
+                })
+        if sub_rows:
+            sub_df = pd.DataFrame(sub_rows)
+            sub_path = os.path.join(OUTPUT_DIR, "wmb_kinase_expression_subclass.csv")
+            sub_df.to_csv(sub_path, index=False)
+            print(f"  Saved {len(sub_df)} subclass-level audit rows to {sub_path}")
 
         # Save per-region breakdown
         if regional_rows:
@@ -571,7 +618,7 @@ def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
                   f"{config.WMB_REGIONAL_EXPRESSION_FILE}")
 
     # Summary
-    for ct in config.SEA_AD_SUBCLASSES:
+    for ct in ct_universe:
         sub = df[df["cell_type"] == ct]
         if len(sub) == 0:
             continue
@@ -634,15 +681,18 @@ def compute_wmb_proteome_expression(force: bool = False) -> pd.DataFrame:
         print(f"  Proteome genes found in atlas: {len(matched_genes)}/{len(proteome_genes_upper)}")
         gene_indices = np.array(matched_indices)
 
-        accum, _ = _stream_wmb_expression(
+        accum, _, _ = _stream_wmb_expression(
             matched_genes, gene_indices, label="proteome", chunk_size=5000,
             skip_regional=True,
         )
 
-        # Build output DataFrame
+        # Build output DataFrame at WMB class level
         print("\n  Computing whole-brain aggregates ...")
         rows = []
-        for ct in config.SEA_AD_SUBCLASSES:
+        ct_universe = list(config.WMB_CLASSES) + ["Other"]
+        for ct in ct_universe:
+            if ct not in accum:
+                continue
             n_total = accum[ct]["n_cells"]
             if n_total == 0:
                 continue
@@ -665,9 +715,10 @@ def compute_wmb_proteome_expression(force: bool = False) -> pd.DataFrame:
 
         df = pd.DataFrame(rows)
 
-        # Compute specificity scores
+        # Specificity over named WMB classes only (Other excluded from denominator)
+        named_mask = df["cell_type"].isin(config.WMB_CLASSES)
         for gene in matched_genes:
-            gene_mask = df["gene_symbol_mouse"] == gene
+            gene_mask = (df["gene_symbol_mouse"] == gene) & named_mask
             gene_df = df.loc[gene_mask]
             total_expr = gene_df["mean_log2_expression"].sum()
             if total_expr > 0:
@@ -675,14 +726,17 @@ def compute_wmb_proteome_expression(force: bool = False) -> pd.DataFrame:
                 df.loc[gene_mask, "specificity_score"] = spec.values
             else:
                 df.loc[gene_mask, "specificity_score"] = 0.0
+        df.loc[~named_mask, "specificity_score"] = 0.0
 
         out_path = config.WMB_PROTEOME_EXPRESSION_FILE
         df.to_csv(out_path, index=False)
         print(f"\n  Saved {len(df)} rows to {out_path}")
 
     # Summary: top-5 most specific genes per cell type
-    for ct in config.SEA_AD_SUBCLASSES:
+    for ct in ct_universe:
         sub = df[df["cell_type"] == ct].copy()
+        if len(sub) == 0:
+            continue
         n_expr = sub["binary_expressed"].sum()
         top5 = sub.sort_values("specificity_score", ascending=False).head(5)
         top_str = ", ".join(

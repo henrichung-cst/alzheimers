@@ -76,7 +76,7 @@ def _load_data():
     attr = attr.rename(columns={"top_celltype_1": "cell_type"})
     attr = attr[attr["cell_type"].notna()].copy()
     attr["tissue_category"] = attr["cell_type"].map(
-        config.SUBCLASS_TO_TISSUE_CATEGORY).fillna("Other")
+        config.CLASS_TO_TISSUE_CATEGORY).fillna("Other")
 
     all_kinases = mea["kinase"].unique().tolist()
     fam_series = kl_data.get_kinase_family(all_kinases)

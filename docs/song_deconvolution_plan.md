@@ -1,165 +1,175 @@
-# Song Bulk Deconvolution → Per-Cell-Type Kinase Enrichment
+# Song bulk decomposition → per-cell-type kinase enrichment (CTM-native)
 
-Plan for a chief-scientist deliverable that takes the pre-computed Song proportional deconvolution at 46 Yuyu clusters, runs kinase MEA per cell type for both ser/thr and tyr tracks, and accompanies each row with a transcript-level reliability indicator drawn from matched snRNA-seq.
+Plan-of-record for the Song bulk → per-cell-type kinase MEA pipeline.
+Single-axis: WMB class throughout, fed by a CTM-native proportional
+decomposition computed directly from the snRNA-seq h5ad. The legacy
+46-cluster + soft-mass-projection plan is preserved for provenance at
+[`../archive/song_deconvolution_plan_46cluster.md`](../archive/song_deconvolution_plan_46cluster.md).
 
 ## 1. Goal and audience
 
-**Goal.** Produce a per-cell-type kinase enrichment table (NES + FDR per kinase × cell type × contrast, ser/thr and tyr tracks) from proportionally deconvoluted Song bulk phosphoproteomics, with a defensible per-row reliability indicator.
+**Goal.** Per-cell-type kinase enrichment table (NES + FDR per kinase × WMB
+class × contrast, ser/thr and tyr tracks) from CTM-native proportional
+decomposition of Song bulk phosphoproteomics, with a defensible per-row
+reliability indicator drawn from matched snRNA-seq.
 
-**Audience.** Chief scientist. Argument leads with the deliverable; uncertainty surfaces as per-row confidence rather than a global feasibility verdict; the closed direct-deconvolution path is not reopened.
+**Audience.** Chief scientist. Argument leads with the deliverable; uncertainty
+surfaces as per-row evidence columns; the closed direct-deconvolution path is not
+reopened.
 
-**Framing.** This is a **proportion-proxy deconvolution**, not the direct deconvolution closed by the analysis charter. Proportional decomposition redistributes bulk signal across cell types using Song's per-gene scRNA expression as a within-cohort prior — distinct from inferring cell-type-specific effects from `A_obs + bulk` alone.
+**Framing.** This is a **proportion-proxy decomposition** with snRNA pseudobulk
+as the per-(group, WMB class, gene) prior — distinct from inferring
+cell-type-specific effects from `A_obs + bulk` alone, which the analysis
+charter closes.
 
 ## 2. Cell-type vocabulary
 
-**46 named clusters** from the 2025-07-21 refresh (`deconvolution_with_new_clusters_20250721/`). The chief scientist's reference resolution.
+The Allen WMB-class spine (`config.WMB_CLASSES`, 34 classes). Of those, 24
+are detectably present in the Song h5ad after the `class_prob ≥ 0.9` and
+WMB-mappability filters; the remaining 10 are biological-sampling gaps (no
+nuclei from those classes were captured) and appear nowhere in the
+decomposition output:
 
-The existing attribution pipeline (live program) stays at 34 WMB classes — this plan does not touch that. The two outputs cohabit at different vocabularies, joined via a curated mapping:
+```
+15 HY Gnrh1 Glut, 16 HY MM Glut, 21 MB Dopa, 22 MB-HB Sero, 23 P Glut,
+24 MY Glut, 25 Pineal Glut, 26 P GABA, 27 MY GABA, 28 CB GABA
+```
 
-- **`yuyu_46_to_wmb_class.csv`** — first-draft mapping authored from cluster name semantics + WMB class definitions, committed to the repo, surfaces ambiguity in a `notes` column. Residual `cluster-N` (~15 unnamed clusters) → `Unclassified`.
-- Each row of the deconvolution output carries a `wmb_class` column.
-- A **secondary rolled-up view** at WMB class is produced as a cross-reference table for direct comparability with the attribution output.
+The live attribution program (`code/kinase_attribution.py`) operates on the
+same 34-class spine; the deconvolution branch and the live program share a
+single cell-type vocabulary end-to-end.
 
 ## 3. Inputs
 
-All present locally under `data/raw/external/gdrive_shared/integrations/yuyu01/documentation/incytr/deconvolution/deconvolution_with_new_clusters_20250721/`:
-
 | File | Role |
 |---|---|
-| `ps_yuyu_deconvoluted.csv` (271 MB) | Pre-computed ser/thr deconvolved phospho per site × cell type × sample (24 groups) |
-| `py_yuyu_deconvoluted.csv` (19 MB) | Pre-computed tyr deconvolved phospho per site × cell type × sample (24 groups) |
-| `pr_yuyu_deconvoluted.csv` (134 MB) | Pre-computed total protein deconvolved per gene × cell type × sample (for stoichiometry, optional) |
-| `yuyu_clustersize.csv` | 46 clusters × 24 samples cell counts |
-| `kr_cluster_id_key.csv` | 109 fine cluster IDs → 46 named cell types |
-| `yuyu_samplekey.csv` | MS_ID ↔ scRNA group key |
+| `data/incytr_collections/song/transcriptomics/170_gex_celltypes_00.h5ad` | snRNA-seq with CTM `class_name` per nucleus (63,695 nuclei × 30,567 genes) |
+| `data/incytr_collections/song/proteomics/source/imac_median.csv` | Ser/Thr per-(site, group) bulk medians (24 groups) |
+| `data/incytr_collections/song/proteomics/source/py_median.csv` | Tyr per-(site, group) bulk medians (24 groups) |
+| `data/incytr_collections/song/proteomics/source/pr_median.csv` | Total proteome per-(gene, group) bulk medians (24 groups; for stoichiometry, optional downstream) |
+| `data/incytr_collections/song/proteomics/source/yuyu_samplekey.csv` | MS\_ID ↔ SCRNA\_ID/Group bridge |
+| `data/external/allen_abc/wmb_class_manifest.csv` | CTM `class_name` → prefixed WMB class label |
 
-snRNA cross-check oracle: re-run of `code/snrna_integration.py --concordance` at the 46-cluster vocabulary (currently at 34 WMB classes), output to `outputs/reports/snrna_integration/song_concordance_46clusters.csv`. Produces per-gene LFC per cluster per contrast under males-only factorial OLS.
+snRNA cross-check oracle: `outputs/reports/snrna_integration/song_concordance.csv`
+and `song_expression_specificity.csv`, both produced by
+`code/snrna_integration.py` on the same WMB-class axis.
 
 ## 4. Stage-by-stage pipeline
 
-### Stage 1 — Adopt pre-computed deconvolution outputs
+### Stage 0 — CTM-native proportional decomposition
 
-No recomputation. Load `ps_yuyu_deconvoluted.csv` and `py_yuyu_deconvoluted.csv` as the per-site × cell-type × sample matrices. Track-by-track from here.
+`code/deconvolution/build_wmb_decomposition.py`. For each gene, group, and
+WMB class:
 
-### Stage 2 — Males-only factorial OLS per cell type
+```
+deconv[gene, group, w] =
+    bulk_median[gene, group]
+  · (raw_count[gene, group, w] / Σ_w' raw_count[gene, group, w'])
+  · size_factor[group, w]
+```
 
-For each track (S/T, Y) and each cell type (46), filter to the 12 male sample groups, fit the same factorial OLS used in the live pipeline (`const, App, Tau, Int, time_4mo, time_6mo, App×time4, App×time6, Tau×time4, Tau×time6`), and extract per-site β + p-value for the 9 contrasts.
+with `size_factor[group, w] = Σ_w' n_cells[group, w'] / n_cells[group, w]`.
+Raw counts are aggregated directly from the h5ad on `(group, wmb_class)`.
+Genes with zero raw count in any (group, w) cell receive a small floor
+(`min_nonzero / 10000`) before the share normalization (matches Yuyu's
+original `protein-ms-by-cell-type.py:34-44, 87-92`).
 
-Cohort filter happens here, not at deconvolution time — pre-computed outputs remain at 24 groups; OLS uses only the 12 males.
+Outputs: `outputs/reports/deconvolution/wmb_decomposition/{ps,py,pr}_wmb_decomposition.csv`
+plus `wmb_class_size.csv` (WMB-class × group nucleus count matrix used by
+the Stage 5 `n_cells_min` floor).
 
-### Stage 3 — Kinase MEA per cell type, per track
+### Stage 1 — Load decomposition tracks
 
-For each cell type × contrast × track:
+`load_track("st" | "py")` returns per-site metadata + a (n_sites × (n_groups
+× n_classes)) matrix with a tidy MultiIndex of `(sample, wmb_class)`.
 
-- **Ser/thr track**: rank phosphosites from Stage 2 by β; run kinase library MEA against the **ser/thr kinase substrate set**.
-- **Tyr track**: rank phosphosites from Stage 2 by β; run kinase library MEA against the **tyrosine kinase substrate set**.
+### Stage 2 — Males-only factorial OLS per WMB class
 
-No mixing of motif spaces. Two independent MEA runs feed into one merged output table.
+`run_per_animal_track`. For each track and each WMB class, expand the
+per-(group, w, site) decomposition to per-animal via the
+`phospho_group_id` column in `outputs/reports/data_ingest/sample_mapping.csv`,
+multiply by per-animal bulk phospho intensity, and fit the same factorial
+OLS used in the live pipeline (10 parameters: const, App, Tau, Int,
+time\_4mo, time\_6mo, App×time\_4, App×time\_6, Tau×time\_4, Tau×time\_6).
+Extract per-site β + p-value for the 9 contrasts.
 
-Output: NES + FDR per kinase × cell type × contrast × track. Significance threshold: FDR < 0.25 (kinase library / GSEA standard, matches live pipeline).
+Sample filtering: males-only after the live outlier-exclusion list.
+
+### Stage 3 — Kinase MEA per WMB class, per track
+
+For each WMB class × contrast × track:
+
+- **Ser/thr track**: rank phosphosites from Stage 2 by β; run kinase library
+  MEA against the Ser/Thr substrate set.
+- **Tyr track**: rank by β; run against the tyrosine substrate set.
+
+Output: NES + FDR per kinase × WMB class × contrast × track.
+Significance threshold: FDR < `DECON_FDR_THRESH` (default 0.25).
 
 ### Stage 4 — snRNA cross-check (kinase gene LFC concordance)
 
-Re-run `snrna_integration.py --concordance` at 46-cluster vocabulary (males-only factorial OLS on Song pseudobulk).
+For each row of the Stage 3 output, look up the kinase's own gene LFC in
+`song_concordance.csv` at the same WMB class and contrast. Annotate three
+columns:
 
-For each row of the Stage 3 output, look up the **kinase's own gene LFC** in the snRNA at the same cell type and contrast. Annotate three columns:
-
-- `kinase_gene_LFC_snRNA` — signed magnitude
-- `kinase_gene_FDR_snRNA` — significance
+- `kinase_gene_LFC_snRNA`
+- `kinase_gene_FDR_snRNA`
 - `direction_match` — `match` / `opposite` / `flat` / `n/a`
 
-This is transcript-level corroboration, not parallel phospho measurement. The snRNA is a collaborator to the deconvolution, not a replacement.
+Cohort concordance: per (WMB class, contrast) stratum, binomial test on
+`sign(NES) == sign(kinase_gene_LFC_snRNA)` over kinase rows in that stratum,
+BH across strata.
 
-### Stage 5 — Confidence calibration
+### Stage 5 — Attach per-row evidence
 
-Per-row confidence label, computed deterministically:
+Per-row evidence columns are joined onto the Stage 4 MEA table — no
+categorical confidence label is assigned. Downstream readers gate on the
+underlying columns directly:
 
-| Confidence | Condition |
-|---|---|
-| **High** | Deconv FDR < 0.25 + snRNA gene FDR < 0.10 + direction_match = `match` |
-| **Moderate** | Deconv FDR < 0.25 + snRNA flat or n/a (post-translational regulation plausible, not corroborated) |
-| **Low** | Deconv FDR < 0.25 + snRNA significant in opposite direction |
-| **Insufficient** | Cluster has < 20 cells in any sample group of this contrast (power floor breached) |
+- `FDR` (bulk MEA, threshold `DECON_FDR_THRESH`)
+- `n_cells_min` (smallest group nucleus count for this (wmb_class, contrast); compare against `MIN_CELLS_PER_GROUP`)
+- `cohort_concordant` / `frac_match` / `cohort_fdr` (stratum-level binomial)
+- `expressed` (kinase mRNA above `EXPR_PRESENCE_FLOOR` in this WMB class)
+- `kinase_gene_LFC_snRNA` / `direction_match` (per-row sign agreement with snRNA)
 
-Thresholds documented and tunable in code; defaults set in advance to avoid post-hoc tuning.
+Thresholds in `paths.py`:
 
-### Stage 6 — Roll-up to WMB classes (secondary view)
+- `MIN_CELLS_PER_GROUP = 20`
+- `DECON_FDR_THRESH = 0.25`
+- `COHORT_FDR_THRESH` (calibrated via `cohort_concordance_audit.py`)
+- `EXPR_PRESENCE_FLOOR` (same audit)
 
-Aggregate Stage 5 output to 34 WMB classes via `yuyu_46_to_wmb_class.csv`. Aggregation rule: take the **strongest-evidence row** per kinase × WMB class × contrast × track (highest |NES| at deconv FDR < 0.25; ties broken by FDR), with cluster-of-origin annotated. `Unclassified` clusters excluded from the rolled-up view.
+Stoichiometry is **not** applied per cell type: under this proportional
+decomposition the share/size_factor terms are gene-level (not phospho-vs-
+protein-specific), so `log2(ps_decomp[w]) − log2(pr_decomp[w])` reduces to
+bulk stoichiometry and the wmb_class axis cancels. Parent-protein
+confounding is handled in the live pipeline, not here.
 
-This produces a parallel table at WMB-class resolution for direct cross-referencing with the live attribution pipeline.
+## 5. What this plan supersedes
 
-## 5. Deliverables
+The 46-cluster predecessor plan is preserved at
+[`../archive/song_deconvolution_plan_46cluster.md`](../archive/song_deconvolution_plan_46cluster.md).
+It built decomposition outputs at Yuyu's hand-clustered 46-name axis and
+projected onto the WMB axis post hoc via a soft-mass crosswalk derived from
+CTM. Three problems retired by this plan:
 
-### Primary table
-`outputs/reports/deconvolution/kinase_enrichment_46clusters.csv`
+1. **No defensible reason to keep Yuyu's 46-cluster axis.** It is not NNLS
+   — `protein-ms-by-cell-type.py` is a proportional redistribution. Re-running
+   the formula on the 24 CTM-reachable WMB classes is mechanically identical
+   and removes a layer of interpretation.
+2. **The hand crosswalk has known errors.** `Erbb4-VIP-inhibitory-neurons`
+   maps to `06 CTX-CGE GABA` while CTM places 99.9% in `05 OB-IMN GABA`;
+   `Ptprz1-protoplasmic-astrocytes` maps to `30 Astro-Epen` while CTM places
+   99.8% in `32 OEC`. Soft-mass projection overrides these, so the hand
+   layer cannot be claimed as a defense.
+3. **Two cell-type axes upstream and downstream were confusing.** Single
+   axis end-to-end eliminates the mismatch.
 
-| kinase | cell_type | wmb_class | contrast | track | NES | FDR | kinase_gene_LFC_snRNA | kinase_gene_FDR_snRNA | direction_match | confidence | n_cells_min |
+## 6. Out of scope
 
-### Secondary table (rolled-up view)
-`outputs/reports/deconvolution/kinase_enrichment_wmb_rollup.csv`
-
-Same schema, aggregated to 34 WMB classes.
-
-### Cluster mapping artifact
-`code/deconvolution/yuyu_46_to_wmb_class.csv`
-
-Curated mapping with `cluster_name`, `wmb_class`, `confidence_in_mapping` (clean / ambiguous / unmapped), `notes`.
-
-### Methods write-up
-`docs/deconvolution_kinase_enrichment.md` — walks the chief scientist through:
-
-1. The proportion-proxy method (legacy-faithful, at 46 clusters)
-2. Two-track MEA (S/T and Y separated, with substrate-set rationale)
-3. snRNA cross-check as transcript-level corroboration (with honest framing of what it does and doesn't validate)
-4. How to read the confidence column
-5. Navigation between the 46-cluster primary and the WMB-class roll-up
-
-## 6. Repo layout
-
-New module `code/deconvolution/` (chief-scientist deliverable, not wired into `pixi run live` or `pixi run dual`):
-
-```
-code/deconvolution/
-├── README.md                          # charter footnote: proportion-proxy, not direct deconvolution
-├── yuyu_46_to_wmb_class.csv           # curated mapping
-├── load_deconvoluted.py               # readers for ps/py CSVs
-├── factorial_ols.py                   # males-only OLS per site per cell type
-├── mea_per_celltype.py                # two-track MEA driver
-├── snrna_concordance.py               # join Stage 3 output with snRNA gene LFCs
-├── confidence.py                      # Stage 5 calibration
-├── rollup_wmb.py                      # Stage 6 aggregation
-└── run.py                             # orchestrator (Stages 1-6)
-```
-
-Charter footnote in `README.md`: "This code path uses proportional redistribution as a proxy. It does not reopen the direct cell-type deconvolution path closed by `docs/foundation/analysis_charter.md`."
-
-## 7. Time budget
-
-| Stage | Estimate |
-|---|---|
-| 1: Load pre-computed | 0.5 day |
-| 2: Males-only factorial OLS at 46 clusters × 2 tracks | 1 day |
-| 3: Two-track MEA per cell type per contrast | 1 day |
-| 4: snRNA at 46 clusters + join | 1 day |
-| 5: Confidence calibration | 0.5 day |
-| 6: WMB rollup + mapping curation | 0.5 day |
-| Methods write-up | 1 day |
-| **Total** | **~5 days** |
-
-## 8. Open risk flags
-
-These do not block kickoff but are worth knowing about:
-
-1. **Prior-findings benchmark.** Whether the chief scientist has specific kinase × cell-type expectations from the legacy iteration that should reproduce. If so, those become an implicit validation target. Worth asking before delivery.
-2. **Kinase library coverage variance.** Cell types receiving little signal from the deconvolution may have too few sites with kinase-substrate matches to produce reliable NES — some entries will be `n/a` per kinase library defaults. Honest but needs explanation in the write-up.
-3. **`aggexp` per-sample noise inheritance.** The proportional formula uses per-sample, per-cell-type expression weights, so per-cell-type deconvolved signal inherits sample-level scRNA noise. Most pronounced at rare clusters.
-4. **Mapping ambiguity.** Some 46→WMB mappings will be subjective (e.g., where does `Erbb4-VIP-inhibitory-neurons` go). The mapping CSV will surface these in a `notes` column rather than hiding them.
-
-## 9. What this plan does not do
-
-- Does not modify the live pipeline or the existing 34-WMB attribution.
-- Does not re-run the deconvolution from `aggexp.csv` + bulk. Adopts pre-computed outputs.
-- Does not run direct A_obs-based OLS deconvolution. The infeasibility analysis (`docs/deconvolution_infeasibility.md`) remains available as appendix material if asked.
-- Does not produce female or full-cohort outputs. Males-only matches the live pipeline default.
-- Does not gate or drop clusters by power. All 46 retained; uncertainty surfaces in the confidence column.
+- Re-running `snrna_integration.py --pseudobulk`. Stage 0 reads the h5ad
+  directly; pseudobulk artifacts on disk are independent.
+- The 10 absent WMB classes — biological sampling gap, not addressed here.
+- Live pipeline (`kinase_attribution.py`, `attribution_recovery.py`) —
+  already on WMB axis; no changes.
+- Incytr integration — separate axis, separate plan.

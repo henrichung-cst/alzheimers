@@ -5,9 +5,9 @@ Computes pseudobulk expression, within-cohort expression specificity, and
 within-cohort transcriptomic concordance from paired snRNA-seq data
 (170_gex_celltypes_00.h5ad, 63,695 nuclei × 30,567 genes, 28 animals).
 
-Uses Allen Cell Type Mapper annotations (210 subclass_name labels) to map
-nuclei directly to 22/24 SEA-AD subclasses, bypassing the lossy 46-cluster
-taxonomy that only covers 12/24.
+Uses Allen Cell Type Mapper class_name annotations to label nuclei against
+the 34 WMB classes. Song's dissection covers ~21 of 34 forebrain classes
+with sufficient nuclei (≥50); the rest are flagged in active_classes.csv.
 
 Inputs:
   data/incytr_collections/song/transcriptomics/170_gex_celltypes_00.h5ad
@@ -58,6 +58,19 @@ GENOTYPE_FACTORIAL = {
 }
 
 
+def _build_class_name_to_label() -> dict:
+    """Map Song's class_name (no prefix, e.g. 'IT-ET Glut') to the prefixed
+    WMB class label used as the canonical cell_type identifier (e.g.
+    '01 IT-ET Glut'). Reads wmb_class_manifest.csv."""
+    if not os.path.exists(config.WMB_CLASS_MANIFEST_FILE):
+        raise FileNotFoundError(
+            f"WMB class manifest not found at {config.WMB_CLASS_MANIFEST_FILE}. "
+            "Generate via Phase 1a (see docs/foundation/concordance.md)."
+        )
+    m = pd.read_csv(config.WMB_CLASS_MANIFEST_FILE)
+    return dict(zip(m["class_name"], m["class_label"]))
+
+
 # ---------------------------------------------------------------------------
 # S1: Pseudobulk computation
 # ---------------------------------------------------------------------------
@@ -66,14 +79,13 @@ GENOTYPE_FACTORIAL = {
 def step_pseudobulk() -> None:
     """Compute pseudobulk expression from 170_gex_celltypes_00.h5ad.
 
-    For each (animal, SEA-AD subclass) pair, sums raw counts across nuclei
-    passing confidence and subclass filters, then applies CPM + log2
-    normalization.
+    For each (animal, WMB class) pair, sums raw counts across nuclei passing
+    class-prob and mappability filters, then applies CPM + log2 normalization.
     """
     import anndata as ad
 
     print("=" * 72)
-    print("S1  Pseudobulk computation from paired snRNA-seq")
+    print("S1  Pseudobulk computation from paired snRNA-seq (WMB class)")
     print("=" * 72)
 
     h5ad_path = config.SONG_H5AD_FILE
@@ -81,39 +93,42 @@ def step_pseudobulk() -> None:
         print(f"  ERROR: h5ad file not found: {h5ad_path}")
         sys.exit(1)
 
+    class_name_to_label = _build_class_name_to_label()
+    print(f"  WMB class manifest: {len(class_name_to_label)} classes")
+
     print(f"  Loading {h5ad_path} ...")
     adata = ad.read_h5ad(h5ad_path)
     print(f"  Loaded: {adata.shape[0]:,} nuclei × {adata.shape[1]:,} genes")
 
-    # Filter by subclass confidence and mappability
-    mask_prob = adata.obs["subclass_prob"] >= config.SONG_MIN_SUBCLASS_PROB
-    mask_mapped = adata.obs["subclass_name"].isin(config.SONG_SUBCLASS_MAP)
+    # Filter by class-prob confidence and mappability into WMB taxonomy
+    mask_prob = adata.obs["class_prob"] >= config.SONG_MIN_SUBCLASS_PROB
+    mask_mapped = adata.obs["class_name"].isin(class_name_to_label.keys())
     mask = mask_prob & mask_mapped
     n_pass = mask.sum()
-    print(f"  After filtering (prob >= {config.SONG_MIN_SUBCLASS_PROB}, "
-          f"mapped subclass): {n_pass:,} nuclei "
+    print(f"  After filtering (class_prob >= {config.SONG_MIN_SUBCLASS_PROB}, "
+          f"mapped class): {n_pass:,} nuclei "
           f"({n_pass / len(mask) * 100:.1f}%)")
 
     # Extract sparse matrix and metadata (avoid full dense copy)
     X = adata.X[mask.values]  # sparse CSR slice — no dense materialization
     obs = adata.obs[mask].copy()
-    obs["sea_ad_subclass"] = obs["subclass_name"].map(config.SONG_SUBCLASS_MAP)
+    obs["wmb_class"] = obs["class_name"].map(class_name_to_label)
     genes = adata.var_names.tolist()
     n_genes = len(genes)
     del adata  # free memory
 
-    # Aggregate per (animal, subclass)
-    print("  Aggregating pseudobulk per (animal, subclass) ...")
-    groups = obs.groupby(["sample", "sea_ad_subclass"], observed=True)
+    # Aggregate per (animal, WMB class)
+    print("  Aggregating pseudobulk per (animal, class) ...")
+    groups = obs.groupby(["sample", "wmb_class"], observed=True)
 
     cell_counts_rows = []
     pb_meta = []       # (sample, cell_type) per passing group
     pb_data = []       # pre-allocated log2(CPM+1) arrays
 
-    for (sample, subclass), grp_idx in groups.groups.items():
+    for (sample, wmb_class), grp_idx in groups.groups.items():
         n_cells = len(grp_idx)
         cell_counts_rows.append({
-            "sample": sample, "cell_type": subclass, "n_cells": n_cells,
+            "sample": sample, "cell_type": wmb_class, "n_cells": n_cells,
         })
 
         if n_cells < config.SONG_MIN_CELLS:
@@ -131,7 +146,7 @@ def step_pseudobulk() -> None:
         else:
             log2_cpm = np.zeros(n_genes)
 
-        pb_meta.append({"sample": sample, "cell_type": subclass})
+        pb_meta.append({"sample": sample, "cell_type": wmb_class})
         pb_data.append(log2_cpm)
 
     # Build output DataFrames
@@ -148,14 +163,14 @@ def step_pseudobulk() -> None:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     cell_counts.to_csv(CELL_COUNTS_FILE, index=False)
-    print(f"  Cell counts: {len(cell_counts)} (animal × subclass) pairs → "
+    print(f"  Cell counts: {len(cell_counts)} (animal × class) pairs → "
           f"{CELL_COUNTS_FILE}")
 
     pseudobulk.to_csv(PSEUDOBULK_FILE, index=False)
     n_samples = pseudobulk["sample"].nunique()
-    n_subtypes = pseudobulk["cell_type"].nunique()
+    n_classes = pseudobulk["cell_type"].nunique()
     print(f"  Pseudobulk: {len(pseudobulk)} rows "
-          f"({n_samples} animals × {n_subtypes} subclasses, "
+          f"({n_samples} animals × {n_classes} WMB classes, "
           f"min {config.SONG_MIN_CELLS} cells gate) → {PSEUDOBULK_FILE}")
 
     # Summary stats
@@ -195,8 +210,8 @@ def step_specificity() -> None:
     print(f"  Loaded pseudobulk: {len(pb)} rows")
 
     gene_cols = [c for c in pb.columns if c not in ("sample", "cell_type")]
-    subclasses = sorted(pb["cell_type"].unique())
-    print(f"  Subclasses: {len(subclasses)}, genes: {len(gene_cols)}")
+    cell_types = sorted(pb["cell_type"].unique())
+    print(f"  WMB classes: {len(cell_types)}, genes: {len(gene_cols)}")
 
     # Mean expression per subclass (pool across all animals)
     mean_by_ct = pb.groupby("cell_type")[gene_cols].mean()  # (n_subclass, n_genes)
@@ -218,15 +233,15 @@ def step_specificity() -> None:
     df.to_csv(SPECIFICITY_FILE, index=False)
     print(f"  Output: {len(df)} (gene × subclass) pairs → {SPECIFICITY_FILE}")
 
-    # Summary: top specific genes per subclass
-    print(f"\n  Top 3 most specific genes per subclass:")
+    # Summary: top specific genes per class
+    print(f"\n  Top 3 most specific genes per WMB class:")
     for ct in sorted(df["cell_type"].unique()):
         ct_df = df[df["cell_type"] == ct].nlargest(3, "specificity_score")
         genes_str = ", ".join(
             f"{r['gene_symbol']} ({r['specificity_score']:.3f})"
             for _, r in ct_df.iterrows()
         )
-        print(f"    {ct:<20s}  {genes_str}")
+        print(f"    {ct:<22s}  {genes_str}")
 
 
 # ---------------------------------------------------------------------------
@@ -272,17 +287,18 @@ def _fit_ols_batch(
 def step_concordance() -> None:
     """Compute within-cohort transcriptomic concordance via factorial OLS.
 
-    Males-only analysis for consistency with the primary kinase enrichment.
-    Design matrix: intercept + App + Tau + Int (4 params).
-    Pools across timepoints for statistical power (df_resid ≈ 11).
+    Males-only analysis. Design matches the bulk pipeline:
+    10 params = const, App, Tau, Int, time_4mo, time_6mo,
+                App_x_time4, App_x_time6, Tau_x_time4, Tau_x_time6.
 
-    Output pathways:
-        App_lfc = β_App  (applies to App_2mo, App_4mo, App_6mo)
-        Tau_lfc = β_Tau  (applies to Tau_2mo, Tau_4mo, Tau_6mo)
-        ApTt_lfc = β_App + β_Tau + β_Int  (applies to ApTt_2mo, ApTt_4mo, ApTt_6mo)
+    Emits 9 time-resolved contrasts per (gene, cell_type):
+        App_2mo / 4mo / 6mo, Tau_2mo / 4mo / 6mo, ApTt_2mo / 4mo / 6mo
+    using the same CONTRAST_COEFS coefficient combinations as the bulk pipeline.
+    With ~15 male animals per cell type, df_resid = 5 — small but matched to
+    the bulk OLS so the snRNA value can be joined per-contrast in attribution.
     """
     print("=" * 72)
-    print("S3  Within-cohort transcriptomic concordance (males-only OLS)")
+    print("S3  Within-cohort transcriptomic concordance (males-only, 10-param)")
     print("=" * 72)
 
     if not os.path.exists(PSEUDOBULK_FILE):
@@ -293,39 +309,69 @@ def step_concordance() -> None:
     pb = pd.read_csv(PSEUDOBULK_FILE)
     gene_cols = [c for c in pb.columns if c not in ("sample", "cell_type")]
 
-    # Parse sample metadata
     pb["sex"] = pb["sample"].str.split("_").str[1]
     pb["timepoint"] = pb["sample"].str.split("_").str[2]
     pb["genotype"] = pb["sample"].str.split("_").str[3]
 
-    # Males only
     pb_male = pb[pb["sex"] == "ma"].copy()
     n_males = pb_male["sample"].nunique()
     print(f"  Males-only pseudobulk: {len(pb_male)} rows from {n_males} animals")
 
-    subclasses = sorted(pb_male["cell_type"].unique())
+    # Same contrast coefficient definitions as the bulk pipeline. Param order:
+    # 0:const 1:App 2:Tau 3:Int 4:time_4mo 5:time_6mo
+    # 6:App_x_time4 7:App_x_time6 8:Tau_x_time4 9:Tau_x_time6
+    PARAM_NAMES = ["const", "App", "Tau", "Int", "time_4mo", "time_6mo",
+                   "App_x_time4", "App_x_time6", "Tau_x_time4", "Tau_x_time6"]
+    P = {n: i for i, n in enumerate(PARAM_NAMES)}
+    CONTRAST_COEFS = {
+        "App_2mo":  {"App": 1},
+        "App_4mo":  {"App": 1, "App_x_time4": 1},
+        "App_6mo":  {"App": 1, "App_x_time6": 1},
+        "Tau_2mo":  {"Tau": 1},
+        "Tau_4mo":  {"Tau": 1, "Tau_x_time4": 1},
+        "Tau_6mo":  {"Tau": 1, "Tau_x_time6": 1},
+        "ApTt_2mo": {"App": 1, "Tau": 1, "Int": 1},
+        "ApTt_4mo": {"App": 1, "Tau": 1, "Int": 1, "App_x_time4": 1, "Tau_x_time4": 1},
+        "ApTt_6mo": {"App": 1, "Tau": 1, "Int": 1, "App_x_time6": 1, "Tau_x_time6": 1},
+    }
+    CONTRAST_VECS = {}
+    for cn, terms in CONTRAST_COEFS.items():
+        v = np.zeros(len(PARAM_NAMES))
+        for k, w in terms.items():
+            v[P[k]] = w
+        CONTRAST_VECS[cn] = v
+
+    cell_types = sorted(pb_male["cell_type"].unique())
     all_rows = []
 
-    for ct in subclasses:
+    for ct in cell_types:
         ct_df = pb_male[pb_male["cell_type"] == ct].copy()
         n_animals = ct_df["sample"].nunique()
 
-        if n_animals < config.SONG_MIN_ANIMALS:
-            print(f"    {ct:<20s}  SKIP ({n_animals} animals < "
-                  f"{config.SONG_MIN_ANIMALS} min)")
+        if n_animals <= len(PARAM_NAMES):
+            print(f"    {ct:<20s}  SKIP ({n_animals} animals ≤ "
+                  f"{len(PARAM_NAMES)} params)")
             continue
 
-        # Build design matrix: intercept + App + Tau + Int
         X_rows = []
         for _, row in ct_df.iterrows():
-            geno = row["genotype"]
-            coding = GENOTYPE_FACTORIAL[geno]
-            X_rows.append([1.0, coding["App"], coding["Tau"], coding["Int"]])
-        X = np.array(X_rows)  # (n_animals, 4)
-        # Expression matrix: (n_genes, n_animals)
-        Y = ct_df[gene_cols].values.T  # already log2(CPM+1)
+            coding = GENOTYPE_FACTORIAL[row["genotype"]]
+            t = row["timepoint"]
+            t4 = 1.0 if t == "4mo" else 0.0
+            t6 = 1.0 if t == "6mo" else 0.0
+            App, Tau, Int = coding["App"], coding["Tau"], coding["Int"]
+            X_rows.append([
+                1.0, App, Tau, Int, t4, t6,
+                App * t4, App * t6, Tau * t4, Tau * t6,
+            ])
+        X = np.array(X_rows)
+        rank = np.linalg.matrix_rank(X)
+        if rank < X.shape[1]:
+            print(f"    {ct:<20s}  SKIP (design rank {rank} < "
+                  f"{X.shape[1]}; insufficient (genotype, time) coverage)")
+            continue
 
-        # Filter genes with nonzero expression in at least half the animals
+        Y = ct_df[gene_cols].values.T  # (n_genes, n_animals)
         min_detect = max(3, n_animals // 2)
         gene_detect = (Y > 0).sum(axis=1)
         gene_mask = gene_detect >= min_detect
@@ -336,65 +382,44 @@ def step_concordance() -> None:
             print(f"    {ct:<20s}  SKIP (no genes pass detection filter)")
             continue
 
-        # Vectorized OLS
-        beta_hat, se, _, p_values = _fit_ols_batch(Y_filt, X)
-
-        # Extract factorial coefficients (indices: 1=App, 2=Tau, 3=Int)
-        idx_app, idx_tau, idx_int = 1, 2, 3
-
-        # Derive pathway contrasts
-        app_lfc = beta_hat[:, idx_app]
-        tau_lfc = beta_hat[:, idx_tau]
-        aptt_lfc = beta_hat[:, idx_app] + beta_hat[:, idx_tau] + beta_hat[:, idx_int]
-
-        app_se = se[:, idx_app]
-        tau_se = se[:, idx_tau]
-        # ApTt SE via variance propagation: Var(β_A + β_T + β_I)
-        cov_mat = np.linalg.inv(X.T @ X)
-        var_aptt = (cov_mat[idx_app, idx_app] + cov_mat[idx_tau, idx_tau]
-                    + cov_mat[idx_int, idx_int]
-                    + 2 * cov_mat[idx_app, idx_tau]
-                    + 2 * cov_mat[idx_app, idx_int]
-                    + 2 * cov_mat[idx_tau, idx_int])
-        sigma2 = np.sum((Y_filt - beta_hat @ X.T)**2, axis=1) / (X.shape[0] - X.shape[1])
-        aptt_se = np.sqrt(sigma2 * var_aptt)
-
-        app_pval = p_values[:, idx_app]
-        tau_pval = p_values[:, idx_tau]
-        # ApTt p-value from t-test
+        beta_hat, se, _, _ = _fit_ols_batch(Y_filt, X)
+        # Per-contrast LFC, SE, p — propagate through the contrast vector.
+        XtX_inv = np.linalg.inv(X.T @ X)
         df_resid = X.shape[0] - X.shape[1]
-        aptt_t = aptt_lfc / np.where(aptt_se > 0, aptt_se, np.inf)
-        aptt_pval = 2.0 * sp_stats.t.sf(np.abs(aptt_t), df=df_resid)
+        residuals = Y_filt - beta_hat @ X.T
+        sigma2 = np.sum(residuals ** 2, axis=1) / df_resid
 
-        for pathway, lfc_arr, se_arr, pval_arr in [
-            ("App", app_lfc, app_se, app_pval),
-            ("Tau", tau_lfc, tau_se, tau_pval),
-            ("ApTt", aptt_lfc, aptt_se, aptt_pval),
-        ]:
+        per_contrast_summary = {}
+        for cn, c_vec in CONTRAST_VECS.items():
+            lfc = beta_hat @ c_vec  # (n_genes,)
+            var_c = float(c_vec @ XtX_inv @ c_vec)
+            se_c = np.sqrt(sigma2 * var_c)
+            t_c = lfc / np.where(se_c > 0, se_c, np.inf)
+            p_c = 2.0 * sp_stats.t.sf(np.abs(t_c), df=df_resid)
+            per_contrast_summary[cn] = (lfc, se_c, p_c)
             for gi, gene in enumerate(gene_names_filt):
                 all_rows.append({
                     "gene_symbol": gene,
                     "cell_type": ct,
-                    "pathway": pathway,
-                    "song_lfc": float(lfc_arr[gi]),
-                    "song_se": float(se_arr[gi]),
-                    "song_pval": float(pval_arr[gi]),
+                    "contrast": cn,
+                    "song_lfc": float(lfc[gi]),
+                    "song_se": float(se_c[gi]),
+                    "song_pval": float(p_c[gi]),
                     "n_animals": n_animals,
                 })
 
-        n_sig_app = (app_pval < 0.05).sum()
-        n_sig_tau = (tau_pval < 0.05).sum()
-        n_sig_aptt = (aptt_pval < 0.05).sum()
+        sig_counts = {cn: int((p < 0.05).sum())
+                      for cn, (_, _, p) in per_contrast_summary.items()}
         print(f"    {ct:<20s}  {n_animals:>2d} animals  "
               f"{len(gene_names_filt):>5d} genes  "
-              f"sig(p<.05): App={n_sig_app}, Tau={n_sig_tau}, ApTt={n_sig_aptt}")
+              f"sig(p<.05) per contrast: {sig_counts}")
 
     df = pd.DataFrame(all_rows)
 
-    # BH FDR correction per (cell_type, pathway)
-    print("\n  Applying BH FDR correction per (subclass, pathway) ...")
+    # BH FDR correction per (cell_type, contrast)
+    print("\n  Applying BH FDR correction per (cell_type, contrast) ...")
     df["song_fdr"] = np.nan
-    for (ct, _pw), idx in df.groupby(["cell_type", "pathway"]).groups.items():
+    for (_ct, _cn), idx in df.groupby(["cell_type", "contrast"]).groups.items():
         if len(idx) > 0:
             _, fdr_vals, _, _ = multipletests(
                 df.loc[idx, "song_pval"].values, alpha=0.05, method="fdr_bh",
@@ -403,14 +428,11 @@ def step_concordance() -> None:
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     df.to_csv(CONCORDANCE_FILE, index=False)
-    print(f"\n  Output: {len(df)} (gene × subclass × pathway) rows → "
+    print(f"\n  Output: {len(df)} (gene × cell_type × contrast) rows → "
           f"{CONCORDANCE_FILE}")
-
-    # Summary
     n_sig = (df["song_fdr"] < 0.05).sum()
-    n_total = len(df)
-    print(f"  Significant at FDR < 0.05: {n_sig}/{n_total} "
-          f"({n_sig / n_total * 100:.1f}%)")
+    print(f"  Significant at FDR < 0.05: {n_sig}/{len(df)} "
+          f"({n_sig / max(len(df),1) * 100:.1f}%)")
 
 
 # ---------------------------------------------------------------------------

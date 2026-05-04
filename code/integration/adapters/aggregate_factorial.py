@@ -27,6 +27,7 @@ import sys
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
+from glob import glob
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -59,13 +60,28 @@ def _build_receiver_lookup(data_dir):
     return lookup
 
 
-def create_connection(data_dir):
+def _resolve_duckdb_settings(memory_limit_gb=None, duckdb_threads=None):
+    """Resolve DuckDB resource settings from CLI/env with safe defaults."""
+    if memory_limit_gb is None:
+        memory_limit_gb = float(os.getenv("MEMORY_LIMIT_GB", "6"))
+    if duckdb_threads is None:
+        duckdb_threads = int(os.getenv("DUCKDB_THREADS", "4"))
+    return {
+        "memory_limit_gb": memory_limit_gb,
+        "duckdb_threads": max(1, duckdb_threads),
+        "preserve_insertion_order": False,
+    }
+
+
+def create_connection(data_dir, *, memory_limit_gb=None, duckdb_threads=None):
     """Create DuckDB connection and register Parquet + kinase CSV views."""
     assert "'" not in data_dir
 
+    settings = _resolve_duckdb_settings(memory_limit_gb, duckdb_threads)
     con = duckdb.connect()
-    con.execute("SET memory_limit='4GB'")
-    con.execute("SET threads=4")
+    con.execute(f"SET memory_limit='{settings['memory_limit_gb']}GB'")
+    con.execute(f"SET threads={settings['duckdb_threads']}")
+    con.execute("SET preserve_insertion_order=false")
 
     # Build receiver lookup from Parquet metadata
     recv_lookup = _build_receiver_lookup(data_dir)
@@ -93,7 +109,98 @@ def create_connection(data_dir):
         FROM read_csv_auto('{csv_glob}', filename=true)
     """)
 
-    return con
+    return con, settings
+
+
+def build_backbone_provenance_table(data_dir, out_dir):
+    """Build static backbone provenance once from receiver parquet files.
+
+    Provenance is contrast-invariant in the current receiver parquet schema, so
+    this helper computes one compact row per (receiver, Receptor, EM, Target)
+    and persists it for Q4 reuse and debugging.
+    """
+    recv_lookup = _build_receiver_lookup(data_dir)
+    parts = []
+    columns = ["Receptor", "EM", "Target", "pathway_evidence", "imputed_nodes"]
+
+    for path in sorted(glob(os.path.join(data_dir, "recv_*.parquet"))):
+        receiver = recv_lookup.get(path)
+        if not receiver:
+            continue
+        df = pd.read_parquet(path, columns=columns)
+        if df.empty:
+            continue
+        df["receiver"] = receiver
+        nodes = df["imputed_nodes"].fillna("").astype(str)
+        df["imp_receptor"] = nodes.str.contains("Receptor", regex=False)
+        df["imp_em"] = nodes.str.contains("EM", regex=False)
+        df["imp_target"] = nodes.str.contains("Target", regex=False)
+        # Older factorial receiver parquets wrote every pathway_evidence value
+        # as expression-confirmed while still carrying correct imputed_nodes.
+        # Treat imputed_nodes as the source of truth for provenance.
+        is_kin_imp = nodes.ne("")
+        df["is_expr"] = (~is_kin_imp).astype(np.int32)
+        df["is_kin_imp"] = is_kin_imp.astype(np.int32)
+
+        grouped = (
+            df.groupby(["receiver", "Receptor", "EM", "Target"], sort=False)
+              .agg(
+                  n_expression_confirmed=("is_expr", "sum"),
+                  n_kinase_imputed=("is_kin_imp", "sum"),
+                  imp_receptor=("imp_receptor", "max"),
+                  imp_em=("imp_em", "max"),
+                  imp_target=("imp_target", "max"),
+              )
+              .reset_index()
+        )
+        parts.append(grouped)
+
+    if parts:
+        provenance = pd.concat(parts, ignore_index=True)
+    else:
+        provenance = pd.DataFrame(columns=[
+            "receiver", "Receptor", "EM", "Target",
+            "n_expression_confirmed", "n_kinase_imputed",
+            "imp_receptor", "imp_em", "imp_target",
+        ])
+
+    provenance["pathway_evidence_backbone"] = np.select(
+        [
+            (provenance["n_expression_confirmed"] > 0)
+            & (provenance["n_kinase_imputed"] > 0),
+            provenance["n_kinase_imputed"] > 0,
+        ],
+        ["mixed", "kinase-imputed"],
+        default="expression-confirmed",
+    )
+
+    def _join_nodes(row):
+        out = []
+        if bool(row["imp_receptor"]):
+            out.append("Receptor")
+        if bool(row["imp_em"]):
+            out.append("EM")
+        if bool(row["imp_target"]):
+            out.append("Target")
+        return ";".join(out)
+
+    provenance["imputed_nodes_union"] = provenance.apply(_join_nodes, axis=1)
+    provenance = provenance[[
+        "receiver", "Receptor", "EM", "Target",
+        "pathway_evidence_backbone",
+        "n_expression_confirmed", "n_kinase_imputed",
+        "imputed_nodes_union",
+    ]]
+
+    prov_path = os.path.join(out_dir, "backbone_provenance.csv")
+    provenance.to_csv(prov_path, index=False)
+    return provenance, prov_path
+
+
+def _count_csv_rows(path):
+    """Return row count excluding header for a CSV file."""
+    with open(path, "r", encoding="utf-8") as f:
+        return max(sum(1 for _ in f) - 1, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -153,12 +260,13 @@ def q3_temporal_dynamics(con, pval_threshold):
     return pd.concat(parts, ignore_index=True)
 
 
-def q4_backbone_recurrence(con, pval_threshold):
+def q4_backbone_recurrence(con, pval_threshold, out_path):
     """Q4: Backbone recurrence — R-EM-T triples significant across senders.
 
     Processes one contrast at a time to avoid OOM on the 366M-row unnest.
     """
-    parts = []
+    total_rows = 0
+    wrote_header = False
     for contrast in CONTRASTS:
         sql = f"""
         WITH per_sender AS (
@@ -169,22 +277,36 @@ def q4_backbone_recurrence(con, pval_threshold):
             GROUP BY sender, receiver, Receptor, EM, Target
         )
         SELECT '{contrast}' AS contrast,
-               receiver, Receptor, EM, Target,
-               COUNT(DISTINCT sender) AS n_senders,
-               COUNT(DISTINCT sender) FILTER (sender_min_pval < ?) AS n_senders_significant,
-               ROUND(AVG(sender_mean_tpds), 6) AS mean_tpds,
-               ROUND(MAX(ABS(sender_mean_tpds)), 6) AS max_abs_tpds,
-               STRING_AGG(DISTINCT sender, ',' ORDER BY sender) AS sender_list
-        FROM per_sender
-        GROUP BY receiver, Receptor, EM, Target
-        HAVING COUNT(DISTINCT sender) FILTER (sender_min_pval < ?) >= 2
+               ps.receiver, ps.Receptor, ps.EM, ps.Target,
+               COUNT(DISTINCT ps.sender) AS n_senders,
+               COUNT(DISTINCT ps.sender) FILTER (ps.sender_min_pval < ?) AS n_senders_significant,
+               ROUND(AVG(ps.sender_mean_tpds), 6) AS mean_tpds,
+               ROUND(MAX(ABS(ps.sender_mean_tpds)), 6) AS max_abs_tpds,
+               MIN(ps.sender_min_pval) AS tpds_pvalue,
+               STRING_AGG(DISTINCT ps.sender, ',' ORDER BY ps.sender) AS sender_list,
+               p.pathway_evidence_backbone,
+               p.n_expression_confirmed,
+               p.n_kinase_imputed,
+               p.imputed_nodes_union
+        FROM per_sender ps
+        JOIN backbone_provenance p
+          ON ps.receiver = p.receiver
+         AND ps.Receptor = p.Receptor
+         AND ps.EM = p.EM
+         AND ps.Target = p.Target
+        GROUP BY ps.receiver, ps.Receptor, ps.EM, ps.Target,
+                 p.pathway_evidence_backbone, p.n_expression_confirmed,
+                 p.n_kinase_imputed, p.imputed_nodes_union
+        HAVING COUNT(DISTINCT ps.sender) FILTER (ps.sender_min_pval < ?) >= 2
         ORDER BY n_senders_significant DESC, max_abs_tpds DESC
         """
         df = con.execute(sql, [pval_threshold, pval_threshold]).fetchdf()
-        parts.append(df)
+        df.to_csv(out_path, mode="a" if wrote_header else "w",
+                  header=not wrote_header, index=False)
+        wrote_header = True
+        total_rows += len(df)
         print(f"    {contrast}: {len(df)} backbones")
-
-    return pd.concat(parts, ignore_index=True)
+    return total_rows
 
 
 def q5_kinase_integration(con, pval_threshold):
@@ -803,6 +925,10 @@ def main():
     parser.add_argument("--n-permutations", type=int,
                         default=icfg.N_PERMUTATIONS_AGGREGATE,
                         help="Number of permutation iterations (default: %(default)s)")
+    parser.add_argument("--memory-limit-gb", type=float, default=None,
+                        help="DuckDB memory limit in GB (default: MEMORY_LIMIT_GB env or 6)")
+    parser.add_argument("--duckdb-threads", type=int, default=None,
+                        help="DuckDB thread count (default: DUCKDB_THREADS env or 4)")
     args = parser.parse_args()
 
     data_dir = icfg.FACTORIAL_ALL_PAIRS_DIR
@@ -813,6 +939,13 @@ def main():
     print(f"Factorial aggregation: {data_dir}")
     print(f"  P-value threshold: {pval}")
     print(f"  Output: {out_dir}")
+    duckdb_settings = _resolve_duckdb_settings(
+        args.memory_limit_gb, args.duckdb_threads
+    )
+    print("  DuckDB settings: "
+          f"memory_limit={duckdb_settings['memory_limit_gb']}GB, "
+          f"threads={duckdb_settings['duckdb_threads']}, "
+          f"preserve_insertion_order={str(duckdb_settings['preserve_insertion_order']).lower()}")
 
     t0 = time.monotonic()
 
@@ -823,6 +956,7 @@ def main():
     all_cached = not any(_should_run(os.path.join(out_dir, f)) for f in [
         "hub_matrix_by_contrast.csv", "contrast_comparison.csv",
         "temporal_dynamics.csv", "backbone_recurrence_by_contrast.csv",
+        "backbone_provenance.csv",
         "target_convergence_by_contrast.csv",
     ]) and (args.skip_kinase_join or not _should_run(
         os.path.join(out_dir, "kinase_tpds_integration.csv")))
@@ -833,12 +967,31 @@ def main():
         print("  All aggregation queries cached — skipping DuckDB")
         con = None
         n_rows = 0
+        prov_rows = _count_csv_rows(os.path.join(out_dir, "backbone_provenance.csv"))
     else:
-        con = create_connection(data_dir)
+        con, _ = create_connection(
+            data_dir,
+            memory_limit_gb=duckdb_settings["memory_limit_gb"],
+            duckdb_threads=duckdb_settings["duckdb_threads"],
+        )
         n_rows = con.execute("SELECT COUNT(*) FROM recv_all").fetchone()[0]
         n_pairs = con.execute(
             "SELECT COUNT(DISTINCT sender) FROM recv_all").fetchone()[0]
         print(f"  Parquet: {n_rows:,} total rows, {n_pairs} senders")
+
+        prov_path = os.path.join(out_dir, "backbone_provenance.csv")
+        if _should_run(prov_path):
+            print("\nQ0: Backbone provenance...")
+            t0_prov = time.monotonic()
+            provenance_df, prov_path = build_backbone_provenance_table(data_dir, out_dir)
+            prov_rows = len(provenance_df)
+            print(f"  {prov_rows} rows ({time.monotonic()-t0_prov:.1f}s) -> {prov_path}")
+        else:
+            print("\nQ0: Backbone provenance (cached)")
+            provenance_df = pd.read_csv(prov_path)
+            prov_rows = len(provenance_df)
+        con.register("backbone_provenance_df", provenance_df)
+        con.execute("CREATE OR REPLACE TEMP VIEW backbone_provenance AS SELECT * FROM backbone_provenance_df")
 
     metadata = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -846,6 +999,8 @@ def main():
         "n_contrasts": len(CONTRASTS),
         "contrasts": CONTRASTS,
         "total_pathways": n_rows,
+        "backbone_provenance_rows": prov_rows,
+        "duckdb_settings": duckdb_settings,
     }
 
     # --- Q1: Hub matrix ---
@@ -900,12 +1055,12 @@ def main():
     if _should_run(bb_path):
         print("\nQ4: Backbone recurrence...")
         t4 = time.monotonic()
-        backbone_df = q4_backbone_recurrence(con, pval)
-        backbone_df.to_csv(bb_path, index=False)
-        metadata["backbone_recurrence_rows"] = len(backbone_df)
-        print(f"  {len(backbone_df)} rows ({time.monotonic()-t4:.1f}s) -> {bb_path}")
+        backbone_rows = q4_backbone_recurrence(con, pval, bb_path)
+        metadata["backbone_recurrence_rows"] = backbone_rows
+        print(f"  {backbone_rows} rows ({time.monotonic()-t4:.1f}s) -> {bb_path}")
     else:
         print("\nQ4: Backbone recurrence (cached)")
+        metadata["backbone_recurrence_rows"] = _count_csv_rows(bb_path)
 
     # --- Q5: Kinase integration ---
     kin_path = os.path.join(out_dir, "kinase_tpds_integration.csv")

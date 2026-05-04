@@ -72,6 +72,24 @@ MEA_WINSORIZE_PERCENTILE = 1.0  # winsorize site LFCs at this percentile before 
 OUTLIER_ZSCORE_THRESH = 3.0     # within-group z-score threshold for outlier exclusion
 ANALYSIS_MODE = os.environ.get("ANALYSIS_MODE", "males_only")  # "males_only" or "full_cohort"
 
+WMB_CLASSES = [
+    "01 IT-ET Glut", "02 NP-CT-L6b Glut", "03 OB-CR Glut", "04 DG-IMN Glut",
+    "05 OB-IMN GABA", "06 CTX-CGE GABA", "07 CTX-MGE GABA", "08 CNU-MGE GABA",
+    "09 CNU-LGE GABA", "10 LSX GABA", "11 CNU-HYa GABA", "12 HY GABA",
+    "13 CNU-HYa Glut", "14 HY Glut", "15 HY Gnrh1 Glut", "16 HY MM Glut",
+    "17 MH-LH Glut", "18 TH Glut", "19 MB Glut", "20 MB GABA",
+    "21 MB Dopa", "22 MB-HB Sero", "23 P Glut", "24 MY Glut",
+    "25 Pineal Glut", "26 P GABA", "27 MY GABA", "28 CB GABA",
+    "29 CB Glut", "30 Astro-Epen", "31 OPC-Oligo", "32 OEC",
+    "33 Vascular", "34 Immune",
+]
+WMB_CLASS_MANIFEST_FILE = os.path.join(
+    EXTERNAL_DATA_DIR, "allen_abc", "wmb_class_manifest.csv"
+)
+SEAAD_TO_WMB_CLASS_FILE = os.path.join(
+    EXTERNAL_DATA_DIR, "sea_ad", "seaad_subclass_to_wmb_class.csv"
+)
+
 SEA_AD_SUBCLASSES = [
     "Chandelier", "Lamp5", "Lamp5 Lhx6", "Pax6", "Pvalb",
     "Sncg", "Sst", "Sst Chodl", "Vip",
@@ -87,9 +105,9 @@ SEA_AD_PATHWAY_MAP = {
     "Tau":  "late",    # tau-driven → late/high-CPS human donors
     "ApTt": "full",    # combined pathology → full CPS range
 }
-N_CELL_TYPES = len(SEA_AD_SUBCLASSES)
-SPECIFICITY_HIGH = 2.0 / N_CELL_TYPES   # ~0.083: ≥2× more specific than uniform
-SPECIFICITY_LOW = 1.0 / N_CELL_TYPES    # ~0.042: ≥1× uniform (above-average specificity)
+N_CELL_TYPES = len(WMB_CLASSES)         # 34 — WMB-class spine
+SPECIFICITY_HIGH = 2.0 / N_CELL_TYPES   # ~0.059: ≥2× more specific than uniform across 34 classes
+SPECIFICITY_LOW = 1.0 / N_CELL_TYPES    # ~0.029: ≥1× uniform across 34 classes
 
 SNRNA_CLUSTER_TAXONOMY = {
     "Astrocytes":              {"sea_ad_subclass": "Astrocyte",       "confidence": "unambiguous", "note": "Direct match"},
@@ -125,6 +143,44 @@ SNRNA_CLUSTER_TAXONOMY = {
     "Cholinergic-Neurons":     {"sea_ad_subclass": "Other",           "confidence": "unmapped", "note": "No SEA-AD subclass"},
 }
 
+CLASS_TO_TISSUE_CATEGORY = {
+    "01 IT-ET Glut": "Excitatory neurons",
+    "02 NP-CT-L6b Glut": "Excitatory neurons",
+    "03 OB-CR Glut": "Excitatory neurons",
+    "04 DG-IMN Glut": "Excitatory neurons",
+    "05 OB-IMN GABA": "Interneurons",
+    "06 CTX-CGE GABA": "Interneurons",
+    "07 CTX-MGE GABA": "Interneurons",
+    "08 CNU-MGE GABA": "Interneurons",
+    "09 CNU-LGE GABA": "Interneurons",
+    "10 LSX GABA": "Subcortical neurons",
+    "11 CNU-HYa GABA": "Subcortical neurons",
+    "12 HY GABA": "Subcortical neurons",
+    "13 CNU-HYa Glut": "Subcortical neurons",
+    "14 HY Glut": "Subcortical neurons",
+    "15 HY Gnrh1 Glut": "Subcortical neurons",
+    "16 HY MM Glut": "Subcortical neurons",
+    "17 MH-LH Glut": "Subcortical neurons",
+    "18 TH Glut": "Subcortical neurons",
+    "19 MB Glut": "Brainstem neurons",
+    "20 MB GABA": "Brainstem neurons",
+    "21 MB Dopa": "Brainstem neurons",
+    "22 MB-HB Sero": "Brainstem neurons",
+    "23 P Glut": "Brainstem neurons",
+    "24 MY Glut": "Brainstem neurons",
+    "25 Pineal Glut": "Brainstem neurons",
+    "26 P GABA": "Brainstem neurons",
+    "27 MY GABA": "Brainstem neurons",
+    "28 CB GABA": "Cerebellum",
+    "29 CB Glut": "Cerebellum",
+    "30 Astro-Epen": "Astrocytes",
+    "31 OPC-Oligo": "Oligodendrocytes",
+    "32 OEC": "Oligodendrocytes",
+    "33 Vascular": "Endothelial cells",
+    "34 Immune": "Microglia",
+    "Other": "Other",
+}
+
 SUBCLASS_TO_TISSUE_CATEGORY = {
     "Chandelier": "Interneurons", "Lamp5": "Interneurons",
     "Lamp5 Lhx6": "Interneurons", "Pax6": "Interneurons",
@@ -149,8 +205,10 @@ DISEASE_GROUPS = ["App", "Tau", "ApTt"]
 TIMEPOINTS = ["2mo", "4mo", "6mo"]
 DISEASE_COLORS = {"App": "#c62828", "Tau": "#1565c0", "ApTt": "#6a1b9a"}
 TISSUE_ORDER = [
-    "Excitatory neurons", "Interneurons", "Astrocytes",
-    "Oligodendrocytes", "OPCs", "Microglia", "Endothelial cells",
+    "Excitatory neurons", "Interneurons", "Subcortical neurons",
+    "Brainstem neurons", "Cerebellum",
+    "Astrocytes", "Oligodendrocytes", "OPCs", "Microglia",
+    "Endothelial cells", "Other",
 ]
 
 def minprob_impute(mat, q=0.01, rng=None):
@@ -239,6 +297,8 @@ SEA_AD_S3_BUCKET = "sea-ad-single-cell-profiling"
 
 WMB_EXPRESSION_OUTPUT_DIR = os.path.join("outputs", "reports", "wmb_expression")
 WMB_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_kinase_expression.csv")
+WMB_EXPRESSION_SUBCLASS_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_kinase_expression_subclass.csv")
+WMB_SUBCLASS_TO_CLASS_FILE = os.path.join(EXTERNAL_DATA_DIR, "allen_abc", "wmb_subclass_to_class.csv")
 WMB_REGIONAL_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_regional_kinase_expression.csv")
 WMB_PROTEOME_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_proteome_expression.csv")
 PROTEOME_GENE_LIST_FILE = os.path.join(DATA_INGEST_OUTPUT_DIR, "total_proteome_genes.txt")
