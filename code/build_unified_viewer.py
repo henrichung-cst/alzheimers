@@ -7055,8 +7055,6 @@ const ATTR_VERDICT_COLS = [
    title:"SEA-AD log2 fold change in human AD vs control, median across SEA-AD supertypes mapped to this subclass. Stratum (early / late / full CPS) is selected from the contrast pathway. Color: red = up in AD, blue = down."},
   {key:"song_lfc",                     label:"Song LFC",    type:"num", group:"attr",
    title:"Song log2 fold change from within-cohort snRNA-seq factorial OLS (β at this contrast — 10-param design, time-resolved). Color: red = up in disease genotype, blue = down."},
-  {key:"song_pval",                    label:"Song p",      type:"num", group:"attr",
-   title:"Two-sided t-test p-value for the Song β at this (gene, cell type, contrast). Uncorrected — n≈15 males with a 10-param design saturates BH FDR within (cell type × contrast) strata, so per-row FDR is not informative; uncorrected p<0.05 is the most useful directional flag the dataset supports. Bold when p<0.05."},
   {key:"combined_score",               label:"Score",       type:"num", group:"attr",
    title:"Combined attribution score: effective concordance × (0.5 + WMB specificity). The unified attribution uses this for confidence tiers."},
   {key:"decomp_nes",                   label:"Decomp NES",  type:"num", group:"decomp",
@@ -7167,10 +7165,6 @@ function _renderAttributionVerdict(hostId, ctx) {
     const songCell = r.song_lfc == null || !isFinite(r.song_lfc)
       ? `<td class="attr-num attr-empty">—</td>`
       : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(r.song_lfc)}">${num(r.song_lfc, 3)}</td>`;
-    const songPvalSig = r.song_pval != null && isFinite(r.song_pval) && r.song_pval < 0.05;
-    const songPvalCell = r.song_pval == null || !isFinite(r.song_pval)
-      ? `<td class="attr-num attr-empty">—</td>`
-      : `<td class="attr-num"${songPvalSig ? ' style="font-weight:600"' : ''}>${num(r.song_pval, 3)}</td>`;
     const decompNesCell = r.decomp_nes == null || !isFinite(r.decomp_nes)
       ? `<td class="attr-num attr-empty">—</td>`
       : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(r.decomp_nes)}">${num(r.decomp_nes, 2)}</td>`;
@@ -7212,7 +7206,6 @@ function _renderAttributionVerdict(hostId, ctx) {
       `<td class="attr-num">${num(r.wmb_fraction_cells_expressing, 2)}</td>` +
       seaCell +
       songCell +
-      songPvalCell +
       scoreCell +
       decompNesCell +
       decompFdrCell +
