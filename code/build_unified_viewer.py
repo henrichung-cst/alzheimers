@@ -1874,9 +1874,6 @@ main#app-main { padding:14px; }
 .attr-bulk-anchor .attr-bulk-up { color:#b91c1c; }
 .attr-bulk-anchor .attr-bulk-down { color:#1d4ed8; }
 .attr-bulk-anchor .attr-bulk-ns { color:#64748b; font-weight:500; }
-.attr-cross-glyph { display:inline-flex; flex-direction:column; width:18px; height:14px;
-  border:1px solid #94a3b8; border-radius:2px; overflow:hidden; vertical-align:middle; }
-.attr-cross-glyph .acg-top, .attr-cross-glyph .acg-bot { flex:1 1 50%; }
 .attr-verdict-toggle { padding:6px 0 0; font-size:11px; }
 .attr-verdict-toggle label { cursor:pointer; user-select:none; }
 .attr-explainer { margin-top:10px; padding:8px 12px; background:#f8fafc; border:1px solid var(--border);
@@ -5017,13 +5014,13 @@ function _tv2EnsureAttrIndex() {
   _tv2AttrTierByKinCtx = m;
 }
 
-function _tv2AttrPasses(kid, contrastIdx, cellsScope, threshold) {
+function _tv2AttrPasses(ctxKey, cellsScope, threshold) {
   // Returns true if at least one attribution row at (kid, contrastIdx) within
   // the cell-type scope reaches the requested tier rank. threshold "" → pass.
   if (!threshold) return true;
   const wantRank = _CONF_RANK[threshold] || 0;
   if (wantRank <= 0) return true;
-  const arr = _tv2AttrTierByKinCtx.get(kid + "|" + contrastIdx);
+  const arr = _tv2AttrTierByKinCtx.get(ctxKey);
   if (!arr) return false;
   for (const r of arr) {
     if (cellsScope !== "ALL" && r.cell !== cellsScope) continue;
@@ -5069,7 +5066,8 @@ function _tv2Eval(series, kid, contrastIdx) {
   const bulkFdr = bulkFdrCol ? bulkFdrCol[kid] : null;
   const bulkSig = bulkFdr != null && isFinite(bulkFdr) && bulkFdr < series.fdrBulk;
 
-  let dRows = (_decompByKinCtx && _decompByKinCtx.get(kid + "|" + contrastIdx)) || [];
+  const ctxKey = kid + "|" + contrastIdx;
+  let dRows = (_decompByKinCtx && _decompByKinCtx.get(ctxKey)) || [];
   if (series.cells !== "ALL") dRows = dRows.filter(r => r.cell_type === series.cells);
   // For each decomp row at this kinase × contrast: sig + sign-vs-bulk.
   let decompAnyPass = false;        // any decomp row sig at fdrDecomp (sign-agnostic)
@@ -5101,7 +5099,7 @@ function _tv2Eval(series, kid, contrastIdx) {
   else { pass = false; refNes = null; }
   if (!pass) return null;
   // Attribution-tier gate: applies to any series, scoped to the same cells set.
-  if (series.attrTier && !_tv2AttrPasses(kid, contrastIdx, series.cells, series.attrTier)) {
+  if (series.attrTier && !_tv2AttrPasses(ctxKey, series.cells, series.attrTier)) {
     return null;
   }
 
@@ -5118,29 +5116,30 @@ function _tv2Counts(series) {
   const DG = META.diseaseGroups;
   const TPS = META.timepoints;
   const counts = {};
+  // Hoist (g, t) → contrast-index lookup out of the per-kinase loop.
+  const gtPairs = [];
   for (const g of DG) {
     counts[g] = {};
-    for (const t of TPS) counts[g][t] = {
-      up: 0, down: 0, total: 0,
-      upIds: [], downIds: [], totalIds: [],
-    };
+    for (const t of TPS) {
+      counts[g][t] = {
+        up: 0, down: 0, total: 0,
+        upIds: [], downIds: [], totalIds: [],
+      };
+      const cIdx = CONTRASTS.indexOf(g + "_" + t);
+      if (cIdx >= 0) gtPairs.push({ g, t, cIdx });
+    }
   }
   const n = K.id.length;
   for (let i = 0; i < n; i++) {
     const kid = K.id[i];
-    for (const g of DG) {
-      for (const t of TPS) {
-        const c = g + "_" + t;
-        const cIdx = CONTRASTS.indexOf(c);
-        if (cIdx < 0) continue;
-        const r = _tv2Eval(series, kid, cIdx);
-        if (!r) continue;
-        const cell = counts[g][t];
-        cell.total++;
-        cell.totalIds.push(kid);
-        if (r.sign > 0) { cell.up++; cell.upIds.push(kid); }
-        else if (r.sign < 0) { cell.down++; cell.downIds.push(kid); }
-      }
+    for (const p of gtPairs) {
+      const r = _tv2Eval(series, kid, p.cIdx);
+      if (!r) continue;
+      const cell = counts[p.g][p.t];
+      cell.total++;
+      cell.totalIds.push(kid);
+      if (r.sign > 0) { cell.up++; cell.upIds.push(kid); }
+      else if (r.sign < 0) { cell.down++; cell.downIds.push(kid); }
     }
   }
   return counts;
@@ -6886,10 +6885,8 @@ function _allenABALink(gene) {
 const ATTR_VERDICT_COLS = [
   {key:"cell_type",                    label:"Cell type",   type:"str", group:"id",
    title:""},
-  {key:"cross_rank",                   label:"Cross",       type:"num", group:"id",
-   title:"Cross-layer signal at full resolution. Top half = attribution tier (gray=none, pale=low, amber=moderate, red=high). Bottom half = decomposition step vs bulk direction (gray=absent, pale=nominal, amber=sig-agree FDR<0.25, red=strong-agree FDR<0.10, blue=sig-disagree). Reinforcing rows are saturated top+bottom in warm tones; conflicts pair warm top with blue bottom; single-layer rows light up only one half."},
-  {key:"combined_tier",                label:"Conf",        type:"conf", group:"attr",
-   title:"Combined confidence tier. Starts from the attribution-only tier (high / moderate / low / none). Upgraded to 'very high' when the decomposition layer significantly agrees (Decomp FDR < 0.25 with sign matching bulk MEA)."},
+  {key:"cross_rank",                   label:"Conf",        type:"num", group:"attr",
+   title:"Combined confidence tier. Starts from the attribution-only tier (high / moderate / low / none). Upgraded to 'very high' when the decomposition layer significantly agrees (Decomp FDR < 0.25 with sign matching bulk MEA). Sort uses cross_rank: tier first, decomposition step as tie-breaker."},
   {key:"wmb_specificity",              label:"WMB enrich",  type:"num", group:"attr",
    title:"WMB enrichment: cell type's share of total log2 expression across 34 WMB classes (uniform = 1/34 ≈ 0.029). Higher = more concentrated in this cell type."},
   {key:"wmb_mean_log2_expression",     label:"log2 expr",   type:"num", group:"attr",
@@ -7048,19 +7045,9 @@ function _renderAttributionVerdict(hostId, ctx) {
     const _sbk = (PAYLOAD.subclass_breakdown || {})[String(ctx.kinase_id)] || {};
     const _sbTip = _sbk[r.cell_type] || "";
     const _sbAttr = _sbTip ? ` title="WMB subclass breakdown: ${_escapeHtml(_sbTip)}"` : "";
-    const _tierTopColor = ({very_high:"#14532d", high:"#b91c1c", moderate:"#f59e0b", low:"#fde68a", none:"#e5e7eb"})[r.combined_tier] || "#e5e7eb";
-    const _decompBotColor = ({"3":"#b91c1c","2":"#f59e0b","1":"#f1f5f9","0":"#e5e7eb","-2":"#1d4ed8"})[String(r.decomp_step)] || "#e5e7eb";
-    const _decompStepLabel = ({"3":"strong-agree (FDR<0.10)","2":"sig-agree (FDR<0.25)","1":"nominal","0":"absent","-2":"sig-disagree (opposes bulk)"})[String(r.decomp_step)] || "absent";
-    const _crossTip = `Combined tier: ${r.combined_tier || 'none'} · Layer 1 (attribution): ${r.combined_confidence || 'none'} · Layer 2 (decomp): ${_decompStepLabel}`;
-    const crossCell = `<td class="attr-num" title="${_escapeHtml(_crossTip)}">` +
-      `<span class="attr-cross-glyph" aria-label="${_escapeHtml(_crossTip)}">` +
-        `<span class="acg-top" style="background:${_tierTopColor}"></span>` +
-        `<span class="acg-bot" style="background:${_decompBotColor}"></span>` +
-      `</span></td>`;
     const scoreCell = `<td class="attr-num">${num(r.combined_score, 3)}</td>`;
     return `<tr data-cell-type="${_escapeHtml(r.cell_type)}" class="attr-verdict-row${i === 0 ? ' attr-verdict-selected' : ''}">` +
       `<td class="attr-celltype"${_sbAttr}>${_escapeHtml(r.cell_type)}${_sbTip ? ' <span class="attr-subclass-marker" aria-hidden="true">ⓘ</span>' : ''} ${expBadge}</td>` +
-      crossCell +
       `<td><span class="${_attrConfidenceClass(r.combined_tier)}" title="${_escapeHtml('Attribution: ' + (r.combined_confidence || 'none') + (r.combined_tier === 'very_high' ? ' · upgraded to very_high by significant decomp agreement' : ''))}">${_escapeHtml((r.combined_tier || '').replace('_', ' '))}</span></td>` +
       `<td class="attr-num">${num(r.wmb_specificity, 3)}</td>` +
       `<td class="attr-num">${num(r.wmb_mean_log2_expression, 2)}</td>` +
