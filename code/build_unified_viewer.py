@@ -75,6 +75,11 @@ PER_BACKBONE_SUMMARY = os.path.join(UNIFIED_VIEWER_DIR, "edge_summaries",
                                     "per_backbone_summary.parquet")
 EDGE_SLICES_KINASE_DIR = os.path.join(UNIFIED_VIEWER_DIR, "edge_slices", "kinase")
 EDGE_SLICES_BACKBONE_DIR = os.path.join(UNIFIED_VIEWER_DIR, "edge_slices", "backbone")
+EDGE_SLICES_DECOMP_OLS_DIR = os.path.join(UNIFIED_VIEWER_DIR, "edge_slices", "decomp_ols")
+DECOMP_OLS_PARQUET = os.path.join(
+    config.REPO_ROOT, "outputs", "reports", "deconvolution",
+    "per_animal", "site_level_ols.parquet",
+)
 AUDIT_SOURCES_DIR = os.path.join(UNIFIED_VIEWER_DIR, "audit_sources")
 MEASUREMENT_TRACE_DIR = os.path.join(AUDIT_SOURCES_DIR, "measurement_trace")
 MEASUREMENT_TRACE_INDEX = os.path.join(MEASUREMENT_TRACE_DIR, "index.json")
@@ -1403,6 +1408,118 @@ def _build_agreement_index(
     }
 
 
+def _norm_motif(s: str) -> str:
+    return str(s or "").strip("_").upper()
+
+
+def _write_decomp_ols_slices(kid: dict, contrast_to_id: dict) -> dict:
+    """Per-kinase shard of per-cell-type OLS at substrate sites.
+
+    Reads `outputs/reports/deconvolution/per_animal/site_level_ols.parquet`
+    (3.77M rows: site × wmb_class × contrast × track), filters each kinase
+    to its substrate-set motifs (across all contrasts/tracks), and writes
+    one parquet per kinase to `edge_slices/decomp_ols/{kid:03d}.parquet`.
+
+    The drawer in the Attribution tab fetches one shard on demand and
+    filters client-side by current contrast + cell_type to populate the
+    substrate-level evidence table for the per-cell pseudo-deconv NES.
+    """
+    if not os.path.exists(DECOMP_OLS_PARQUET):
+        print(f"  (warn) decomp OLS parquet missing: {DECOMP_OLS_PARQUET}; "
+              f"skipping decomp_ols slice generation", flush=True)
+        return {"slice_count": 0, "present_kinase_ids": [], "filename_template":
+                "{kinase_id:03d}.parquet"}
+
+    os.makedirs(EDGE_SLICES_DECOMP_OLS_DIR, exist_ok=True)
+    # Clear stale shards so an aborted previous run doesn't leave a mismatched
+    # slice_count vs. present_kinase_ids.
+    for f in os.listdir(EDGE_SLICES_DECOMP_OLS_DIR):
+        if f.endswith(".parquet"):
+            os.remove(os.path.join(EDGE_SLICES_DECOMP_OLS_DIR, f))
+
+    # Substrate sets — st + py tracks. Both files share schema.
+    ss_paths = [
+        os.path.join(AUDIT_SOURCES_DIR, "mea_substrate_sets.csv"),
+        os.path.join(AUDIT_SOURCES_DIR, "mea_substrate_sets_pY.csv"),
+    ]
+    ss_frames = []
+    for p in ss_paths:
+        if os.path.exists(p):
+            ss_frames.append(pd.read_csv(p, usecols=["kinase", "motif", "track"]))
+    if not ss_frames:
+        print(f"  (warn) substrate-set tables not found under {AUDIT_SOURCES_DIR}; "
+              f"skipping decomp_ols slice generation", flush=True)
+        return {"slice_count": 0, "present_kinase_ids": [], "filename_template":
+                "{kinase_id:03d}.parquet"}
+    ss = pd.concat(ss_frames, ignore_index=True)
+    ss["motif_norm"] = ss["motif"].map(_norm_motif)
+    ss = ss[ss["kinase"].isin(kid)]
+    # kinase -> set of (motif_norm, track) substrate keys
+    kinase_subs: dict[str, set] = {}
+    for k, g in ss.groupby("kinase"):
+        kinase_subs[k] = set(zip(g["motif_norm"], g["track"]))
+    print(f"  decomp_ols: {len(kinase_subs)} kinases with substrate sets", flush=True)
+
+    print(f"  decomp_ols: loading {DECOMP_OLS_PARQUET} "
+          f"({os.path.getsize(DECOMP_OLS_PARQUET) / 1e6:.1f} MB)", flush=True)
+    cols = ["site_id", "gene_symbol", "motif", "wmb_class",
+            "contrast", "lfc", "se", "pval", "track"]
+    pcdf = pq.read_table(DECOMP_OLS_PARQUET, columns=cols).to_pandas()
+    pcdf = pcdf[pcdf["contrast"].isin(contrast_to_id)].copy()
+    pcdf["motif_norm"] = pcdf["motif"].astype(str).map(_norm_motif)
+    pcdf["contrast_id"] = pcdf["contrast"].map(contrast_to_id).astype("uint8")
+    pcdf = pcdf.drop(columns=["contrast"])
+    print(f"  decomp_ols: {len(pcdf):,} per-cell rows after contrast filter", flush=True)
+
+    # Index by (motif_norm, track) for fast per-kinase slicing.
+    pc_index = pcdf.set_index(["motif_norm", "track"], drop=False).sort_index()
+
+    template = "{kinase_id:03d}.parquet"
+    present = []
+    total_rows = 0
+    for k, kid_int in kid.items():
+        keys = kinase_subs.get(k)
+        if not keys:
+            continue
+        # Build a small DataFrame of (motif_norm, track) selectors and join.
+        sel_keys = list(keys)
+        try:
+            sub = pc_index.loc[sel_keys]
+        except KeyError:
+            sub = pc_index.loc[pc_index.index.intersection(sel_keys)]
+        if isinstance(sub, pd.Series):
+            continue
+        if sub.empty:
+            continue
+        out = sub.reset_index(drop=True)[
+            ["contrast_id", "wmb_class", "site_id", "gene_symbol",
+             "motif", "lfc", "se", "pval", "track"]
+        ].copy()
+        out["lfc"] = out["lfc"].astype("float32")
+        out["se"] = out["se"].astype("float32")
+        out["pval"] = out["pval"].astype("float32")
+        path = os.path.join(EDGE_SLICES_DECOMP_OLS_DIR,
+                            template.format(kinase_id=int(kid_int)))
+        pq.write_table(pa.Table.from_pandas(out, preserve_index=False), path,
+                       compression="zstd")
+        present.append(int(kid_int))
+        total_rows += len(out)
+
+    present.sort()
+    index = {
+        "schema_version": SCHEMA_VERSION,
+        "slice_count": len(present),
+        "present_kinase_ids": present,
+        "filename_template": template,
+        "n_total_rows": total_rows,
+    }
+    with open(os.path.join(EDGE_SLICES_DECOMP_OLS_DIR, "index.json"), "w") as f:
+        json.dump(index, f)
+    print(f"  decomp_ols: wrote {len(present)} shards "
+          f"({total_rows:,} total rows)", flush=True)
+    return index
+
+
 def build_payload(data: UnifiedData) -> dict:
     """Assemble the full JSON payload (no edges — that's the sidecar)."""
     from kinase_library.utils._global_vars import family_colors as KL_FAMILY_COLORS
@@ -1454,6 +1571,14 @@ def build_payload(data: UnifiedData) -> dict:
         kinase_slice_index = json.load(f)
     with open(backbone_index_path) as f:
         backbone_slice_index = json.load(f)
+
+    # Decomp-OLS slices: per-kinase per-cell-type substrate-site OLS, fetched on
+    # demand by the Attribution drawer to back the per-cell pseudo-deconv NES.
+    _kid_for_slices = {k: i for i, k in enumerate(data.edge_metadata["kinases"])}
+    _contrast_to_id_for_slices = {c: i for i, c in enumerate(contrasts)}
+    decomp_ols_slice_index = _write_decomp_ols_slices(
+        _kid_for_slices, _contrast_to_id_for_slices,
+    )
 
     meta = {
         "schema_version": SCHEMA_VERSION,
@@ -1591,6 +1716,12 @@ def build_payload(data: UnifiedData) -> dict:
             "n_backbone_buckets": backbone_slice_index["bucket_count"],
             "present_kinase_ids": kinase_slice_index["present_kinase_ids"],
             "source_sha256": kinase_slice_index.get("source_sha256"),
+            "decomp_ols_url": "edge_slices/decomp_ols/",
+            "decomp_ols_index": "edge_slices/decomp_ols/index.json",
+            "n_decomp_ols_slices": decomp_ols_slice_index.get("slice_count", 0),
+            "present_decomp_ols_kinase_ids": decomp_ols_slice_index.get(
+                "present_kinase_ids", []
+            ),
         },
         "meta": meta,
     }
@@ -1927,6 +2058,15 @@ main#app-main { padding:14px; }
   text-align:left; border-bottom:1px solid var(--border); cursor:help; }
 .attr-song-table td { padding:4px 8px; border-bottom:1px solid #f1f5f9; }
 .attr-song-table tr.attr-song-selected { background:#e3f2fd; }
+.attr-section-wide { margin-top:12px; }
+.attr-section-wide .audit-scroll { max-height:340px; overflow:auto; }
+.attr-decomp-ols-table { width:100%; border-collapse:collapse; font-size:12px; }
+.attr-decomp-ols-table th { background:#f8fafc; font-weight:600; padding:5px 8px;
+  text-align:left; border-bottom:1px solid var(--border); cursor:help;
+  position:sticky; top:0; z-index:1; }
+.attr-decomp-ols-table td { padding:4px 8px; border-bottom:1px solid #f1f5f9; }
+.attr-decomp-ols-table td.attr-num { text-align:right; font-variant-numeric:tabular-nums; }
+.attr-decomp-ols-table td.motif-mono { font-family:var(--font-mono, monospace); font-size:11px; }
 @media (max-width:1100px) {
   .kinase-audit-layout, .audit-source-catalog { grid-template-columns:1fr; }
   .audit-grid { grid-template-columns:1fr; }
@@ -3918,10 +4058,28 @@ const SliceCache = (function(){
     return arr.map(i => rows[i]);
   }
 
+  // Decomp-OLS shards: per-kinase substrate-site OLS for every (contrast, wmb_class).
+  // Backs the Attribution drawer's per-cell evidence section.
+  const dCache = new Map();              // kinase_id -> rows[]
+  const dPresent = new Set((ESR.present_decomp_ols_kinase_ids || []).map(Number));
+  async function loadDecompOls(kinase_id){
+    if (!dPresent.has(Number(kinase_id))) return [];
+    if (dCache.has(kinase_id)) {
+      const v = dCache.get(kinase_id); _lruTouch(dCache, kinase_id, v); return v;
+    }
+    if (!ESR.decomp_ols_url) return [];
+    const pad = String(kinase_id).padStart(3, "0");
+    const url = `${ESR.decomp_ols_url}${pad}.parquet`;
+    const rows = await _fetchParquet(url);
+    _lruTouch(dCache, kinase_id, rows);
+    return rows;
+  }
+
   return { loadKinase, loadBackboneBucket, backboneEdges, backboneSummary,
-           kinaseBackboneSetSync,
+           kinaseBackboneSetSync, loadDecompOls,
            get kinaseCacheSize(){ return kCache.size; },
-           get backboneCacheSize(){ return bCache.size; } };
+           get backboneCacheSize(){ return bCache.size; },
+           get decompOlsCacheSize(){ return dCache.size; } };
 })();
 window.SliceCache = SliceCache;
 
@@ -7163,10 +7321,88 @@ function _renderAttributionDrawer(hostId, ctx, cellType) {
       `<section class="attr-section"><h5>Song within-cohort OLS <span class="muted">(song_concordance.csv)</span></h5>` +
         `<p class="muted attr-caption">Factorial OLS coefficient on the per-animal pseudobulk for this cell type and pathway. Pathway is derived from the contrast prefix (App / Tau / ApTt).</p>` +
         `<div id="attr-song-table"></div></section>` +
-    `</div>`;
+    `</div>` +
+    `<section class="attr-section attr-section-wide"><h5>Per-cell substrate-site OLS <span class="muted">(deconvolution/per_animal/site_level_ols.parquet)</span></h5>` +
+      `<p class="muted attr-caption">Per-(site, contrast, cell type) β / SE / p from the CTM-native pseudo-deconvolution OLS, restricted to ${_escapeHtml(ctx.name || "")}'s substrate set in ${_escapeHtml(cellType)}. Shows what is driving the Decomp NES in the row above. Bulk β is the same site's stoichiometry β before share-reweighting; |Δβ| measures how much the per-cell estimate diverges from bulk.</p>` +
+      `<div id="attr-decomp-ols-table" class="audit-scroll"></div></section>`;
   _renderWMBDotPlot("attr-wmb-dotplot", ctx, cellType);
   _renderSEAADHeatmap("attr-seaad-heatmap", ctx, cellType);
   _renderSongOLSPanel("attr-song-table", ctx, cellType);
+  _renderDecompOlsTable("attr-decomp-ols-table", ctx, cellType);
+}
+
+function _renderDecompOlsTable(hostId, ctx, cellType) {
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  const cId = CONTRASTS.indexOf(ctx.contrast);
+  if (ctx.kinase_id == null || cId < 0) {
+    host.innerHTML = `<div class="muted">No contrast resolved.</div>`;
+    return;
+  }
+  if (!SliceCache || typeof SliceCache.loadDecompOls !== "function") {
+    host.innerHTML = `<div class="muted">Decomp OLS shards unavailable in this build.</div>`;
+    return;
+  }
+  host.innerHTML = `<div class="muted">Loading per-cell OLS shard…</div>`;
+  const reqGene = ctx.gene;
+  const reqContrast = ctx.contrast;
+  const reqCell = cellType;
+  SliceCache.loadDecompOls(ctx.kinase_id).then(rows => {
+    // Bail if the user moved on while we were fetching.
+    if (ctx.gene !== reqGene || ctx.contrast !== reqContrast) return;
+    const stillThis = document.getElementById(hostId);
+    if (!stillThis || stillThis !== host) return;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      host.innerHTML = `<div class="muted">No per-cell OLS shard for this kinase.</div>`;
+      return;
+    }
+    const sub = rows.filter(r => Number(r.contrast_id) === cId
+                              && String(r.wmb_class) === String(reqCell));
+    if (!sub.length) {
+      host.innerHTML = `<div class="muted">No substrate sites for ${_escapeHtml(reqCell)} in ${_escapeHtml(reqContrast)}.</div>`;
+      return;
+    }
+    const lfcCol = "stoich_lfc_" + reqContrast;
+    const pCol = "stoich_pval_" + reqContrast;
+    const bulkBySite = new Map();
+    for (const r of (ctx.olsRows || [])) {
+      bulkBySite.set(String(r.site_id), {bulk_lfc: r[lfcCol], bulk_pval: r[pCol]});
+    }
+    sub.sort((a, b) => (Number(b.lfc) || 0) - (Number(a.lfc) || 0));
+    const num = (v, d=3) => (v == null || !isFinite(v)) ? "—" : Number(v).toFixed(d);
+    const rowsHtml = sub.map(r => {
+      const sid = String(r.site_id);
+      const bulk = bulkBySite.get(sid) || {};
+      const blfc = bulk.bulk_lfc != null && isFinite(bulk.bulk_lfc) ? Number(bulk.bulk_lfc) : null;
+      const dlfc = (blfc != null && isFinite(r.lfc)) ? Math.abs(Number(r.lfc) - blfc) : null;
+      const pcSig = isFinite(r.pval) && Number(r.pval) < 0.05;
+      const bulkSig = bulk.bulk_pval != null && isFinite(bulk.bulk_pval) && Number(bulk.bulk_pval) < 0.05;
+      return `<tr>` +
+        `<td>${_escapeHtml(r.gene_symbol || "")}</td>` +
+        `<td class="attr-num">${_escapeHtml(sid)}</td>` +
+        `<td class="motif-mono">${_escapeHtml(r.motif || "")}</td>` +
+        `<td>${_escapeHtml(r.track || "")}</td>` +
+        `<td class="attr-num"${pcSig ? ' style="font-weight:600"' : ''}>${num(r.lfc, 3)}</td>` +
+        `<td class="attr-num">${num(r.se, 3)}</td>` +
+        `<td class="attr-num"${pcSig ? ' style="font-weight:600"' : ''}>${num(r.pval, 3)}</td>` +
+        `<td class="attr-num"${bulkSig ? ' style="font-weight:600"' : ''}>${num(blfc, 3)}</td>` +
+        `<td class="attr-num">${num(dlfc, 3)}</td>` +
+      `</tr>`;
+    }).join("");
+    host.innerHTML =
+      `<div class="muted" style="font-size:11px;margin-bottom:4px;">${sub.length} substrate sites · sorted by per-cell β (largest first)</div>` +
+      `<table class="attr-decomp-ols-table"><thead><tr>` +
+        `<th>Gene</th><th>Site</th><th>Motif</th><th>Track</th>` +
+        `<th title="Per-cell β: substrate-site stoichiometry coefficient from the per-(group, wmb_class) OLS, on the deconvoluted phospho signal. Bold when per-cell p < 0.05.">Per-cell β</th>` +
+        `<th>SE</th>` +
+        `<th title="Per-cell p-value (uncorrected). Bold at p < 0.05.">p</th>` +
+        `<th title="Bulk β: same site's stoichiometry β from the bulk MEA pipeline before share-reweighting. Bold when bulk p < 0.05.">Bulk β</th>` +
+        `<th title="|per-cell β − bulk β|. Large values mean the cell-type estimate diverges materially from the bulk estimate at this site.">|Δβ|</th>` +
+      `</tr></thead><tbody>${rowsHtml}</tbody></table>`;
+  }).catch(err => {
+    console.error("decomp OLS shard fetch failed", err);
+    host.innerHTML = `<div class="muted">Failed to load per-cell OLS shard: ${_escapeHtml(String(err && err.message || err))}</div>`;
+  });
 }
 
 function _renderWMBDotPlot(hostId, ctx, targetCellType) {
