@@ -190,5 +190,16 @@ For each deleted layer, the revival recipe is:
 
 ## Status
 
-Triage written and resolved 2026-05-06. Ready to open Phase 1 PR #1 (INC-27
-deletion).
+- 2026-05-06: triage written and resolved.
+- 2026-05-06: **Phase 1 complete** — Section C dead code deleted across
+  3 commits in `incytr` (INC-27, INC-25, INC-28+INC-29) and 1 commit in
+  `alzheimers` (INC-25 wrapper wiring). Net ~2,500 lines removed; testthat
+  470/470; `run_degenerate_2cond.sh` + `run_duckdb_enumeration_equiv.sh`
+  passing.
+- 2026-05-06: **Phase 2 complete** — `INCYTR_*` namespace standardized.
+  Single registry at `code/integration/incytr_runtime.sh` (shell) +
+  `code/integration/wrappers/incytr_runtime.R` (R). `ENABLE_KINASE_IMPUTATION`
+  → `INCYTR_LAYER_KINASE_PACK` (default flipped on→off). `DUCKDB_CUTOFF_SIGPROB`
+  → `INCYTR_CUTOFF_SIGPROB` (default `0.01` → `0.0`, native-equivalent).
+  Anchor gates re-verified.
+- Phase 3 (relocate parked sidecars under `code/integration/sidecar/`) pending.

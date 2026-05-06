@@ -257,7 +257,7 @@ Kinase abbreviation → human gene symbol uses MyGene.info, cached at `SONG_ANAL
 | `PHOSPHO_FDR_GATE` | `0.25` | Python | MEA FDR gate for kinase support |
 | `DISCORDANCE_RANK_QUARTILE` | `0.25` | Python | |
 | `EXPRESSION_DETECTION_THRESHOLD` | `0.10` | **R env var `EXPR_DETECTION_THRESHOLD`** | Python constant is documentation; R wrappers read from environment with `0.10` default |
-| `ENABLE_KINASE_IMPUTATION` | `True` | Shell env var of same name | |
+| Kinase pack (kinase-imputed expansion + support score) | off | Shell env var `INCYTR_LAYER_KINASE_PACK` | See `code/integration/incytr_runtime.sh` registry |
 | `KINASE_IMPUTATION_FDR` | `0.10` | Python | Imputation gate, tighter than `PHOSPHO_FDR_GATE` |
 | `KINASE_IMPUTATION_ATTRIBUTION_TAU` | median `combined_score` | Python | Per-receiver cell-type gate |
 | `EXPR_IMPUTATION_FLOOR` | `0.05` | R | Minimum `det_rates` for imputed survivors |
@@ -313,12 +313,16 @@ Produces `incytr_object.rds` + CSVs. Output schema is not compatible with the al
 |---|---|---|---|
 | `PAIR_FILTER` | (all pairs) | all-pairs runners | Filter pairs, e.g. `"Microglia-PVM:L5 IT"` or `"*:L5 IT"` |
 | `FORCE_RERUN` | `0` | all-pairs runners | Set to `1` to reprocess pairs with existing results |
-| `ENABLE_KINASE_IMPUTATION` | `1` | all-pairs runners | Set to `0` to disable kinase-imputed pathway expansion |
+| `INCYTR_LAYER_KINASE_PACK` | `0` | all-pairs runners | Set to `1` to enable kinase-imputed expansion + kinase support score sidecar |
+| `INCYTR_LAYER_BACKBONE_PERMS` | `0` | aggregation stage | Set to `1` to enable backbone permutation runner (pending design revisit) |
+| `INCYTR_CUTOFF_SIGPROB` | `0.0` | factorial wrapper | DuckDB pre-prune SigProb cutoff (`0.0` = native-equivalent) |
 | `RUN_PERMUTATIONS` | `0` | single-contrast | Set to `1` to run dual-null backbone tests during aggregation |
 | `RUN_BOOTSTRAP` | `0` | all | Set to `1` to run L5 IT bootstrap sensitivity |
 | `MEMORY_LIMIT_GB` | `10` | R wrappers | In-R memory guard threshold |
 | `EXPR_DETECTION_THRESHOLD` | `0.10` | R wrappers | Expression detection threshold |
 | `DUCKDB_TEMP_DIR` | `~/.cache/duckdb` | DuckDB | Spill directory (set by `.envrc`) |
+
+The `INCYTR_*` defaults live in a single registry: `code/integration/incytr_runtime.sh` (shell) mirrored by `code/integration/wrappers/incytr_runtime.R` (R). See `docs/integrations/incytr_layer_inventory.md`.
 
 ## 8. Outputs
 

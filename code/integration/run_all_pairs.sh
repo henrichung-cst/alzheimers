@@ -25,6 +25,9 @@ ADAPTERS_DIR="$INT_DIR/adapters"
 WRAPPERS_DIR="$INT_DIR/wrappers"
 OUT_DIR="$INT_DIR/intermediates"
 
+# shellcheck source=incytr_runtime.sh
+source "$INT_DIR/incytr_runtime.sh"
+
 SKIP_ADAPTERS=0
 for arg in "$@"; do
   case "$arg" in
@@ -65,8 +68,8 @@ else
   run_adapter "export_kl_output" --all-pairs
   run_adapter "export_phospho"
 
-  # Kinase-imputed gene expansion
-  if [ "${ENABLE_KINASE_IMPUTATION:-1}" = "1" ]; then
+  # Kinase-imputed gene expansion — kinase pack.
+  if [ "$INCYTR_LAYER_KINASE_PACK" = "1" ]; then
     run_adapter "export_kinase_imputed_genes"
   fi
 fi
@@ -79,7 +82,7 @@ echo "[run_incytr_all_pairs.R]"
 
 # Build env var forwarding for systemd-run (use array for safe word splitting)
 ENV_ARGS=()
-for var in PAIR_FILTER FORCE_RERUN MEMORY_LIMIT_GB SKIP_EXPRONLY EXPR_DETECTION_THRESHOLD EXPR_IMPUTATION_FLOOR; do
+for var in PAIR_FILTER FORCE_RERUN MEMORY_LIMIT_GB SKIP_EXPRONLY EXPR_DETECTION_THRESHOLD EXPR_IMPUTATION_FLOOR "${INCYTR_FORWARDED_VARS[@]}"; do
   if [ -n "${!var:-}" ]; then
     ENV_ARGS+=(--setenv="$var=${!var}")
   fi

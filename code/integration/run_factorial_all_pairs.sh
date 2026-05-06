@@ -12,9 +12,16 @@
 #   MEMORY_LIMIT_GB   - R memory abort threshold (default 10)
 #   ENABLE_CELLTYPE_MAPPING - Set to 1 to remap WMB classes to SEA-AD subclasses
 #                             in multiomics evidence (default off; native-equivalent)
-#   DUCKDB_CUTOFF_SIGPROB - DuckDB pre-prune SigProb cutoff (default 0.01;
-#                           Sprint 4 audit ledger ALZ-18.b; set to 0 for native-
-#                           equivalent enumeration)
+#
+# INCYTR_* layer knobs (sourced from code/integration/incytr_runtime.sh; see
+# docs/integrations/incytr_layer_inventory.md):
+#   INCYTR_LAYER_KINASE_PACK   - 1 to enable kinase-imputed gene expansion +
+#                                kinase support score sidecar (default 0).
+#   INCYTR_LAYER_BACKBONE_PERMS - 1 to enable backbone permutation runner
+#                                (default 0; pending design revisit).
+#   INCYTR_CUTOFF_SIGPROB      - DuckDB pre-prune SigProb cutoff
+#                                (default 0.0 = native-equivalent).
+#
 #   --skip-adapters   - Skip Python adapter step (use existing intermediates)
 #
 # Usage:
@@ -29,6 +36,9 @@ INT_DIR="$REPO_ROOT/code/integration"
 ADAPTERS_DIR="$INT_DIR/adapters"
 WRAPPERS_DIR="$INT_DIR/wrappers"
 FAC_DIR="$INT_DIR/intermediates/factorial"
+
+# shellcheck source=incytr_runtime.sh
+source "$INT_DIR/incytr_runtime.sh"
 
 SKIP_ADAPTERS=0
 for arg in "$@"; do
@@ -70,8 +80,8 @@ else
   run_adapter "export_kldata"
   run_adapter "export_kl_output_factorial"
 
-  # Kinase-imputed gene expansion (per-contrast, per-receiver)
-  if [ "${ENABLE_KINASE_IMPUTATION:-1}" = "1" ]; then
+  # Kinase-imputed gene expansion (per-contrast, per-receiver) — kinase pack.
+  if [ "$INCYTR_LAYER_KINASE_PACK" = "1" ]; then
     run_adapter "export_kinase_imputed_genes_factorial"
   fi
 fi
@@ -84,7 +94,7 @@ echo "[run_incytr_factorial_all_pairs.R]"
 
 # Build env var forwarding for systemd-run
 ENV_ARGS=()
-for var in PAIR_FILTER FORCE_RERUN MEMORY_LIMIT_GB EXPR_DETECTION_THRESHOLD EXPR_IMPUTATION_FLOOR ENABLE_CELLTYPE_MAPPING DUCKDB_CUTOFF_SIGPROB; do
+for var in PAIR_FILTER FORCE_RERUN MEMORY_LIMIT_GB EXPR_DETECTION_THRESHOLD EXPR_IMPUTATION_FLOOR ENABLE_CELLTYPE_MAPPING "${INCYTR_FORWARDED_VARS[@]}"; do
   if [ -n "${!var:-}" ]; then
     ENV_ARGS+=(--setenv="$var=${!var}")
   fi

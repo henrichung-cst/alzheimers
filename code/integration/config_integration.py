@@ -89,11 +89,13 @@ DISCORDANCE_RANK_QUARTILE = 0.25
 
 EXPRESSION_DETECTION_THRESHOLD = 0.10
 
-# Kinase-imputed pathway expansion
-# When enabled, receiver genes that are substrates of MEA-significant kinases
-# are added to the receiver gene list even if they fail the expression threshold.
-# These pathways are labeled "kinase-imputed" vs "expression-confirmed".
-ENABLE_KINASE_IMPUTATION = True
+# Kinase-imputed pathway expansion (kinase pack — gated by
+# INCYTR_LAYER_KINASE_PACK env var; see incytr_runtime.sh / .R registries and
+# docs/integrations/incytr_layer_inventory.md).
+# When the pack is enabled, receiver genes that are substrates of
+# MEA-significant kinases are added to the receiver gene list even if they
+# fail the expression threshold. These pathways are labeled "kinase-imputed"
+# vs "expression-confirmed".
 # Tighter than PHOSPHO_FDR_GATE (0.25) because imputation multiplies search
 # scope: one false-positive kinase drags its full motif-predicted substrate
 # set into every receiver. See docs/integrations/kinase_incytr_integration.md.
@@ -146,7 +148,18 @@ MEA_STOICHIOMETRY_CSV = os.path.join(KINASE_ATTR_DIR, "mea_stoichiometry.csv")
 UNIFIED_ATTRIBUTION_CSV = os.path.join(KINASE_ATTR_DIR, "unified_attribution.csv")
 SITE_LEVEL_OLS_CSV = os.path.join(KINASE_ATTR_DIR, "site_level_ols.csv")
 STOICHIOMETRY_MATRIX_CSV = os.path.join(KINASE_ATTR_DIR, "stoichiometry_matrix.csv")
+MEA_STOICHIOMETRY_PY_CSV = os.path.join(KINASE_ATTR_DIR, "mea_stoichiometry_pY.csv")
+SITE_LEVEL_OLS_PY_CSV = os.path.join(KINASE_ATTR_DIR, "site_level_ols_pY.csv")
+STOICHIOMETRY_MATRIX_PY_CSV = os.path.join(KINASE_ATTR_DIR, "stoichiometry_matrix_pY.csv")
 SAMPLE_MAPPING_CSV = os.path.join(DATA_INGEST_DIR, "sample_mapping.csv")
+
+WMB_DECOMPOSITION_DIR = os.path.join(
+    REPO_ROOT, "outputs", "reports", "deconvolution", "wmb_decomposition"
+)
+PR_WMB_DECOMPOSITION_CSV = os.path.join(WMB_DECOMPOSITION_DIR, "pr_wmb_decomposition.csv")
+PS_WMB_DECOMPOSITION_CSV = os.path.join(WMB_DECOMPOSITION_DIR, "ps_wmb_decomposition.csv")
+PY_WMB_DECOMPOSITION_CSV = os.path.join(WMB_DECOMPOSITION_DIR, "py_wmb_decomposition.csv")
+SEAAD_TO_WMB_CLASS_CSV = main_config.SEAAD_TO_WMB_CLASS_FILE
 
 H5AD_PATH = os.path.join(
     main_config.SONG_TRANSCRIPTOMICS_DIR, "170_gex_celltypes_00.h5ad"

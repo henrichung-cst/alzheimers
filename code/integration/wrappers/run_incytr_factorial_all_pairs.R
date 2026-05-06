@@ -47,6 +47,8 @@ script_dir <- get_script_dir()
 
 # Source shared helpers: hill(), build_hill_sql(), weighted_quantile_expr()
 source(file.path(script_dir, "duckdb_enumeration.R"))
+# INCYTR_* runtime knob registry (single source of truth for defaults).
+source(file.path(script_dir, "incytr_runtime.R"))
 
 sanitize_name <- function(x) gsub("/", "-", gsub(" ", "_", x))
 
@@ -79,14 +81,13 @@ force_rerun     <- Sys.getenv("FORCE_RERUN", "0") == "1"
 memory_limit_gb <- as.numeric(Sys.getenv("MEMORY_LIMIT_GB", "10"))
 pair_filter     <- Sys.getenv("PAIR_FILTER", "")
 K <- 0.5; N <- 2; KN <- K^N
-# Sprint 4: DuckDB pre-prune SigProb cutoff (audit ledger ALZ-18.b).
-# Native default is `cutoff_SigProb = NULL` (no pre-prune). The wrapper retains
-# 0.01 as a performance optimization: a pre-prune at SigProb >= 0.01 in EITHER
-# condition cannot drop any pathway whose final TPDS contribution is
-# non-negligible (SigProb is a multiplicand in PDS; pathways below 0.01 in both
-# conditions sit far below any meaningful top-K cut). Set
-# DUCKDB_CUTOFF_SIGPROB=0 to opt back into native-equivalent enumeration.
-cutoff_SigProb <- as.numeric(Sys.getenv("DUCKDB_CUTOFF_SIGPROB", "0.01"))
+# DuckDB pre-prune SigProb cutoff. Default 0.0 = native-equivalent enumeration
+# (no pre-prune). Raise via INCYTR_CUTOFF_SIGPROB env var if benchmarks
+# justify; 0.01 is mathematically lossless for any reasonable top-K cut
+# (SigProb is a multiplicand in PDS; pathways below 0.01 in both conditions
+# cannot contribute non-negligible TPDS).
+.runtime_cfg <- incytr_runtime()
+cutoff_SigProb <- .runtime_cfg$cutoff_sigprob
 
 cat(sprintf("Config: threshold=%.0f%%, memory_limit=%dGB, force=%s\n",
             expr_threshold * 100, memory_limit_gb, force_rerun))
