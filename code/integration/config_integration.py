@@ -74,6 +74,27 @@ FACTORIAL_CONTRASTS = {
     "ApTt_6mo": [0, 1, 1, 1, 0, 0, 0, 1, 0, 1],
 }
 
+# Explicit (cond_ref, cond_alt) condition labels for each contrast.
+# Used by the factorial R wrapper to look up per-condition SiK_score_<cond>
+# and apply the directional KPDS combination in PDS_<c>. Replaces the
+# package's contrast_to_conditions heuristic, which silently misroutes
+# multi-coefficient interaction contrasts (7 of 9 here). Conditions are
+# {genotype}_{timepoint} as keyed in animal_metadata.csv.
+FACTORIAL_CONTRAST_CONDITIONS = {
+    "App_2mo":  ("WTyp_2mo", "AppP_2mo"),
+    "App_4mo":  ("WTyp_4mo", "AppP_4mo"),
+    "App_6mo":  ("WTyp_6mo", "AppP_6mo"),
+    "Tau_2mo":  ("WTyp_2mo", "Ttau_2mo"),
+    "Tau_4mo":  ("WTyp_4mo", "Ttau_4mo"),
+    "Tau_6mo":  ("WTyp_6mo", "Ttau_6mo"),
+    "ApTt_2mo": ("WTyp_2mo", "ApTt_2mo"),
+    "ApTt_4mo": ("WTyp_4mo", "ApTt_4mo"),
+    "ApTt_6mo": ("WTyp_6mo", "ApTt_6mo"),
+}
+assert set(FACTORIAL_CONTRAST_CONDITIONS) == set(FACTORIAL_CONTRASTS), (
+    "FACTORIAL_CONTRAST_CONDITIONS must cover every contrast in FACTORIAL_CONTRASTS"
+)
+
 # ---------------------------------------------------------------------------
 # Tiered integration thresholds
 # ---------------------------------------------------------------------------

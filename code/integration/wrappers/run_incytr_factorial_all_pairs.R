@@ -152,6 +152,29 @@ contrast_mat <- do.call(rbind, contrast_list)
 cat(sprintf("  %d contrasts: %s\n", length(contrast_names),
             paste(contrast_names, collapse = ", ")))
 
+# Explicit (cond_ref, cond_alt) condition labels for each contrast — mirrors
+# code/integration/config_integration.py::FACTORIAL_CONTRAST_CONDITIONS.
+# Used by Phase D (native SiK + KPDS-augmented PDS) to look up per-condition
+# SiK_score_<cond> for the directional combination. Replaces the package's
+# contrast_to_conditions heuristic, which silently misroutes the 7 of 9
+# multi-coefficient interaction contrasts.
+factorial_contrast_conditions <- list(
+  App_2mo  = c("WTyp_2mo", "AppP_2mo"),
+  App_4mo  = c("WTyp_4mo", "AppP_4mo"),
+  App_6mo  = c("WTyp_6mo", "AppP_6mo"),
+  Tau_2mo  = c("WTyp_2mo", "Ttau_2mo"),
+  Tau_4mo  = c("WTyp_4mo", "Ttau_4mo"),
+  Tau_6mo  = c("WTyp_6mo", "Ttau_6mo"),
+  ApTt_2mo = c("WTyp_2mo", "ApTt_2mo"),
+  ApTt_4mo = c("WTyp_4mo", "ApTt_4mo"),
+  ApTt_6mo = c("WTyp_6mo", "ApTt_6mo")
+)
+stopifnot(setequal(names(factorial_contrast_conditions), contrast_names))
+unique_conditions <- sort(unique(unlist(factorial_contrast_conditions)))
+cat(sprintf("  %d unique conditions for SiK: %s\n",
+            length(unique_conditions),
+            paste(unique_conditions, collapse = ", ")))
+
 # Pre-compute OLS hat matrix: (X'X)^{-1} X'
 # beta = hat_mat %*% y  for any response vector y
 XtX_inv <- solve(crossprod(design_mat))
@@ -203,6 +226,20 @@ if (file.exists(multiomics_path)) {
   cat(sprintf("Multiomics evidence not found at %s — PPDS/PhPDS_ps/PhPDS_py = 0 for all contrasts.\n",
               multiomics_path))
   mev <- NULL
+}
+
+# Kinase-substrate reference (kldata.csv), shared with pair mode. Drives the
+# Phase D structural SiK matching: pathways whose (Receptor/EM/Target) gene
+# pairs match a (motif.geneName, gene) edge in kldata get a non-zero SiK case.
+kldata_path <- file.path(int_dir, "kldata.csv")
+if (file.exists(kldata_path)) {
+  cat("Loading kldata...\n")
+  kldata <- read.csv(kldata_path, stringsAsFactors = FALSE)
+  cat(sprintf("  %s rows\n", format(nrow(kldata), big.mark = ",")))
+} else {
+  cat(sprintf("kldata not found at %s — SiK_score = 0, PDS = multimodel_score for all contrasts.\n",
+              kldata_path))
+  kldata <- NULL
 }
 
 # =========================================================================
@@ -299,6 +336,27 @@ pooled_expr <- list()
 for (ct in cell_types) {
   cells <- which(meta$labels == ct)
   pooled_expr[[ct]] <- weighted_quantile_expr(mat[, cells, drop = FALSE])
+}
+
+# Per-condition expression (one weighted-quantile vector per (cell_type,
+# genotype_timepoint) pair). Drives Phase D SiK: cal_ei needs a per-condition
+# expression matrix across all cell types so the receiver-side EI lookup
+# captures genotype/timepoint-specific specificity. Conditions are the
+# 12 (genotype, timepoint) combinations referenced by any contrast.
+# Memory: 22 cell_types × 12 conditions × ~25k genes ≈ 50 MB.
+cond_expr <- list()
+for (ct in cell_types) {
+  cond_expr[[ct]] <- list()
+  for (cond in unique_conditions) {
+    parts <- strsplit(cond, "_", fixed = TRUE)[[1]]
+    g <- parts[1]; tp <- parts[2]
+    cells <- which(meta$labels == ct &
+                   meta$genotype == g &
+                   meta$timepoint == tp)
+    if (length(cells) >= 1) {
+      cond_expr[[ct]][[cond]] <- weighted_quantile_expr(mat[, cells, drop = FALSE])
+    }
+  }
 }
 
 # Summary: animals with expression per cell type
@@ -490,10 +548,144 @@ compute_evaluation_factorial_vectorized <- function(dt, contrast_names,
          score.weight[4] * get(paste0("Ack_score_",  cname)) +
          score.weight[5] * get(paste0("KGG_score_",  cname)) +
          score.weight[6] * get(paste0("Rme1_score_", cname))]
+  }
+  dt
+}
 
-    # Inference-scope diagnostic. Once Phase D wires PDS, swap mm_col -> PDS_<c>.
-    aux <- abs(dt[[mm_col]] - dt[[tpds_col]]) /
-           (abs(dt[[mm_col]]) + 1e-10)
+
+# Phase D: structural SiK + KPDS-augmented PDS.
+#
+# SiK matches receiver-side gene pairs (Receptor/EM/Target combinations) to
+# kldata's (motif.geneName, gene) substrate edges to identify pathways whose
+# inter-node phosphorylation cascade is supported by the kinase reference.
+# Per-condition SiK_score reflects how specific the matched kinase is to the
+# receiver cell type at that (genotype, timepoint), via Cal_EI.
+SIK_NAMES_FACT <- c("SiK_R_of_EM", "SiK_R_of_T", "SiK_EM_of_T",
+                    "SiK_EM_of_R", "SiK_T_of_R", "SiK_T_of_EM")
+SIK_CASE_KEY_FACT <- data.frame(
+  Kinase    = c("Receptor", "Receptor", "EM",       "EM",       "Target",   "Target"),
+  Substrate = c("EM",       "Target",   "Target",   "Receptor", "Receptor", "EM"),
+  stringsAsFactors = FALSE
+)
+
+# Vectorized Cal_EI (matches incytr/R/SiK and receiver_scoring.R::cal_ei_vec).
+cal_ei_vec_fact <- function(mat_in, fold_threshold) {
+  m <- mat_in
+  max_row <- do.call(pmax, as.data.frame(m))
+  min_row <- do.call(pmin, as.data.frame(m))
+  second <- if (ncol(m) == 1) max_row else
+    apply(m, 1, function(x) sort(x, partial = length(x) - 1)[length(x) - 1])
+  distance_max <- max_row - min_row
+  distance_max[distance_max == 0] <- 1e-5
+  all_equal <- (max_row == min_row)
+  second[second == 0] <- 1e-5
+  dist_mat <- m - min_row
+  dist_mat[dist_mat == 0] <- 1e-5
+  porp1 <- dist_mat / distance_max
+  m_nz <- m; m_nz[m_nz == 0] <- 1e-5
+  porp2 <- m_nz / second
+  result <- porp1 * 0.99
+  result[all_equal, ] <- 0
+  result[porp1 == 1 & porp2 > fold_threshold & !all_equal] <- 1
+  as.data.frame(result)
+}
+
+#' Compute per-condition SiK_score for all pathways of one receiver.
+#' Returns the dt (with `SiK_score_<cond>` columns added) and a flag indicating
+#' whether any structural matches were found.
+compute_sik_factorial <- function(dt, kldata, cond_expr, cell_types, recv,
+                                  conditions, fold_threshold = 10,
+                                  reverse_sik_weight = 0.3) {
+  zero_out <- function(d) {
+    for (cond in conditions) d[, (paste0("SiK_score_", cond)) := 0]
+    d
+  }
+  if (is.null(kldata) || nrow(kldata) == 0) {
+    return(list(dt = zero_out(dt), has_structural = FALSE))
+  }
+
+  gene_use <- unique(c(dt$Receptor, dt$EM, dt$Target))
+  kl <- kldata[kldata$gene %in% gene_use & kldata[["motif.geneName"]] %in% gene_use, ]
+  if (nrow(kl) == 0) {
+    return(list(dt = zero_out(dt), has_structural = FALSE))
+  }
+  kl_pairs <- paste0(kl[["motif.geneName"]], "|", kl$gene)
+
+  n <- nrow(dt)
+  sik_genes <- matrix(NA_character_, nrow = n, ncol = 6)
+  for (i in 1:6) {
+    pairs <- paste0(dt[[SIK_CASE_KEY_FACT$Kinase[i]]], "|",
+                    dt[[SIK_CASE_KEY_FACT$Substrate[i]]])
+    matched <- pairs %in% kl_pairs
+    sik_genes[matched, i] <- dt[[SIK_CASE_KEY_FACT$Kinase[i]]][matched]
+  }
+  k_gene <- unique(na.omit(as.vector(sik_genes)))
+  if (length(k_gene) == 0) {
+    return(list(dt = zero_out(dt), has_structural = FALSE))
+  }
+
+  sik_weights <- c(rep(1.0, 3), rep(reverse_sik_weight, 3))
+  ws <- sum(sik_weights)
+
+  for (cond in conditions) {
+    expr_mat <- sapply(cell_types, function(ct) {
+      v <- cond_expr[[ct]][[cond]]
+      if (is.null(v)) rep(0, length(k_gene))
+      else unname(v[k_gene])
+    })
+    rownames(expr_mat) <- k_gene
+    expr_mat[is.na(expr_mat)] <- 0
+
+    ei <- cal_ei_vec_fact(expr_mat, fold_threshold)
+    ei_lookup <- setNames(ei[[recv]], k_gene)
+
+    ei_mat <- matrix(0, nrow = n, ncol = 6)
+    for (i in 1:6) {
+      g <- sik_genes[, i]
+      has <- !is.na(g)
+      if (any(has)) ei_mat[has, i] <- unname(ei_lookup[g[has]])
+    }
+    ei_mat[is.na(ei_mat)] <- 0
+    dt[, (paste0("SiK_score_", cond)) :=
+         as.numeric(ei_mat %*% sik_weights) / ws]
+  }
+
+  list(dt = dt, has_structural = TRUE)
+}
+
+#' Per-contrast PDS = multimodel_score + KPDS.weight × cdir(SiK_alt, SiK_ref).
+#'
+#' The directional combination mirrors apply_condition_direction
+#' (incytr/R/evaluation.R) and compute_pds_vectorized
+#' (receiver_scoring.R), but uses the explicit per-contrast (cond_ref, cond_alt)
+#' map. Sign convention: positive base ⇔ alt > ref (factorial OLS β > 0), so
+#' alt-side evidence is added with +w; negative base ⇔ ref dominant, ref-side
+#' evidence subtracted with -w; tie ⇔ scaled difference.
+#'
+#' Also (re)computes pds_inference_scope_<c> from the final PDS, replacing the
+#' pre-Phase-D multimodel_score proxy.
+compute_pds_factorial <- function(dt, contrast_names, contrast_conditions,
+                                  KPDS.weight = 0.5, has_structural = FALSE) {
+  for (cname in contrast_names) {
+    base <- dt[[paste0("multimodel_score_", cname)]]
+    pds <- base
+    if (has_structural) {
+      cc <- contrast_conditions[[cname]]
+      ref_col <- paste0("SiK_score_", cc[1])
+      alt_col <- paste0("SiK_score_", cc[2])
+      if (ref_col %in% names(dt) && alt_col %in% names(dt)) {
+        alt <- dt[[alt_col]]
+        ref <- dt[[ref_col]]
+        kpds <- fifelse(base > 0, KPDS.weight * alt,
+                fifelse(base < 0, -KPDS.weight * ref,
+                                   KPDS.weight * (alt - ref)))
+        pds <- pds + kpds
+      }
+    }
+    dt[, (paste0("PDS_", cname)) := pds]
+
+    tpds <- dt[[paste0("TPDS_", cname)]]
+    aux <- abs(pds - tpds) / (abs(pds) + 1e-10)
     dt[, (paste0("pds_inference_scope_", cname)) := fifelse(
       aux < 0.1, "full",
       fifelse(aux < 0.5, "partial", "descriptive"))]
@@ -871,6 +1063,18 @@ for (recv in receivers_in_order) {
               nrow(dt), length(contrast_names),
               (proc.time() - t0_mm)["elapsed"]))
 
+  # --- Phase D: structural SiK + KPDS-augmented PDS ---
+  t0_sik <- proc.time()
+  sik_res <- compute_sik_factorial(dt, kldata, cond_expr, cell_types, recv,
+                                   unique_conditions)
+  dt <- sik_res$dt
+  has_structural <- sik_res$has_structural
+  dt <- compute_pds_factorial(dt, contrast_names, factorial_contrast_conditions,
+                              KPDS.weight = 0.5,
+                              has_structural = has_structural)
+  cat(sprintf("    SiK + PDS: structural=%s (%.1fs)\n",
+              has_structural, (proc.time() - t0_sik)["elapsed"]))
+
   # --- Write Parquet (atomic) ---
   # Select output columns
   out_cols <- c("sender", "Ligand", "Receptor", "EM", "Target", "Path",
@@ -887,7 +1091,11 @@ for (recv in receivers_in_order) {
                   paste0("KGG_score_", cname),
                   paste0("Rme1_score_", cname),
                   paste0("multimodel_score_", cname),
+                  paste0("PDS_", cname),
                   paste0("pds_inference_scope_", cname))
+  }
+  for (cond in unique_conditions) {
+    out_cols <- c(out_cols, paste0("SiK_score_", cond))
   }
   dt_out <- dt[, ..out_cols]
 
