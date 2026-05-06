@@ -202,4 +202,10 @@ For each deleted layer, the revival recipe is:
   → `INCYTR_LAYER_KINASE_PACK` (default flipped on→off). `DUCKDB_CUTOFF_SIGPROB`
   → `INCYTR_CUTOFF_SIGPROB` (default `0.01` → `0.0`, native-equivalent).
   Anchor gates re-verified.
-- Phase 3 (relocate parked sidecars under `code/integration/sidecar/`) pending.
+- 2026-05-06: **Phase 3 complete** — parked sidecars relocated.
+  `compute_kinase_support_factorial.py` → `code/integration/sidecar/kinase_pack/`;
+  `run_factorial_permutations.sh` → `code/integration/sidecar/backbone_perms/`.
+  READMEs added at each path documenting activation flag and revival pointers.
+  Backbone-perms call site in `aggregate_factorial.py --permutations` now
+  hard-gated by `INCYTR_LAYER_BACKBONE_PERMS=1`. Production wrapper defaults
+  unchanged: pure Section A + Section B + INC-30 PTM.

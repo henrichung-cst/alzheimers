@@ -712,6 +712,12 @@ def run_factorial_permutations(backbone_path, n_permutations, out_path):
     ~500MB peak (edge structures + permutation arrays).
     """
     import gc
+    _sidecar_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "sidecar", "kinase_pack",
+    )
+    if _sidecar_dir not in sys.path:
+        sys.path.insert(0, _sidecar_dir)
     from compute_kinase_support_factorial import load_shared_data
 
     print(f"\n=== Backbone-Level Permutation Tests "
@@ -1109,8 +1115,13 @@ def main():
         con.close()
         del con
 
-    # --- Permutation tests ---
+    # --- Permutation tests (backbone_perms sidecar; gated) ---
     if args.permutations:
+        if os.environ.get("INCYTR_LAYER_BACKBONE_PERMS", "0") != "1":
+            print("\n--permutations requested but INCYTR_LAYER_BACKBONE_PERMS != 1; "
+                  "skipping. Enable with INCYTR_LAYER_BACKBONE_PERMS=1 (see "
+                  "code/integration/sidecar/backbone_perms/README.md).")
+            sys.exit(0)
         perm_path = os.path.join(out_dir,
                                  "backbone_permutation_pvalues_by_contrast.csv")
         if not args.force and os.path.exists(perm_path):

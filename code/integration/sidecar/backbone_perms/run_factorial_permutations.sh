@@ -2,12 +2,21 @@
 # Run factorial permutation tests one contrast at a time as separate processes.
 # Each contrast writes to its own file, then all are concatenated at the end.
 #
+# Sidecar layer: backbone_perms (gated by INCYTR_LAYER_BACKBONE_PERMS=1; see
+# README.md in this directory and docs/integrations/incytr_layer_inventory.md).
+#
 # Usage:
-#   bash code/integration/run_factorial_permutations.sh
-#   bash code/integration/run_factorial_permutations.sh 1000   # custom N
+#   INCYTR_LAYER_BACKBONE_PERMS=1 bash code/integration/sidecar/backbone_perms/run_factorial_permutations.sh
+#   INCYTR_LAYER_BACKBONE_PERMS=1 bash code/integration/sidecar/backbone_perms/run_factorial_permutations.sh 1000
 
 set -euo pipefail
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/../../../.."
+
+if [ "${INCYTR_LAYER_BACKBONE_PERMS:-0}" != "1" ]; then
+  echo "ERROR: INCYTR_LAYER_BACKBONE_PERMS != 1; backbone perms are sidecar/opt-in." >&2
+  echo "  Re-run with INCYTR_LAYER_BACKBONE_PERMS=1 to proceed." >&2
+  exit 2
+fi
 
 N_PERM="${1:-10000}"
 OUT_DIR="code/integration/intermediates/factorial/all_pairs/aggregation"
@@ -40,6 +49,7 @@ for i in "${!CONTRASTS[@]}"; do
 import sys, os, gc
 sys.path.insert(0, os.path.join(os.getcwd(), 'code/integration'))
 sys.path.insert(0, os.path.join(os.getcwd(), 'code/integration/adapters'))
+sys.path.insert(0, os.path.join(os.getcwd(), 'code/integration/sidecar/kinase_pack'))
 
 import pandas as pd
 import config_integration as icfg
@@ -117,7 +127,7 @@ rm -rf "${TMP_DIR}"
 # -----------------------------------------------------------------
 echo ""
 echo "=== Emitting per-pair kinase routes (idempotent) ==="
-pixi run python3 code/integration/adapters/compute_kinase_support_factorial.py \
+pixi run python3 code/integration/sidecar/kinase_pack/compute_kinase_support_factorial.py \
   --emit-kinase-routes
 
 echo ""

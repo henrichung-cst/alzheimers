@@ -238,7 +238,8 @@ def main():
 
     if not pairs_with_routes:
         print("No pair directories contain kinase_routes.parquet. "
-              "Run compute_kinase_support_factorial.py --emit-kinase-routes first.")
+              "Run sidecar/kinase_pack/compute_kinase_support_factorial.py "
+              "--emit-kinase-routes first (requires INCYTR_LAYER_KINASE_PACK=1).")
         sys.exit(1)
 
     print(f"  {len(pairs_with_routes)} with routes; "

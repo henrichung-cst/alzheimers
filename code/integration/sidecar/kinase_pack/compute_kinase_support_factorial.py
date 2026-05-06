@@ -18,7 +18,17 @@ import argparse
 import fnmatch
 import json
 import os
+import sys
 import time
+
+# Sidecar lives at code/integration/sidecar/kinase_pack/; add code/integration/
+# and code/integration/adapters/ to sys.path so we can import the in-tree
+# helpers (config_integration, common, compute_kinase_support).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_INT_DIR = os.path.dirname(os.path.dirname(_HERE))
+for _p in (_INT_DIR, os.path.join(_INT_DIR, "adapters")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import pandas as pd
 
@@ -183,9 +193,14 @@ def process_one_pair(shared, pq_path, sender, receiver, *, emit_routes=False):
 
     t0 = time.monotonic()
 
-    # Read pathway structure + per-contrast TPDS
+    # Read pathway structure + per-contrast TPDS/PDS when present.
     tpds_cols = [f"TPDS_{c}" for c in icfg.FACTORIAL_CONTRASTS]
-    usecols = PATHWAY_ID_COLS + ["sender"] + tpds_cols
+    schema_names = set(pq.read_schema(pq_path).names)
+    pds_cols = [
+        f"PDS_{c}" for c in icfg.FACTORIAL_CONTRASTS
+        if f"PDS_{c}" in schema_names
+    ]
+    usecols = PATHWAY_ID_COLS + ["sender"] + tpds_cols + pds_cols
     filters = [("sender", "=", sender)]
     table = pq.read_table(pq_path, columns=usecols, filters=filters)
     df = table.drop("sender").to_pandas()
@@ -207,12 +222,16 @@ def process_one_pair(shared, pq_path, sender, receiver, *, emit_routes=False):
         sub_pair = apply_pair_weights(cdata["sub_raw_edges"], attr_weights)
 
         # Build pathways DataFrame with TPDS and PDS columns expected by
-        # compute_scores_fast. Since factorial mode has no PDS, use TPDS
-        # for both (PDS is only passed through, not used in scoring).
+        # compute_scores_fast. Newer factorial runs emit native-style PDS
+        # columns; older checkpoints fall back to TPDS for compatibility.
         tpds_col = f"TPDS_{contrast}"
+        pds_col = f"PDS_{contrast}"
         pathways = pathways_base.copy()
         pathways["TPDS"] = df[tpds_col].values
-        pathways["PDS"] = df[tpds_col].values  # placeholder
+        if pds_col in df.columns:
+            pathways["PDS"] = df[pds_col].values
+        else:
+            pathways["PDS"] = df[tpds_col].values
 
         routes_sink = [] if emit_routes else None
         scores_c = compute_scores_fast(
@@ -237,6 +256,9 @@ def process_one_pair(shared, pq_path, sender, receiver, *, emit_routes=False):
     # Add per-contrast TPDS for reference
     for contrast in icfg.FACTORIAL_CONTRASTS:
         out[f"TPDS_{contrast}"] = df[f"TPDS_{contrast}"].values
+        pds_col = f"PDS_{contrast}"
+        if pds_col in df.columns:
+            out[pds_col] = df[pds_col].values
 
     # Write outputs
     t_w = time.monotonic()
