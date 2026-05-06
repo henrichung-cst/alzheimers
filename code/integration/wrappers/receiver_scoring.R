@@ -19,9 +19,6 @@ suppressPackageStartupMessages({
   library(limma)
 })
 
-# Incytr internal (not exported); replicate here to avoid :::
-em_weight_log <- function(degree) 1 / log2(1 + degree)
-
 # =========================================================================
 # Helpers
 # =========================================================================
@@ -78,34 +75,14 @@ build_sender_expr_table <- function(senders, genes_per_sender, wq_expr, conditio
 #' @param recv character: receiver cell type
 #' @param recv_c1,recv_c2 patched receiver expression vectors
 #' @param conditions character(2)
-#' @param em_degree named numeric vector
-#' @param edge_source_count data.table (EM, Target, n_sources)
 #' @param K,N Hill params
 #' @param correction numeric for SigProb FC
 #' @param cutoff_SigProb numeric
-#' @param edge_confidence_bonus numeric
 #'
 #' @return dt with SigProb columns; rows below cutoff removed
 compute_sigprob_vectorized <- function(dt, sender_expr_dt, recv_c1, recv_c2,
-                                       em_degree, edge_source_count,
                                        K = 0.5, N = 2, correction = 0.001,
-                                       cutoff_SigProb = 0.01,
-                                       edge_confidence_bonus = 1.0) {
-  # --- EM promiscuity weight (receiver-only, computed once) ---
-  em_w <- em_weight_log(as.numeric(em_degree[dt$EM]))
-  em_w[is.na(em_w)] <- 1
-
-  # Edge confidence bonus
-  if (edge_confidence_bonus > 1.0 && nrow(edge_source_count) > 0) {
-    setkey(edge_source_count, EM, Target)
-    n_src <- edge_source_count[.(dt$EM, dt$Target), n_sources]
-    n_src[is.na(n_src)] <- 1L
-    c_edge <- ifelse(n_src > 1L, edge_confidence_bonus, 1.0)
-    em_target_weight <- em_w * c_edge
-  } else {
-    em_target_weight <- em_w
-  }
-
+                                       cutoff_SigProb = 0.01) {
   # --- Receiver expression lookups (shared across all senders) ---
   R_c1 <- recv_c1[dt$Receptor]; R_c2 <- recv_c2[dt$Receptor]
   EM_c1 <- recv_c1[dt$EM];      EM_c2 <- recv_c2[dt$EM]
@@ -119,8 +96,8 @@ compute_sigprob_vectorized <- function(dt, sender_expr_dt, recv_c1, recv_c2,
   h_l1_c2 <- hill(dt$L_c2 * R_c2, K, N)
   h_l2_c1 <- hill(R_c1 * EM_c1, K, N)
   h_l2_c2 <- hill(R_c2 * EM_c2, K, N)
-  h_l3_c1 <- hill(EM_c1 * T_c1 * em_target_weight, K, N)
-  h_l3_c2 <- hill(EM_c2 * T_c2 * em_target_weight, K, N)
+  h_l3_c1 <- hill(EM_c1 * T_c1, K, N)
+  h_l3_c2 <- hill(EM_c2 * T_c2, K, N)
 
   # --- SigProb ---
   sp_c1 <- h_l1_c1 * h_l2_c1 * h_l3_c1
@@ -130,9 +107,6 @@ compute_sigprob_vectorized <- function(dt, sender_expr_dt, recv_c1, recv_c2,
   keep <- (sp_c1 >= cutoff_SigProb) | (sp_c2 >= cutoff_SigProb)
   dt <- dt[keep]
   sp_c1 <- sp_c1[keep]; sp_c2 <- sp_c2[keep]
-
-  # Store em_target_weight for expression-only scoring path
-  dt[, em_target_weight := em_target_weight[keep]]
 
   # --- SigProb fold change (per sender, matching Cal_foldchange semantics) ---
   # th must be computed per sender because in the original pipeline it's
@@ -834,9 +808,6 @@ format_export_columns <- function(dt, recv, conditions) {
   dt[, ID_2 := paste0(sender, "_", recv)]
   dt[, kinase_boost := PDS - TPDS]
 
-  # Remove em_target_weight temp column
-  if ("em_target_weight" %in% names(dt)) dt[, em_target_weight := NULL]
-
   dt
 }
 
@@ -851,7 +822,6 @@ format_export_columns <- function(dt, recv, conditions) {
 #' @param ki_for_recv kinase-imputed genes for this receiver
 #' @param ki_rm_c1,ki_rm_c2 cached rowMeans for kinase-imputed genes
 #' @param recv_c1,recv_c2 patched receiver expression vectors
-#' @param em_degree,edge_source_count network metadata
 #' @param ps1,ps2 phospho data (or NULL)
 #' @param kldata,kl_out kinase data (or NULL)
 #' @param cell_types character vector (all 22)
@@ -867,7 +837,6 @@ score_receiver_all_senders <- function(all_pathways_df, recv,
                                        wq_expr, gene_lists,
                                        recv_genes_expr,
                                        recv_c1, recv_c2,
-                                       em_degree, edge_source_count,
                                        ps1, ps2, kldata, kl_out,
                                        cell_types, conditions,
                                        K = 0.5, N = 2,
@@ -896,7 +865,6 @@ score_receiver_all_senders <- function(all_pathways_df, recv,
   t1 <- proc.time()
   dt <- compute_sigprob_vectorized(
     dt, sender_expr_dt, recv_c1, recv_c2,
-    em_degree, edge_source_count,
     K = K, N = N, correction = 0.001,
     cutoff_SigProb = cutoff_SigProb)
   cat(sprintf("    SigProb: %s pathways survived (%.1fs)\n",

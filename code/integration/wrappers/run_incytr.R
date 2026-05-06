@@ -176,8 +176,6 @@ duck_result <- duckdb_enumerate_pathways(
   return_edges = TRUE)
 
 inc@pathways <- as.data.frame(duck_result$pathways)
-inc@options$em_degree <- duck_result$em_degree
-inc@options$edge_source_count <- duck_result$edge_source_count
 
 # Save compact edge lists for future graph visualization
 if (!is.null(duck_result$edges)) {

@@ -131,12 +131,6 @@ cat(sprintf("  Filtered DB: L1=%d, L2=%d, L3=%d edges\n",
             nrow(DB_Layer2_mouse_filtered),
             nrow(DB_Layer3_mouse_filtered)))
 
-# Compute em_degree and edge_source_count from full L3 (before reducing columns)
-em_degree <- table(DB_Layer3_mouse_filtered$from)
-l3_dt_full <- as.data.table(DB_Layer3_mouse_filtered[, c("from", "to", "source")])
-edge_source_count <- l3_dt_full[, .(n_sources = uniqueN(source)),
-                                by = .(EM = from, Target = to)]
-rm(l3_dt_full)
 
 # Convert to data.tables with just from/to for pruning
 l1_raw <- as.data.table(DB_Layer1_mouse_filtered[, c("from", "to")])
@@ -320,21 +314,11 @@ dbExecute(con, sprintf("SET threads=%d", 4L))
 dbExecute(con, "SET max_temp_directory_size='20GiB'")
 dbExecute(con, "SET preserve_insertion_order=false")
 
-# Register global em_degree table
-em_deg_df <- data.frame(gene = names(em_degree), degree = as.numeric(em_degree),
-                        stringsAsFactors = FALSE)
-duckdb_register(con, "em_degree_tbl", em_deg_df)
-rm(em_deg_df)
-
 # --- Build SQL templates ---
 h_l2_c1 <- build_hill_sql("r1.c1",  "r2.c1", N, KN)
 h_l2_c2 <- build_hill_sql("r1.c2",  "r2.c2", N, KN)
-
-em_w <- "(1.0 / LOG2(CAST(1 + COALESCE(ed.degree, 1) AS DOUBLE)))"
-l3_prod_c1 <- sprintf("(r2.c1 * r3.c1 * %s)", em_w)
-l3_prod_c2 <- sprintf("(r2.c2 * r3.c2 * %s)", em_w)
-h_l3_c1 <- sprintf("POWER(%s, %d) / (POWER(%s, %d) + %f)", l3_prod_c1, N, l3_prod_c1, N, KN)
-h_l3_c2 <- sprintf("POWER(%s, %d) / (POWER(%s, %d) + %f)", l3_prod_c2, N, l3_prod_c2, N, KN)
+h_l3_c1 <- build_hill_sql("r2.c1", "r3.c1", N, KN)
+h_l3_c2 <- build_hill_sql("r2.c2", "r3.c2", N, KN)
 
 # Phase A: Backbone enumeration (receiver-only, L2 x L3)
 # Produces all R-EM-T triples with pre-computed receiver-side SigProb components.
@@ -353,7 +337,6 @@ sql_backbone <- sprintf('
   JOIN receiver_expr r1 ON L2."from" = r1.gene
   JOIN receiver_expr r2 ON L2."to"  = r2.gene
   JOIN receiver_expr r3 ON L3."to"  = r3.gene
-  LEFT JOIN em_degree_tbl ed ON L2."to" = ed.gene
   WHERE L2."from" != L2."to"
     AND L2."from" != L3."to"
     AND L2."to"   != L3."to"
@@ -584,8 +567,6 @@ for (recv in receivers_in_order) {
       gene_lists = gene_lists,
       recv_genes_expr = recv_genes_expr,
       recv_c1 = r_c1_patched, recv_c2 = r_c2_patched,
-      em_degree = em_degree,
-      edge_source_count = edge_source_count,
       ps1 = ps1, ps2 = ps2,
       kldata = kldata, kl_out = kl_out,
       cell_types = cell_types,

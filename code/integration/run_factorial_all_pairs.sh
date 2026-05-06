@@ -10,8 +10,6 @@
 #   PAIR_FILTER       - Filter pairs, e.g. "Microglia-PVM:L5 IT", "*:L5 IT"
 #   FORCE_RERUN       - Set to 1 to ignore checkpoints
 #   MEMORY_LIMIT_GB   - R memory abort threshold (default 10)
-#   ENABLE_EM_PROMISCUITY_WEIGHT - Set to 1 to opt into the 1/log2(1+degree)
-#                                  EM weight (Sprint 3 audit ledger INC-25; default off)
 #   ENABLE_CELLTYPE_MAPPING - Set to 1 to remap WMB classes to SEA-AD subclasses
 #                             in multiomics evidence (default off; native-equivalent)
 #   DUCKDB_CUTOFF_SIGPROB - DuckDB pre-prune SigProb cutoff (default 0.01;
@@ -86,7 +84,7 @@ echo "[run_incytr_factorial_all_pairs.R]"
 
 # Build env var forwarding for systemd-run
 ENV_ARGS=()
-for var in PAIR_FILTER FORCE_RERUN MEMORY_LIMIT_GB EXPR_DETECTION_THRESHOLD EXPR_IMPUTATION_FLOOR ENABLE_EM_PROMISCUITY_WEIGHT ENABLE_CELLTYPE_MAPPING DUCKDB_CUTOFF_SIGPROB; do
+for var in PAIR_FILTER FORCE_RERUN MEMORY_LIMIT_GB EXPR_DETECTION_THRESHOLD EXPR_IMPUTATION_FLOOR ENABLE_CELLTYPE_MAPPING DUCKDB_CUTOFF_SIGPROB; do
   if [ -n "${!var:-}" ]; then
     ENV_ARGS+=(--setenv="$var=${!var}")
   fi

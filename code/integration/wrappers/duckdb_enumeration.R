@@ -52,20 +52,16 @@ weighted_quantile_expr <- function(mat_sub) {
 #' @param K numeric: Hill function half-max (default 0.5)
 #' @param N integer: Hill function exponent (default 2)
 #' @param cutoff_SigProb numeric: SigProb threshold (default 0.01)
-#' @param em_promiscuity_weight logical: apply EM promiscuity weighting in
-#'   DuckDB query (default TRUE). Matches Cal_SigProb's "log" method:
-#'   weight = 1/log2(1+degree). Dramatically reduces returned pathways.
 #' @param duckdb_memory character: DuckDB memory limit (default "6GB")
 #' @param duckdb_threads integer: DuckDB thread count (default 4)
 #' @param return_edges logical: also return compact edge lists (default FALSE)
-#' @return list with $pathways, $em_degree, $edge_source_count, $edges, $stats
+#' @return list with $pathways, $edges, $stats
 duckdb_enumerate_pathways <- function(
   mat, meta, DB, sender, receiver, conditions,
   gene.use_Sender = NULL, gene.use_Receiver = NULL,
   kinase_imputed_genes = NULL,
   imputed_weights = NULL,
   K = 0.5, N = 2, cutoff_SigProb = 0.01,
-  em_promiscuity_weight = TRUE,
   duckdb_memory = "6GB", duckdb_threads = 4L,
   return_edges = FALSE
 ) {
@@ -73,17 +69,6 @@ duckdb_enumerate_pathways <- function(
   all_genes <- rownames(mat)
   if (is.null(gene.use_Sender))  gene.use_Sender  <- all_genes
   if (is.null(gene.use_Receiver)) gene.use_Receiver <- all_genes
-
-  # ------------------------------------------------------------------
-  # 1. Compute em_degree and edge_source_count from FULL L3 (unfiltered)
-  #    Matches pathway_inference() lines 31-36 in Incytr/R/analysis.R
-  # ------------------------------------------------------------------
-  l3_full <- DB[[3]]
-  em_degree <- table(l3_full$from)
-  l3_dt_full <- as.data.table(l3_full[, c("from", "to", "source")])
-  edge_source_count <- l3_dt_full[, .(n_sources = uniqueN(source)),
-                                  by = .(EM = from, Target = to)]
-  rm(l3_dt_full)
 
   # ------------------------------------------------------------------
   # 2. Filter DB layers by gene role and convert to data.table
@@ -184,8 +169,6 @@ duckdb_enumerate_pathways <- function(
       pathways = data.frame(Ligand = character(), Receptor = character(),
                             EM = character(), Target = character(),
                             Path = character(), stringsAsFactors = FALSE),
-      em_degree = em_degree,
-      edge_source_count = edge_source_count,
       edges = NULL,
       stats = list(n_pathways = 0L, time_sec = 0)))
   }
@@ -228,16 +211,6 @@ duckdb_enumerate_pathways <- function(
   duckdb_register(con, "sender_expr", sender_expr_df)
   duckdb_register(con, "receiver_expr", receiver_expr_df)
 
-  # Register EM degree table for in-query promiscuity weighting
-  if (em_promiscuity_weight) {
-    em_deg_df <- data.frame(
-      gene = names(em_degree),
-      degree = as.numeric(em_degree),
-      stringsAsFactors = FALSE)
-    duckdb_register(con, "em_degree_tbl", em_deg_df)
-    rm(em_deg_df)
-  }
-
   # Free R copies — DuckDB has zero-copy references
   rm(dt1, dt2, dt3, sender_expr_df, receiver_expr_df)
 
@@ -248,22 +221,8 @@ duckdb_enumerate_pathways <- function(
   h_l2_c1 <- build_hill_sql("r1.c1",  "r2.c1", N, KN)
   h_l1_c2 <- build_hill_sql("se.c2",  "r1.c2", N, KN)
   h_l2_c2 <- build_hill_sql("r1.c2",  "r2.c2", N, KN)
-
-  # L3 Hill terms: optionally weighted by EM promiscuity (1/log2(1+degree)).
-  # Expression values now use the same weighted quantile method as Expr_bygroup,
-  # so DuckDB SigProb matches Cal_SigProb. Full cutoff is used (no safety margin).
-  if (em_promiscuity_weight) {
-    em_w <- "(1.0 / LOG2(CAST(1 + COALESCE(ed.degree, 1) AS DOUBLE)))"
-    l3_prod_c1 <- sprintf("(r2.c1 * r3.c1 * %s)", em_w)
-    l3_prod_c2 <- sprintf("(r2.c2 * r3.c2 * %s)", em_w)
-    h_l3_c1 <- sprintf("POWER(%s, %d) / (POWER(%s, %d) + %f)", l3_prod_c1, N, l3_prod_c1, N, KN)
-    h_l3_c2 <- sprintf("POWER(%s, %d) / (POWER(%s, %d) + %f)", l3_prod_c2, N, l3_prod_c2, N, KN)
-    em_join <- "LEFT JOIN em_degree_tbl ed ON L2.\"to\" = ed.gene"
-  } else {
-    h_l3_c1 <- build_hill_sql("r2.c1", "r3.c1", N, KN)
-    h_l3_c2 <- build_hill_sql("r2.c2", "r3.c2", N, KN)
-    em_join <- ""
-  }
+  h_l3_c1 <- build_hill_sql("r2.c1", "r3.c1", N, KN)
+  h_l3_c2 <- build_hill_sql("r2.c2", "r3.c2", N, KN)
 
   sql <- sprintf('
     SELECT DISTINCT
@@ -278,7 +237,6 @@ duckdb_enumerate_pathways <- function(
     JOIN receiver_expr r1 ON L1."to"  = r1.gene
     JOIN receiver_expr r2 ON L2."to"  = r2.gene
     JOIN receiver_expr r3 ON L3."to"  = r3.gene
-    %s
     WHERE L1."from" != L1."to"
       AND L1."from" != L2."to"
       AND L1."from" != L3."to"
@@ -290,8 +248,7 @@ duckdb_enumerate_pathways <- function(
         OR
         (%s * %s * %s) >= %f
       )
-  ', em_join,
-     h_l1_c1, h_l2_c1, h_l3_c1, cutoff_SigProb,
+  ', h_l1_c1, h_l2_c1, h_l3_c1, cutoff_SigProb,
      h_l1_c2, h_l2_c2, h_l3_c2, cutoff_SigProb)
 
   pathways_df <- dbGetQuery(con, sql)
@@ -340,8 +297,6 @@ duckdb_enumerate_pathways <- function(
     time_prep_sec = t_prep, time_duckdb_sec = t_duck, time_total_sec = t_total)
 
   list(pathways = pathways_df,
-       em_degree = em_degree,
-       edge_source_count = edge_source_count,
        edges = edges,
        stats = stats)
 }

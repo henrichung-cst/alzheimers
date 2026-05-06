@@ -50,9 +50,6 @@ source(file.path(script_dir, "duckdb_enumeration.R"))
 
 sanitize_name <- function(x) gsub("/", "-", gsub(" ", "_", x))
 
-# EM weight from Incytr internals
-em_weight_log <- function(degree) 1 / log2(1 + degree)
-
 # Record all senders as skipped and unregister receiver-scoped DuckDB tables.
 skip_recv_senders <- function(senders, recv, status, con) {
   for (send in senders) {
@@ -81,8 +78,6 @@ expr_threshold  <- as.numeric(Sys.getenv("EXPR_DETECTION_THRESHOLD", "0.10"))
 force_rerun     <- Sys.getenv("FORCE_RERUN", "0") == "1"
 memory_limit_gb <- as.numeric(Sys.getenv("MEMORY_LIMIT_GB", "10"))
 pair_filter     <- Sys.getenv("PAIR_FILTER", "")
-# Sprint 3: EM promiscuity weight reverted to default-off (audit ledger INC-25).
-enable_em_promiscuity_weight <- Sys.getenv("ENABLE_EM_PROMISCUITY_WEIGHT", "0") == "1"
 K <- 0.5; N <- 2; KN <- K^N
 # Sprint 4: DuckDB pre-prune SigProb cutoff (audit ledger ALZ-18.b).
 # Native default is `cutoff_SigProb = NULL` (no pre-prune). The wrapper retains
@@ -179,9 +174,6 @@ cat(sprintf("  Filtered DB: L1=%d, L2=%d, L3=%d edges\n",
             nrow(DB_Layer1_mouse_filtered),
             nrow(DB_Layer2_mouse_filtered),
             nrow(DB_Layer3_mouse_filtered)))
-
-# Compute em_degree from full L3
-em_degree <- table(DB_Layer3_mouse_filtered$from)
 
 # Convert to data.tables with just from/to for pruning
 l1_raw <- as.data.table(DB_Layer1_mouse_filtered[, c("from", "to")])
@@ -414,12 +406,6 @@ dbExecute(con, sprintf("SET threads=%d", 4L))
 dbExecute(con, "SET max_temp_directory_size='20GiB'")
 dbExecute(con, "SET preserve_insertion_order=false")
 
-# Register global em_degree table
-em_deg_df <- data.frame(gene = names(em_degree), degree = as.numeric(em_degree),
-                        stringsAsFactors = FALSE)
-duckdb_register(con, "em_degree_tbl", em_deg_df)
-rm(em_deg_df)
-
 # --- Summary tracking ---
 summary_rows <- list()
 n_done <- 0
@@ -538,9 +524,8 @@ for (recv in receivers_in_order) {
   # filtering. This is slightly lossy (an animal with higher expression than
   # the pool could have a pathway survive), but prevents 100x edge inflation
   # from max-across-animals pruning.
-  em_w <- "(1.0 / LOG2(CAST(1 + COALESCE(ed.degree, 1) AS DOUBLE)))"
   h_l2 <- build_hill_sql("r1.c1", "r2.c1", N, KN)
-  l3_prod <- sprintf("(r2.c1 * r3.c1 * %s)", em_w)
+  l3_prod <- "(r2.c1 * r3.c1)"
   h_l3 <- sprintf("POWER(%s, %d) / (POWER(%s, %d) + %f)", l3_prod, N, l3_prod, N, KN)
 
   sql_backbone <- sprintf('
@@ -553,7 +538,6 @@ for (recv in receivers_in_order) {
     JOIN receiver_expr r1 ON L2."from" = r1.gene
     JOIN receiver_expr r2 ON L2."to"  = r2.gene
     JOIN receiver_expr r3 ON L3."to"  = r3.gene
-    LEFT JOIN em_degree_tbl ed ON L2."to" = ed.gene
     WHERE L2."from" != L2."to"
       AND L2."from" != L3."to"
       AND L2."to"   != L3."to"
@@ -694,20 +678,10 @@ for (recv in receivers_in_order) {
       L_a[mask] <- s_expr_a[dt$Ligand[mask]]
     }
 
-    # EM promiscuity weight (default OFF per Sprint 3 audit, INC-25 revert).
-    # Set ENABLE_EM_PROMISCUITY_WEIGHT=1 to opt back into the `1/log2(1+degree)`
-    # weighting from commit abde752 (no empirical justification recorded).
-    if (enable_em_promiscuity_weight) {
-      em_w_vec <- em_weight_log(as.numeric(em_degree[dt$EM]))
-      em_w_vec[is.na(em_w_vec)] <- 1
-    } else {
-      em_w_vec <- rep(1, n_pw)
-    }
-
     # Hill components
     h1 <- hill(L_a * R_a, K, N)
     h2 <- hill(R_a * EM_a, K, N)
-    h3 <- hill(EM_a * T_a * em_w_vec, K, N)
+    h3 <- hill(EM_a * T_a, K, N)
 
     sigprob_mat[, a_idx] <- h1 * h2 * h3
   }

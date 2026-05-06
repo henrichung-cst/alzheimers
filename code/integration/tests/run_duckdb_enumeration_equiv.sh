@@ -6,7 +6,7 @@
 # 12-gene × 40-cell × 2-condition fixture (helper-golden.R), with all
 # pre-prune cutoffs disabled.
 #
-# Equivalence claim: with cutoff_SigProb = 0 and em_promiscuity_weight = FALSE,
+# Equivalence claim: with cutoff_SigProb = 0,
 # the (Ligand, Receptor, EM, Target) tuples returned by
 # duckdb_enumerate_pathways() match the @pathways slot of an Incytr object
 # built via pathway_inference() on the same DB and gene set.
@@ -97,7 +97,6 @@ res_duck <- duckdb_enumerate_pathways(
   conditions = c("condA", "condB"),
   K = 0.5, N = 2,
   cutoff_SigProb = 0,             # disable SigProb filter
-  em_promiscuity_weight = FALSE,  # Sprint 4 territory; off for equivalence
   duckdb_memory = "1GB", duckdb_threads = 1L
 )
 duck_pw <- as.data.frame(res_duck$pathways)[, c("Ligand", "Receptor", "EM", "Target")]
