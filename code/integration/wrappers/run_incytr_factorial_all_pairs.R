@@ -338,42 +338,48 @@ if (n_total == 0) {
 #'
 #' @return data.table with per-contrast TPDS, SE, pvalue columns
 fit_contrast_ols <- function(sigprob_mat, hat_mat, XtX_inv, contrast_mat,
-                             n_animals, n_params) {
+                             n_animals, n_params, pseudocount = 1e-10) {
   n_pw <- nrow(sigprob_mat)
   df_resid <- n_animals - n_params
 
-  # beta = hat_mat %*% t(sigprob_mat)  => p x n_pw
-  beta_mat <- hat_mat %*% t(sigprob_mat)
+  # OLS on log(SigProb + pseudocount) so the contrast estimate is a log-ratio
+  # of geometric-mean per-animal SigProb. Mirrors incytr/R/factorial.R::
+  # Contrast_SigProb (pseudocount 1e-10), which is the package's reference
+  # factorial path. The post-OLS logi(beta, k = 2/log(2)) below is the natural-
+  # log -> log2 base-change calibration that makes this algebraically equal to
+  # pair mode's logi(log2FC, k = 2): TPDS lives in [-1, 1] on the same scale
+  # as the omics evidence terms it is added to in multimodel_score.
+  Y_log <- log(sigprob_mat + pseudocount)
 
-  # Residuals: e = y - X %*% beta => n_animals x n_pw
-  fitted <- design_mat %*% beta_mat  # n_animals x n_pw
-  resid_mat <- t(sigprob_mat) - fitted  # n_animals x n_pw
+  # beta on log(Y): p x n_pw
+  beta_mat <- hat_mat %*% t(Y_log)
 
-  # MSE per pathway: sum(e^2) / df_resid
-  mse <- colSums(resid_mat^2) / df_resid  # length n_pw
+  # Residuals on log scale: n_animals x n_pw
+  fitted <- design_mat %*% beta_mat
+  resid_mat <- t(Y_log) - fitted
 
-  # For each contrast c: TPDS = c' beta, Var = c' (X'X)^{-1} c * MSE
+  # MSE per pathway (log scale): sum(e^2) / df_resid
+  mse <- colSums(resid_mat^2) / df_resid
+
+  k_logi <- 2 / log(2)
+
+  # For each contrast c: beta_c = c' beta, Var = c' (X'X)^{-1} c * MSE
   result <- data.table(pathway_idx = seq_len(n_pw))
 
   for (i in seq_along(contrast_names)) {
     cname <- contrast_names[i]
     cvec <- contrast_mat[i, ]
 
-    # TPDS = c' beta
-    tpds <- as.numeric(cvec %*% beta_mat)  # length n_pw
-
-    # SE = sqrt(c' (X'X)^{-1} c * MSE)
-    c_var_factor <- as.numeric(t(cvec) %*% XtX_inv %*% cvec)  # scalar
+    beta_c <- as.numeric(cvec %*% beta_mat)
+    c_var_factor <- as.numeric(t(cvec) %*% XtX_inv %*% cvec)
     se <- sqrt(c_var_factor * mse)
 
-    # t-statistic and p-value (two-sided)
-    t_stat <- tpds / se
+    # t-statistic and two-sided p-value computed on the log-scale beta/SE.
+    t_stat <- beta_c / se
     pval <- 2 * pt(abs(t_stat), df = df_resid, lower.tail = FALSE)
 
-    # Clamp TPDS to [-1, 1] via logistic transform matching Incytr convention
-    # Incytr's TPDS = logi(aFC) where logi(x) = 2/(1+exp(-x)) - 1
-    # But in factorial mode, the raw OLS beta is the effect size on SigProb
-    # scale. We use the raw beta as TPDS (bounded by SigProb range [0,1]).
+    # TPDS = logi(beta_c, k = 2/log(2)) ∈ [-1, 1]; matches pair-mode TPDS scale.
+    tpds <- logi(beta_c, k = k_logi)
     result[, (paste0("TPDS_", cname)) := tpds]
     result[, (paste0("SE_", cname)) := se]
     result[, (paste0("pvalue_", cname)) := pval]
