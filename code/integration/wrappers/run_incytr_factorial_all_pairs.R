@@ -52,6 +52,42 @@ source(file.path(script_dir, "incytr_runtime.R"))
 
 sanitize_name <- function(x) gsub("/", "-", gsub(" ", "_", x))
 
+#' Map `fn` over `keys` with `mc.cores` forks, capping inner thread pools to
+#' avoid nested oversubscription. weighted_quantile_expr (matrixStats) uses
+#' OpenMP; data.table and BLAS aren't on this path but are clamped defensively.
+#' Falls back to serial lapply when mc.cores <= 1 or `parallel` is unavailable.
+parallel_per_key <- function(keys, fn, mc.cores = NULL) {
+  if (length(keys) == 0) return(setNames(list(), character(0)))
+  if (is.null(mc.cores)) {
+    # PARALLEL_NCORES env override (default 6). Forks copy-on-write the parent's
+    # ~1.5GB R state including the sparse expression matrix, so memory pressure
+    # scales with mc.cores. 6 forks balances ~4× speedup vs the 12GB MemoryMax
+    # in run_factorial_all_pairs.sh; raise via env var if MemoryMax is raised.
+    n_env <- suppressWarnings(as.integer(Sys.getenv("PARALLEL_NCORES", "6")))
+    if (is.na(n_env) || n_env < 1L) n_env <- 6L
+    n_avail <- max(1L, parallel::detectCores(logical = FALSE) - 1L)
+    mc.cores <- min(n_env, n_avail, length(keys))
+  }
+  if (mc.cores <= 1L) return(setNames(lapply(keys, fn), keys))
+
+  prev_dt  <- data.table::getDTthreads()
+  prev_omp <- Sys.getenv("OMP_NUM_THREADS",      unset = NA_character_)
+  prev_obl <- Sys.getenv("OPENBLAS_NUM_THREADS", unset = NA_character_)
+  data.table::setDTthreads(1L)
+  Sys.setenv(OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1")
+  restore <- function() {
+    data.table::setDTthreads(prev_dt)
+    if (is.na(prev_omp)) Sys.unsetenv("OMP_NUM_THREADS")
+    else Sys.setenv(OMP_NUM_THREADS = prev_omp)
+    if (is.na(prev_obl)) Sys.unsetenv("OPENBLAS_NUM_THREADS")
+    else Sys.setenv(OPENBLAS_NUM_THREADS = prev_obl)
+  }
+  on.exit(restore())
+  res <- parallel::mclapply(keys, fn, mc.cores = mc.cores,
+                            mc.preschedule = TRUE)
+  setNames(res, keys)
+}
+
 # Record all senders as skipped and unregister receiver-scoped DuckDB tables.
 skip_recv_senders <- function(senders, recv, status, con) {
   for (send in senders) {
@@ -103,12 +139,17 @@ cat("Loading Incytr (for DB layers)...\n")
 library(Incytr)
 
 cat("Loading factorial expression matrix...\n")
+.tp <- function(label, t0) cat(sprintf("  [t] %-32s %6.1fs\n", label, (proc.time() - t0)["elapsed"]))
+t_s1 <- proc.time()
 mat <- readMM(file.path(fac_dir, "expression_matrix.mtx"))
 mat <- as(mat, "dgCMatrix")
+.tp("mtx read+coerce", t_s1)
+t_s1 <- proc.time()
 genes    <- read.csv(file.path(fac_dir, "expression_genes.csv"))$gene
 barcodes <- read.csv(file.path(fac_dir, "expression_barcodes.csv"))$barcode
 rownames(mat) <- genes; colnames(mat) <- barcodes
 all_genes <- genes
+.tp("gene/barcode csv + dimnames", t_s1)
 cat(sprintf("  %d genes x %d cells\n", nrow(mat), ncol(mat)))
 
 meta <- read.csv(file.path(fac_dir, "expression_metadata.csv"),
@@ -180,6 +221,7 @@ cat(sprintf("  %d unique conditions for SiK: %s\n",
 XtX_inv <- solve(crossprod(design_mat))
 hat_mat <- XtX_inv %*% t(design_mat)  # p x n
 
+t_s1 <- proc.time()
 cat("Loading IncytrDB mouse...\n")
 data(DB_Layer1_mouse_filtered, package = "Incytr")
 data(DB_Layer2_mouse_filtered, package = "Incytr")
@@ -205,6 +247,7 @@ l2_raw <- as.data.table(DB_Layer2_mouse_filtered[, c("from", "to")])
 l3_raw <- as.data.table(DB_Layer3_mouse_filtered[, c("from", "to")])
 rm(DB_Layer1_mouse_filtered, DB_Layer2_mouse_filtered, DB_Layer3_mouse_filtered)
 gc(verbose = FALSE)
+.tp("IncytrDB load+filter", t_s1)
 
 # Per-contrast multiomics evidence (pr/ps/py log2FCs by cell_type, gene).
 # Produced by export_multiomics_evidence_factorial.py; one row per
@@ -213,12 +256,14 @@ gc(verbose = FALSE)
 multiomics_path <- file.path(fac_dir, "multiomics_evidence.csv")
 if (file.exists(multiomics_path)) {
   cat("Loading multiomics evidence...\n")
+  t_s1 <- proc.time()
   mev <- fread(multiomics_path,
                select = c("cell_type", "gene_symbol", "contrast",
-                          "pr_log2FC", "ps_log2FC", "py_log2FC"))
-  setnames(mev, c("pr_log2FC", "ps_log2FC", "py_log2FC"),
-                c("pr_lfc", "ps_lfc", "py_lfc"))
+                          "pr_log2FC", "pr_aFC",
+                          "ps_log2FC", "ps_aFC",
+                          "py_log2FC", "py_aFC"))
   setkey(mev, contrast, cell_type, gene_symbol)
+  .tp("multiomics fread+setkey", t_s1)
   cat(sprintf("  %s rows across %d contrasts, %d cell types\n",
               format(nrow(mev), big.mark = ","),
               uniqueN(mev$contrast), uniqueN(mev$cell_type)))
@@ -234,7 +279,9 @@ if (file.exists(multiomics_path)) {
 kldata_path <- file.path(int_dir, "kldata.csv")
 if (file.exists(kldata_path)) {
   cat("Loading kldata...\n")
+  t_s1 <- proc.time()
   kldata <- read.csv(kldata_path, stringsAsFactors = FALSE)
+  .tp("kldata read.csv", t_s1)
   cat(sprintf("  %s rows\n", format(nrow(kldata), big.mark = ",")))
 } else {
   cat(sprintf("kldata not found at %s — SiK_score = 0, PDS = multimodel_score for all contrasts.\n",
@@ -248,28 +295,44 @@ if (file.exists(kldata_path)) {
 cat("\n=== Section 2: Precomputing per-animal expression ===\n")
 t0_precomp <- proc.time()
 
+# Precomputed cell indices: O(n_cells) once vs O(n_keys × n_cells) repeated
+# `which()` scans across ~616 (ct, animal/cond) keys downstream.
+t_s1 <- proc.time()
+.cells_by_ct        <- split(seq_len(nrow(meta)), meta$labels)
+.cells_by_ct_animal <- split(seq_len(nrow(meta)),
+                             list(meta$labels, meta$animal_id), drop = TRUE)
+.cells_by_ct_cond   <- split(seq_len(nrow(meta)),
+                             list(meta$labels,
+                                  paste(meta$genotype, meta$timepoint, sep = "_")),
+                             drop = TRUE)
+.tp("precompute cell indices", t_s1)
+
 # Per-animal expression: animal_expr[[ct]][[animal_id]] = named numeric vector
-# Only for animals with >= 1 cell in that cell type (min_cells = 1 for now)
-animal_expr <- list()
-animal_counts <- list()  # n_cells per (ct, animal)
-for (ct in cell_types) {
-  animal_expr[[ct]] <- list()
-  animal_counts[[ct]] <- list()
+# Only for animals with >= 1 cell in that cell type.
+t_s1 <- proc.time()
+animal_expr <- parallel_per_key(cell_types, function(ct) {
+  out <- list()
   for (aid in animal_ids) {
-    cells <- which(meta$labels == ct & meta$animal_id == aid)
-    animal_counts[[ct]][[aid]] <- length(cells)
-    if (length(cells) >= 1) {
-      animal_expr[[ct]][[aid]] <- weighted_quantile_expr(mat[, cells, drop = FALSE])
-    }
+    cells <- .cells_by_ct_animal[[paste(ct, aid, sep = ".")]]
+    if (!is.null(cells) && length(cells) >= 1)
+      out[[aid]] <- weighted_quantile_expr(mat[, cells, drop = FALSE])
   }
-}
+  out
+})
+animal_counts <- setNames(lapply(cell_types, function(ct)
+  setNames(lapply(animal_ids, function(aid) {
+    cells <- .cells_by_ct_animal[[paste(ct, aid, sep = ".")]]
+    if (is.null(cells)) 0L else length(cells)
+  }), animal_ids)), cell_types)
+.tp("animal_expr (22ct x 15an)", t_s1)
 
 # Detection rates (pooled across all animals)
-det_rates <- list()
-for (ct in cell_types) {
-  cells <- which(meta$labels == ct)
-  det_rates[[ct]] <- Matrix::rowMeans(mat[, cells, drop = FALSE] > 0)
-}
+t_s1 <- proc.time()
+det_rates <- parallel_per_key(cell_types, function(ct) {
+  cells <- .cells_by_ct[[ct]]
+  Matrix::rowMeans(mat[, cells, drop = FALSE] > 0)
+})
+.tp("det_rates (22ct)", t_s1)
 
 # Gene lists (expression threshold)
 gene_lists <- list()
@@ -323,20 +386,25 @@ load_imputed_for_recv_factorial <- function(recv) {
   out
 }
 
-per_recv_imputed_files <- Sys.glob(
-  file.path(fac_dir, "kinase_imputed_genes__*.csv"))
-cat(sprintf("  Per-receiver factorial imputed files: %d\n",
-            length(per_recv_imputed_files)))
+per_recv_imputed_files <- if (.runtime_cfg$layer_kinase_pack) {
+  Sys.glob(file.path(fac_dir, "kinase_imputed_genes__*.csv"))
+} else {
+  character(0)
+}
+cat(sprintf("  Per-receiver factorial imputed files: %d (kinase pack %s)\n",
+            length(per_recv_imputed_files),
+            ifelse(.runtime_cfg$layer_kinase_pack, "ON", "OFF")))
 
 # Pooled expression (all cells of each type, regardless of animal)
 # Used for DuckDB edge pruning — gives a realistic single estimate per gene,
 # unlike max-across-animals which overstates products (max_A * max_B where
 # maxes come from different animals).
-pooled_expr <- list()
-for (ct in cell_types) {
-  cells <- which(meta$labels == ct)
-  pooled_expr[[ct]] <- weighted_quantile_expr(mat[, cells, drop = FALSE])
-}
+t_s1 <- proc.time()
+pooled_expr <- parallel_per_key(cell_types, function(ct) {
+  cells <- .cells_by_ct[[ct]]
+  weighted_quantile_expr(mat[, cells, drop = FALSE])
+})
+.tp("pooled_expr (22ct)", t_s1)
 
 # Per-condition expression (one weighted-quantile vector per (cell_type,
 # genotype_timepoint) pair). Drives Phase D SiK: cal_ei needs a per-condition
@@ -344,20 +412,17 @@ for (ct in cell_types) {
 # captures genotype/timepoint-specific specificity. Conditions are the
 # 12 (genotype, timepoint) combinations referenced by any contrast.
 # Memory: 22 cell_types × 12 conditions × ~25k genes ≈ 50 MB.
-cond_expr <- list()
-for (ct in cell_types) {
-  cond_expr[[ct]] <- list()
+t_s1 <- proc.time()
+cond_expr <- parallel_per_key(cell_types, function(ct) {
+  out <- list()
   for (cond in unique_conditions) {
-    parts <- strsplit(cond, "_", fixed = TRUE)[[1]]
-    g <- parts[1]; tp <- parts[2]
-    cells <- which(meta$labels == ct &
-                   meta$genotype == g &
-                   meta$timepoint == tp)
-    if (length(cells) >= 1) {
-      cond_expr[[ct]][[cond]] <- weighted_quantile_expr(mat[, cells, drop = FALSE])
-    }
+    cells <- .cells_by_ct_cond[[paste(ct, cond, sep = ".")]]
+    if (!is.null(cells) && length(cells) >= 1)
+      out[[cond]] <- weighted_quantile_expr(mat[, cells, drop = FALSE])
   }
-}
+  out
+})
+.tp("cond_expr (22ct x 12cond)", t_s1)
 
 # Summary: animals with expression per cell type
 for (ct in cell_types) {
@@ -481,26 +546,99 @@ fit_contrast_ols <- function(sigprob_mat, hat_mat, XtX_inv, contrast_mat,
 #' preserved at attach time and zeroed inside the scoring helper.
 attach_multiomics_evidence <- function(dt, mev, recv, contrast_names) {
   if (is.null(mev)) return(dt)
+  omics <- c("pr", "ps", "py")
   for (cname in contrast_names) {
-    ev <- mev[contrast == cname, .(cell_type, gene_symbol, pr_lfc, ps_lfc, py_lfc)]
+    cols <- c("cell_type", "gene_symbol",
+              paste0(omics, "_log2FC"), paste0(omics, "_aFC"))
+    ev <- mev[contrast == cname, ..cols]
 
-    # Receiver-side: single recv cell type. Sub-key by gene_symbol.
     ev_r <- ev[cell_type == recv][, cell_type := NULL]
     setkey(ev_r, gene_symbol)
     for (role in c("Receptor", "EM", "Target")) {
       m <- ev_r[dt[[role]], on = "gene_symbol"]
-      dt[, (paste0(role, "_pr_lfc_", cname)) := m$pr_lfc]
-      dt[, (paste0(role, "_ps_lfc_", cname)) := m$ps_lfc]
-      dt[, (paste0(role, "_py_lfc_", cname)) := m$py_lfc]
+      for (o in omics) {
+        dt[, (paste0(role, "_", o, "_log2FC_", cname)) := m[[paste0(o, "_log2FC")]]]
+        dt[, (paste0(role, "_", o, "_aFC_",    cname)) := m[[paste0(o, "_aFC")]]]
+      }
     }
 
-    # Sender-side (per-row sender). Key by (cell_type, gene_symbol).
     setkey(ev, cell_type, gene_symbol)
     m_l <- ev[dt[, .(cell_type = sender, gene_symbol = Ligand)],
               on = c("cell_type", "gene_symbol")]
-    dt[, (paste0("Ligand_pr_lfc_", cname)) := m_l$pr_lfc]
-    dt[, (paste0("Ligand_ps_lfc_", cname)) := m_l$ps_lfc]
-    dt[, (paste0("Ligand_py_lfc_", cname)) := m_l$py_lfc]
+    for (o in omics) {
+      dt[, (paste0("Ligand_", o, "_log2FC_", cname)) := m_l[[paste0(o, "_log2FC")]]]
+      dt[, (paste0("Ligand_", o, "_aFC_",    cname)) := m_l[[paste0(o, "_aFC")]]]
+    }
+  }
+  dt
+}
+
+
+#' Per-role per-contrast scRNA log2FC, computed from per-condition expression
+#' (cond_expr) and the explicit contrast → (cond_ref, cond_alt) mapping. Mirror
+#' of pair-mode `Ligand_sclog2FC` etc. (`receiver_scoring.R::format_export_columns`)
+#' but per contrast. Uses the same +1 offset that `Cal_foldchange` applies for
+#' log2 stability when expression is zero.
+attach_sc_log2fc_factorial <- function(dt, cond_expr, recv, contrast_names,
+                                       contrast_conditions) {
+  recv_expr <- cond_expr[[recv]]
+  for (cname in contrast_names) {
+    cc <- contrast_conditions[[cname]]
+    if (is.null(cc)) next
+    ref_v <- recv_expr[[cc[1]]]; alt_v <- recv_expr[[cc[2]]]
+    if (is.null(ref_v) || is.null(alt_v)) {
+      for (role in c("Ligand", "Receptor", "EM", "Target"))
+        dt[, (paste0(role, "_sclog2FC_", cname)) := NA_real_]
+      next
+    }
+    rcv_lfc <- log2((alt_v + 1) / (ref_v + 1))
+    for (role in c("Receptor", "EM", "Target"))
+      dt[, (paste0(role, "_sclog2FC_", cname)) := unname(rcv_lfc[dt[[role]]])]
+
+    # Sender side varies per row.
+    lig_lfc <- rep(NA_real_, nrow(dt))
+    for (send in unique(dt$sender)) {
+      s_expr <- cond_expr[[send]]
+      sref <- s_expr[[cc[1]]]; salt <- s_expr[[cc[2]]]
+      if (is.null(sref) || is.null(salt)) next
+      mask <- dt$sender == send
+      lig_lfc[mask] <- log2((salt[dt$Ligand[mask]] + 1) /
+                             (sref[dt$Ligand[mask]] + 1))
+    }
+    dt[, (paste0("Ligand_sclog2FC_", cname)) := lig_lfc]
+  }
+  dt
+}
+
+
+#' Per-condition pathway-level SigProb (mean over animals in that condition)
+#' plus per-contrast log2FC and aFC. SigProb means come from `sigprob_mat`
+#' (n_pathways × n_animals) using `meta` rows aligned to `animal_ids`.
+#' aFC formula (`log2FC * pmax(SigProb_ref, SigProb_alt)`) matches
+#' pair-mode `Cal_foldchange` semantics.
+attach_sigprob_per_condition <- function(dt, sigprob_mat, animal_ids, animal_meta,
+                                         conditions, contrast_names,
+                                         contrast_conditions, eps = 1e-3) {
+  cond_of_animal <- setNames(
+    paste(animal_meta$genotype, animal_meta$timepoint, sep = "_"),
+    animal_meta$animal_id)[animal_ids]
+
+  for (cond in conditions) {
+    a_idx <- which(cond_of_animal == cond)
+    sp <- if (length(a_idx) == 0) rep(NA_real_, nrow(dt)) else
+            rowMeans(sigprob_mat[, a_idx, drop = FALSE], na.rm = TRUE)
+    sp[is.nan(sp)] <- NA_real_
+    dt[, (paste0("SigProb_", cond)) := sp]
+  }
+
+  for (cname in contrast_names) {
+    cc <- contrast_conditions[[cname]]
+    if (is.null(cc)) next
+    ref <- dt[[paste0("SigProb_", cc[1])]]
+    alt <- dt[[paste0("SigProb_", cc[2])]]
+    log2fc <- log2((alt + eps) / (ref + eps))
+    dt[, (paste0("log2FC_", cname)) := log2fc]
+    dt[, (paste0("aFC_",    cname)) := log2fc * pmax(ref, alt, na.rm = FALSE)]
   }
   dt
 }
@@ -519,7 +657,7 @@ compute_evaluation_factorial_vectorized <- function(dt, contrast_names,
   for (cname in contrast_names) {
     for (omic in c("pr", "ps", "py")) {
       cols <- paste0(c("Ligand", "Receptor", "EM", "Target"),
-                     "_", omic, "_lfc_", cname)
+                     "_", omic, "_log2FC_", cname)
       score_col <- switch(omic,
                           pr = paste0("PPDS_", cname),
                           ps = paste0("PhPDS_ps_", cname),
@@ -596,8 +734,21 @@ cal_ei_vec_fact <- function(mat_in, fold_threshold) {
 compute_sik_factorial <- function(dt, kldata, cond_expr, cell_types, recv,
                                   conditions, fold_threshold = 10,
                                   reverse_sik_weight = 0.3) {
-  zero_out <- function(d) {
-    for (cond in conditions) d[, (paste0("SiK_score_", cond)) := 0]
+  n <- nrow(dt)
+  emit_match <- function(d, sik_genes) {
+    for (i in seq_along(SIK_NAMES_FACT))
+      d[, (SIK_NAMES_FACT[i]) := sik_genes[, i]]
+    d
+  }
+  zero_out <- function(d, sik_genes = NULL) {
+    if (is.null(sik_genes))
+      sik_genes <- matrix(NA_character_, nrow = n, ncol = 6)
+    d <- emit_match(d, sik_genes)
+    for (cond in conditions) {
+      d[, (paste0("SiK_score_", cond)) := 0]
+      for (nm in SIK_NAMES_FACT)
+        d[, (paste0(nm, "_EI_", cond)) := 0]
+    }
     d
   }
   if (is.null(kldata) || nrow(kldata) == 0) {
@@ -611,7 +762,6 @@ compute_sik_factorial <- function(dt, kldata, cond_expr, cell_types, recv,
   }
   kl_pairs <- paste0(kl[["motif.geneName"]], "|", kl$gene)
 
-  n <- nrow(dt)
   sik_genes <- matrix(NA_character_, nrow = n, ncol = 6)
   for (i in 1:6) {
     pairs <- paste0(dt[[SIK_CASE_KEY_FACT$Kinase[i]]], "|",
@@ -621,8 +771,10 @@ compute_sik_factorial <- function(dt, kldata, cond_expr, cell_types, recv,
   }
   k_gene <- unique(na.omit(as.vector(sik_genes)))
   if (length(k_gene) == 0) {
-    return(list(dt = zero_out(dt), has_structural = FALSE))
+    return(list(dt = zero_out(dt, sik_genes), has_structural = FALSE))
   }
+
+  dt <- emit_match(dt, sik_genes)
 
   sik_weights <- c(rep(1.0, 3), rep(reverse_sik_weight, 3))
   ws <- sum(sik_weights)
@@ -646,6 +798,9 @@ compute_sik_factorial <- function(dt, kldata, cond_expr, cell_types, recv,
       if (any(has)) ei_mat[has, i] <- unname(ei_lookup[g[has]])
     }
     ei_mat[is.na(ei_mat)] <- 0
+
+    for (i in seq_along(SIK_NAMES_FACT))
+      dt[, (paste0(SIK_NAMES_FACT[i], "_EI_", cond)) := ei_mat[, i]]
     dt[, (paste0("SiK_score_", cond)) :=
          as.numeric(ei_mat %*% sik_weights) / ws]
   }
@@ -772,7 +927,11 @@ for (recv in receivers_in_order) {
   # are not patched — imputation changes *which* pathways enumerate, not
   # the per-animal SigProbs used for OLS contrast estimation).
   ki_for_recv <- character(0)
-  recv_imputed_df <- load_imputed_for_recv_factorial(recv)
+  recv_imputed_df <- if (.runtime_cfg$layer_kinase_pack) {
+    load_imputed_for_recv_factorial(recv)
+  } else {
+    NULL
+  }
   if (!is.null(recv_imputed_df) && nrow(recv_imputed_df) > 0) {
     if (expr_imputation_floor > 0) {
       dr <- det_rates[[recv]][recv_imputed_df$gene]
@@ -957,6 +1116,7 @@ for (recv in receivers_in_order) {
 
   # Compute per-animal SigProb for each pathway
   # Build a sigprob matrix: n_pathways x n_animals
+  t0_sp <- proc.time()
   n_pw <- nrow(dt)
   sigprob_mat <- matrix(NA_real_, nrow = n_pw, ncol = n_animals,
                         dimnames = list(NULL, animal_ids))
@@ -1022,6 +1182,9 @@ for (recv in receivers_in_order) {
     next
   }
 
+  cat(sprintf("    Per-animal SigProb: %.1fs\n",
+              (proc.time() - t0_sp)["elapsed"]))
+
   # Replace remaining NAs with 0 (animal has no cells of this type)
   sigprob_mat[is.na(sigprob_mat)] <- 0
 
@@ -1054,10 +1217,17 @@ for (recv in receivers_in_order) {
     imputed_nodes == "", "expression-confirmed", "kinase-imputed"
   )]
 
+  # --- Per-condition SigProb means + per-contrast log2FC/aFC (parity) ---
+  dt <- attach_sigprob_per_condition(dt, sigprob_mat, animal_ids, animal_meta,
+                                     unique_conditions, contrast_names,
+                                     factorial_contrast_conditions)
+
   # --- Multimodal evidence: attach per-contrast omics LFCs + score ---
   cat("    Attaching multiomics evidence + scoring...\n")
   t0_mm <- proc.time()
   dt <- attach_multiomics_evidence(dt, mev, recv, contrast_names)
+  dt <- attach_sc_log2fc_factorial(dt, cond_expr, recv, contrast_names,
+                                   factorial_contrast_conditions)
   dt <- compute_evaluation_factorial_vectorized(dt, contrast_names, k_logi = 2)
   cat(sprintf("    Multiomic scoring: %d pathways x %d contrasts (%.1fs)\n",
               nrow(dt), length(contrast_names),
@@ -1075,12 +1245,34 @@ for (recv in receivers_in_order) {
   cat(sprintf("    SiK + PDS: structural=%s (%.1fs)\n",
               has_structural, (proc.time() - t0_sik)["elapsed"]))
 
+  # --- Identity / provenance columns (parity with pair-mode) ---
+  dt[, Sender.group := sender]
+  dt[, Receiver.group := recv]
+  dt[, ID_1 := paste0(Path, "_", sender, "_", recv)]
+  dt[, ID_2 := paste0(sender, "_", recv)]
+  for (cname in contrast_names) {
+    dt[, (paste0("kinase_boost_", cname)) :=
+         get(paste0("PDS_", cname)) - get(paste0("TPDS_", cname))]
+  }
+
   # --- Write Parquet (atomic) ---
   # Select output columns
-  out_cols <- c("sender", "Ligand", "Receptor", "EM", "Target", "Path",
-                "pathway_evidence", "imputed_nodes", "n_animals", "df_resid")
+  out_cols <- c("sender", "Sender.group", "Receiver.group",
+                "Ligand", "Receptor", "EM", "Target", "Path", "ID_1", "ID_2",
+                "pathway_evidence", "imputed_nodes", "n_animals", "df_resid",
+                SIK_NAMES_FACT)
+  roles <- c("Ligand", "Receptor", "EM", "Target")
   for (cname in contrast_names) {
     out_cols <- c(out_cols,
+                  paste0("log2FC_", cname),
+                  paste0("aFC_",    cname),
+                  paste0(roles, "_sclog2FC_", cname),
+                  paste0(roles, "_pr_log2FC_", cname),
+                  paste0(roles, "_pr_aFC_",    cname),
+                  paste0(roles, "_ps_log2FC_", cname),
+                  paste0(roles, "_ps_aFC_",    cname),
+                  paste0(roles, "_py_log2FC_", cname),
+                  paste0(roles, "_py_aFC_",    cname),
                   paste0("TPDS_", cname),
                   paste0("SE_", cname),
                   paste0("pvalue_", cname),
@@ -1092,13 +1284,21 @@ for (recv in receivers_in_order) {
                   paste0("Rme1_score_", cname),
                   paste0("multimodel_score_", cname),
                   paste0("PDS_", cname),
+                  paste0("kinase_boost_", cname),
                   paste0("pds_inference_scope_", cname))
   }
   for (cond in unique_conditions) {
-    out_cols <- c(out_cols, paste0("SiK_score_", cond))
+    out_cols <- c(out_cols,
+                  paste0("SigProb_", cond),
+                  paste0("SiK_score_", cond),
+                  paste0(SIK_NAMES_FACT, "_EI_", cond))
   }
+  # Filter out any column not present (defensive: contrasts whose conditions
+  # didn't materialise leave NA columns; missing columns are fatal otherwise).
+  out_cols <- intersect(out_cols, names(dt))
   dt_out <- dt[, ..out_cols]
 
+  t0_wr <- proc.time()
   tmp_path <- paste0(recv_parquet, ".tmp")
   tbl <- arrow_table(dt_out)
   tbl$metadata <- c(tbl$metadata, list(
@@ -1110,8 +1310,9 @@ for (recv in receivers_in_order) {
     timestamp = format(Sys.time(), "%Y-%m-%dT%H:%M:%S")))
   write_parquet(tbl, tmp_path)
   file.rename(tmp_path, recv_parquet)
-  cat(sprintf("    Wrote %s (%s rows)\n", basename(recv_parquet),
-              format(nrow(dt_out), big.mark = ",")))
+  cat(sprintf("    Wrote %s (%s rows, %d cols, %.1fs)\n", basename(recv_parquet),
+              format(nrow(dt_out), big.mark = ","),
+              ncol(dt_out), (proc.time() - t0_wr)["elapsed"]))
 
   n_post_by_sender <- dt[, .N, by = sender]
   setkey(n_post_by_sender, sender)
