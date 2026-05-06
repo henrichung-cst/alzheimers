@@ -215,7 +215,7 @@ These need explicit verdicts even though they are A-bucket "necessary" extension
 - [x] Sprint 0: scaffolding _(2026-05-05; branches + golden harness + native/current goldens + pre-audit diff + ledger seeded — see `incytr_audit_pre_diff.md`)_
 - [x] Sprint 1: factorial extension (Section A) _(2026-05-05; 28 A-bucket signed off, 4 design decisions recorded, PDS drift attributed to INC-25 → Sprint 3, SiK_score drift attributed to INC-28 + co-suspect INC-13 → Sprint 5; degenerate 2-cond runner at `code/integration/tests/run_degenerate_2cond.sh`; 593/593 testthat passing)_
 - [x] Sprint 2: performance (Section B) _(2026-05-05; 9 B-bucket rows signed off, INC-37 split into perf + correctness (INC-37.b, fix-forward, no Sprint 3/4 re-route), DuckDB enumerator bitwise-equivalent to native `pathway_inference` with pre-prune cutoffs disabled, `verify_phase2.R` promoted to `code/integration/tests/run_verify_phase2.sh`; 593/593 testthat passing)_
-- [ ] Sprint 3: scoring formula changes (Section C, group 1)
+- [x] Sprint 3: scoring formula changes (Section C, group 1) _(2026-05-05; INC-25 EM promiscuity weight reverted to default-off in package + env-gated in wrapper, parking-in-place per ENABLE_KINASE_AUGMENTATION precedent; ALZ-22 wrapper gene-admission divergence signed off as snRNA-seq config; INC-DESIGN-5 `logi()` k parameter audit confirmed no drift; Sprint 1 attribution amended — synthetic fixture has `em_degree=1` making INC-25 a no-op there, residual PDS drift now owned by Sprint 5 INC-28; 593/593 testthat passing)_
 - [ ] Sprint 4: filtering and pathway universe (Section C, group 2)
 - [ ] Sprint 5: added analysis layers + native SiK reinstatement (Section C, group 3)
 

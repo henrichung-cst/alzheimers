@@ -81,6 +81,8 @@ expr_threshold  <- as.numeric(Sys.getenv("EXPR_DETECTION_THRESHOLD", "0.10"))
 force_rerun     <- Sys.getenv("FORCE_RERUN", "0") == "1"
 memory_limit_gb <- as.numeric(Sys.getenv("MEMORY_LIMIT_GB", "10"))
 pair_filter     <- Sys.getenv("PAIR_FILTER", "")
+# Sprint 3: EM promiscuity weight reverted to default-off (audit ledger INC-25).
+enable_em_promiscuity_weight <- Sys.getenv("ENABLE_EM_PROMISCUITY_WEIGHT", "0") == "1"
 K <- 0.5; N <- 2; KN <- K^N; cutoff_SigProb <- 0.01
 
 cat(sprintf("Config: threshold=%.0f%%, memory_limit=%dGB, force=%s\n",
@@ -684,9 +686,15 @@ for (recv in receivers_in_order) {
       L_a[mask] <- s_expr_a[dt$Ligand[mask]]
     }
 
-    # EM promiscuity weight
-    em_w_vec <- em_weight_log(as.numeric(em_degree[dt$EM]))
-    em_w_vec[is.na(em_w_vec)] <- 1
+    # EM promiscuity weight (default OFF per Sprint 3 audit, INC-25 revert).
+    # Set ENABLE_EM_PROMISCUITY_WEIGHT=1 to opt back into the `1/log2(1+degree)`
+    # weighting from commit abde752 (no empirical justification recorded).
+    if (enable_em_promiscuity_weight) {
+      em_w_vec <- em_weight_log(as.numeric(em_degree[dt$EM]))
+      em_w_vec[is.na(em_w_vec)] <- 1
+    } else {
+      em_w_vec <- rep(1, n_pw)
+    }
 
     # Hill components
     h1 <- hill(L_a * R_a, K, N)

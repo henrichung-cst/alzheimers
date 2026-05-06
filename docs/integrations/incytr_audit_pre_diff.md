@@ -203,3 +203,60 @@ runners.
    `code/integration/tests/run_duckdb_enumeration_equiv.sh`,
    `code/integration/tests/run_verify_phase2.sh`, ledger updates, and
    `docs/integrations/working/sprint2_perf_split.md`.
+
+## Sprint 3 verdict addendum (2026-05-05)
+
+Sprint 3 audited the **scoring-formula bucket** (Section C, group 1): items
+that modify the SigProb / TPDS / PDS formulas relative to native Incytr.
+
+1. **INC-25 (`abde752` EM promiscuity weight) — reverted to default-off,
+   parking-in-place.** Three package-side default flips (`em_promiscuity_weight = TRUE → FALSE` in `Cal_SigProb`, `Cal_SigProb_animal`,
+   `run_factorial`) plus an env-var gate in
+   `code/integration/wrappers/run_incytr_factorial_all_pairs.R`
+   (`ENABLE_EM_PROMISCUITY_WEIGHT=1` to opt back in). Pattern matches
+   the `ENABLE_KINASE_AUGMENTATION` precedent — code preserved behind
+   a default-off flag rather than physically removed. No empirical or
+   theoretical justification for the original default-on choice was
+   recorded in `docs/integrations/` or in the integration code.
+
+2. **Sprint 1 attribution amended.** Sprint 1 named INC-25 the prime
+   `evaluation.PDS` drift driver, with magnitude ≈0.089 on the Sprint 0
+   synthetic fixture. Inspection during Sprint 3 showed the synthetic
+   Layer-3 DB has `em_degree = 1` for every EM node, so
+   `em_weight_log(1) = 1/log2(2) = 1` is a no-op even when the flag was on
+   — INC-25 has zero observable effect on this fixture. The residual
+   ~0.089 PDS drift therefore flows through `kl.pathways → Cal_PDS` from
+   INC-28 (`6858063` memory permutation pass), which Sprint 1 had already
+   routed to Sprint 5. The INC-25 revert remains substantive on production
+   data where `em_degree` is non-trivial (e.g., Ep300 at ~16k yields
+   weight ≈0.07), but the Sprint 0 fixture cannot empirically distinguish
+   INC-25 from INC-28.
+
+3. **`logi()` k parameter audit (INC-DESIGN-5) — no drift.** `logi()`
+   body byte-identical to native (`2/(1+exp(-k*x))-1`). Legacy two-
+   condition path uses `k_logi = 2` (native default). Factorial path uses
+   `k_logi = 2/log(2)` as a deliberate scale calibration (factorial OLS
+   fits log-FC; native consumes aFC), already covered by INC-DESIGN-3
+   and `test-Pathway_evaluation_factorial.R`. Signed off as A-bucket.
+
+4. **`Find_highexp_gene` audit (ALZ-22) — wrapper-config divergence,
+   justified.** Native `Find_highexp_gene` (`R/utils.R`,
+   `cutoff_percentile = 0.5`) is byte-identical to the inherited
+   definition; the package itself is unmodified. The all-pairs wrappers
+   bypass it entirely by passing explicit `gene.use_Sender` /
+   `gene.use_Receiver` whitelists computed Python-side using
+   `EXPR_DETECTION_THRESHOLD = 0.10` (10% of cells with nonzero UMI). This
+   is the standard snRNA-seq detection-rate rule, appropriate for sparse
+   single-nucleus data (5–10× lower UMI than scRNA-seq); native's
+   50th-percentile-of-expressed cutoff was designed for scRNA-seq density.
+   Signed off without code change.
+
+5. **Sprint 3 deliverables.**
+   - Package edits: 3 default-flip lines plus `@param` docstring updates
+     in `R/analysis.R` and `R/factorial.R`.
+   - Wrapper edits: env-var gate around `em_w_vec` application in
+     `code/integration/wrappers/run_incytr_factorial_all_pairs.R`.
+   - Working note: `docs/integrations/working/sprint3_scoring_audit.md`.
+   - Verification: `run_degenerate_2cond.sh` (must-match slots clean),
+     `run_duckdb_enumeration_equiv.sh` (still equivalent), 593/593
+     testthat across 216 files.
