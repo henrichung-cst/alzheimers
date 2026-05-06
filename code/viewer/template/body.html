@@ -1,0 +1,380 @@
+<body>
+<header id="app-header">
+  <h1>Kinase + Pathway Viewer</h1>
+  <label class="filter-label" data-filter="receiver" data-metric="receiver">Receiver <select id="f-receiver" aria-label="Receiver filter"></select></label>
+  <label class="filter-label" data-filter="pathwayEvidence" data-metric="pathwayEvidence">Support <select id="f-pathway-evidence" aria-label="Pathway support filter">
+    <option value="ALL">All</option>
+    <option value="expression-confirmed">Expression-confirmed</option>
+    <option value="kinase-imputed">Kinase-imputed</option>
+    <option value="mixed">Mixed</option>
+  </select></label>
+  <label class="filter-label" data-filter="fdr" data-metric="fdr">FDR &lt; <input id="f-fdr" aria-label="FDR threshold" type="number" step="0.05" min="0" max="1"
+    value="0.25" style="width:60px;"></label>
+  <label class="filter-label" data-filter="tpdsSig" data-metric="tpdsSig"
+    title="Threshold on chain-level TPDS p-value. Off = no gate (every enumerated chain). 0.10/0.05/0.01 = require the chain's TPDS magnitude to be significantly non-zero at that level (min over senders). Distinct from the chain over-representation test, which gates kinase specificity rather than TPDS magnitude.">TPDS p &lt; <select id="f-tpds-sig" aria-label="TPDS p-value threshold">
+    <option value="OFF">off</option>
+    <option value="0.10">0.10</option>
+    <option value="0.05">0.05</option>
+    <option value="0.01">0.01</option>
+  </select></label>
+  <button id="glossary-toggle" aria-controls="glossary-panel" aria-expanded="false" title="Open metric definitions and abbreviations">Glossary</button>
+  <button id="f-graph-nodes-clear" class="chip" hidden>Clear graph-node filter</button>
+  <button id="f-sender-clear" class="chip" hidden>Clear sender filter</button>
+  <button id="f-selection-kinase-clear" class="chip" hidden>Clear kinase selection</button>
+  <button id="f-selection-celltype-clear" class="chip" hidden>Clear cell-type selection</button>
+</header>
+<nav id="tab-bar" role="tablist" aria-label="Viewer panels">
+  <span class="tab-group-label">Landscape</span>
+  <button id="tabbtn-signal" role="tab" aria-selected="true" aria-controls="tab-signal" data-tab="signal" data-tab-group="landscape" class="active">Signal Map</button>
+  <button id="tabbtn-senders" role="tab" aria-selected="false" aria-controls="tab-senders" data-tab="senders" data-tab-group="landscape">Sender&times;Receiver</button>
+  <button id="tabbtn-temporal" role="tab" aria-selected="false" aria-controls="tab-temporal" data-tab="temporal" data-tab-group="landscape">Temporal</button>
+  <button id="tabbtn-additivity" role="tab" aria-selected="false" aria-controls="tab-additivity" data-tab="additivity" data-tab-group="landscape">Additivity</button>
+  <button id="tabbtn-temporalv2" role="tab" aria-selected="false" aria-controls="tab-temporalv2" data-tab="temporalv2" data-tab-group="landscape">Temporal v2</button>
+  <span class="tab-group-divider" aria-hidden="true"></span>
+  <span class="tab-group-label">Drill-down</span>
+  <button id="tabbtn-kinase" role="tab" aria-selected="false" aria-controls="tab-kinase" data-tab="kinase" data-tab-group="drilldown">Kinase</button>
+  <button id="tabbtn-pathway" role="tab" aria-selected="false" aria-controls="tab-pathway" data-tab="pathway" data-tab-group="drilldown">Pathway</button>
+  <button id="tabbtn-graph" role="tab" aria-selected="false" aria-controls="tab-graph" data-tab="graph" data-tab-group="drilldown">Graph</button>
+  <span class="tab-group-divider" aria-hidden="true"></span>
+  <span class="tab-group-label">Reference</span>
+  <button id="tabbtn-methods" role="tab" aria-selected="false" aria-controls="tab-methods" data-tab="methods" data-tab-group="reference">Methods</button>
+</nav>
+<div id="content-shell">
+<main id="app-main">
+  <div id="file-mode-notice" class="notice">
+    This viewer is open as a local file. Some kinase and pathway drill-down
+    panels fetch parquet sidecar files, which browsers block under file://.
+    Serve this directory over HTTP if those drill-downs are needed.
+  </div>
+  <div id="tab-signal" class="tab-panel active" role="tabpanel" aria-labelledby="tabbtn-signal">
+    <div class="card">
+      <h2>Receiver &times; Contrast</h2>
+      </div>
+    <div class="card">
+      <div id="overview-plot" role="img" aria-label="Heatmap of significant pathway backbones by receiver and contrast"></div>
+    </div>
+  </div>
+  <div id="tab-kinase" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-kinase" hidden>
+    <div class="explorer-layout kinase-audit-layout">
+      <div class="card">
+        <div class="ke-toolbar ke-toolbar-multi" id="ke-unified-toolbar">
+          <label class="sr-only" for="ke-search">Search kinase or gene</label>
+          <input id="ke-search" aria-label="Search kinase or gene" placeholder="Search kinase or gene…"/>
+          <span class="ke-filter-label" id="ke-ms-disease"
+                data-key="disease" data-label="Disease"
+                title="Filter by disease. Multi-select: kinase must have ≥1 row in EVERY selected disease (cross-grid AND with timepoint and cell type)."></span>
+          <span class="ke-filter-label" id="ke-ms-timepoint"
+                data-key="timepoint" data-label="Timepoint"
+                title="Filter by timepoint. Multi-select: kinase must have ≥1 row in EVERY selected timepoint."></span>
+          <span class="ke-filter-label" id="ke-ms-celltype"
+                data-key="celltype" data-label="Cell type"
+                title="Filter by attributed cell type. Multi-select: kinase must have ≥1 row in EVERY selected cell type."></span>
+          <span class="ke-filter-label" id="ke-ms-confidence-wrap">
+            <label class="ke-filter-label">Confidence
+              <select id="ke-filter-confidence" aria-label="Minimum confidence tier"
+                      title="Minimum combined tier. Threshold (≥): very high = upgraded by decomp agreement only; high = high+very high; moderate = +moderate; low = +low.">
+                <option value="">Any</option>
+                <option value="very_high">very high (only)</option>
+                <option value="high">high+</option>
+                <option value="moderate">moderate+</option>
+                <option value="low">low+</option>
+              </select>
+            </label>
+          </span>
+          <span class="ke-filter-label" id="ke-ms-wmb-wrap">
+            <label class="ke-filter-label">WMB
+              <select id="ke-filter-wmb" aria-label="Minimum WMB specificity tier"
+                      title="Minimum WMB specificity tier (× uniform 1/34 ≈ 0.029). Kinase passes if any attribution row in scope has wmb_specificity ≥ threshold.">
+                <option value="0">Any</option>
+                <option value="1">≥1× (0.029)</option>
+                <option value="2">≥2× (0.059)</option>
+                <option value="5">≥5× (0.147)</option>
+                <option value="10">≥10× (0.294)</option>
+              </select>
+            </label>
+          </span>
+          <label class="ke-filter-label" title="Minimum number of significant contrasts (FDR < threshold) the kinase must reach within the active disease/timepoint scope. 0 = no constraint.">n_sig &geq;
+            <input id="ke-filter-nsig-min" type="number" min="0" max="9" step="1" value="0" style="width:48px;"
+                   aria-label="Minimum number of significant contrasts"/>
+          </label>
+          <button id="ke-filter-reset" class="ke-filter-reset" title="Reset all kinase filters">Reset</button>
+          <span class="muted" id="ke-count"></span>
+        </div>
+        <div class="ke-table-wrap">
+          <table class="data-table" id="ke-table">
+            <thead><tr>
+              <th data-col="name" data-metric="kinaseName" title="Display label: Kinase&#10;Raw column: name&#10;Definition: Kinase identifier from the MEA / integration tables.">Kinase</th>
+              <th data-col="gene_symbol" data-metric="kinaseGene" title="Display label: Gene&#10;Raw column: gene_symbol&#10;Definition: Gene symbol associated with the kinase.">Gene</th>
+              <th data-col="nes_profile" data-metric="nesProfile" title="NES profile across 9 contrasts (3 diseases × 3 timepoints). Color = direction (red up, blue down), saturation = |NES|, black outline = FDR < threshold. Click to sort by max |NES| in scope.">NES Profile</th>
+              <th data-col="agreement_profile" data-metric="agreementProfile" title="Bulk-vs-decomp agreement across 9 contrasts. Green = both pipelines significant, same direction; orange = disagreement (decomp_only / bulk_only / mixed / pure disagreement); empty = neither significant. Click to sort by count of disagreement contrasts (in scope).">Agreement</th>
+              <th data-col="peak_NES" data-metric="peakNes" title="Peak |NES| — max absolute NES across the active disease/timepoint scope (or all 9 contrasts if no scope). Click to sort.">|NES|</th>
+              <th data-col="n_sig" data-metric="nSig" title="n_sig — count of contrasts where FDR < threshold, within the active disease/timepoint scope (or out of 9 if no scope). Click to sort.">n_sig</th>
+              <th data-col="n_attributed_celltypes" data-metric="nAttributed" title="Cell types attributed at high or moderate confidence in the active scope. Click to sort by count (matches the pill column).">Cell types</th>
+              <th data-col="wmb_max_tier" data-metric="wmbMaxTier" title="Maximum WMB specificity tier reached by any attribution row in scope (×uniform 1/34). 10× = ≥0.294, 5× = ≥0.147, 2× = ≥0.059, 1× = ≥0.029. Click to sort by max tier.">WMB</th>
+              <th data-col="conf" data-metric="highConfAttr" title="Highest confidence tier reached in the active scope (high &gt; moderate &gt; low &gt; none). Click to sort by max tier — kinases with at least one HIGH-confidence row come first, ties broken by table order.">Conf</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="ka-splitter" id="ka-splitter" title="Drag to resize"></div>
+      <section class="detail-card" id="ke-detail">
+        <div class="muted">Select a kinase to see details.</div>
+      </section>
+    </div>
+  </div>
+  <div id="tab-pathway" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-pathway" hidden>
+    <div class="explorer-layout">
+      <div class="card">
+        <div class="ke-toolbar">
+          <label class="sr-only" for="pe-search">Search Receptor, EM, or Target</label>
+          <input id="pe-search" aria-label="Search Receptor, EM, or Target" placeholder="Search Receptor / EM / Target…"/>
+          <label>|TPDS| &geq;
+            <input id="pe-tpds-min" type="number" step="0.1" min="0" value="0"
+                   aria-label="Minimum absolute TPDS for pathway rows"
+                   title="Hide backbones whose maximum |TPDS| across passing contrasts falls below this value."
+                   style="width:64px;">
+          </label>
+          <span class="muted" id="pe-count"></span>
+        </div>
+        <div class="pe-cset" role="group" aria-label="Filter by trajectory">
+          <span class="pe-cset-label">Show backbones passing in:</span>
+          <span id="pe-traj-buttons" class="pe-cset-chips"></span>
+        </div>
+        <div class="ke-table-wrap">
+          <table class="data-table" id="pe-table">
+            <thead><tr>
+              <th data-col="receiver" data-metric="receiverCol" title="Display label: Receiver&#10;Raw column: receiver&#10;Definition: Receiver cell type for the backbone.">Receiver</th>
+              <th data-col="Receptor" data-metric="receptorCol" title="Display label: Receptor&#10;Raw column: Receptor&#10;Definition: Receptor gene in the backbone.">Receptor</th>
+              <th data-col="EM" data-metric="emCol" title="Display label: EM&#10;Raw column: EM&#10;Definition: Extracellular-matrix or intermediate molecule in the backbone.">EM</th>
+              <th data-col="Target" data-metric="targetCol" title="Display label: Target&#10;Raw column: Target&#10;Definition: Downstream target gene in the backbone.">Target</th>
+              <th data-col="pathway_evidence" data-metric="pathwayEvidence" title="Display label: Support&#10;Raw column: pathway_evidence_backbone&#10;Definition: How a backbone's chain was assembled.">Support</th>
+              <th data-col="tpds" data-metric="tpds" title="Display label: TPDS&#10;Raw column: mean_tpds&#10;Definition: Transcript-level pathway differential score for the selected contrast.">TPDS</th>
+              <th data-col="passing_contrasts" data-metric="passingContrasts" title="Display label: Passing contrasts&#10;Raw column: significant_both_mask&#10;Definition: Genotype-by-timepoint contrasts where this backbone passed both permutation nulls.">Passing contrasts</th>
+              <th data-col="n_senders" data-metric="nSenders" title="Display label: Senders&#10;Raw column: n_senders_significant&#10;Definition: Number of significant sender cell types detected for this backbone.">Senders</th>
+              <th data-col="max_abs_tpds" data-metric="maxAbsTpds" title="Display label: Max |TPDS|&#10;Raw column: max_abs_tpds&#10;Definition: Largest absolute TPDS observed across contrasts.">Max|TPDS|</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <aside class="detail-card" id="pe-detail">
+        <div class="muted">Select a backbone to see details.</div>
+      </aside>
+    </div>
+  </div>
+  <div id="tab-graph" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-graph" hidden>
+    <div id="graph-controls" class="detail-chips">
+      <label>Genotype:
+        <select id="graph-genotype" aria-label="Graph genotype" title="Pick which disease genotype's network is shown.">
+          <option value="App">App</option>
+          <option value="Tau">Tau</option>
+          <option value="ApTt">ApTt</option>
+        </select>
+      </label>
+      <label>Timepoint:
+        <select id="graph-timepoint" aria-label="Graph timepoint" title="Pick which timepoint's snapshot to render. Step with the slider or arrow keys.">
+          <option value="2mo">2mo</option>
+          <option value="4mo">4mo</option>
+          <option value="6mo">6mo</option>
+        </select>
+      </label>
+      <label>Layout:
+        <select id="graph-layout" aria-label="Graph layout" title="Choose how receptor, EM, and target nodes are arranged.">
+          <option value="concentric">Concentric (R → EM → T)</option>
+          <option value="flow">Flow (column-snapped)</option>
+          <option value="force">Force-directed</option>
+        </select>
+      </label>
+      <label>Min degree:
+        <select id="graph-min-degree" aria-label="Minimum graph node degree" title="Hide nodes connected to fewer than this many backbones.">
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="5">5</option>
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="50">50</option>
+        </select>
+      </label>
+      <label>|TPDS| &geq;
+        <input id="graph-tpds-min" type="number" step="0.1" min="0" value="0"
+               aria-label="Minimum absolute TPDS for graph edges"
+               title="Hide edges whose mean |TPDS| is below this value. Drag down to reveal weaker edges."
+               style="width:64px;">
+      </label>
+      <label>Max edges:
+        <input id="graph-top-n" type="number" step="50" min="0" placeholder="off"
+               aria-label="Maximum number of edges to render"
+               title="Optional rendering cap: keep only the top N edges by |TPDS|. Leave blank for no cap."
+               style="width:72px;">
+      </label>
+      <span id="graph-stats" class="muted"></span>
+      <button id="graph-focus-clear" class="chip" hidden>Clear focus</button>
+      <span class="graph-legend" aria-label="Node role legend">
+        <span class="graph-legend-item"><span class="graph-legend-swatch" style="background:var(--receptor-color);"></span>Receptor</span>
+        <span class="graph-legend-item"><span class="graph-legend-swatch" style="background:var(--em-color);"></span>EM (effector)</span>
+        <span class="graph-legend-item"><span class="graph-legend-swatch" style="background:var(--target-color);"></span>Target</span>
+      </span>
+    </div>
+    <div id="graph-container">
+      <div id="cy" role="img" aria-label="Interactive receptor, EM, and target pathway graph"></div>
+      <aside class="detail-card" id="graph-detail">
+        <div class="muted">Click a node for details.</div>
+      </aside>
+    </div>
+  </div>
+  <div id="tab-senders" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-senders" hidden>
+    <div class="card">
+      <div class="detail-chips">
+        <label>Compare:
+          <select id="sm-axis" aria-label="Sender receiver compare axis" title="Compare timepoints holds genotype fixed and shows three timepoints side-by-side. Compare genotypes holds timepoint fixed and shows the three genotypes.">
+            <option value="timepoint">Timepoints (fixed genotype)</option>
+            <option value="genotype">Genotypes (fixed timepoint)</option>
+          </select>
+        </label>
+        <label id="sm-anchor-label">Anchor:
+          <select id="sm-anchor" aria-label="Sender receiver anchor"></select>
+        </label>
+        <label>Mode:
+          <select id="sm-mode" aria-label="Sender receiver matrix mode" title="Count mode shows log-scaled backbone counts; direction mode shows up minus down backbones.">
+            <option value="count">Count (log10 1+n)</option>
+            <option value="direction">Direction (n_up − n_down)</option>
+          </select>
+        </label>
+        <span class="muted" id="sm-subtitle"></span>
+        <span class="muted" id="sm-keyhint" title="Step the anchor with left and right; flip the compare axis with up and down.">
+          <kbd>←</kbd> <kbd>→</kbd> step anchor · <kbd>↑</kbd> <kbd>↓</kbd> flip axis
+        </span>
+      </div>
+      <div id="sender-matrix-grid" style="display:grid; grid-template-columns:repeat(3, 1fr); gap:12px;">
+        <div id="sender-matrix-plot-0" role="img" aria-label="Sender by receiver heatmap, panel 1" style="width:100%; height:560px;"></div>
+        <div id="sender-matrix-plot-1" role="img" aria-label="Sender by receiver heatmap, panel 2" style="width:100%; height:560px;"></div>
+        <div id="sender-matrix-plot-2" role="img" aria-label="Sender by receiver heatmap, panel 3" style="width:100%; height:560px;"></div>
+      </div>
+    </div>
+  </div>
+  <div id="tab-temporal" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-temporal" hidden>
+    <div class="card">
+      <div class="detail-chips">
+        <label>Level:
+          <select id="tm-level" aria-label="Temporal aggregation level" title="Switch between kinase-level and pathway-backbone-level temporal summaries.">
+            <option value="kinase">Kinase</option>
+            <option value="backbone">Backbone</option>
+          </select>
+        </label>
+        <label id="tm-metric-label">Metric:
+          <select id="tm-metric" aria-label="Temporal backbone metric" title="Choose the backbone summary metric plotted across disease timepoints.">
+            <option value="count">Count</option>
+            <option value="mean_score">Mean observed score</option>
+            <option value="mean_tpds">Mean |TPDS|</option>
+            <option value="pct_up">% upregulated</option>
+          </select>
+        </label>
+        <label id="tm-tissue-label">Tissue:
+          <select id="tm-tissue" aria-label="Temporal kinase cell type scope" title="Restrict kinase temporal counts by top attributed cell type or tissue class."></select>
+        </label>
+        <label id="tm-score-label">|TPDS| &geq;
+          <input id="tm-score-min" type="number" step="0.1" min="0" value="0"
+                 aria-label="Minimum absolute TPDS for backbone-mode rows"
+                 title="In backbone mode, drop rows whose contrast |TPDS| falls below this value before counting or averaging."
+                 style="width:64px;">
+        </label>
+        <span class="muted" id="tm-subtitle"></span>
+      </div>
+      <div id="temporal-plot" role="img" aria-label="Temporal summary plot" style="width:100%; height:480px;"></div>
+    </div>
+  </div>
+  <div id="tab-additivity" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-additivity" hidden>
+    <div class="card">
+      <div class="detail-chips">
+        <label>Level:
+          <select id="add-level" aria-label="Additivity aggregation level" title="Switch between kinase NES additivity and backbone observed-score additivity.">
+            <option value="kinase">Kinase</option>
+            <option value="backbone">Backbone</option>
+          </select>
+        </label>
+        <label>Timepoint:
+          <select id="add-tp" aria-label="Additivity timepoint" title="Show one timepoint or all three timepoints side by side.">
+            <option value="ALL">All (2/4/6mo)</option>
+            <option value="2mo">2mo</option>
+            <option value="4mo">4mo</option>
+            <option value="6mo">6mo</option>
+          </select>
+        </label>
+        <label>Score &geq;
+          <input id="add-score-min" type="number" step="0.1" min="0" value="0"
+                 aria-label="Minimum observed score for additivity rows"
+                 title="Drop backbones whose observed score in either component contrast falls below this value."
+                 style="width:64px;">
+        </label>
+        <span class="muted" id="add-subtitle"></span>
+      </div>
+      <div id="add-plot" role="img" aria-label="Additivity scatter plot" style="width:100%; height:520px;"></div>
+      <div class="muted" id="add-stats"></div>
+    </div>
+  </div>
+  <div id="tab-temporalv2" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-temporalv2" hidden>
+    <div class="card">
+      <div class="detail-chips" id="tv2-presets" style="flex-wrap:wrap;">
+        <span class="muted" style="margin-right:6px;">Presets:</span>
+        <button class="chip" data-tv2-preset="bulk_only">Bulk only</button>
+        <button class="chip" data-tv2-preset="bulk_corrob_contest">Bulk · Corroborated · Contested</button>
+        <button class="chip" data-tv2-preset="bulk_vs_decomp">Bulk vs Decomp-summed</button>
+        <button class="chip" data-tv2-preset="bulk_attr_vs_decomp">Bulk · Bulk+attr≥high · Decomp</button>
+        <button class="chip" data-tv2-preset="celltype_sweep">Per-cell-type sweep</button>
+        <span style="flex:1;"></span>
+        <button class="chip" id="tv2-add-series" title="Add a new series row">+ Add series</button>
+        <button class="chip" id="tv2-clear" title="Remove all series">Clear</button>
+        <label class="muted" style="margin-left:8px;" title="When on, every subplot uses the same y-axis range so heights are visually comparable across series.">
+          <input type="checkbox" id="tv2-share-y"> shared y-axis
+        </label>
+      </div>
+      <div id="tv2-series-list" style="display:flex; flex-direction:column; gap:4px; margin:8px 0;"></div>
+      <div class="muted" id="tv2-subtitle" style="margin:4px 0 8px 0;"></div>
+      <div id="tv2-plot" role="img" aria-label="Temporal series builder plot" style="width:100%;"></div>
+      <details style="margin-top:10px;">
+        <summary class="muted">How this view counts kinases</summary>
+        <div class="muted" style="margin-top:6px; line-height:1.5;">
+          <p>Each <b>series</b> defines a predicate over (kinase, contrast) pairs. Bar height = <b>count of unique kinases</b> passing the predicate at that (genotype, timepoint). Series stack as small multiples (one row per series).</p>
+          <ul style="margin:4px 0 0 16px; padding:0;">
+            <li><b>Layer = bulk</b>: kinase passes if its bulk-MEA FDR at this contrast &lt; gate.</li>
+            <li><b>Layer = decomp</b>: kinase passes if at least one cell type in scope has decomp FDR &lt; gate (sign-agree with bulk optional).</li>
+            <li><b>Layer = bulk ∩ decomp</b>: both must pass; "Agree" requires NES sign match.</li>
+            <li><b>Layer = bulk \\ decomp</b>: bulk passes AND no cell type in scope passes decomp at the gate (bulk-only signal).</li>
+            <li><b>Sign = signed</b>: split bars (up at +y, down at −y). <b>up / down / either</b>: only one direction or unsigned total.</li>
+          </ul>
+          <p style="margin-top:6px;">Cell-type scope is one of: <b>any (OR)</b> across the 24 decomp-present WMB classes, or a single class. The decomp pipeline does not cover the remaining 10 WMB classes (sampling gaps).</p>
+        </div>
+      </details>
+    </div>
+  </div>
+  <div id="tab-methods" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-methods" hidden>
+    <iframe id="methods-frame" src="pipeline_overview.html"
+      style="width:100%;height:calc(100vh - 120px);border:1px solid var(--border);
+             border-radius:4px;background:#fff;"
+      title="Pipeline overview and methods"></iframe>
+  </div>
+</main>
+<div id="drawer-resizer" title="Drag to resize"></div>
+<button id="howto-drawer-toggle" type="button" aria-label="Toggle how-to drawer" aria-expanded="false" title="Show/hide the 'How to read' drawer">?</button>
+<aside id="howto-drawer"></aside>
+</div>
+<aside id="glossary-panel" aria-hidden="true">
+  <h3>Glossary</h3>
+  <dl>
+    <dt>Backbone</dt><dd>A receiver-specific Receptor &rarr; EM &rarr; Target route. It summarizes the receiver-side signaling route shared across one or more sender ligands.</dd>
+    <dt>Receiver</dt><dd>The cell type whose receptor, EM, and target genes define the intracellular side of the modeled pathway.</dd>
+    <dt>Sender</dt><dd>The cell type providing the ligand side of a sender-to-receiver pathway.</dd>
+    <dt>TPDS</dt><dd>Transcript-level pathway differential score: modeled disease-associated change in log signaling probability. Positive and negative signs indicate opposite directions of modeled signaling change.</dd>
+    <dt>Passed both nulls</dt><dd>For a specific backbone and contrast, both permutation checks passed: kinase enrichment and receiver-specific wiring.</dd>
+    <dt>Passing contrasts</dt><dd>Count of genotype-by-timepoint contrasts, out of 9, where the backbone passed both nulls. A value of 3 means three contrasts passed, not three null models.</dd>
+    <dt>NES</dt><dd>Normalized Enrichment Score (MEA on stoichiometry).</dd>
+    <dt>FDR</dt><dd>False discovery rate used to threshold kinase MEA significance.</dd>
+    <dt>Pathway support</dt><dd>Backbone-level provenance derived from full pathways: expression-confirmed, kinase-imputed, or mixed when both appear across contributing paths or contrasts.</dd>
+    <dt>Support</dt><dd>Kinase contribution to a pathway backbone edge; larger absolute values indicate stronger phosphoproteomic support for that modeled route.</dd>
+    <dt>Observed score</dt><dd>Permutation-tested pathway score used for backbone-level additivity and graph edge summaries.</dd>
+    <dt>Additivity</dt><dd>Comparison of the observed ApTt signal with the App plus Tau expectation. Above the diagonal is stronger than additive; below is weaker than additive.</dd>
+    <dt>Contrast</dt><dd>disease &times; timepoint: App/Tau/ApTt at 2/4/6mo.</dd>
+  </dl>
+</aside>
+
