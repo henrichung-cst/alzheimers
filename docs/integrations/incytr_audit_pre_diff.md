@@ -260,3 +260,71 @@ that modify the SigProb / TPDS / PDS formulas relative to native Incytr.
    - Verification: `run_degenerate_2cond.sh` (must-match slots clean),
      `run_duckdb_enumeration_equiv.sh` (still equivalent), 593/593
      testthat across 216 files.
+
+## Sprint 4 verdict addendum (2026-05-05)
+
+Section C group 2 (filtering and pathway-universe changes) is fully resolved.
+Six rows finalised; one wrapper file edited (1 line plus env-var forwarding).
+
+1. **`ALZ-18.b` (split from ALZ-18) — DuckDB pre-prune `cutoff_SigProb = 0.01`.**
+   Native `Cal_SigProb` defaults `cutoff_SigProb = NULL` at
+   `93b9881:R/analysis.R:606`. The wrapper's 0.01 pre-prune
+   (`code/integration/wrappers/duckdb_enumeration.R:67,150–163,294–295`,
+   centralised at `run_incytr_factorial_all_pairs.R:86`) was kept as a
+   performance optimisation and gated behind a `DUCKDB_CUTOFF_SIGPROB` env
+   var. Mathematical justification: pathways below 0.01 SigProb in BOTH
+   conditions (the OR-test) cannot contribute non-negligible TPDS because
+   SigProb is a multiplicand in PDS. The Sprint-2 `run_duckdb_enumeration_equiv.sh`
+   already exercises `cutoff_SigProb = 0` and confirms bitwise pathway-set
+   match against native `pathway_inference()`, so the opt-out is verified
+   on every CI run. **Verdict: keep-flagged; parking-in-place via env var.**
+
+2. **`ALZ-19` kinase-imputed receiver expansion + `EXPR_IMPUTATION_FLOOR`.**
+   Already shell-gated on `ENABLE_KINASE_AUGMENTATION=1` at
+   `code/integration/run_factorial_all_pairs.sh:70`. Confirmed by reading
+   the wrapper that no `kinase_imputed_genes__*.csv` files exist on disk
+   without the flag; `load_imputed_for_recv_factorial(recv)` returns NULL
+   and the rescue block at `run_incytr_factorial_all_pairs.R:473` short-
+   circuits. `EXPR_IMPUTATION_FLOOR` is read unconditionally but consumed
+   only inside that nested guard. **Verdict: signed-off
+   (parking-in-place behind ENABLE_KINASE_AUGMENTATION).** No code change.
+
+3. **`INC-30` (PTM scope expansion) and `ALZ-2` (pY track).** Native
+   Incytr has no Ack/KGG/Rme1/pY tracks. The new slots are additive
+   output columns parallel to the existing serine/threonine track and do
+   not perturb the canonical PDS/TPDS pipeline. The Sprint-1 degenerate
+   2-cond runner emits "Ack/KGG/Rme1/pY fold change data not found …
+   skipped" and the must-match SigProb/FC slots remain bitwise-clean
+   against native. **Verdict: signed-off as scope expansion.**
+
+4. **`INC-30.b` (cutoff-applied-to-all-omics-slots).** `c3580fc`'s filter
+   portion broadens `cutoff_SigProb` application from one slot in native
+   to all PTM slots. Native default is `cutoff_SigProb = NULL`, so both
+   codebases run no filter on the default code path — the change is
+   default-inert. When a non-NULL cutoff is passed, the post-INC-30 code
+   applies it uniformly across all omics slots, which is the principled
+   filter-consistency invariant for a multi-PTM codebase.
+   **Verdict: signed-off (default-inert; opt-in cutoff applies uniformly
+   when set).**
+
+5. **`ALZ-23` (new row, `ENABLE_CELLTYPE_MAPPING`).** Default branch in
+   `code/integration/adapters/export_multiomics_evidence_factorial.py:42`
+   returns identity mapping (`{ct: ct for ct in cell_types}`,
+   strategy = `"exact_or_global"`); WMB classes are passed through
+   unchanged. The legacy SEA-AD-to-WMB compatibility map is loaded only
+   when the flag is set. **Verdict: signed-off (parking-in-place behind
+   ENABLE_CELLTYPE_MAPPING).** No code change.
+
+6. **Sprint 4 deliverables.**
+   - Wrapper edits: 1 line in `code/integration/wrappers/run_incytr_factorial_all_pairs.R:86`
+     (replaces hard-coded `cutoff_SigProb <- 0.01` with
+     `Sys.getenv("DUCKDB_CUTOFF_SIGPROB", "0.01")`); env-var forwarding
+     in `code/integration/run_factorial_all_pairs.sh:85` for
+     `ENABLE_EM_PROMISCUITY_WEIGHT`, `ENABLE_CELLTYPE_MAPPING`, and
+     `DUCKDB_CUTOFF_SIGPROB`, plus the script-header doc block.
+   - No `incytr` package edits.
+   - Working note: `docs/integrations/working/sprint4_filter_audit.md`.
+   - Verification: `run_degenerate_2cond.sh` (must-match clean),
+     `run_duckdb_enumeration_equiv.sh` (still equivalent at `cutoff = 0`),
+     `run_verify_phase2.sh` (SKIPs gracefully), 593/593 testthat across
+     216 files.
