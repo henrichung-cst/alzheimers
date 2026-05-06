@@ -12,6 +12,9 @@
 #   MEMORY_LIMIT_GB   - R memory abort threshold (default 10)
 #   ENABLE_CELLTYPE_MAPPING - Set to 1 to remap WMB classes to SEA-AD subclasses
 #                             in multiomics evidence (default off; native-equivalent)
+#   ENABLE_MULTIOMICS_EVIDENCE - Set to 0 to skip the per-contrast multiomics
+#                                evidence export (pr/ps/py log2FCs feeding
+#                                factorial PPDS/PhPDS scores). Default 1.
 #
 # INCYTR_* layer knobs (sourced from code/integration/incytr_runtime.sh; see
 # docs/integrations/incytr_layer_inventory.md):
@@ -79,6 +82,12 @@ else
   run_adapter "export_expression_factorial"
   run_adapter "export_kldata"
   run_adapter "export_kl_output_factorial"
+
+  # Per-contrast multiomics evidence (pr/ps/py log2FCs by cell type, gene)
+  # feeding factorial PPDS / PhPDS_ps / PhPDS_py scoring in the R wrapper.
+  if [ "${ENABLE_MULTIOMICS_EVIDENCE:-1}" = "1" ]; then
+    run_adapter "export_multiomics_evidence_factorial"
+  fi
 
   # Kinase-imputed gene expansion (per-contrast, per-receiver) — kinase pack.
   if [ "$INCYTR_LAYER_KINASE_PACK" = "1" ]; then

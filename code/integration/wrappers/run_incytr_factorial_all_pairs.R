@@ -183,6 +183,28 @@ l3_raw <- as.data.table(DB_Layer3_mouse_filtered[, c("from", "to")])
 rm(DB_Layer1_mouse_filtered, DB_Layer2_mouse_filtered, DB_Layer3_mouse_filtered)
 gc(verbose = FALSE)
 
+# Per-contrast multiomics evidence (pr/ps/py log2FCs by cell_type, gene).
+# Produced by export_multiomics_evidence_factorial.py; one row per
+# (contrast, cell_type, gene_symbol). Columns we use: cell_type, gene_symbol,
+# contrast, pr_log2FC, ps_log2FC, py_log2FC. Loaded once, sub-set per receiver.
+multiomics_path <- file.path(fac_dir, "multiomics_evidence.csv")
+if (file.exists(multiomics_path)) {
+  cat("Loading multiomics evidence...\n")
+  mev <- fread(multiomics_path,
+               select = c("cell_type", "gene_symbol", "contrast",
+                          "pr_log2FC", "ps_log2FC", "py_log2FC"))
+  setnames(mev, c("pr_log2FC", "ps_log2FC", "py_log2FC"),
+                c("pr_lfc", "ps_lfc", "py_lfc"))
+  setkey(mev, contrast, cell_type, gene_symbol)
+  cat(sprintf("  %s rows across %d contrasts, %d cell types\n",
+              format(nrow(mev), big.mark = ","),
+              uniqueN(mev$contrast), uniqueN(mev$cell_type)))
+} else {
+  cat(sprintf("Multiomics evidence not found at %s — PPDS/PhPDS_ps/PhPDS_py = 0 for all contrasts.\n",
+              multiomics_path))
+  mev <- NULL
+}
+
 # =========================================================================
 # Section 2: Precompute per-animal, per-cell-type expression
 # =========================================================================
@@ -389,6 +411,94 @@ fit_contrast_ols <- function(sigprob_mat, hat_mat, XtX_inv, contrast_mat,
   result[, df_resid := df_resid]
   result[, pathway_idx := NULL]
   result
+}
+
+
+#' Attach per-contrast Ligand/Receptor/EM/Target × pr/ps/py log2FCs to a
+#' pathway dt by joining `mev` (the multiomics evidence table loaded in
+#' Section 1).
+#'
+#' Sender-side roles (Ligand) join on (sender, gene); receiver-side roles
+#' (Receptor, EM, Target) join on (recv, gene). NA from missing genes is
+#' preserved at attach time and zeroed inside the scoring helper.
+attach_multiomics_evidence <- function(dt, mev, recv, contrast_names) {
+  if (is.null(mev)) return(dt)
+  for (cname in contrast_names) {
+    ev <- mev[contrast == cname, .(cell_type, gene_symbol, pr_lfc, ps_lfc, py_lfc)]
+
+    # Receiver-side: single recv cell type. Sub-key by gene_symbol.
+    ev_r <- ev[cell_type == recv][, cell_type := NULL]
+    setkey(ev_r, gene_symbol)
+    for (role in c("Receptor", "EM", "Target")) {
+      m <- ev_r[dt[[role]], on = "gene_symbol"]
+      dt[, (paste0(role, "_pr_lfc_", cname)) := m$pr_lfc]
+      dt[, (paste0(role, "_ps_lfc_", cname)) := m$ps_lfc]
+      dt[, (paste0(role, "_py_lfc_", cname)) := m$py_lfc]
+    }
+
+    # Sender-side (per-row sender). Key by (cell_type, gene_symbol).
+    setkey(ev, cell_type, gene_symbol)
+    m_l <- ev[dt[, .(cell_type = sender, gene_symbol = Ligand)],
+              on = c("cell_type", "gene_symbol")]
+    dt[, (paste0("Ligand_pr_lfc_", cname)) := m_l$pr_lfc]
+    dt[, (paste0("Ligand_ps_lfc_", cname)) := m_l$ps_lfc]
+    dt[, (paste0("Ligand_py_lfc_", cname)) := m_l$py_lfc]
+  }
+  dt
+}
+
+
+#' Compute per-contrast PPDS/PhPDS_ps/PhPDS_py + multimodel_score +
+#' pds_inference_scope. Mirror of incytr/R/evaluation.R::Pathway_evaluation
+#' and code/integration/wrappers/receiver_scoring.R::compute_evaluation_vectorized,
+#' indexed per contrast.
+#'
+#' Until Phase D (native SiK + KPDS) ships, multimodel_score stands in for PDS
+#' in the inference-scope diagnostic.
+compute_evaluation_factorial_vectorized <- function(dt, contrast_names,
+                                                    k_logi = 2,
+                                                    score.weight = rep(0.5, 6)) {
+  for (cname in contrast_names) {
+    for (omic in c("pr", "ps", "py")) {
+      cols <- paste0(c("Ligand", "Receptor", "EM", "Target"),
+                     "_", omic, "_lfc_", cname)
+      score_col <- switch(omic,
+                          pr = paste0("PPDS_", cname),
+                          ps = paste0("PhPDS_ps_", cname),
+                          py = paste0("PhPDS_py_", cname))
+      if (!all(cols %in% names(dt))) {
+        dt[, (score_col) := 0]
+        next
+      }
+      mat <- as.matrix(dt[, ..cols])
+      mat[is.na(mat)] <- 0
+      dt[, (score_col) := rowMeans(logi(mat, k = k_logi))]
+    }
+
+    # Layers absent from Song bulk proteomics — hard-zero, matching pair
+    # behavior in receiver_scoring.R::compute_evaluation_vectorized.
+    dt[, (paste0("Ack_score_",  cname)) := 0]
+    dt[, (paste0("KGG_score_",  cname)) := 0]
+    dt[, (paste0("Rme1_score_", cname)) := 0]
+
+    tpds_col <- paste0("TPDS_", cname)
+    mm_col   <- paste0("multimodel_score_", cname)
+    dt[, (mm_col) := get(tpds_col) +
+         score.weight[1] * get(paste0("PPDS_",     cname)) +
+         score.weight[2] * get(paste0("PhPDS_ps_", cname)) +
+         score.weight[3] * get(paste0("PhPDS_py_", cname)) +
+         score.weight[4] * get(paste0("Ack_score_",  cname)) +
+         score.weight[5] * get(paste0("KGG_score_",  cname)) +
+         score.weight[6] * get(paste0("Rme1_score_", cname))]
+
+    # Inference-scope diagnostic. Once Phase D wires PDS, swap mm_col -> PDS_<c>.
+    aux <- abs(dt[[mm_col]] - dt[[tpds_col]]) /
+           (abs(dt[[mm_col]]) + 1e-10)
+    dt[, (paste0("pds_inference_scope_", cname)) := fifelse(
+      aux < 0.1, "full",
+      fifelse(aux < 0.5, "partial", "descriptive"))]
+  }
+  dt
 }
 
 # =========================================================================
@@ -752,6 +862,15 @@ for (recv in receivers_in_order) {
     imputed_nodes == "", "expression-confirmed", "kinase-imputed"
   )]
 
+  # --- Multimodal evidence: attach per-contrast omics LFCs + score ---
+  cat("    Attaching multiomics evidence + scoring...\n")
+  t0_mm <- proc.time()
+  dt <- attach_multiomics_evidence(dt, mev, recv, contrast_names)
+  dt <- compute_evaluation_factorial_vectorized(dt, contrast_names, k_logi = 2)
+  cat(sprintf("    Multiomic scoring: %d pathways x %d contrasts (%.1fs)\n",
+              nrow(dt), length(contrast_names),
+              (proc.time() - t0_mm)["elapsed"]))
+
   # --- Write Parquet (atomic) ---
   # Select output columns
   out_cols <- c("sender", "Ligand", "Receptor", "EM", "Target", "Path",
@@ -760,7 +879,15 @@ for (recv in receivers_in_order) {
     out_cols <- c(out_cols,
                   paste0("TPDS_", cname),
                   paste0("SE_", cname),
-                  paste0("pvalue_", cname))
+                  paste0("pvalue_", cname),
+                  paste0("PPDS_", cname),
+                  paste0("PhPDS_ps_", cname),
+                  paste0("PhPDS_py_", cname),
+                  paste0("Ack_score_", cname),
+                  paste0("KGG_score_", cname),
+                  paste0("Rme1_score_", cname),
+                  paste0("multimodel_score_", cname),
+                  paste0("pds_inference_scope_", cname))
   }
   dt_out <- dt[, ..out_cols]
 
