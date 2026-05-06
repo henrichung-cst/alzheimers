@@ -147,3 +147,59 @@ ledger with `disposition = signed-off` and `verdict_date = 2026-05-05`.
 Sprint 1 introduced no code changes to the `incytr` package (read-only
 sprint). Wrapper-side artifact: `code/integration/tests/run_degenerate_2cond.sh`.
 Working note: `docs/integrations/working/sprint1_factorial_surface.md`.
+
+## Sprint 2 verdict addendum (2026-05-05)
+
+Sprint 2 audited the **performance bucket** — rewrites that should not change
+scientific output relative to native Incytr on a matched two-condition input.
+None of the Sprint-2 commits introduce numerical drift; the equivalence
+claims they assert in their own commit messages were reproduced with explicit
+runners.
+
+1. **`c1b6fb9` split — `INC-37` (perf) + `INC-37.b` (correctness, fix-forward).**
+   The bundled commit's three correctness hunks are all numerically neutral on
+   the in-use code path:
+   - `R/analysis.R` `pathway_inference` null-gene fallback fixes a **native
+     `93b9881` bug** (the message claimed it was setting `gene.use_Sender`/
+     `gene.use_Receiver` to all genes but only updated the unused `gene_use`
+     variable; the buggy branch is unreachable in our wrapper, which always
+     passes both args).
+   - `R/math.R` `setDT(df)` → `as.data.table(df)` removes an in-place caller
+     mutation (also a native bug); return-value semantics are identical.
+   - 7× `|` → `||` in scalar `is.null(x) | foo(x)` patterns is lazy-eval
+     defense; no behavior change.
+
+   Neither hunk was re-routed to Sprint 3 (formula) or Sprint 4 (filter).
+   Per-fix verdict in `docs/integrations/working/sprint2_perf_split.md`. The
+   two native-bug fixes are **flagged for an upstream PR follow-up**, not
+   blocking.
+
+2. **DuckDB enumeration (ALZ-18) bitwise-equivalent to native
+   `pathway_inference()`.** Verified by
+   `code/integration/tests/run_duckdb_enumeration_equiv.sh` on the synthetic
+   12-gene × 40-cell × 2-condition fixture with `cutoff_SigProb = 0` and
+   `em_promiscuity_weight = FALSE`. The runner sorts both pathway sets and
+   compares (Ligand, Receptor, EM, Target) tuples bitwise. Pre-prune cutoffs
+   `Hill < 0.01` and `SigProb >= 0.01 OR` are bucket C and remain Sprint 4
+   territory; Sprint 2 only verifies that the enumerator is equivalence-
+   preserving when those filters are off.
+
+3. **Vectorized receiver scoring (ALZ-15) promoted to a one-command runner.**
+   `verify_phase2.R` is now invoked via
+   `code/integration/tests/run_verify_phase2.sh` at `tol=1e-10`. The runner
+   gracefully SKIPs when Phase 1 per-pair CSVs and Phase 2 receiver Parquets
+   aren't both present (i.e., when `code/integration/intermediates/all_pairs/`
+   doesn't have a fully-run pipeline output); when they exist, mismatch is a
+   hard failure.
+
+4. **Source-split / dependency-removal (INC-35, INC-36, INC-38) signed off.**
+   Each commit's own equivalence claim ("13/13 snapshots exact match",
+   "all 148 tests pass", "+23 tests, 13/13 snapshots unchanged") was
+   reproduced via `run_degenerate_2cond.sh` (must-match slots clean) and the
+   593/593 testthat run.
+
+5. **No new package-level commits.** Sprint 2 was read-only for the `incytr`
+   package, same as Sprint 1. All artifacts land in `alzheimers`:
+   `code/integration/tests/run_duckdb_enumeration_equiv.sh`,
+   `code/integration/tests/run_verify_phase2.sh`, ledger updates, and
+   `docs/integrations/working/sprint2_perf_split.md`.
