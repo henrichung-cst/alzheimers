@@ -213,7 +213,7 @@ These need explicit verdicts even though they are A-bucket "necessary" extension
 ## 10. Status checklist
 
 - [x] Sprint 0: scaffolding _(2026-05-05; branches + golden harness + native/current goldens + pre-audit diff + ledger seeded — see `incytr_audit_pre_diff.md`)_
-- [ ] Sprint 1: factorial extension (Section A)
+- [x] Sprint 1: factorial extension (Section A) _(2026-05-05; 28 A-bucket signed off, 4 design decisions recorded, PDS drift attributed to INC-25 → Sprint 3, SiK_score drift attributed to INC-28 + co-suspect INC-13 → Sprint 5; degenerate 2-cond runner at `code/integration/tests/run_degenerate_2cond.sh`; 593/593 testthat passing)_
 - [ ] Sprint 2: performance (Section B)
 - [ ] Sprint 3: scoring formula changes (Section C, group 1)
 - [ ] Sprint 4: filtering and pathway universe (Section C, group 2)

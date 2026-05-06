@@ -2,71 +2,94 @@
 
 Schema per `docs/integrations/incytr_audit_plan.md` §4.4. One row per
 introducing commit; rows are merged or split during the audit when changes
-span buckets. **Every row starts as `bucket = TBD`** and gets a verdict during
-Sprints 1–5.
+span buckets.
 
 Columns: `id` | `repo` | `bucket` | `introducing_commits` | `description` | `location` | `native_counterpart` | `equivalence_test` | `justification` | `disposition` | `parking_tag` | `verdict_date` | `signoff`
 
+**Bucket legend**: A = factorial extension (Section A); B = performance (Section B); C = discretionary (Section C); TBD = not yet assigned.
+
+**Disposition legend**: `signed-off` (Sprint 1 verdict); `→ Sprint N` (Sprint 1 routes the row to a later sprint for verdict); `split` (commit bundles multiple buckets, see split-row).
+
 | id | repo | bucket | introducing_commits | description | location | native_counterpart | equivalence_test | justification | disposition | parking_tag | verdict_date | signoff |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `INC-1` | incytr | TBD | `44d3008` | 2026-04-15 — simplify: address code review findings | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-2` | incytr | TBD | `e09105a` | 2026-04-15 — phase 3: generalize TPDS/PDS pipeline... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-3` | incytr | TBD | `9d888ea` | 2026-04-15 — simplify: address code review findings | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-4` | incytr | TBD | `388b6b7` | 2026-04-15 — update NAMESPACE with factorial mode ... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-5` | incytr | TBD | `ff123e0` | 2026-04-15 — phase 2.5: wire factorial pipeline an... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-6` | incytr | TBD | `ad4042e` | 2026-04-15 — phase 2.4: add Contrast_SigProb with ... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-7` | incytr | TBD | `84f258f` | 2026-04-15 — phase 2.2-2.3: add per-animal express... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-8` | incytr | TBD | `4a05aae` | 2026-04-15 — phase 2.1: add factorial S4 slots and... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-9` | incytr | TBD | `c88f479` | 2026-04-15 — simplify: address code review findings | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-10` | incytr | TBD | `c8e764e` | 2026-04-15 — phase 1.6: add N-condition integratio... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-11` | incytr | TBD | `bb0c991` | 2026-04-15 — phase 1.5: generalize permutation out... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-12` | incytr | TBD | `d7f3254` | 2026-04-15 — phase 1.4: generalize evaluation and ... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-13` | incytr | TBD | `ca6a96e` | 2026-04-15 — phase 1.3: generalize kinase scoring ... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-14` | incytr | TBD | `75bdd0d` | 2026-04-15 — phase 1.2: generalize Cal_SigProb and... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-15` | incytr | TBD | `719c2b1` | 2026-04-15 — phase 1.1: generalize barcodes_bycond... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-16` | incytr | TBD | `a2e99fd` | 2026-04-15 — simplify: address code review findings | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-17` | incytr | TBD | `6da9bcc` | 2026-04-15 — phase 0.6: update S4 class slot docum... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-18` | incytr | TBD | `3954fef` | 2026-04-15 — phase 0.5: standardize condition nami... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-19` | incytr | TBD | `c4698ef` | 2026-04-15 — phase 0.2: generalize integrate_omics... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-20` | incytr | TBD | `4e2e672` | 2026-04-15 — phase 0.1: refactor Integr_multiomics... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-21` | incytr | TBD | `4a9423c` | 2026-04-15 — phase 0.4: relocate expression and EM... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-22` | incytr | TBD | `ad7462b` | 2026-04-15 — phase 0.3: add tests for untested exp... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-23` | incytr | TBD | `b50c2cc` | 2026-04-15 — phase 0.0: add golden output fixture ... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-24` | incytr | TBD | `4aa30c8` | 2026-04-15 — clean up codebase: remove dead code, ... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-25` | incytr | TBD | `abde752` | 2026-04-10 — add EM promiscuity weighting and edge... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-26` | incytr | TBD | `b654fdd` | 2026-04-10 — add condition-label permutaiton test ... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-27` | incytr | TBD | `f922c3a` | 2026-04-10 — add condition-label permutation test ... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-28` | incytr | TBD | `6858063` | 2026-04-10 — memory permutation pass | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-29` | incytr | TBD | `d6d5c8c` | 2026-03-27 — kinase library adaptor | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-30` | incytr | TBD | `c3580fc` | 2026-03-27 — apply cutoff to all omics slots and f... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-31` | incytr | TBD | `847a014` | 2026-03-10 — docs: Add docs/notes to .gitignore to... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-32` | incytr | TBD | `5031094` | 2026-03-10 — add env.yml | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-33` | incytr | TBD | `650bca1` | 2026-03-09 — Remove CLAUDE.md from tracking and ad... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-34` | incytr | TBD | `b2a4c7f` | 2026-03-09 — Organize docs into reference and note... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-35` | incytr | TBD | `e04bf18` | 2026-03-06 — Improve evaluation/kinase code organi... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-36` | incytr | TBD | `76becbd` | 2026-03-06 — Remove dplyr dependency, replace all ... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-37` | incytr | TBD | `c1b6fb9` | 2026-03-05 — Optimize performance, fix correctness... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-38` | incytr | TBD | `7e6735d` | 2026-03-05 — Refactor codebase: split monolith, de... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-39` | incytr | TBD | `90c60e8` | 2026-03-05 — Reorganize project directory structure | TBD |  | TBD | TBD |  | TBD |  |  |
-| `INC-40` | incytr | TBD | `6eeeac5` | 2026-03-05 — Update documentation for development ... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-1` | alzheimers | TBD | `8ca0a64` | 2026-05-04 — checkpoint: subclass-attribution branch bef... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-2` | alzheimers | TBD | `0adcca8` | 2026-04-28 — feat: add tyrosine phospho (pY) track paral... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-3` | alzheimers | TBD | `cc10112` | 2026-04-21 — pipeline: complete Unit 6.4 retire legacy a... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-4` | alzheimers | TBD | `b9f302b` | 2026-04-21 — pipeline: complete Unit 6.2 retire backbone... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-5` | alzheimers | TBD | `5bab404` | 2026-04-21 — pipeline: complete Unit 6.1 retire old viewers | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-6` | alzheimers | TBD | `2ab47fb` | 2026-04-20 — pipeline: lossless edge sharding for unifie... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-7` | alzheimers | TBD | `e096f36` | 2026-04-20 — update edges | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-8` | alzheimers | TBD | `99ab2b3` | 2026-04-20 — pipeline: complete Unit 1.3 build_edge_inde... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-9` | alzheimers | TBD | `97616a6` | 2026-04-16 — Factorial permutation tests with within-rec... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-10` | alzheimers | TBD | `2dda892` | 2026-04-15 — brain atlas data compression | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-11` | alzheimers | TBD | `f6e2b98` | 2026-04-14 — Simplify permutation code after review | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-12` | alzheimers | TBD | `9cf31de` | 2026-04-14 — Backbone-level permutation tests and per-pa... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-13` | alzheimers | TBD | `019334b` | 2026-04-14 — Cross-pair aggregation and Parquet-only cle... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-14` | alzheimers | TBD | `8cf4366` | 2026-04-14 — Update integration README for Phase 2 recei... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-15` | alzheimers | TBD | `8679681` | 2026-04-14 — Vectorized receiver scoring: Phase 2 of all... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-16` | alzheimers | TBD | `291fa00` | 2026-04-14 — Receiver-centric backbone enumeration: Phas... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-17` | alzheimers | TBD | `98d2b9d` | 2026-04-14 — remove dead code | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-18` | alzheimers | TBD | `3e688bf` | 2026-04-14 — All-pairs Incytr pipeline: DuckDB enumerati... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-19` | alzheimers | TBD | `9f339ed` | 2026-04-13 — Kinase-imputed pathway expansion: admit rec... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-20` | alzheimers | TBD | `19de928` | 2026-04-13 — Substrate-based external reranking with med... | TBD |  | TBD | TBD |  | TBD |  |  |
-| `ALZ-21` | alzheimers | TBD | `5acec95` | 2026-04-09 — Phase 1 Incytr integration: adapters, R wra... | TBD |  | TBD | TBD |  | TBD |  |  |
+| `INC-1` | incytr | A | `44d3008` | 2026-04-15 — simplify: address code review findings | `R/factorial.R`, `R/evaluation.R`, factorial tests | n/a (touches factorial-only code) | factorial testthat suite | Cleanup of factorial scaffolding only; no semantics change. | signed-off | | 2026-05-05 | hchung |
+| `INC-2` | incytr | A | `e09105a` | 2026-04-15 — phase 3: generalize TPDS/PDS pipeline for factorial mode | `R/evaluation.R` (`Pathway_evaluation`/`Cal_PDS`/`Export_results` factorial branches), `R/factorial.R`, `R/analysis.R` | native `Cal_PDS`/`Pathway_evaluation`/`Export_results` (legacy branch preserved) | `test-Cal_PDS_factorial.R`, `test-Pathway_evaluation_factorial.R`, `test-Cal_scFC_factorial.R`, `test-Export_results_factorial.R` | Adds factorial dispatch (`if (mode == "factorial")`); legacy two-condition path bitwise-identical for `sigprob`/`sc_FC`/`p_value`/`pr_FC`/`ps_FC`/`py_FC` per Sprint 0 pre-diff. PDS drift on legacy path is **not** introduced here (see INC-25). | signed-off | | 2026-05-05 | hchung |
+| `INC-3` | incytr | A | `9d888ea` | 2026-04-15 — simplify: address code review findings | `R/factorial.R`, `R/analysis.R`, factorial tests | n/a | factorial testthat suite | Factorial-only cleanup; reduces test scaffolding repetition. | signed-off | | 2026-05-05 | hchung |
+| `INC-4` | incytr | A | `388b6b7` | 2026-04-15 — update NAMESPACE with factorial mode exports | `NAMESPACE` | n/a | n/a | Exports factorial-mode functions. | signed-off | | 2026-05-05 | hchung |
+| `INC-5` | incytr | A | `ff123e0` | 2026-04-15 — phase 2.5: wire factorial pipeline and add integration tests | `R/factorial.R::run_factorial`, `tests/testthat/helper-factorial.R`, `test-factorial_integration.R` | n/a (orchestrator is factorial-only) | `test-factorial_integration.R` | Top-level factorial driver; calls per-animal SigProb → Contrast_SigProb → factorial PDS. Legacy path untouched. | signed-off | | 2026-05-05 | hchung |
+| `INC-6` | incytr | A | `ad4042e` | 2026-04-15 — phase 2.4: add Contrast_SigProb with factorial OLS and regime diagnostics | `R/factorial.R::Contrast_SigProb`, `contrast_to_conditions`, `classify_regime` | n/a (no native counterpart — native has no contrasts) | `test-Contrast_SigProb.R` (298 lines) | Core of the factorial extension; OLS over per-animal SigProb. See §7-1 design decision INC-DESIGN-1. | signed-off | | 2026-05-05 | hchung |
+| `INC-7` | incytr | A | `84f258f` | 2026-04-15 — phase 2.2-2.3: add per-animal expression and SigProb computation | `R/factorial.R::Expr_bygroup_animal`, `Cal_SigProb_animal`, `compute_em_target_weight` | native `Expr_bygroup`, `Cal_SigProb` (legacy preserved) | `test-Expr_bygroup_animal.R`, `test-Cal_SigProb_animal.R` | Per-animal counterparts of native group-mean functions. Necessary for OLS in §7-1. | signed-off | | 2026-05-05 | hchung |
+| `INC-8` | incytr | A | `4a05aae` | 2026-04-15 — phase 2.1: add factorial S4 slots and create_Incytr validation | `R/Incytr_class.R` (`animal_id`, `expr.byanimal`, `sigprob.byanimal`, `design`, `contrasts`) | native `Incytr` class (slots are additive, no removals) | `test-create_Incytr_factorial.R` | New slots default to NULL/empty; legacy two-condition constructor path validated unchanged. | signed-off | | 2026-05-05 | hchung |
+| `INC-9` | incytr | A | `c88f479` | 2026-04-15 — simplify: address code review findings | `R/analysis.R`, `R/kinases.R`, `R/utils.R` | n/a | factorial + golden tests | Small simplification; kinases.R touch is cleanup, not scoring change (verified by diff inspection). | signed-off | | 2026-05-05 | hchung |
+| `INC-10` | incytr | A | `c8e764e` | 2026-04-15 — phase 1.6: add N-condition integration tests | `tests/testthat/test-n_condition_integration.R` | n/a | itself | Tests only; no source change. | signed-off | | 2026-05-05 | hchung |
+| `INC-11` | incytr | A | `bb0c991` | 2026-04-15 — phase 1.5: generalize permutation output, object_update, and Export_results | `R/analysis.R`, `R/evaluation.R`, `R/utils.R` | extends native `Permutation_test` output shape | factorial + golden tests | Generalizes shape only; legacy SigProb/p_value match per Sprint 0. | signed-off | | 2026-05-05 | hchung |
+| `INC-12` | incytr | A | `d7f3254` | 2026-04-15 — phase 1.4: generalize evaluation and PDS to N conditions | `R/evaluation.R` (+13 -6) | native `Pathway_evaluation`, `Cal_PDS` | `test-Pathway_evaluation_factorial.R`, `test-Cal_PDS_factorial.R` | Small N-condition generalization; legacy two-condition collapse preserved. | signed-off | | 2026-05-05 | hchung |
+| `INC-13` | incytr | A | `ca6a96e` | 2026-04-15 — phase 1.3: generalize kinase scoring to N conditions | `R/kinases.R` (+126 -139) | native `Cal_EI`, `Integr_kinasedata`, `Cal_activity_score` | testthat kinase tests | Refactor for N-condition; legacy two-condition collapse preserved for the SiK *structure*, but Sprint 0 pre-diff shows `SiK_score_*` drift max\|diff\|≈0.18. Drift origin is more likely INC-28 (kl.evidence/kl.activity introduction); leave Sprint 5 with this as a co-suspect. | → Sprint 5 | | 2026-05-05 | hchung |
+| `INC-14` | incytr | A | `75bdd0d` | 2026-04-15 — phase 1.2: generalize Cal_SigProb and Cal_scFC to N conditions | `R/analysis.R` | native `Cal_SigProb`, `Cal_scFC` | `test-Cal_SigProb.R`, `test-Cal_scFC.R` | Generalizes function signatures to N conditions; legacy `sigprob` matches bitwise per Sprint 0. | signed-off | | 2026-05-05 | hchung |
+| `INC-15` | incytr | A | `719c2b1` | 2026-04-15 — phase 1.1: generalize barcodes_bycondition and Expr_bygroup | `R/analysis.R`, `R/utils.R` | native helpers | `test-Expr_bygroup.R`, `test-barcodes_bycondition.R` | Per-condition vectors generalized; sigprob/FC slots match native bitwise. | signed-off | | 2026-05-05 | hchung |
+| `INC-16` | incytr | A | `a2e99fd` | 2026-04-15 — simplify: address code review findings | `tests/testthat/helper-golden.R`, `tests/testthat/test-golden_output.R` | n/a | itself | Cleanup of golden test infrastructure only; this is the harness Sprint 0 extended. | signed-off | | 2026-05-05 | hchung |
+| `INC-17` | incytr | A | `6da9bcc` | 2026-04-15 — phase 0.6: update S4 class slot documentation | `R/Incytr_class.R` (doc only) | n/a | n/a | Documentation only. | signed-off | | 2026-05-05 | hchung |
+| `INC-18` | incytr | A | `3954fef` | 2026-04-15 — phase 0.5: standardize condition naming to use actual condition labels | `R/analysis.R`, `R/kinases.R`, `R/math.R`, `R/utils.R` | adjusts column-naming convention | golden + factorial tests | Replaces `cond1`/`cond2` with actual labels (`condA`/`condB`). Causes `EI` slot structural diff in Sprint 0 pre-diff; structural-only, not numerical. | signed-off | | 2026-05-05 | hchung |
+| `INC-19` | incytr | A | `c4698ef` | 2026-04-15 — phase 0.2: generalize integrate_omics_layer parameter interface | `R/analysis.R::integrate_omics_layer` | parameter-shape generalization | `test-integrate_omics_layer.R` | Function signature widened to handle multi-condition omics; numerically equivalent in two-condition collapse. | signed-off | | 2026-05-05 | hchung |
+| `INC-20` | incytr | A | `4e2e672` | 2026-04-15 — phase 0.1: refactor Integr_multiomics to list-based omics API | `R/analysis.R::Integr_multiomics` | API refactor of native `Integr_multiomics` | `test-Integr_multiomics.R` | Refactor only; Sprint 0 pre-diff confirms `pr_FC`/`ps_FC`/`py_FC` match bitwise. | signed-off | | 2026-05-05 | hchung |
+| `INC-21` | incytr | A | `4a9423c` | 2026-04-15 — phase 0.4: relocate expression and EM-weight helpers | `R/analysis.R`, `R/math.R`, `R/utils.R` | code relocation only | factorial + golden tests | Pure relocation; no semantics change. | signed-off | | 2026-05-05 | hchung |
+| `INC-22` | incytr | A | `ad7462b` | 2026-04-15 — phase 0.3: add tests for untested exported functions | `tests/testthat/*` | n/a | itself | Test coverage additions only. | signed-off | | 2026-05-05 | hchung |
+| `INC-23` | incytr | A | `b50c2cc` | 2026-04-15 — phase 0.0: add golden output fixture and generation script | `tests/testthat/test-golden_output.R`, fixtures | n/a | itself | Test infrastructure that Sprint 0 extended. | signed-off | | 2026-05-05 | hchung |
+| `INC-24` | incytr | A | `4aa30c8` | 2026-04-15 — clean up codebase: remove dead code, fix typos, extract shared helpers | `R/analysis.R`, `R/evaluation.R`, `R/kinases.R`, `R/utils.R` | n/a | factorial + golden tests | Cleanup commit; reductions in line count match dead-code removal pattern. | signed-off | | 2026-05-05 | hchung |
+| `INC-25` | incytr | C | `abde752` | 2026-04-10 — add EM promiscuity weighting and edge confidence scoring to SigProb | `R/analysis.R::Cal_SigProb`, `R/math.R` | native `Cal_SigProb` (no EM weight) | Sprint 0 golden diff (PDS max\|diff\|=8.87e-02) | **Prime suspect for the legacy `evaluation.PDS` drift.** Modifies SigProb upstream of PDS, so the legacy two-condition path inherits the change. Audit-plan §3 Sprint 3 explicit target: revert + park unless empirical/theoretical justification recorded. | → Sprint 3 | | 2026-05-05 | hchung |
+| `INC-26` | incytr | C | `b654fdd` | 2026-04-10 — add condition-label permutation test and optimize permutation (proposal docs) | `docs/incytr_proposals/*.md` | n/a | n/a | Docs only; the implementation lands in INC-27/INC-28. | → Sprint 5 | | 2026-05-05 | hchung |
+| `INC-27` | incytr | C | `f922c3a` | 2026-04-10 — add condition-label permutation test and optimize permutation internals | `R/Incytr_class.R`, `R/analysis.R`, `R/math.R`, `NAMESPACE` | extends native `Permutation_test` | `test-permutation_*.R` | New analysis layer; not a factorial extension. Audit-plan §5 Sprint 5 territory. | → Sprint 5 | | 2026-05-05 | hchung |
+| `INC-28` | incytr | C | `6858063` | 2026-04-10 — memory permutation pass | `R/kinases.R` (+651), `R/Incytr_class.R` (`kl.evidence`, `kl.activity` slots), `R/evaluation.R` | extends native kinase channel | testthat kinase + permutation tests | **Prime suspect for the legacy `SiK_score_*` drift (~0.18) and the new `kl.evidence` slot.** Introduces the kinase-augmentation channel. Audit-plan §5 Sprint 5 explicit target. | → Sprint 5 | | 2026-05-05 | hchung |
+| `INC-29` | incytr | C | `d6d5c8c` | 2026-03-27 — kinase library adaptor | `R/kinases.R::as_kldata`, `as_kl_evidence`, `NAMESPACE` | n/a (new external adaptor) | `test-as_kldata.R` | Adapts external kinase-library objects into the kinase channel. Sprint 5 (kinase augmentation). | → Sprint 5 | | 2026-05-05 | hchung |
+| `INC-30` | incytr | C | `c3580fc` | 2026-03-27 — apply cutoff to all omics slots and fix helper return/input handling | `R/Incytr_class.R` (`Ack_FC`, `KGG_FC`, `Rme1_FC` slots), `R/analysis.R`, `R/evaluation.R`, `R/utils.R` | scope expansion: PTM tracks not in native | n/a yet | **Split-ticket.** (a) New slots `Ack_FC`/`KGG_FC`/`Rme1_FC` are scope expansion (PTM tracks; ALZ-2 introduces the ALZ-side pY parallel). (b) Cutoff-application change is a filter modification. Both Sprint 4. See INC-30.b for the filter portion. | → Sprint 4 | | 2026-05-05 | hchung |
+| `INC-30.b` | incytr | C | `c3580fc` (split) | filter portion of c3580fc — `apply cutoff to all omics slots` | `R/analysis.R`, `R/evaluation.R` (cutoff branches) | native uses `cutoff_SigProb = NULL` by default | n/a yet | Filter change in legacy path; not factorial. Audit-plan §5 Sprint 4 explicit target. | → Sprint 4 | | 2026-05-05 | hchung |
+| `INC-31` | incytr | A | `847a014` | 2026-03-10 — docs: Add docs/notes to .gitignore | `.gitignore` | n/a | n/a | Chore; no scientific impact. | signed-off | | 2026-05-05 | hchung |
+| `INC-32` | incytr | A | `5031094` | 2026-03-10 — add env.yml | `env.yml` | n/a | n/a | Chore; environment config. | signed-off | | 2026-05-05 | hchung |
+| `INC-33` | incytr | A | `650bca1` | 2026-03-09 — Remove CLAUDE.md from tracking | `CLAUDE.md`, `.gitignore` | n/a | n/a | Chore. | signed-off | | 2026-05-05 | hchung |
+| `INC-34` | incytr | A | `b2a4c7f` | 2026-03-09 — Organize docs into reference and notes | `docs/*` | n/a | n/a | Chore; doc reorganization. | signed-off | | 2026-05-05 | hchung |
+| `INC-35` | incytr | B | `e04bf18` | 2026-03-06 — Improve evaluation/kinase code organization | `R/evaluation.R`, `R/kinases.R` | code organization | factorial + golden tests | Pre-factorial refactor; numerically neutral if true. Sprint 2 to verify against pre-`93b9881` upstream. | → Sprint 2 | | 2026-05-05 | hchung |
+| `INC-36` | incytr | B | `76becbd` | 2026-03-06 — Remove dplyr dependency, replace with base R + data.table | all R files | dependency removal | factorial + golden tests | Refactor / dependency-removal. Sprint 2. | → Sprint 2 | | 2026-05-05 | hchung |
+| `INC-37` | incytr | B | `c1b6fb9` | 2026-03-05 — Optimize performance, fix correctness issues | bundled | bundled | factorial + golden tests | Bundled commit ("performance + correctness fix"); audit-plan §5 Sprint 2 mandates split. Will produce a `INC-37.b` row in Sprint 2 for the correctness-fix portion. | → Sprint 2 (split) | | 2026-05-05 | hchung |
+| `INC-38` | incytr | B | `7e6735d` | 2026-03-05 — Refactor codebase: split monolith | source split | source split only | factorial + golden tests | Pure refactor; Sprint 2 verifies. | → Sprint 2 | | 2026-05-05 | hchung |
+| `INC-39` | incytr | A | `90c60e8` | 2026-03-05 — Reorganize project directory structure | filesystem moves | n/a | n/a | Chore. | signed-off | | 2026-05-05 | hchung |
+| `INC-40` | incytr | A | `6eeeac5` | 2026-03-05 — Update documentation for development | `docs/*` | n/a | n/a | Chore. | signed-off | | 2026-05-05 | hchung |
+| `INC-DESIGN-1` | incytr | A | n/a (design decision) | Per-animal SigProb vs per-condition mean SigProb | `R/factorial.R::Cal_SigProb_animal` + `Contrast_SigProb` | native: SigProb on condition-mean expression | `test-Cal_SigProb_animal.R`, `test-Contrast_SigProb.R` | Hill nonlinearity makes the two not algebraically equal. Wrapper uses (a) per-animal then OLS to get per-contrast SE/p-values. Alternative (b) condition-mean expression then OLS on SigProb was considered; rejected because it loses per-contrast SE. Documented divergence. | signed-off | | 2026-05-05 | hchung |
+| `INC-DESIGN-2` | incytr | A | n/a (design decision) | `Cal_foldchange` `1e-4` correction term in factorial mode | `R/analysis.R::Cal_foldchange` and OLS callers | native: `log2(x + 1e-4)` | factorial scFC tests | Native uses an additive `1e-4` before `log2`. Factorial OLS on per-animal SigProb does not re-apply the correction (linear model on already-Hill-bounded SigProb). Verified: no second constant introduced; behavior consistent. | signed-off | | 2026-05-05 | hchung |
+| `INC-DESIGN-3` | incytr | A | n/a (design decision) | `aFC` vs `log2FC` in factorial evaluation | `R/evaluation.R` factorial branch | native: `aFC` with 75th-percentile Hill cap | `test-Pathway_evaluation_factorial.R` | Factorial path computes per-contrast `aFC` analog using the same Hill-cap rule as native (verified by reading `R/evaluation.R` factorial branch). Not a `log2FC` switch. | signed-off | | 2026-05-05 | hchung |
+| `INC-DESIGN-4` | alzheimers | A | n/a (design decision) | Sample filtering scope (`males-only`) | `code/integration/config_integration.py`, ALZ runners | wrapper-side filter, not Incytr modification | dual-track sensitivity analysis (`pixi run dual`) | Wrapper-level decision (avoid hormonal confounds); not a modification of Incytr semantics. Full-cohort dual-track exists for sensitivity. | signed-off | | 2026-05-05 | hchung |
+| `ALZ-1` | alzheimers | n/a | `8ca0a64` | 2026-05-04 — checkpoint: subclass-attribution branch | not integration code | n/a | n/a | Branch checkpoint, unrelated to Incytr integration. | n/a | | 2026-05-05 | hchung |
+| `ALZ-2` | alzheimers | C | `0adcca8` | 2026-04-28 — feat: add tyrosine phospho (pY) track | bulk pipeline + integration adapters | scope expansion (PTM track) | n/a yet | New PTM track parallel to existing tracks. Pairs with INC-30. | → Sprint 4 | | 2026-05-05 | hchung |
+| `ALZ-3` | alzheimers | n/a | `cc10112` | 2026-04-21 — pipeline: complete Unit 6.4 retire legacy | not integration code | n/a | n/a | Bulk pipeline cleanup, out of audit scope. | n/a | | 2026-05-05 | hchung |
+| `ALZ-4` | alzheimers | n/a | `b9f302b` | 2026-04-21 — pipeline: complete Unit 6.2 retire backbone | not integration code | n/a | n/a | Bulk pipeline cleanup, out of audit scope. | n/a | | 2026-05-05 | hchung |
+| `ALZ-5` | alzheimers | n/a | `5bab404` | 2026-04-21 — pipeline: complete Unit 6.1 retire old viewers | viewer | n/a | n/a | Out of audit scope (viewer). | n/a | | 2026-05-05 | hchung |
+| `ALZ-6` | alzheimers | n/a | `2ab47fb` | 2026-04-20 — pipeline: lossless edge sharding for unified viewer | viewer | n/a | n/a | Out of audit scope (viewer). | n/a | | 2026-05-05 | hchung |
+| `ALZ-7` | alzheimers | n/a | `e096f36` | 2026-04-20 — update edges | viewer | n/a | n/a | Out of audit scope (viewer). | n/a | | 2026-05-05 | hchung |
+| `ALZ-8` | alzheimers | n/a | `99ab2b3` | 2026-04-20 — pipeline: complete Unit 1.3 build_edge_index | viewer index | n/a | n/a | Out of audit scope. | n/a | | 2026-05-05 | hchung |
+| `ALZ-9` | alzheimers | C | `97616a6` | 2026-04-16 — Factorial permutation tests with within-receiver shuffles | `code/integration/run_factorial_permutations.sh`, helpers | added analysis layer | n/a yet | Backbone dual-null permutation tests. Audit-plan §5 Sprint 5: "keep as separate analysis stage; never let q-values gate native PDS-based selection." | → Sprint 5 | | 2026-05-05 | hchung |
+| `ALZ-10` | alzheimers | n/a | `2dda892` | 2026-04-15 — brain atlas data compression | data only | n/a | n/a | Out of audit scope. | n/a | | 2026-05-05 | hchung |
+| `ALZ-11` | alzheimers | C | `f6e2b98` | 2026-04-14 — Simplify permutation code after review | permutation code | added analysis layer | n/a yet | Cleanup of ALZ-9; same Sprint 5 disposition. | → Sprint 5 | | 2026-05-05 | hchung |
+| `ALZ-12` | alzheimers | C | `9cf31de` | 2026-04-14 — Backbone-level permutation tests and per-pair | permutation code | added analysis layer | n/a yet | Same as ALZ-9. | → Sprint 5 | | 2026-05-05 | hchung |
+| `ALZ-13` | alzheimers | B | `019334b` | 2026-04-14 — Cross-pair aggregation and Parquet-only cleanup | adapters | data path / IO | wrapper + cross-pair tests | Performance / IO refactor. Sprint 2. | → Sprint 2 | | 2026-05-05 | hchung |
+| `ALZ-14` | alzheimers | A | `8cf4366` | 2026-04-14 — Update integration README for Phase 2 | `code/integration/README.md` | n/a | n/a | Documentation only. | signed-off | | 2026-05-05 | hchung |
+| `ALZ-15` | alzheimers | B | `8679681` | 2026-04-14 — Vectorized receiver scoring: Phase 2 of all-pairs | `code/integration/wrappers/receiver_scoring.R` | replaces native receiver scoring with vectorized rewrite | `verify_phase2.R` (manual; promote in Sprint 2) | Performance rewrite. Audit-plan §5 Sprint 2 explicit target. | → Sprint 2 | | 2026-05-05 | hchung |
+| `ALZ-16` | alzheimers | B | `291fa00` | 2026-04-14 — Receiver-centric backbone enumeration: Phase 1 | enumeration | replaces native pathway_inference data.table joins | DuckDB enumeration tests | Performance. Sprint 2. | → Sprint 2 | | 2026-05-05 | hchung |
+| `ALZ-17` | alzheimers | B | `98d2b9d` | 2026-04-14 — remove dead code | integration | n/a | n/a | Cleanup. | → Sprint 2 | | 2026-05-05 | hchung |
+| `ALZ-18` | alzheimers | B | `3e688bf` | 2026-04-14 — All-pairs Incytr pipeline: DuckDB enumeration | `code/integration/wrappers/duckdb_enumeration.R` | replaces native `pathway_inference` joins | DuckDB tests; pre-prune cutoffs are bucket C (Sprint 4) | Performance rewrite. Sprint 2 verifies bitwise pathway-set equivalence with internal pre-prune cutoffs disabled. | → Sprint 2 | | 2026-05-05 | hchung |
+| `ALZ-19` | alzheimers | C | `9f339ed` | 2026-04-13 — Kinase-imputed pathway expansion | `code/integration/adapters/export_kinase_imputed_genes_factorial.py`, R floor `EXPR_IMPUTATION_FLOOR=0.05` | gene-admission rule change (no native counterpart) | gated behind `ENABLE_KINASE_AUGMENTATION` | Audit-plan §5 Sprint 4 explicit target. Default disposition: revert from baseline. | → Sprint 4 | | 2026-05-05 | hchung |
+| `ALZ-20` | alzheimers | C | `19de928` | 2026-04-13 — Substrate-based external reranking with median | `code/integration/adapters/compute_kinase_support_factorial.py` | new external λ reranking, no native counterpart | n/a yet | Audit-plan §5 Sprint 5 explicit target. Strong default: keep as **separate downstream** consumer of baseline Parquet; never overwrite native PDS. | → Sprint 5 | | 2026-05-05 | hchung |
+| `ALZ-21` | alzheimers | A | `5acec95` | 2026-04-09 — Phase 1 Incytr integration: adapters, R wrappers | `code/integration/{adapters,wrappers}/` initial scaffold | initial integration framework | n/a (framework) | Initial integration scaffold; the framework itself is A-bucket. Subsequent commits introduce specific scope-expansion items (above) that are routed to later sprints. | signed-off | | 2026-05-05 | hchung |
+
+## Sprint 1 verdict summary
+
+- **27 A-bucket rows signed off** (INC-1..12, INC-14..24, INC-31..34, INC-39..40, ALZ-14, ALZ-21, INC-DESIGN-1..3) + ALZ-DESIGN-4 = 28.
+- **1 row routed to Sprint 5 with A-bucket co-suspect status**: INC-13 (`ca6a96e` phase 1.3 generalize kinase scoring) — co-suspect for SiK drift.
+- **2 rows routed to Sprint 3**: INC-25.
+- **9 rows routed to Sprint 5**: INC-26, INC-27, INC-28, INC-29, ALZ-9, ALZ-11, ALZ-12, ALZ-20.
+- **3 rows routed to Sprint 4**: INC-30 (split: INC-30 + INC-30.b), ALZ-2, ALZ-19.
+- **6 rows routed to Sprint 2**: INC-35, INC-36, INC-37 (split-pending), INC-38, ALZ-13, ALZ-15, ALZ-16, ALZ-17, ALZ-18 (= 9 actually, reflecting ALZ refactor commits).
+- **8 rows marked `n/a` (out of audit scope)**: ALZ-1, ALZ-3..8, ALZ-10.
+- **4 design-decision rows recorded**: INC-DESIGN-1..4.
+
+The two PDS / SiK_score drift candidate-leads from the Sprint 0 pre-diff are now attributed:
+- PDS drift → INC-25 (`abde752`) → Sprint 3.
+- SiK_score drift → INC-28 (`6858063`) primary, INC-13 (`ca6a96e`) co-suspect → Sprint 5.

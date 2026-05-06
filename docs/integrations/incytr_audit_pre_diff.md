@@ -111,3 +111,39 @@ Candidate commits:
 - Test fixture (alias): `../incytr/tests/testthat/fixtures/golden_output_v1.rds`
 - Comparison script: `../incytr/tests/testthat/compare_golden_outputs.R`
 - Native generator (worktree): `/home/hchung/Projects/work/incytr-93b9881/tests/testthat/generate_golden_native.R`
+
+## Sprint 1 verdict addendum (2026-05-05)
+
+Sprint 1 closed with the following outcomes against the implications listed above:
+
+1. **`sigprob`/`sc_FC`/`p_value`/`pr_FC`/`ps_FC`/`py_FC` bitwise match — confirmed and signed off.**
+   The wrapper-side degenerate 2-condition runner at
+   `code/integration/tests/run_degenerate_2cond.sh` re-asserts this each run
+   and hard-fails on any drift in those slots. Used as the regression
+   anchor for Sprints 2–5.
+
+2. **`evaluation.PDS` drift (~0.089) — attributed to `abde752` (INC-25)** "add EM
+   promiscuity weighting and edge confidence scoring to SigProb." The EM
+   weight modifies `Cal_SigProb` upstream of PDS, so the legacy two-condition
+   path inherits the drift. Routed to **Sprint 3** in the ledger.
+
+3. **`Ack_FC`/`KGG_FC`/`Rme1_FC` slots + cutoff change — attributed to
+   `c3580fc` (INC-30)**. Split into INC-30 (PTM-track scope expansion) and
+   INC-30.b (filter change). Both routed to **Sprint 4**. Pairs with ALZ-2
+   `0adcca8` for the pY parallel.
+
+4. **`kl_evidence` slot + `SiK_score_*` drift (~0.18) — attributed to
+   `6858063` (INC-28)** "memory permutation pass" with co-suspect `ca6a96e`
+   (INC-13) "phase 1.3 generalize kinase scoring." Routed to **Sprint 5**
+   alongside the kinase augmentation flag split.
+
+5. **`EI` structural diff** — attributed to `3954fef` (INC-18) "phase 0.5
+   standardize condition naming." Structural-only (cond1/cond2 → condA/condB
+   labels), no numerical drift. Signed off as A-bucket.
+
+The four §7 open design decisions are recorded as `INC-DESIGN-1..4` in the
+ledger with `disposition = signed-off` and `verdict_date = 2026-05-05`.
+
+Sprint 1 introduced no code changes to the `incytr` package (read-only
+sprint). Wrapper-side artifact: `code/integration/tests/run_degenerate_2cond.sh`.
+Working note: `docs/integrations/working/sprint1_factorial_surface.md`.
