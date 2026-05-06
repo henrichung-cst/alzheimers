@@ -328,3 +328,80 @@ Six rows finalised; one wrapper file edited (1 line plus env-var forwarding).
      `run_duckdb_enumeration_equiv.sh` (still equivalent at `cutoff = 0`),
      `run_verify_phase2.sh` (SKIPs gracefully), 593/593 testthat across
      216 files.
+
+## Sprint 5 verdict addendum (2026-05-05)
+
+1. **Drift attribution finalized.** The synthetic-golden `SiK_score_*` drift
+   (~0.18) and the residual `evaluation.PDS` drift (~0.089) flagged in Sprint
+   0 / Sprint 1 / Sprint 3 are *both* owned by `INC-28` (`6858063` memory
+   permutation pass + `kl.evidence`/`kl.activity` slots). The drift is the
+   *expected signature of the augmented kinase channel* exercised by the
+   golden (the testthat fixture passes a non-null `kldata`); it is not a
+   regression on the baseline `kldata = NULL` path. The factorial wrapper
+   does not invoke `Integr_kinasedata`, so the drift is unobservable in
+   production. INC-13 (`ca6a96e` N-condition kinase-scoring generalization)
+   is the structural co-anchor — it adds the `reverse_sik_weight=0.3`
+   parameter and the three-slot architecture — but it is not the numerical
+   driver; the slots are inert when `kldata = NULL`.
+
+2. **No λ-style PDS reranking exists in the codebase.** Audit-plan §5 Sprint
+   5 referred to "external kinase_support_score + λ reranking" in
+   `compute_kinase_support_factorial.py`. Phase-1 exploration confirmed
+   `compute_kinase_support_factorial.py` is *already* a sidecar — it reads
+   baseline `recv_*.parquet`, writes per-pair sidecar files, and is not
+   invoked from `run_factorial_all_pairs.sh`. The λ at
+   `aggregate_factorial.py:499` is Storey's pi0 fixed-λ q-value parameter,
+   not a blending weight. Native PDS is never overwritten.
+
+3. **Backbone permutations are already a separate stage.** `ALZ-9`/`-11`/
+   `-12` outputs land in
+   `intermediates/factorial/all_pairs/aggregation/backbone_permutation_pvalues_by_contrast.csv`;
+   `recv_*.parquet` is unmodified. Q-values never gate native PDS-based
+   selection.
+
+4. **Native SiK channel is currently absent, not gated off.**
+   `run_incytr_factorial_all_pairs.R` makes zero calls to
+   `Integr_kinasedata` / `Cal_PDS` / `kl.pathways` / `as_kldata` /
+   `as_kl_evidence` / `Permutation_test`. The wrapper header explicitly
+   states "Phospho, kinase scoring, and downstream reranking are deferred
+   to a second PR." Recorded as design verdict `INC-DESIGN-6`; wiring
+   deferred to a follow-up PR.
+
+5. **Flag-name correction.** Sprint 4 ledger rows for `ALZ-19` and `INC-25`
+   reference an `ENABLE_KINASE_AUGMENTATION` flag, but no such flag exists
+   in the current code. The actual flag at
+   `run_factorial_all_pairs.sh:76` is `ENABLE_KINASE_IMPUTATION` (default
+   on, gates only the kinase-imputed gene expansion adapter).
+   Sprint-4-as-shipped is left immutable; this addendum records the
+   corrected name. The Sprint 4 verdicts are unaffected — only the flag
+   *name* in the ledger is wrong, the gating logic is correct. Suggested
+   post-audit flag scheme: `ENABLE_NATIVE_SIK=1` (default ON once wired)
+   and `ENABLE_KINASE_SUPPORT_SCORE=0` (default OFF), splitting the
+   conceptual `ENABLE_KINASE_AUGMENTATION` of audit-plan §5 into two
+   independent flags.
+
+6. **Sprint 5 deliverables.**
+   - No `incytr` package edits and no `alzheimers` code edits
+     (documentation-only sprint).
+   - Ledger rows finalized: `INC-13`, `INC-26`, `INC-27`, `INC-28`,
+     `INC-29`, `ALZ-9`, `ALZ-11`, `ALZ-12`, `ALZ-20` (9 rows).
+   - New row: `INC-DESIGN-6` (native SiK absent; deferred to follow-up).
+   - Working note: `docs/integrations/working/sprint5_added_layers_audit.md`.
+   - Verification: `run_degenerate_2cond.sh` (must-match clean),
+     `run_duckdb_enumeration_equiv.sh` (still equivalent), `run_verify_phase2.sh`
+     (SKIPs gracefully), 593/593 testthat across 216 files.
+
+## Audit close (2026-05-05)
+
+All five sprints are signed off. The Incytr audit closes with:
+
+- Every change since fork has a final verdict in `incytr_audit_ledger.md`.
+- The factorial baseline `recv_*.parquet` schema contains only
+  native-equivalent columns; non-native columns live in sidecar files
+  (kinase support scores, backbone permutation q-values).
+- Discretionary behavior is gated by default-OFF flags
+  (`ENABLE_EM_PROMISCUITY_WEIGHT`, `ENABLE_CELLTYPE_MAPPING`,
+  `DUCKDB_CUTOFF_SIGPROB=0` opt-out) per the parking-in-place precedent.
+- Two open follow-ups outside the audit: native SiK wiring (per
+  `INC-DESIGN-6`), upstream PR for `INC-37.b` correctness fixes (carried
+  forward from Sprint 2).
