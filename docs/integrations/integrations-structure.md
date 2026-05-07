@@ -1,3 +1,9 @@
+# OUT OF DATE — IGNORE
+
+References the retired live `data/gdrive_shared/` mount. The current pattern is `pixi run ingest-gdrive-shared` (rclone copy into `data/raw/external/gdrive_shared/`, on demand); the local mirror was deleted on 2026-05-07. See `CLAUDE.md` for the live layout.
+
+---
+
 # Integrations Directory Structure (Upstream Archive View)
 
 This document describes the structure of the collaborator-owned upstream archive under `data/gdrive_shared/`.

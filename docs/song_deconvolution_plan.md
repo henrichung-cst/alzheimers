@@ -1,3 +1,9 @@
+# OUT OF DATE — IGNORE
+
+Branch-only plan. The bulk-median inputs it describes were deleted from `data/incytr_collections/song/proteomics/source/` on 2026-05-07 and must be re-pulled via `pixi run ingest-gdrive-shared` before the plan can be executed. Live pipeline scope is in `CLAUDE.md`; the WMB-class spine is now established by the live stoichiometry pipeline, not this decomposition.
+
+---
+
 # Song bulk decomposition → per-cell-type kinase enrichment (CTM-native)
 
 Plan-of-record for the Song bulk → per-cell-type kinase MEA pipeline.
