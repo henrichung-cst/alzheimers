@@ -76,7 +76,6 @@ alzheimers/
 │   ├── data_ingest.py              # Main: data ingestion + characterization
 │   ├── kinase_attribution.py       # Main: stoichiometry + MEA + unified attribution
 │   ├── attribution_recovery.py     # Main: attribution recovery + final table assembly
-│   ├── plot_attribution_bubbles.py # Main: attribution visualizations
 │   ├── config.py                   # Supporting: shared configuration
 │   ├── atlas_reference.py          # Supporting: external-reference prep (SEA-AD, WMB, Aging Mouse)
 │   ├── wmb_expression.py           # Supporting: WMB expression export

@@ -135,7 +135,6 @@ The live pipeline is a 3-stage stoichiometry-corrected MEA enrichment + unified 
 1. **data_ingest.py** — TMT channel mapping, phosphosite-to-protein matching (91.7%), marker assessment, PCA QC, outlier detection
 2. **kinase_attribution.py** — IRS normalization (all 72 samples), stoichiometry (`log2(phospho) − log2(protein)`), factorial OLS (9 time-resolved contrasts), MEA kinase enrichment (median-centered + winsorized), unified cell-type attribution (SEA-AD + WMB + Song concordance)
 3. **attribution_recovery.py** — Cross-contrast consistency and final hypothesis tables (primary deliverable: `kinase_hypothesis_table.csv`)
-4. **plot_attribution_bubbles.py** — Visualization: heatmaps, direction-over-time bars, additivity scatter
 
 ### Key Design Points
 
@@ -164,7 +163,6 @@ kinase_attribution.py + snrna_integration.py  ←  code/integration/
 - `data_ingest.py` — TMT channel mapping, phosphosite-to-protein matching, marker assessment, PCA quality control, outlier detection. Outputs to `outputs/reports/data_ingest/`. Requires: `scikit-learn`, `matplotlib`.
 - `kinase_attribution.py` — IRS normalization (all 72 samples), sample filtering (outlier exclusion + sex filter), stoichiometry computation, factorial OLS with disease×timepoint interactions (9 contrasts), MEA kinase enrichment (median-centered + winsorized), unified cell-type attribution (SEA-AD concordance + WMB expression specificity). Outputs to `outputs/reports/kinase_attribution/`. Requires: `kinase-library`, `gseapy`, `scikit-learn`, `matplotlib`, `anndata`.
 - `attribution_recovery.py` — Cross-contrast consistency analysis, final unified attribution table. Outputs to `outputs/reports/attribution_recovery/`. Requires: `matplotlib`.
-- `plot_attribution_bubbles.py` — Per-tissue heatmaps, direction-over-time diverging bars, ApTt additivity scatter, winsorization diagnostic. Outputs to `outputs/reports/attribution_recovery/bubble_plots/`. Requires: `matplotlib`, `scipy`.
 - `build_unified_viewer.py` — Generates the interactive HTML viewer (kinase activity → cell-type attribution → pathway backbones → cross-entity views). Reads attribution-recovery tables, MEA stoichiometry, site-level OLS, factorial backbone recurrence + permutation pvalues, and the `kinase_backbone_edges.parquet` edge index. Emits `outputs/reports/unified_viewer/index.html` + a shared JSON payload plus sharded per-entity edge slices under `edge_slices/{kinase,backbone}/` fetched on demand via `SliceCache`. Requires: `kinase-library`, `scipy`, `pyarrow`.
 - `lucie_5xfad_manifest.py` — Builds a proteomics manifest for Lucie 5xFAD data integration.
 
@@ -238,7 +236,6 @@ Operational shell wrappers under `code/runners/`:
   - `kinase_activity_matrix.csv` — wide NES/FDR + trajectory label (1 row/kinase)
   - `celltype_evidence_table.csv` — WMB-gated static evidence (1 row/kinase×celltype)
   - `kinase_hypothesis_table.csv` — kinase-first synthesis, **primary downstream deliverable**
-  - `bubble_plots/` — Heatmaps, direction-over-time, additivity scatter, winsorization diagnostic
 - `outputs/reports/wmb_expression/` — WMB expression export (supporting)
 
 ## Foundation Documentation

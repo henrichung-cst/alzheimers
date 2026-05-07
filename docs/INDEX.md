@@ -82,7 +82,6 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 | 1. Ingest | `data_ingest.py` | `runners/main/run_data_ingest.sh` | `outputs/reports/data_ingest/` |
 | 2. Normalize + MEA + attribute | `kinase_attribution.py` | `runners/main/run_kinase_attribution.sh` | `outputs/reports/kinase_attribution/` |
 | 3. Recovery | `attribution_recovery.py` | `runners/main/run_attribution_recovery.sh` | `outputs/reports/attribution_recovery/` |
-| Plots | `plot_attribution_bubbles.py` | — | `outputs/reports/attribution_recovery/bubble_plots/` |
 | Bundled | — | `runners/main/run_live_pipeline.sh` | all of the above |
 | Dual-track | — | `runners/main/run_dual_analysis.sh` | `*_males_only/`, `*_full_cohort/` |
 
@@ -123,7 +122,7 @@ Python adapters + R wrappers; config in `config_integration.py`.
 |:---|:---|
 | `data_ingest/` | `sample_exclusions.csv`, `pca_plots/outlier_diagnostic.png` |
 | `kinase_attribution/` | `stoichiometry_matrix.csv`, `mea_stoichiometry.csv`, `site_level_ols.csv`, `unified_attribution.csv`, `attribution_summary.json`, `mea_global_shift.csv`, `winsorized_sites.csv` |
-| `attribution_recovery/` | **`kinase_hypothesis_table.csv` (primary deliverable)**, `kinase_activity_matrix.csv`, `celltype_evidence_table.csv`, `bubble_plots/` |
+| `attribution_recovery/` | **`kinase_hypothesis_table.csv` (primary deliverable)**, `kinase_activity_matrix.csv`, `celltype_evidence_table.csv` |
 | `wmb_expression/`, `snrna_integration/` | Supporting prerequisites |
 | `supplementary/` | Reviewer-diagnostic results |
 
