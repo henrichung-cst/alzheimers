@@ -41,7 +41,7 @@ Practical implication: the data can support bulk condition effects, but not reli
 
 ## 4. Evidence That The Failure Is Structural
 
-The non-identifiability conclusion is not based on one failed implementation. An 8-phase synthetic validation campaign, four rescue strategies, a joint factor model, two-compartment collapse, and transcript-only rescue all returned near-zero recovery. See [`analysis_rationale.md`](./analysis_rationale.md) for the full pivot logic and [`deconvolution_infeasibility.md`](../deconvolution_infeasibility.md) for the synthetic validation.
+The non-identifiability conclusion is not based on one failed implementation. An 8-phase synthetic validation campaign, four rescue strategies, a joint factor model, two-compartment collapse, and transcript-only rescue all returned near-zero recovery. See [`analysis_rationale.md`](./analysis_rationale.md) for the full pivot logic and [`deconvolution_infeasibility.md`](../../archive/deconvolution/docs/deconvolution_infeasibility.md) for the synthetic validation.
 
 The factor-model failure matters because it shows that parameter reduction and kinase-substrate structure did not solve the real problem. The bottleneck is the composition geometry, not the size of the parameterization.
 

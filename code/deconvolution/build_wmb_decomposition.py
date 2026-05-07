@@ -38,6 +38,8 @@ import config  # noqa: E402
 WMB_MANIFEST_FILE = config.WMB_CLASS_MANIFEST_FILE
 H5AD_FILE = config.SONG_H5AD_FILE
 
+# Inputs were removed from disk on 2026-05-07; re-pull via `pixi run
+# ingest-gdrive-shared` and copy into BULK_DIR before running this branch.
 BULK_DIR = os.path.join(
     config.REPO_ROOT, "data", "incytr_collections", "song", "proteomics", "source",
 )

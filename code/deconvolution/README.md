@@ -40,15 +40,19 @@ code/deconvolution/
 
 ## Inputs
 
-All consumed read-only:
+All consumed read-only. The four bulk-median + samplekey files under
+`data/incytr_collections/song/proteomics/source/` were deleted on
+2026-05-07; re-pull via `pixi run ingest-gdrive-shared` and copy from
+`data/raw/external/gdrive_shared/integrations/yuyu01/documentation/incytr/deconvolution/`
+into that directory before running this branch.
 
 | File | Source |
 |---|---|
 | `data/incytr_collections/song/transcriptomics/170_gex_celltypes_00.h5ad` | snRNA-seq with Allen Cell Type Mapper `class_name` per nucleus |
-| `data/incytr_collections/song/proteomics/source/imac_median.csv` | Ser/Thr per-(site, group) bulk medians |
-| `data/incytr_collections/song/proteomics/source/py_median.csv` | Tyr per-(site, group) bulk medians |
-| `data/incytr_collections/song/proteomics/source/pr_median.csv` | Total proteome per-(gene, group) bulk medians |
-| `data/incytr_collections/song/proteomics/source/yuyu_samplekey.csv` | MS\_ID ↔ SCRNA\_ID/Group mapping |
+| `data/incytr_collections/song/proteomics/source/imac_median.csv` | Ser/Thr per-(site, group) bulk medians (re-pull) |
+| `data/incytr_collections/song/proteomics/source/py_median.csv` | Tyr per-(site, group) bulk medians (re-pull) |
+| `data/incytr_collections/song/proteomics/source/pr_median.csv` | Total proteome per-(gene, group) bulk medians (re-pull) |
+| `data/incytr_collections/song/proteomics/source/yuyu_samplekey.csv` | MS\_ID ↔ SCRNA\_ID/Group mapping (re-pull) |
 | `outputs/reports/kinase_attribution/raw_phospho_normalized.csv` (+ `_pY`) | live IRS-normalized per-animal phospho |
 | `outputs/reports/data_ingest/sample_mapping.csv` (+ `_exclusions`) | live per-animal sample-to-channel mapping |
 | `outputs/reports/snrna_integration/song_concordance.csv` | live snRNA pipeline (WMB-class) |
