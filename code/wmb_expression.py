@@ -6,7 +6,7 @@ Whole Mouse Brain (WMB) 10Xv3 dataset, pooled across all 13 anatomical
 regions (cerebellum, cortical subplate, hippocampal formation, hypothalamus,
 isocortex, midbrain, medulla, olfactory, pons, pallidum, striatum,
 thalamus). The output file (wmb_kinase_expression.csv) is consumed by
-kinase_attribution.py unified attribution and attribution_recovery.py.
+kinase_attribute.py and attribution_recovery.py.
 
 Extracted from the archived pre-stoichiometry concordance logic to isolate
 the live supporting dependency.

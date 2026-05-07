@@ -51,7 +51,7 @@ sys.path.insert(0, os.path.join(HERE, "integration"))
 
 import config  # noqa: E402
 import config_integration as icfg  # noqa: E402
-import kinase_attribution as kattr  # noqa: E402
+import kinase_normalize as kattr  # noqa: E402  (Stage 1 helpers + load_sample_mapping)
 
 # ---------------------------------------------------------------------------
 # Paths — re-exported from viewer.paths so existing references in this module

@@ -9,16 +9,17 @@ version = "0.1.0"
 ingest = "python code/data_ingest.py --run"
 ingest-gdrive-shared = "rclone copy gdrive_shared: data/raw/external/gdrive_shared/ --drive-root-folder-id 1syiic6d9DUJIc1sPL5wc8uL7Od3Dsq3Z --progress"
 ingest-lucie-proteomics = "rclone copy gdrive_shared: data/raw/external/lucie_proteomics/ --drive-root-folder-id 1uWjRb_ZnrDp9HwgijE48zhb8gvJjOr2P --progress"
-normalize = "python code/kinase_attribution.py --normalize"
-enrich = { cmd = "python code/kinase_attribution.py --enrich", env = { ANALYSIS_MODE = "males_only" } }
-attribute = { cmd = "python code/kinase_attribution.py --attribute", env = { ANALYSIS_MODE = "males_only" } }
-mechanism = "python code/kinase_attribution.py --mechanism-annotation"
+normalize = "python code/kinase_normalize.py"
+enrich = { cmd = "python code/kinase_enrich.py", env = { ANALYSIS_MODE = "males_only" } }
+attribute = { cmd = "python code/kinase_attribute.py", env = { ANALYSIS_MODE = "males_only" } }
+mechanism = "python code/kinase_mechanism.py"
 recover = "python code/attribution_recovery.py --run"
 live = { depends-on = ["ingest", "normalize", "enrich", "attribute", "recover"] }
 dual = "bash code/runners/main/run_dual_analysis.sh"
 atlas = "python code/atlas_reference.py --run"
 wmb-export = "python code/wmb_expression.py --run"
 snrna = "python code/snrna_integration.py --run"
+bubbles = "python code/plot_attribution_bubbles.py"
 viewer = "python code/build_unified_viewer.py"
 install-incytr = "R CMD INSTALL --no-multiarch ../incytr"
 

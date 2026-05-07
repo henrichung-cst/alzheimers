@@ -57,7 +57,7 @@ def step_run():
                              "unified_attribution_full.csv")
     if not os.path.exists(full_path):
         raise FileNotFoundError(
-            f"{full_path} not found. Run kinase_attribution.py --attribute first.")
+            f"{full_path} not found. Run kinase_attribute.py first.")
     df = pd.read_csv(full_path)
     print(f"  Loaded {len(df)} rows from unified_attribution_full.csv")
 

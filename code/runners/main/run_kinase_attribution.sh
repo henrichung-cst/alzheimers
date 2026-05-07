@@ -13,14 +13,14 @@ mkdir -p outputs/reports/kinase_attribution
 echo "=== Kinase attribution started at $(date) ===" | tee "$LOG"
 
 echo "--- Stage 1/3: Cross-Plex Normalization + Stoichiometry ---" | tee -a "$LOG"
-$PYTHON code/kinase_attribution.py --normalize 2>&1 | tee -a "$LOG"
+$PYTHON code/kinase_normalize.py 2>&1 | tee -a "$LOG"
 
 echo "--- Stage 2/3: OLS Models + MEA Kinase Enrichment ---" | tee -a "$LOG"
-$PYTHON code/kinase_attribution.py --enrich 2>&1 | tee -a "$LOG"
+$PYTHON code/kinase_enrich.py 2>&1 | tee -a "$LOG"
 
 echo "--- Stage 3/3: Unified Cell-Type Attribution ---" | tee -a "$LOG"
-$PYTHON code/kinase_attribution.py --attribute 2>&1 | tee -a "$LOG"
+$PYTHON code/kinase_attribute.py 2>&1 | tee -a "$LOG"
 
 echo "=== Kinase attribution finished at $(date) ===" | tee -a "$LOG"
 echo "Summary:"
-$PYTHON code/kinase_attribution.py --summary
+$PYTHON code/kinase_summary.py

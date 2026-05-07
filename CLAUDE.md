@@ -52,16 +52,15 @@ python code/data_ingest.py --run           # All steps in order
 python code/data_ingest.py --summary       # Print cached results
 ```
 
-**Stoichiometry, MEA enrichment, and unified attribution** (`kinase_attribution.py`):
+**Stoichiometry, MEA enrichment, and unified attribution** — split into four stage modules plus a summary helper:
 
 The `ANALYSIS_MODE` environment variable controls sample filtering (default: `males_only`):
 ```bash
-python code/kinase_attribution.py --normalize          # Stage 1: IRS cross-plex normalization + stoichiometry (all 72 samples)
-ANALYSIS_MODE=males_only python code/kinase_attribution.py --enrich   # Stage 2: OLS + MEA (males only, outliers excluded)
-ANALYSIS_MODE=males_only python code/kinase_attribution.py --attribute # Stage 3: Unified cell-type attribution
-python code/kinase_attribution.py --mechanism-annotation # Optional: raw phospho MEA + mechanism classification
-python code/kinase_attribution.py --run                # All stages 1-3 in order
-python code/kinase_attribution.py --summary            # Print cached results
+python code/kinase_normalize.py                            # Stage 1: IRS cross-plex normalization + stoichiometry (all 72 samples)
+ANALYSIS_MODE=males_only python code/kinase_enrich.py      # Stage 2: OLS + MEA (males only, outliers excluded)
+ANALYSIS_MODE=males_only python code/kinase_attribute.py   # Stage 3: Unified cell-type attribution
+python code/kinase_mechanism.py                            # Optional: raw phospho MEA + mechanism classification
+python code/kinase_summary.py                              # Print cached results
 ```
 
 **Final attribution-table assembly** (`attribution_recovery.py`):
@@ -133,8 +132,9 @@ The live pipeline is a 3-stage stoichiometry-corrected MEA enrichment + unified 
 ### Pipeline Summary
 
 1. **data_ingest.py** — TMT channel mapping, phosphosite-to-protein matching (91.7%), marker assessment, PCA QC, outlier detection
-2. **kinase_attribution.py** — IRS normalization (all 72 samples), stoichiometry (`log2(phospho) − log2(protein)`), factorial OLS (9 time-resolved contrasts), MEA kinase enrichment (median-centered + winsorized), unified cell-type attribution (SEA-AD + WMB + Song concordance)
+2. **kinase_normalize.py / kinase_enrich.py / kinase_attribute.py / kinase_mechanism.py** — Modular kinase pipeline: IRS normalization (all 72 samples) → stoichiometry (`log2(phospho) − log2(protein)`) → factorial OLS (9 time-resolved contrasts) + MEA kinase enrichment (median-centered + winsorized) → unified cell-type attribution (SEA-AD + WMB + Song concordance) → optional mechanism classification. `kinase_summary.py` prints cached results.
 3. **attribution_recovery.py** — Cross-contrast consistency and final hypothesis tables (primary deliverable: `kinase_hypothesis_table.csv`)
+4. **plot_attribution_bubbles.py** — Visualization: heatmaps, direction-over-time bars, additivity scatter
 
 ### Key Design Points
 
@@ -147,29 +147,36 @@ The live pipeline is a 3-stage stoichiometry-corrected MEA enrichment + unified 
 ### Dependency Graph
 
 ```
-config.py  ←  data_ingest.py  ←  kinase_attribution.py  ←  attribution_recovery.py
+config.py  ←  data_ingest.py  ←  kinase_normalize.py  ←  kinase_enrich.py  ←  kinase_attribute.py  ←  attribution_recovery.py
+                                                                          ←  kinase_mechanism.py (optional, off the live path)
+                                                                          ←  kinase_summary.py (read-only)
 
 Supporting:
 config.py  ←  atlas_reference.py  ←  wmb_expression.py
 config.py  ←  snrna_integration.py
 
 Integration:
-kinase_attribution.py + snrna_integration.py  ←  code/integration/
+kinase_enrich.py / kinase_attribute.py + snrna_integration.py  ←  code/integration/
 ```
 
 ### Live Code
 
 - `config.py` — Shared configuration: file paths, thresholds, enrichment method params, `WMB_CLASSES` list (34 WMB classes, single source of truth for the cell-type spine), `SEA_AD_SUBCLASSES` (transitional, used only by Incytr-integration adapters and supplementary scripts), sample filtering params (`OUTLIER_ZSCORE_THRESH`, `ANALYSIS_MODE`). Still structurally mixed with legacy settings.
 - `data_ingest.py` — TMT channel mapping, phosphosite-to-protein matching, marker assessment, PCA quality control, outlier detection. Outputs to `outputs/reports/data_ingest/`. Requires: `scikit-learn`, `matplotlib`.
-- `kinase_attribution.py` — IRS normalization (all 72 samples), sample filtering (outlier exclusion + sex filter), stoichiometry computation, factorial OLS with disease×timepoint interactions (9 contrasts), MEA kinase enrichment (median-centered + winsorized), unified cell-type attribution (SEA-AD concordance + WMB expression specificity). Outputs to `outputs/reports/kinase_attribution/`. Requires: `kinase-library`, `gseapy`, `scikit-learn`, `matplotlib`, `anndata`.
+- `kinase_normalize.py` — Stage 1: IRS cross-plex normalization (all 72 samples) + stoichiometry computation. Per-track (`--track st|py|both`). Outputs to `outputs/reports/kinase_attribution/`. Requires: `scikit-learn`, `matplotlib`.
+- `kinase_enrich.py` — Stage 2: sample filtering (outlier exclusion + sex), factorial OLS with disease×timepoint interactions (9 contrasts), MEA kinase enrichment (median-centered + winsorized). Per-track. Requires: `kinase-library`, `gseapy`.
+- `kinase_attribute.py` — Stage 3: unified cell-type attribution (SEA-AD concordance + WMB expression specificity + Song within-cohort). Currently consumes the `st` track only. Requires: `anndata`.
+- `kinase_mechanism.py` — Optional supplementary stage: raw-phospho MEA + abundance/activity/both classification. Reuses Stage 2 helpers via import.
+- `kinase_summary.py` — Read-only: prints a cached-results summary across all four stages.
 - `attribution_recovery.py` — Cross-contrast consistency analysis, final unified attribution table. Outputs to `outputs/reports/attribution_recovery/`. Requires: `matplotlib`.
+- `plot_attribution_bubbles.py` — Per-tissue heatmaps, direction-over-time diverging bars, ApTt additivity scatter, winsorization diagnostic. Outputs to `outputs/reports/attribution_recovery/bubble_plots/`. Requires: `matplotlib`, `scipy`.
 - `build_unified_viewer.py` — Generates the interactive HTML viewer (kinase activity → cell-type attribution → pathway backbones → cross-entity views). Reads attribution-recovery tables, MEA stoichiometry, site-level OLS, factorial backbone recurrence + permutation pvalues, and the `kinase_backbone_edges.parquet` edge index. Emits `outputs/reports/unified_viewer/index.html` + a shared JSON payload plus sharded per-entity edge slices under `edge_slices/{kinase,backbone}/` fetched on demand via `SliceCache`. Requires: `kinase-library`, `scipy`, `pyarrow`.
 - `lucie_5xfad_manifest.py` — Builds a proteomics manifest for Lucie 5xFAD data integration.
 
 ### Supporting Code
 
 - `atlas_reference.py` — External atlas acquisition: downloads SEA-AD Nebula effect-size h5ads (`effect_sizes{,_early,_late}.h5ad`) from S3 and all 13 WMB-10Xv3 log2 expression matrices into the ABC project cache. Also exports kinase/phosphatase gene-list helpers and ABC cache utilities consumed by `wmb_expression.py`. Requires: `abc_atlas_access`, `anndata`, `boto3`.
-- `wmb_expression.py` — WMB expression export: per-class kinase/phosphatase expression from Allen WMB 10Xv3 (34 WMB classes, group-by on `wmb_meta["class"]`, no silent drops). Emits `outputs/reports/wmb_expression/wmb_kinase_expression.csv` (primary, class-level) + `wmb_kinase_expression_subclass.csv` (audit sidecar at WMB subclass level). Consumed by kinase_attribution.py unified attribution. Requires: `anndata`.
+- `wmb_expression.py` — WMB expression export: per-class kinase/phosphatase expression from Allen WMB 10Xv3 (34 WMB classes, group-by on `wmb_meta["class"]`, no silent drops). Emits `outputs/reports/wmb_expression/wmb_kinase_expression.csv` (primary, class-level) + `wmb_kinase_expression_subclass.csv` (audit sidecar at WMB subclass level). Consumed by kinase_attribute.py. Requires: `anndata`.
 - `snrna_integration.py` — Song snRNA-seq integration: computes pseudobulk expression from paired 170_gex_celltypes_00.h5ad (63K nuclei, 28 animals) keyed on Allen Cell Type Mapper `class_name` (rolled up to 34 WMB classes via `wmb_class_manifest.csv`); ~21 of 34 classes pass Song's confidence + animal-count gates. Within-cohort expression specificity and transcriptomic concordance via factorial OLS (males-only, pooled across timepoints). Outputs to `outputs/reports/snrna_integration/`. Requires: `anndata`, `scipy`, `statsmodels`.
 - `map_kinases_to_genes.py` — Kinase→gene symbol mapping utility.
 
@@ -236,6 +243,7 @@ Operational shell wrappers under `code/runners/`:
   - `kinase_activity_matrix.csv` — wide NES/FDR + trajectory label (1 row/kinase)
   - `celltype_evidence_table.csv` — WMB-gated static evidence (1 row/kinase×celltype)
   - `kinase_hypothesis_table.csv` — kinase-first synthesis, **primary downstream deliverable**
+  - `bubble_plots/` — Heatmaps, direction-over-time, additivity scatter, winsorization diagnostic
 - `outputs/reports/wmb_expression/` — WMB expression export (supporting)
 
 ## Foundation Documentation
@@ -256,9 +264,9 @@ Other documentation:
 
 ## Gotchas
 
-- **ANALYSIS_MODE controls sample filtering** — defaults to `males_only`. Set `ANALYSIS_MODE=full_cohort` for sensitivity analysis with both sexes. The mode affects `--enrich`, `--attribute`, and `--mechanism-annotation` but NOT `--normalize` (which always uses all 72 samples)
-- **Outlier detection requires stoichiometry** — `data_ingest.py --outliers` reads `stoichiometry_matrix.csv`, so `kinase_attribution.py --normalize` must be run first. Falls back to total proteome if unavailable
-- **Limited automated tests** — live pipeline has no unit tests; verify with `--summary` flags on each script
+- **ANALYSIS_MODE controls sample filtering** — defaults to `males_only`. Set `ANALYSIS_MODE=full_cohort` for sensitivity analysis with both sexes. The mode affects `kinase_enrich.py`, `kinase_attribute.py`, and `kinase_mechanism.py` but NOT `kinase_normalize.py` (which always uses all 72 samples)
+- **Outlier detection requires stoichiometry** — `data_ingest.py --outliers` reads `stoichiometry_matrix.csv`, so `kinase_normalize.py` must be run first. Falls back to total proteome if unavailable
+- **Limited automated tests** — live pipeline has no unit tests; verify with `python code/kinase_summary.py`
 - **Song proteomics files must be mounted** — data_ingest.py reads Excel workbooks from `data/incytr_collections/song/primary/proteomics/`
 - **WMB prerequisite** — `run_live_pipeline.sh` gates on `wmb_kinase_expression.csv` and `wmb_proteome_expression.csv`; run `run_wmb_expression.sh` first
 - **Atlas cache compressed** — raw h5ad files under `data/external/allen_abc/` are zstd-compressed to save space (~115 GB → ~26 GB). Decompress with `bash code/runners/supporting/decompress_atlas_cache.sh` before re-running `wmb_expression.py`. See `data/external/allen_abc/MANIFEST.json` for provenance

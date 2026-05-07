@@ -75,7 +75,7 @@ def step_run():
     # Load MEA results (significant kinases)
     mea_path = os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "mea_stoichiometry.csv")
     if not os.path.exists(mea_path):
-        raise FileNotFoundError(f"{mea_path} not found. Run kinase_attribution.py --enrich first.")
+        raise FileNotFoundError(f"{mea_path} not found. Run kinase_enrich.py first.")
     mea = pd.read_csv(mea_path)
     sig = mea[mea["FDR"] < config.MEA_FDR_THRESH].copy()
     print(f"  {len(sig)} significant kinase-contrast pairs")

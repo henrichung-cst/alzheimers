@@ -39,7 +39,7 @@ FACTORIAL_GENOTYPES = ["WTyp", "AppP", "Ttau", "ApTt"]
 FACTORIAL_TIMEPOINTS = ["2mo", "4mo", "6mo"]
 FACTORIAL_SEX = "ma"
 
-# Design matrix columns (matches kinase_attribution.py OLS)
+# Design matrix columns (matches kinase_enrich.py OLS)
 DESIGN_COLUMNS = [
     "const", "App", "Tau", "Int",
     "time_4mo", "time_6mo",
@@ -62,7 +62,7 @@ TIMEPOINT_TO_DESIGN = {
     "6mo": {"time_4mo": 0, "time_6mo": 1},
 }
 
-# 9 contrast coefficient vectors (from CONTRAST_COEFS in kinase_attribution.py)
+# 9 contrast coefficient vectors (from CONTRAST_COEFS in kinase_enrich.py)
 # Each vector is over DESIGN_COLUMNS in order.
 FACTORIAL_CONTRASTS = {
     "App_2mo": [0, 1, 0, 0, 0, 0, 0, 0, 0, 0],

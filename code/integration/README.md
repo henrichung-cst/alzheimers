@@ -1,6 +1,6 @@
 # Incytr Integration
 
-Connects bulk kinase activity (from `code/kinase_attribution.py`) to cell-cell signaling pathways inferred by Incytr across 462 sender-receiver cell-type pairs. The full specification — scoring model, configuration, runtime modes, outputs, limitations — lives at [`docs/integrations/kinase_incytr_integration.md`](../../docs/integrations/kinase_incytr_integration.md).
+Connects bulk kinase activity (from `code/kinase_enrich.py` + `code/kinase_attribute.py`) to cell-cell signaling pathways inferred by Incytr across 462 sender-receiver cell-type pairs. The full specification — scoring model, configuration, runtime modes, outputs, limitations — lives at [`docs/integrations/kinase_incytr_integration.md`](../../docs/integrations/kinase_incytr_integration.md).
 
 ## Layout
 

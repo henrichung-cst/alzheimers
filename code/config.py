@@ -71,6 +71,10 @@ EXTERNAL_DATA_DIR = os.path.join(REPO_ROOT, "data", "external")
 KL_METHOD = "percentile_rank"
 KL_THRESH = 15  # legacy ST default; tracks read kl_thresh from PHOSPHO_TRACKS
 MEA_FDR_THRESH = 0.25           # standard GSEA FDR threshold
+SITE_FDR_DIAGNOSTIC_THRESH = 0.05  # per-site OLS FDR cutoff for log-only diagnostic counts
+
+TMT_REF_CHANNEL = "126"  # Ref_Pool TMT channel ID present in every plex
+MEA_MIN_SITES = 100             # min ranked sites per contrast to attempt MEA
 MEA_PERMUTATION_NUM = 1000      # GSEApy prerank permutations
 MEA_SEED = 112123               # GSEApy default seed
 MEA_WINSORIZE_PERCENTILE = 1.0  # winsorize site LFCs at this percentile before MEA

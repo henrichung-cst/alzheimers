@@ -5,7 +5,7 @@ Acquires Allen Institute transcriptomic datasets used by the live pipeline:
   - WMB (Allen Mouse Whole Brain): per-region log2 expression matrices, downloaded
     on demand by the WMB cache.  Used by `wmb_expression.py`.
   - SEA-AD (Seattle Alzheimer's Disease MTG): pre-computed Nebula effect-size h5ads
-    (`effect_sizes{,_early,_late}.h5ad`).  Used by `kinase_attribution.py` for
+    (`effect_sizes{,_early,_late}.h5ad`).  Used by `kinase_attribute.py` for
     transcriptomic concordance.
 
 Also exports a small set of helpers consumed by `wmb_expression.py` and

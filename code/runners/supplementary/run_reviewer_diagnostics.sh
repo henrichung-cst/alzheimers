@@ -26,8 +26,8 @@ note "Reviewer diagnostics started"
 # --- Prerequisite: mechanism annotation (needed by parent_protein_qc) ---
 MECH_FILE="outputs/reports/kinase_attribution/mechanism_annotation.csv"
 if [[ ! -f "$MECH_FILE" ]]; then
-  note "mechanism_annotation.csv not found — running --mechanism-annotation"
-  $PYTHON code/kinase_attribution.py --mechanism-annotation 2>&1 | tee -a "$LOG"
+  note "mechanism_annotation.csv not found — running kinase_mechanism.py"
+  $PYTHON code/kinase_mechanism.py 2>&1 | tee -a "$LOG"
 fi
 
 # --- Q4: Stringent FDR ---

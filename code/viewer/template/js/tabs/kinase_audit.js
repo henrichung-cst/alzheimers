@@ -191,7 +191,7 @@ function _diagnoseRawAbsence(ctx, rawRow) {
   if (rawRow && rawRow.contrast) return null;
   const meaRaw = ctx.meaRaw || [];
   if (!meaRaw.length) {
-    return {kind:"file_missing", note:"No raw-phospho MEA loaded for this kinase. Run <code>pixi run python code/kinase_attribution.py --mechanism-annotation</code> to generate <code>mea_raw_phospho.csv</code> (and <code>mea_raw_phospho_pY.csv</code> for tyrosine kinases)."};
+    return {kind:"file_missing", note:"No raw-phospho MEA loaded for this kinase. Run <code>pixi run python code/kinase_mechanism.py</code> to generate <code>mea_raw_phospho.csv</code> (and <code>mea_raw_phospho_pY.csv</code> for tyrosine kinases)."};
   }
   const contrasts = new Set(meaRaw.map(r => r.contrast));
   if (!contrasts.has(ctx.contrast)) {

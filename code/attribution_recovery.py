@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Kinase hypothesis table assembly: kinase-first and cell-type-first views.
 
-Reads MEA enrichment and full unified attribution from kinase_attribution.py
-and produces four output tables suited for hypothesis generation about AD
+Reads MEA enrichment from kinase_enrich.py and unified attribution from
+kinase_attribute.py and produces four output tables suited for hypothesis generation about AD
 progression across cell types, timepoints, and conditions.
 
 Design principle: static localization evidence (WMB expression, SEA-AD
@@ -75,7 +75,7 @@ def _load_mea_stoichiometry():
     if not frames:
         raise FileNotFoundError(
             f"No mea_stoichiometry*.csv found in {KINASE_ATTR_DIR}. "
-            f"Run kinase_attribution.py --enrich first."
+            f"Run kinase_enrich.py first."
         )
     return pd.concat(frames, ignore_index=True, sort=False)
 
@@ -84,7 +84,7 @@ def _load_unified_attribution_full():
     path = os.path.join(KINASE_ATTR_DIR, "unified_attribution_full.csv")
     if not os.path.exists(path):
         raise FileNotFoundError(
-            f"{path} not found. Run kinase_attribution.py --attribute first.")
+            f"{path} not found. Run kinase_attribute.py first.")
     return pd.read_csv(path)
 
 
@@ -342,7 +342,7 @@ def _build_kinase_hypothesis_table(t1, t2):
 
     # Single source of truth: the pill mirrors the per-row combined_confidence
     # from unified_attribution_full (set by _assign_confidence_and_basis_vectorized
-    # in kinase_attribution.py). Pill = True iff at least one (kinase, cell_type)
+    # in kinase_attribute.py). Pill = True iff at least one (kinase, cell_type)
     # row reaches "high" — the same tier rendered in the Attribution verdict
     # table. Tier-by-tier evidence is shown in the Attribution tab; the pill is
     # only a binary "has at least one HIGH row" indicator.

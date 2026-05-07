@@ -5,7 +5,7 @@ timepoints, maps subclass names to SEA-AD subclasses, and exports a sparse
 expression matrix, cell metadata (with animal_id), and an animal-level design
 matrix for the R factorial pipeline.
 
-Design matrix matches kinase_attribution.py OLS:
+Design matrix matches kinase_enrich.py OLS:
   const, App, Tau, Int, time_4mo, time_6mo,
   App_x_time4, App_x_time6, Tau_x_time4, Tau_x_time6
 """

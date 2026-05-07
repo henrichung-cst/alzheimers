@@ -7,7 +7,7 @@
 #
 # Prerequisites:
 #   - data_ingest.py --run (including --outliers for sample_exclusions.csv)
-#   - kinase_attribution.py --normalize (IRS normalization, uses all 72 samples)
+#   - kinase_normalize.py (IRS normalization, uses all 72 samples)
 #   - wmb_expression.py --run (WMB expression matrix)
 #
 # Outputs are archived to mode-specific directories after each track.
@@ -22,7 +22,7 @@ PYTHON=/home/hchung/.local/share/mamba/envs/alzheimers/bin/python
 # Ensure normalization has been run (uses all 72 samples, mode-independent)
 if [[ ! -f outputs/reports/kinase_attribution/stoichiometry_matrix.csv ]]; then
     echo "--- Normalization (all 72 samples) ---"
-    $PYTHON code/kinase_attribution.py --normalize
+    $PYTHON code/kinase_normalize.py
 fi
 
 # Ensure outlier detection has been run
@@ -37,9 +37,9 @@ echo "=========================================="
 echo "  PRIMARY ANALYSIS: males-only"
 echo "=========================================="
 
-ANALYSIS_MODE=males_only $PYTHON code/kinase_attribution.py --enrich
-ANALYSIS_MODE=males_only $PYTHON code/kinase_attribution.py --attribute
-ANALYSIS_MODE=males_only $PYTHON code/kinase_attribution.py --mechanism-annotation
+ANALYSIS_MODE=males_only $PYTHON code/kinase_enrich.py
+ANALYSIS_MODE=males_only $PYTHON code/kinase_attribute.py
+ANALYSIS_MODE=males_only $PYTHON code/kinase_mechanism.py
 ANALYSIS_MODE=males_only $PYTHON code/attribution_recovery.py --run
 
 # Archive primary outputs
@@ -55,9 +55,9 @@ echo "=========================================="
 echo "  SENSITIVITY ANALYSIS: full cohort"
 echo "=========================================="
 
-ANALYSIS_MODE=full_cohort $PYTHON code/kinase_attribution.py --enrich
-ANALYSIS_MODE=full_cohort $PYTHON code/kinase_attribution.py --attribute
-ANALYSIS_MODE=full_cohort $PYTHON code/kinase_attribution.py --mechanism-annotation
+ANALYSIS_MODE=full_cohort $PYTHON code/kinase_enrich.py
+ANALYSIS_MODE=full_cohort $PYTHON code/kinase_attribute.py
+ANALYSIS_MODE=full_cohort $PYTHON code/kinase_mechanism.py
 ANALYSIS_MODE=full_cohort $PYTHON code/attribution_recovery.py --run
 
 # Archive sensitivity outputs
