@@ -4,7 +4,6 @@
 # Filters:
 #   WMB      — WMB full regional h5ad (expression_matrices/WMB-10Xv3/)
 #   subset   — WMB gene-subset h5ad (expression_matrices/WMB-10Xv3-subset/)
-#   Aging    — Aging Mouse h5ad (expression_matrices/Zeng-Aging-Mouse-10Xv3/)
 #   sea_ad   — SEA-AD cell-level h5ad (data/external/sea_ad/)
 #   (empty)  — All compressed files in both directories
 #
@@ -13,7 +12,6 @@
 #   bash code/runners/supporting/decompress_atlas_cache.sh WMB      # only WMB fulls
 #   bash code/runners/supporting/decompress_atlas_cache.sh subset   # only WMB subsets
 #   bash code/runners/supporting/decompress_atlas_cache.sh sea_ad   # only SEA-AD
-#   bash code/runners/supporting/decompress_atlas_cache.sh Aging    # only Aging Mouse
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,10 +68,6 @@ case "$FILTER" in
         echo "Decompressing WMB subset files..."
         decompress_found "$CACHE_DIR" -path "*/WMB-10Xv3-subset/*" -name "*.zst" -type f
         ;;
-    Aging)
-        echo "Decompressing Aging Mouse files..."
-        decompress_found "$CACHE_DIR" -path "*/Zeng-Aging*" -name "*.zst" -type f
-        ;;
     sea_ad)
         if [[ ! -d "$SEA_AD_DIR" ]]; then
             echo "ERROR: SEA-AD directory not found at $SEA_AD_DIR"
@@ -93,7 +87,7 @@ case "$FILTER" in
         ;;
     *)
         echo "ERROR: Unknown filter '$FILTER'"
-        echo "Usage: $0 [WMB|subset|Aging|sea_ad]"
+        echo "Usage: $0 [WMB|subset|sea_ad]"
         exit 1
         ;;
 esac

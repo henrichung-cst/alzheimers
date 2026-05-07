@@ -98,11 +98,6 @@ manifest = {
         'WMB-10Xv3-subset': {
             'description': 'Gene-subset extraction (~7,100 genes) of WMB-10Xv3',
         },
-        'Zeng-Aging-Mouse-10Xv3': {
-            'expression_version': '20241130',
-            'metadata_version': '20250131',
-            'description': 'Aging Mouse Brain single-cell transcriptomics',
-        },
         'SEA-AD': {
             'description': 'Seattle Alzheimer Disease Brain Cell Atlas (MTG region)',
             'runtime_files': ['effect_sizes.h5ad', 'effect_sizes_early.h5ad', 'effect_sizes_late.h5ad'],
