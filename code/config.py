@@ -118,6 +118,7 @@ SEA_AD_PATHWAY_MAP = {
 N_CELL_TYPES = len(WMB_CLASSES)         # 34 — WMB-class spine
 SPECIFICITY_HIGH = 2.0 / N_CELL_TYPES   # ~0.059: ≥2× more specific than uniform across 34 classes
 SPECIFICITY_LOW = 1.0 / N_CELL_TYPES    # ~0.029: ≥1× uniform across 34 classes
+COMBINED_SCORE_SPECIFICITY_BASE = 0.5   # baseline weight on concordance even at zero specificity
 
 CLASS_TO_TISSUE_CATEGORY = {
     "01 IT-ET Glut": "Excitatory neurons",

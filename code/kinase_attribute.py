@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 import config
+from kinase_enrich import _resolve_track, _track_output
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -46,63 +47,60 @@ def _ensure_output_dir():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
-def _resolve_track(track):
-    """Look up a phospho-track config by name; return the dict from config."""
-    if isinstance(track, dict):
-        return track
-    if track not in config.PHOSPHO_TRACKS:
-        raise ValueError(
-            f"Unknown phospho track {track!r}; "
-            f"valid: {list(config.PHOSPHO_TRACKS)}"
-        )
-    return config.PHOSPHO_TRACKS[track]
-
-
-def _track_output(filename, track_cfg):
-    """Compose an output path with the track's suffix appended before the extension."""
-    cfg = _resolve_track(track_cfg)
-    suffix = cfg["output_suffix"]
-    if not suffix:
-        return os.path.join(OUTPUT_DIR, filename)
-    base, ext = os.path.splitext(filename)
-    return os.path.join(OUTPUT_DIR, f"{base}{suffix}{ext}")
-
-
 def _assign_confidence_and_basis_vectorized(unified):
-    """Vectorized confidence + evidence-basis assignment for the unified table."""
-    eff = unified["effective_concordance"]
+    """Vectorized confidence + evidence-basis assignment for the unified table.
+
+    Non-MEA-significant rows short-circuit to ('none', 'weak') in the same pass.
+    """
+    eligible = unified["mea_significant"].astype(bool) & (unified["effective_concordance"] > 0)
     wmb = unified["wmb_specificity"]
     sea_lfc = unified["sea_ad_lfc"].fillna(0.0)
     song_lfc_col = (unified["song_lfc"].fillna(0.0)
                     if "song_lfc" in unified.columns
                     else pd.Series(0.0, index=unified.index))
-    cs_source = unified["concordance_source"]
+    song_contributed = unified["concordance_source"].isin(("song", "both"))
 
     has_wmb = wmb >= config.SPECIFICITY_LOW
     has_wmb_high = wmb >= config.SPECIFICITY_HIGH
     has_sea_ad = sea_lfc.abs() > config.SEA_AD_LFC_MIN
     has_song = song_lfc_col.abs() > config.SONG_LFC_MIN
-    song_contributed = cs_source.isin(("song", "both"))
-    positive_eff = eff > 0
 
-    conf = pd.Series("none", index=unified.index)
-    mask_low = positive_eff & ~song_contributed & ~(has_wmb | has_sea_ad)
-    mask_mod_sea_ad = positive_eff & ~song_contributed & (has_wmb | has_sea_ad)
-    mask_mod_song = positive_eff & song_contributed & (has_wmb | has_sea_ad | has_song)
-    mask_high = positive_eff & song_contributed & has_wmb_high & (has_song | has_sea_ad)
-    conf[mask_low] = "low"
-    conf[mask_mod_sea_ad] = "moderate"
-    conf[mask_mod_song] = "moderate"
-    conf[mask_high] = "high"
+    # Confidence tiers, priority high → moderate → low (np.select picks first match)
+    high_mask = eligible & song_contributed & has_wmb_high & (has_song | has_sea_ad)
+    mod_song_mask = eligible & song_contributed & (has_wmb | has_sea_ad | has_song)
+    mod_sea_ad_mask = eligible & ~song_contributed & (has_wmb | has_sea_ad)
+    low_mask = eligible & ~song_contributed & ~(has_wmb | has_sea_ad)
+    conf = pd.Series(
+        np.select(
+            [high_mask, mod_song_mask, mod_sea_ad_mask, low_mask],
+            ["high", "moderate", "moderate", "low"],
+            default="none",
+        ),
+        index=unified.index,
+    )
 
-    basis = pd.Series("weak", index=unified.index)
-    basis[positive_eff & has_sea_ad & ~has_wmb & ~has_song] = "human_concordance_only"
-    basis[positive_eff & has_song & ~has_wmb & ~has_sea_ad] = "song_only"
-    basis[positive_eff & has_wmb & ~has_sea_ad & ~has_song] = "mouse_expression_only"
-    basis[positive_eff & has_wmb & has_sea_ad & ~has_song] = "cross_species"
-    basis[positive_eff & has_wmb & has_song & ~has_sea_ad] = "within_cohort"
-    basis[positive_eff & has_wmb & has_sea_ad & has_song] = "three_way"
-
+    basis = pd.Series(
+        np.select(
+            [
+                eligible & has_wmb & has_sea_ad & has_song,
+                eligible & has_wmb & has_song & ~has_sea_ad,
+                eligible & has_wmb & has_sea_ad & ~has_song,
+                eligible & has_wmb & ~has_sea_ad & ~has_song,
+                eligible & has_song & ~has_wmb & ~has_sea_ad,
+                eligible & has_sea_ad & ~has_wmb & ~has_song,
+            ],
+            [
+                "three_way",
+                "within_cohort",
+                "cross_species",
+                "mouse_expression_only",
+                "song_only",
+                "human_concordance_only",
+            ],
+            default="weak",
+        ),
+        index=unified.index,
+    )
     return conf, basis
 
 
@@ -300,108 +298,109 @@ def step_attribute():
               f"{supertype_path}")
 
     # 3d. WMB expression specificity (per kinase × subclass)
-    wmb_spec = {}
-    wmb_mean_log2 = {}
-    wmb_frac_cells = {}
-    wmb_binary = {}
+    wmb_top = None
     if os.path.exists(WMB_EXPRESSION_FILE):
         wmb = pd.read_csv(WMB_EXPRESSION_FILE)
-        wmb_key = list(zip(wmb["gene_symbol"].str.upper(), wmb["cell_type"]))
-        wmb["_key"] = wmb_key
-        wmb_max_idx = wmb.groupby("_key")["specificity_score"].idxmax()
-        wmb_top = wmb.loc[wmb_max_idx]
-        wmb_spec = dict(zip(wmb_top["_key"], wmb_top["specificity_score"]))
-        wmb_mean_log2 = dict(zip(wmb_top["_key"], wmb_top["mean_log2_expression"]))
-        wmb_frac_cells = dict(zip(wmb_top["_key"], wmb_top["fraction_cells_expressing"]))
-        wmb_binary = dict(zip(wmb_top["_key"], wmb_top["binary_expressed"]))
-        print(f"  WMB specificity: {len(wmb_spec)} (gene, cell_type) pairs loaded")
+        wmb["_gene_upper"] = wmb["gene_symbol"].str.upper()
+        wmb_top = (wmb.sort_values("specificity_score")
+                      .drop_duplicates(["_gene_upper", "cell_type"], keep="last")
+                      [["_gene_upper", "cell_type", "specificity_score",
+                        "mean_log2_expression", "fraction_cells_expressing",
+                        "binary_expressed"]]
+                      .rename(columns={
+                          "specificity_score": "wmb_specificity",
+                          "mean_log2_expression": "wmb_mean_log2_expression",
+                          "fraction_cells_expressing": "wmb_fraction_cells_expressing",
+                          "binary_expressed": "wmb_binary_expressed",
+                      }))
+        print(f"  WMB specificity: {len(wmb_top)} (gene, cell_type) pairs loaded")
     else:
         print(f"  WMB expression file not found at {WMB_EXPRESSION_FILE}")
 
     # 3d′. Song within-cohort evidence (specificity + concordance)
-    song_spec = {}
+    song_spec_top = None
     if os.path.exists(config.SONG_EXPRESSION_FILE):
         song_sp = pd.read_csv(config.SONG_EXPRESSION_FILE)
-        song_sp_grouped = song_sp.groupby(
-            [song_sp["gene_symbol"].str.upper(), "cell_type"]
-        )["specificity_score"].max()
-        song_spec = song_sp_grouped.to_dict()
-        print(f"  Song specificity: {len(song_spec)} (gene, cell_type) pairs loaded")
+        song_sp["_gene_upper"] = song_sp["gene_symbol"].str.upper()
+        song_spec_top = (song_sp.sort_values("specificity_score")
+                                .drop_duplicates(["_gene_upper", "cell_type"], keep="last")
+                                [["_gene_upper", "cell_type", "specificity_score"]]
+                                .rename(columns={"specificity_score": "song_specificity"}))
+        print(f"  Song specificity: {len(song_spec_top)} (gene, cell_type) pairs loaded")
 
-    song_conc = {}
-    song_conc_pval = {}
-    song_conc_fdr = {}
+    song_cd_top = None
+    _song_key_is_contrast = False
     if os.path.exists(config.SONG_CONCORDANCE_FILE):
         song_cd = pd.read_csv(config.SONG_CONCORDANCE_FILE)
         contrast_col = "contrast" if "contrast" in song_cd.columns else "pathway"
-        song_cd["_key"] = list(zip(
-            song_cd["gene_symbol"].str.upper(),
-            song_cd["cell_type"],
-            song_cd[contrast_col],
-        ))
-        song_conc = dict(zip(song_cd["_key"], song_cd["song_lfc"]))
-        if "song_pval" in song_cd.columns:
-            song_conc_pval = dict(zip(song_cd["_key"], song_cd["song_pval"]))
-        if "song_fdr" in song_cd.columns:
-            song_conc_fdr = dict(zip(song_cd["_key"], song_cd["song_fdr"]))
-        print(f"  Song concordance: {len(song_conc)} (gene, cell_type, "
-              f"{contrast_col}) entries loaded")
         _song_key_is_contrast = (contrast_col == "contrast")
+        keep_cols = ["gene_symbol", "cell_type", contrast_col, "song_lfc"]
+        for opt in ("song_pval", "song_fdr"):
+            if opt in song_cd.columns:
+                keep_cols.append(opt)
+        song_cd_top = song_cd[keep_cols].copy()
+        song_cd_top["_gene_upper"] = song_cd_top["gene_symbol"].str.upper()
+        song_cd_top = song_cd_top.rename(columns={contrast_col: "_song_contrast"})
+        song_cd_top = song_cd_top.drop(columns=["gene_symbol"])
+        print(f"  Song concordance: {len(song_cd_top)} (gene, cell_type, "
+              f"{contrast_col}) entries loaded")
 
-    # 3e. Combine into unified attribution table.
+    # 3e. Combine into unified attribution table (vectorized cross-join + merges).
     print(f"  Building unified base: {len(sig)} sig rows × "
           f"{len(config.WMB_CLASSES)} WMB classes")
-    base_rows = []
-    for _, row in sig.iterrows():
-        gene_upper = row["gene_symbol"].upper() if isinstance(
-            row["gene_symbol"], str) else ""
-        is_sig = bool(np.isfinite(row["FDR"]) and row["FDR"] < config.MEA_FDR_THRESH)
-        for cell_type in config.WMB_CLASSES:
-            base_rows.append({
-                "kinase": row["kinase"],
-                "gene_symbol": row["gene_symbol"],
-                "_gene_upper": gene_upper,
-                "contrast": row["contrast"],
-                "NES": row["NES"],
-                "FDR": row["FDR"],
-                "mea_significant": is_sig,
-                "residue_type": row.get("residue_type", "ST"),
-                "track": row.get("track", "st"),
-                "cell_type": cell_type,
-            })
-    unified = pd.DataFrame(base_rows)
+    sig_base = sig[["kinase", "gene_symbol", "contrast", "NES", "FDR"]].copy()
+    sig_base["_gene_upper"] = sig_base["gene_symbol"].fillna("").astype(str).str.upper()
+    sig_base["mea_significant"] = (np.isfinite(sig_base["FDR"])
+                                    & (sig_base["FDR"] < config.MEA_FDR_THRESH))
+    sig_base["residue_type"] = sig["residue_type"] if "residue_type" in sig.columns else "ST"
+    sig_base["track"] = sig["track"] if "track" in sig.columns else "st"
+
+    cell_type_df = pd.DataFrame({"cell_type": list(config.WMB_CLASSES)})
+    unified = sig_base.merge(cell_type_df, how="cross")
 
     if len(sea_ad_df) > 0:
         sea_ad_join = sea_ad_df[[
             "kinase", "contrast", "cell_type",
             "sea_ad_lfc", "sea_ad_n_supertypes", "sea_ad_stratum",
             "concordance_score",
-        ]].copy()
+        ]]
         unified = unified.merge(
             sea_ad_join, on=["kinase", "contrast", "cell_type"], how="left"
         )
     else:
         unified["sea_ad_lfc"] = np.nan
-        unified["sea_ad_n_supertypes"] = 0
-        unified["sea_ad_stratum"] = ""
-        unified["concordance_score"] = 0.0
+        unified["sea_ad_n_supertypes"] = np.nan
+        unified["sea_ad_stratum"] = np.nan
+        unified["concordance_score"] = np.nan
 
-    keys = list(zip(unified["_gene_upper"], unified["cell_type"]))
-    unified["wmb_specificity"] = [wmb_spec.get(k, 0.0) for k in keys]
-    unified["wmb_mean_log2_expression"] = [wmb_mean_log2.get(k, np.nan) for k in keys]
-    unified["wmb_fraction_cells_expressing"] = [wmb_frac_cells.get(k, np.nan) for k in keys]
-    unified["wmb_binary_expressed"] = [bool(wmb_binary.get(k, False)) for k in keys]
-
-    unified["song_specificity"] = [song_spec.get(k, np.nan) for k in keys]
-    if locals().get("_song_key_is_contrast", False):
-        song_keys = list(zip(unified["_gene_upper"], unified["cell_type"],
-                             unified["contrast"]))
+    if wmb_top is not None:
+        unified = unified.merge(wmb_top, on=["_gene_upper", "cell_type"], how="left")
     else:
-        pathways = unified["contrast"].str.split("_").str[0]
-        song_keys = list(zip(unified["_gene_upper"], unified["cell_type"], pathways))
-    unified["song_lfc"] = [song_conc.get(k, np.nan) for k in song_keys]
-    unified["song_pval"] = [song_conc_pval.get(k, np.nan) for k in song_keys]
-    unified["song_fdr"]  = [song_conc_fdr.get(k, np.nan) for k in song_keys]
+        unified["wmb_specificity"] = np.nan
+        unified["wmb_mean_log2_expression"] = np.nan
+        unified["wmb_fraction_cells_expressing"] = np.nan
+        unified["wmb_binary_expressed"] = np.nan
+    unified["wmb_specificity"] = unified["wmb_specificity"].fillna(0.0)
+    unified["wmb_binary_expressed"] = unified["wmb_binary_expressed"].fillna(False).astype(bool)
+
+    if song_spec_top is not None:
+        unified = unified.merge(song_spec_top, on=["_gene_upper", "cell_type"], how="left")
+    else:
+        unified["song_specificity"] = np.nan
+
+    if song_cd_top is not None:
+        unified["_song_contrast"] = (unified["contrast"] if _song_key_is_contrast
+                                     else unified["contrast"].str.split("_").str[0])
+        unified = unified.merge(song_cd_top,
+                                 on=["_gene_upper", "cell_type", "_song_contrast"],
+                                 how="left")
+        unified = unified.drop(columns=["_song_contrast"])
+    if "song_lfc" not in unified.columns:
+        unified["song_lfc"] = np.nan
+    if "song_pval" not in unified.columns:
+        unified["song_pval"] = np.nan
+    if "song_fdr" not in unified.columns:
+        unified["song_fdr"] = np.nan
     unified["song_concordance_score"] = np.where(
         np.isfinite(unified["song_lfc"]),
         np.sign(unified["NES"]) * unified["song_lfc"],
@@ -430,11 +429,9 @@ def step_attribute():
     )
 
     unified["combined_score"] = (
-        unified["effective_concordance"] * (0.5 + unified["wmb_specificity"]))
+        unified["effective_concordance"]
+        * (config.COMBINED_SCORE_SPECIFICITY_BASE + unified["wmb_specificity"]))
     conf, basis = _assign_confidence_and_basis_vectorized(unified)
-    not_mea_sig = ~unified["mea_significant"].astype(bool)
-    conf = conf.where(~not_mea_sig, "none")
-    basis = basis.where(~not_mea_sig, "weak")
     unified["combined_confidence"] = conf
     unified["evidence_basis"] = basis
 
@@ -490,8 +487,7 @@ def step_attribute():
 def main():
     parser = argparse.ArgumentParser(
         description="Stage 3 of kinase attribution: unified cell-type "
-                    "attribution (SEA-AD + WMB + Song). Standalone copy "
-                    "of step_attribute for fidelity comparison.",
+                    "attribution (SEA-AD + WMB + Song).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.parse_args()
