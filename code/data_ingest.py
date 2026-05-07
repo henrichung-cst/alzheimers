@@ -15,8 +15,10 @@ Inputs (all under data/incytr_collections/song/):
       IMAC phospho site-level quantitation — ~4,000 S/T sites × 6 plexes.
   primary/proteomics/song_IMAC_compositeSites_merged_labeled (2).xlsx
       IMAC phospho composite sites — ~3,000 grouped S/T sites.
-  method_records/aobs_desp_standardized/inputs/A_obs_fractions.tsv
-      snRNA-seq cell-type composition fractions (24 groups × 10 cell types).
+  transcriptomics/170_gex_celltypes_00.h5ad
+      Song snRNA-seq with Allen Cell Type Mapper labels (`class_name` per
+      nucleus, already at WMB-class resolution). Read by --markers to
+      compute per-(sample group × WMB class) composition fractions.
   transcriptomics/snrna_sample_manifest.csv  (optional)
       Manifest linking mouse IDs to snRNA-seq sample IDs.
 
@@ -493,57 +495,47 @@ def step_phospho_match():
 def _compute_class_fractions():
     """Recompute snRNA composition fractions at WMB-class resolution.
 
-    Reads per-cluster-label cell counts from yuyu_clustersize.csv (46 labels ×
-    24 sample groups), maps labels through SNRNA_CLUSTER_TAXONOMY (label →
-    SEA-AD subclass) and seaad_subclass_to_wmb_class.csv (subclass → WMB
-    class), then sums counts per WMB class per group. Labels with no SEA-AD
-    or WMB-class equivalent (subcortical, hippocampal, choroid, etc.) roll
-    into "Other".
+    Counts nuclei per (sample group × class_name) directly from the Song
+    h5ad (`config.SONG_H5AD_FILE`), where `class_name` is the Allen Cell
+    Type Mapper assignment already at WMB-class resolution. Sample group
+    IDs are derived from the h5ad `sample` field by stripping the leading
+    animal code (e.g. ``C198_ma_2mo_WTyp`` → ``ma_2mo_WTyp``). Nuclei
+    below `config.SONG_MIN_SUBCLASS_PROB` are dropped.
 
     Returns
     -------
     pd.DataFrame
-        Index: sample group IDs (24 rows, e.g., "fe_2mo_AppP").
+        Index: sample group IDs (24 rows, e.g. ``fe_2mo_AppP``).
         Columns: WMB class labels with nonzero counts (subset of
-        config.WMB_CLASSES + "Other").
+        ``config.WMB_CLASSES``).
     """
-    raw = pd.read_csv(config.CLUSTERSIZE_FILE, index_col=0)
-    # raw: rows = cluster labels, columns = 24 sample groups
+    import anndata as ad
 
-    seaad_map = pd.read_csv(config.SEAAD_TO_WMB_CLASS_FILE)
-    subclass_to_class = dict(
-        zip(seaad_map["seaad_subclass"], seaad_map["wmb_class_label"])
+    manifest = pd.read_csv(config.WMB_CLASS_MANIFEST_FILE)
+    name_to_label = dict(zip(manifest["class_name"], manifest["class_label"]))
+
+    adata = ad.read_h5ad(config.SONG_H5AD_FILE, backed="r")
+    obs = adata.obs[["sample", "class_name", "class_prob"]].copy()
+    n_total = len(obs)
+    obs = obs[obs["class_prob"] >= config.SONG_MIN_SUBCLASS_PROB]
+    obs = obs.dropna(subset=["class_name"])
+    obs["wmb_class"] = obs["class_name"].map(name_to_label)
+    obs = obs.dropna(subset=["wmb_class"])
+    obs["group"] = obs["sample"].str.replace(r"^[^_]+_", "", regex=True)
+
+    counts = (
+        obs.groupby(["group", "wmb_class"], observed=True)
+           .size()
+           .unstack(fill_value=0)
     )
-
-    taxonomy = config.SNRNA_CLUSTER_TAXONOMY
-    label_to_class = {}
-    for label in raw.index:
-        if label.startswith("cluster-"):
-            label_to_class[label] = "Other"
-            continue
-        if label not in taxonomy:
-            raise ValueError(
-                f"SNRNA_CLUSTER_TAXONOMY is missing label: {label!r}. "
-                "Update config.SNRNA_CLUSTER_TAXONOMY to include this cluster."
-            )
-        sea_subclass = taxonomy[label]["sea_ad_subclass"]
-        label_to_class[label] = subclass_to_class.get(sea_subclass, "Other")
-
-    raw["_class"] = raw.index.map(label_to_class)
-    grouped = raw.groupby("_class").sum()
-
-    # Convert counts → fractions (each sample group sums to 1)
-    fractions = grouped.div(grouped.sum(axis=0), axis=1).T
+    fractions = counts.div(counts.sum(axis=1), axis=0)
     fractions.index.name = "sample_id"
 
-    # Drop columns that are all zero (no cells in any group)
     fractions = fractions.loc[:, (fractions > 0).any(axis=0)]
-
-    n_classes = len(fractions.columns)
-    n_from_wmb = sum(1 for c in fractions.columns if c in config.WMB_CLASSES)
-    print(f"  Class fractions: {n_classes} categories "
-          f"({n_from_wmb} WMB classes, "
-          f"{n_classes - n_from_wmb} other)")
+    n_kept = int(counts.values.sum())
+    print(f"  Class fractions: {fractions.shape[1]} WMB classes × "
+          f"{fractions.shape[0]} groups "
+          f"({n_kept}/{n_total} nuclei after class_prob filter)")
     return fractions
 
 
