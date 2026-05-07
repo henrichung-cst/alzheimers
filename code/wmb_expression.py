@@ -14,7 +14,8 @@ the live supporting dependency.
 Inputs:
   data/external/allen_abc/  (WMB 10Xv3 cell metadata + per-region h5ad files
                              across all 13 regions, via ABC Atlas cache)
-  data/incytr_collections/song/kinase/kldata.csv  (kinase substrate library)
+  Kinase gene universe is fetched via atlas_reference.get_all_kinase_genes,
+  which itself reads data/incytr_collections/song/kinase/kldata.csv.
 
 Outputs:
   outputs/reports/wmb_expression/wmb_kinase_expression.csv
