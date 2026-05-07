@@ -80,7 +80,7 @@ num_cols <- c("SigProb_WT", "SigProb_App", "log2FC", "aFC",
               "TPDS", "multimodel_score", "PDS")
 
 # Optional columns (may not exist in Phase 1 if kinase/phospho data absent)
-opt_cols <- c("PhPDS_ps", "SiK_score_WT", "SiK_score_App", "kinase_boost")
+opt_cols <- c("PhPDS_ps", "SiK_score_WT", "SiK_score_App", "sik_kinase_boost")
 
 n_pairs_checked <- 0
 n_pairs_matched <- 0

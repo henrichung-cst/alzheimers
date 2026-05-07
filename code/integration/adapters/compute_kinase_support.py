@@ -13,14 +13,18 @@ Deduplication: kinases already present as EM or Target nodes in a pathway are
 excluded from the external score for that pathway (their contribution is
 captured by Incytr's internal channel).
 
-Score formula per kinase-substrate edge:
-  edge_weight = |NES| x IDF x attribution_weight
+Score formula per kinase-substrate edge (all-pairs / factorial entry points):
+  edge_weight = |NES| x IDF
   IDF = 1/log(N)  where N = #significant attributed kinases targeting substrate
-  attribution_weight = combined_score x cell_type_relevance
 
 Per-pathway score = median(edge_weights).  Median aggregation is robust to
 hub-substrate inflation (many weak edges from promiscuous substrates) and
 single-outlier dominance (one strong edge in low-degree pathways).
+
+The single-pair `main()` in this module retains the pre-cutover attribution
+multiplier (see `apply_pair_weights`, `_load_attribution_weights`) for the
+diagnostic --permutations path; the all-pairs and factorial entry points
+have stripped it (see git tag `legacy-incytr-storage-cutover`).
 
 Outputs:
   intermediates/kinase_support_scores.csv
@@ -144,9 +148,9 @@ def compute_scores(pathways, sub_to_kins, idf_map, sig_kinases, attr_weights,
     Uses median edge weight as the per-pathway score.  The median is robust
     to both hub-substrate inflation (many weak edges) and single-outlier
     dominance (one strong edge in a low-degree pathway).  The sum is
-    retained as ``kinase_support_score_sum`` for reference.
+    retained as ``mea_kinase_support_sum`` for reference.
 
-    Returns DataFrame with per-pathway kinase_support_score and metadata.
+    Returns DataFrame with per-pathway mea_kinase_support_score and metadata.
     """
 
     rows = []
@@ -210,15 +214,15 @@ def compute_scores(pathways, sub_to_kins, idf_map, sig_kinases, attr_weights,
 
         rows.append({
             "Path": path_id,
-            "kinase_support_score": float(np.median(edge_weights))
+            "mea_kinase_support_score": float(np.median(edge_weights))
                 if edge_weights else 0.0,
-            "kinase_support_score_sum": sum(edge_weights),
-            "kinase_support_score_no_idf": float(np.median(edge_weights_no_idf))
+            "mea_kinase_support_sum": sum(edge_weights),
+            "mea_kinase_support_score_no_idf": float(np.median(edge_weights_no_idf))
                 if edge_weights_no_idf else 0.0,
-            "n_distinct_kinases": len(unique_kinases),
-            "n_node_kinases_excluded": n_excluded,
-            "top_kinases": ";".join(sorted(unique_kinases)[:10]),
-            "concordance_flag": conc_flag,
+            "mea_n_distinct_kinases": len(unique_kinases),
+            "mea_n_node_kinases_excluded": n_excluded,
+            "mea_top_kinases": ";".join(sorted(unique_kinases)[:10]),
+            "mea_concordance_flag": conc_flag,
             "TPDS": tpds,
             "PDS": pds,
         })
@@ -279,6 +283,32 @@ def build_substrate_edge_table(sub_to_kins, idf_map, sig_kinases,
             all_kinase_genes.update(kgenes)
 
     return sub_raw_edges, all_kinase_genes
+
+
+def edges_to_list_form(sub_raw_edges):
+    """Convert sub_raw_edges numpy arrays to the list-form dict that
+    ``compute_scores_fast`` expects, with no per-pair attribution weighting
+    or filtering. This is the structural substitute for
+    :func:`apply_pair_weights` when no cell-type-attribution multiplier is
+    being applied; the resulting kinase support score reflects substrate
+    evidence + IDF + |MEA NES| only, and consumers join cell-type
+    attribution post-hoc from ``unified_attribution.csv``.
+
+    See ``code/integration/sidecar/kinase_pack/compute_kinase_support_factorial.py``
+    docstring for the rationale (taxonomy mismatch between WMB-keyed
+    attribution and SEA-AD-keyed Incytr pairs, plus a Group-C concern about
+    baking attribution into the support score)."""
+    out = {}
+    for sub_gene, raw in sub_raw_edges.items():
+        out[sub_gene] = {
+            "ew_idf": raw["abs_nes_idf"].tolist(),
+            "ew_no_idf": raw["abs_nes"].tolist(),
+            "nes_sign": raw["nes_sign"].tolist(),
+            "kgenes": list(raw["kgenes"]),
+            "abbrevs": list(raw["abbrevs"]),
+            "abbrev_set": set(raw["abbrevs"]),
+        }
+    return out
 
 
 def apply_pair_weights(sub_raw_edges, attr_weights):
@@ -349,10 +379,10 @@ def compute_scores_fast(pathways, sub_pair, all_kinase_genes, *,
         Kinase gene symbols from :func:`build_substrate_edge_table`.
     routes_sink : list, optional
         When given, appended with per-(pathway, kinase) routes: each entry is
-        a tuple ``(path, kinase_abbrev, support_contribution, nes_sign)`` where
-        ``support_contribution`` is the sum of this kinase's edge weights
-        (ew_idf) across the pathway's EM+Target substrates. Summed across
-        kinases per pathway this reproduces ``kinase_support_score_sum``.
+        a tuple ``(path, kinase_abbrev, mea_support_contribution, nes_sign)``
+        where ``mea_support_contribution`` is the sum of this kinase's edge
+        weights (ew_idf) across the pathway's EM+Target substrates. Summed
+        across kinases per pathway this reproduces ``mea_kinase_support_sum``.
 
     Returns
     -------
@@ -482,13 +512,13 @@ def compute_scores_fast(pathways, sub_pair, all_kinase_genes, *,
 
     return pd.DataFrame({
         "Path": path_arr,
-        "kinase_support_score": scores,
-        "kinase_support_score_sum": scores_sum,
-        "kinase_support_score_no_idf": scores_no_idf,
-        "n_distinct_kinases": n_kin,
-        "n_node_kinases_excluded": n_excl,
-        "top_kinases": top_kin_list,
-        "concordance_flag": conc_flags,
+        "mea_kinase_support_score": scores,
+        "mea_kinase_support_sum": scores_sum,
+        "mea_kinase_support_score_no_idf": scores_no_idf,
+        "mea_n_distinct_kinases": n_kin,
+        "mea_n_node_kinases_excluded": n_excl,
+        "mea_top_kinases": top_kin_list,
+        "mea_concordance_flag": conc_flags,
         "TPDS": tpds_arr,
         "PDS": pds_arr,
     })
@@ -499,14 +529,14 @@ def compute_scores_fast(pathways, sub_pair, all_kinase_genes, *,
 # ---------------------------------------------------------------------------
 
 def compute_adjusted_rankings(scores_df, lambda_values):
-    """Compute adjusted_score = TPDS + lambda * kinase_support_score."""
-    out = scores_df[["Path", "TPDS", "kinase_support_score"]].copy()
+    """Compute adjusted_score = TPDS + lambda * mea_kinase_support_score."""
+    out = scores_df[["Path", "TPDS", "mea_kinase_support_score"]].copy()
     out["tpds_rank"] = out["TPDS"].rank(ascending=False, method="min")
 
     for lam in lambda_values:
         col_s = f"adjusted_score_lam{lam}"
         col_r = f"adjusted_rank_lam{lam}"
-        out[col_s] = out["TPDS"] + lam * out["kinase_support_score"]
+        out[col_s] = out["TPDS"] + lam * out["mea_kinase_support_score"]
         out[col_r] = out[col_s].rank(ascending=False, method="min")
 
     return out
@@ -531,18 +561,18 @@ def run_sensitivity_analyses(scores_df, results_full, lambda_values,
             results_full[["Path", "PhPDS_ps"]], on="Path", how="left"
         )
         phPDS = pd.to_numeric(merged["PhPDS_ps"], errors="coerce")
-        ks = merged["kinase_support_score"]
+        ks = merged["mea_kinase_support_score"]
         mask = phPDS.notna() & ks.notna() & (ks > 0)
         if mask.sum() > 10:
             rho, pval = stats.spearmanr(phPDS[mask], ks[mask])
             summary["spearman_rho_phPDS_vs_kscore"] = round(rho, 4)
             summary["spearman_pval_phPDS_vs_kscore"] = float(f"{pval:.2e}")
-            print(f"  PhPDS_ps vs kinase_support_score: rho={rho:.4f}, p={pval:.2e}")
+            print(f"  PhPDS_ps vs mea_kinase_support_score: rho={rho:.4f}, p={pval:.2e}")
 
     # 2. IDF sensitivity: top-20 overlap with vs without IDF
-    rank_idf = scores_df["kinase_support_score"].rank(
+    rank_idf = scores_df["mea_kinase_support_score"].rank(
         ascending=False, method="min")
-    rank_no_idf = scores_df["kinase_support_score_no_idf"].rank(
+    rank_no_idf = scores_df["mea_kinase_support_score_no_idf"].rank(
         ascending=False, method="min")
     top20_idf = set(scores_df.loc[rank_idf <= 20, "Path"])
     top20_no_idf = set(scores_df.loc[rank_no_idf <= 20, "Path"])
@@ -567,10 +597,10 @@ def run_sensitivity_analyses(scores_df, results_full, lambda_values,
 
     # General statistics
     summary["n_pathways"] = len(scores_df)
-    summary["n_nonzero_score"] = int((scores_df["kinase_support_score"] > 0).sum())
-    summary["n_zero_score"] = int((scores_df["kinase_support_score"] == 0).sum())
+    summary["n_nonzero_score"] = int((scores_df["mea_kinase_support_score"] > 0).sum())
+    summary["n_zero_score"] = int((scores_df["mea_kinase_support_score"] == 0).sum())
     summary["n_with_excluded_nodes"] = int(
-        (scores_df["n_node_kinases_excluded"] > 0).sum())
+        (scores_df["mea_n_node_kinases_excluded"] > 0).sum())
 
     return summary
 
@@ -811,8 +841,8 @@ def main():
     print("\nComputing kinase support scores...")
     scores_df = compute_scores_fast(pathways, sub_pair, all_kinase_genes)
 
-    n_nonzero = (scores_df["kinase_support_score"] > 0).sum()
-    n_zero = (scores_df["kinase_support_score"] == 0).sum()
+    n_nonzero = (scores_df["mea_kinase_support_score"] > 0).sum()
+    n_zero = (scores_df["mea_kinase_support_score"] == 0).sum()
     print(f"  Nonzero scores: {n_nonzero}")
     print(f"  Zero scores: {n_zero}")
 

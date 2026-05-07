@@ -2,6 +2,8 @@
 
 import os
 import sys
+import hashlib
+import json
 
 # ---------------------------------------------------------------------------
 # Repo root and path setup
@@ -192,6 +194,71 @@ KINASE_TO_GENE_CSV = os.path.join(
 # ---------------------------------------------------------------------------
 # Paths: intermediates (written by adapters, read by R wrappers)
 # ---------------------------------------------------------------------------
+INCYTR_BASE = os.path.join(REPO_ROOT, "outputs", "incytr")
+UNIVERSE_BASE = os.path.join(INCYTR_BASE, "universes")
+SCORING_BASE = os.path.join(INCYTR_BASE, "scoring")
+CONFIG_BASE = os.path.join(INCYTR_BASE, "configs")
+NORMALIZED_SCHEMA_VERSION = 2
+
+
+def _stable_digest(payload, n=16):
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:n]
+
+
+def resolve_universe_id(config=None):
+    """Return a stable universe id for the active input universe.
+
+    The id is intentionally based on input path identities and universe-defining
+    filters, not output timestamps, so independent runs over the same universe
+    share normalized dimension tables.
+    """
+    payload = {
+        "schema_version": NORMALIZED_SCHEMA_VERSION,
+        "h5ad": H5AD_PATH,
+        "kinase_to_gene": KINASE_TO_GENE_CSV,
+        "factorial_genotypes": FACTORIAL_GENOTYPES,
+        "factorial_timepoints": FACTORIAL_TIMEPOINTS,
+        "factorial_sex": FACTORIAL_SEX,
+        "expression_detection_threshold": EXPRESSION_DETECTION_THRESHOLD,
+        "kinase_imputation_fdr": KINASE_IMPUTATION_FDR,
+        "kinase_imputation_attribution_tau": KINASE_IMPUTATION_ATTRIBUTION_TAU,
+        "expr_imputation_floor": EXPR_IMPUTATION_FLOOR,
+    }
+    if config:
+        payload.update(config)
+    return "u_" + _stable_digest(payload)
+
+
+def resolve_scoring_id(config=None):
+    """Return a stable scoring id for knobs that affect pathway scores."""
+    payload = {
+        "schema_version": NORMALIZED_SCHEMA_VERSION,
+        "universe_id": resolve_universe_id(),
+        "phospho_fdr_gate": PHOSPHO_FDR_GATE,
+        "discordance_rank_quartile": DISCORDANCE_RANK_QUARTILE,
+        "sender_attribution_discount": SENDER_ATTRIBUTION_DISCOUNT,
+        "lambda_values": LAMBDA_VALUES,
+    }
+    if config:
+        payload.update(config)
+    return "s_" + _stable_digest(payload)
+
+
+def resolve_config_id(config=None):
+    """Return a stable aggregation config id."""
+    payload = {
+        "schema_version": NORMALIZED_SCHEMA_VERSION,
+        "universe_id": resolve_universe_id(),
+        "scoring_id": resolve_scoring_id(),
+        "pds_significance_threshold": PDS_SIGNIFICANCE_THRESHOLD,
+        "n_permutations_aggregate": N_PERMUTATIONS_AGGREGATE,
+    }
+    if config:
+        payload.update(config)
+    return "c_" + _stable_digest(payload)
+
+
 INTERMEDIATES_DIR = os.path.join(
     REPO_ROOT, "code", "integration", "intermediates"
 )

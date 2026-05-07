@@ -49,6 +49,18 @@ code/integration/intermediates/[factorial/]all_pairs/
    {sender}__{receiver}/adjusted_rankings.csv
    {sender}__{receiver}/reranking_summary.json
 
+            │  normalization adapters (schema_version = 2)
+            ▼
+outputs/incytr/
+   universes/{universe_id}/
+      genes.parquet cells.parquet contrasts.parquet kinases.parquet
+      pair_dim.parquet backbones.parquet pathways.parquet routes/{pair_id}.parquet
+   scoring/{scoring_id}/
+      pathway_scores.parquet/pair_id=*/part-0.parquet
+   configs/{config_id}/
+      backbones_by_contrast.parquet backbone_senders.parquet
+      target_convergence.parquet target_convergence_senders.parquet
+
             │  aggregate_{cross_pair,factorial}.py
             ▼
 code/integration/intermediates/[factorial/]all_pairs/aggregation/
@@ -63,6 +75,13 @@ code/integration/intermediates/[factorial/]all_pairs/aggregation/
 .../aggregation/examination/
    additivity, temporal, cell-type, kinase composites and CSVs
 ```
+
+The normalized `outputs/incytr/` tree is the production storage target. The
+legacy per-pair CSVs and aggregation CSVs are retained during rollout for
+round-trip verification and existing diagnostic scripts. `build_edge_index.py`
+now writes the universe layer and normalized route shards by default; the old
+`kinase_backbone_edges.parquet` materialized join is only emitted with
+`--emit-legacy-edges`.
 
 ## 3. Runtime modes
 
@@ -139,7 +158,7 @@ Valid chains are drawn from the curated IncytrDB catalog. The **signaling probab
 SigProb = Hill(L × R) × Hill(R × EM) × Hill(EM × T)
 ```
 
-**TPDS** (Transcriptomic Pathway Differential Score) is a logistic transform of SigProb to `[-1, +1]` measuring condition-level change in co-expression. Additional omic layers contribute additive terms to the final **PDS** (Pathway Differential Score); the `kinase_boost = PDS − TPDS` column records how much non-expression evidence moved the score.
+**TPDS** (Transcriptomic Pathway Differential Score) is a logistic transform of SigProb to `[-1, +1]` measuring condition-level change in co-expression. Additional omic layers contribute additive terms to the final **PDS** (Pathway Differential Score); the `sik_kinase_boost = PDS − TPDS` column records how much the **structural** kinase evidence (KPDS, weighted kinase-library SiK terms) moved the score above the transcriptional baseline. This is distinct from `mea_kinase_support_score` (§5), which carries the **activity-based** evidence — median of `|NES| × IDF` over kinase→substrate routes derived from our MEA stoichiometry enrichment. The two are independent quantities and may disagree.
 
 ### Gene filtering
 
@@ -196,8 +215,8 @@ Computed by `compute_kinase_support[_all_pairs|_factorial].py` after R produces 
    cell_type_relevance = 1.0  if K attributed to receiver
                          0.25 if K attributed only to sender (SENDER_ATTRIBUTION_DISCOUNT)
    ```
-3. **Aggregate per pathway.** `kinase_support_score = median(edge_weights)`, unsigned. The median is robust to hub-substrate inflation (promiscuous substrates like Srrm2 with 80+ kinases) and single-outlier dominance. Sum is retained as `kinase_support_score_sum`. Each pathway is annotated with a concordance flag (`concordant` / `discordant` / `mixed` / `none`, based on mean sign of NES vs sign of TPDS), number of distinct contributing kinases, number of node kinases excluded, and identity of top contributing kinases.
-4. **Adjusted rankings.** `adjusted_score = TPDS + λ × kinase_support_score` for `λ ∈ LAMBDA_VALUES`.
+3. **Aggregate per pathway.** `mea_kinase_support_score = median(edge_weights)`, unsigned. The median is robust to hub-substrate inflation (promiscuous substrates like Srrm2 with 80+ kinases) and single-outlier dominance. Sum is retained as `mea_kinase_support_sum`. Each pathway is annotated with `mea_concordance_flag` (`concordant` / `discordant` / `mixed` / `none`, based on mean sign of NES vs sign of TPDS), `mea_n_distinct_kinases`, and identity of top contributing kinases.
+4. **Adjusted rankings.** `adjusted_score = TPDS + λ × mea_kinase_support_score` for `λ ∈ LAMBDA_VALUES`.
 
 **Deduplication rule.** Kinases that are already pathway nodes (EM or Target) for a given pathway are excluded from that pathway's external score. Their contribution is already carried by Incytr's internal channel.
 
@@ -330,10 +349,11 @@ The `INCYTR_*` defaults live in a single registry: `code/integration/incytr_runt
 
 Under `code/integration/intermediates/factorial/all_pairs/`:
 
-- `recv_{receiver}.parquet` (22 files) — columns: `sender, Ligand, Receptor, EM, Target, Path, pathway_evidence, imputed_nodes, kinase_boost, n_animals, df_resid`, plus per-contrast `TPDS_{contrast}`, `SE_{contrast}`, `pvalue_{contrast}` for each of 9 contrasts.
+- `recv_{receiver}.parquet` (22 files) — columns: `sender, Ligand, Receptor, EM, Target, Path, pathway_evidence, imputed_nodes, n_animals, df_resid`, plus per-contrast `TPDS_{contrast}`, `SE_{contrast}`, `pvalue_{contrast}`, `sik_kinase_boost_{contrast}` (= `PDS - TPDS`, structural-SiK lift) for each of 9 contrasts.
 - `pair_summary.csv` — 462-row summary (pathway counts, timing, status).
-- `{sender}__{receiver}/kinase_support_scores.csv` — per-pair, per-contrast substrate-based evidence.
-- `{sender}__{receiver}/adjusted_rankings.csv` — `TPDS + λ × kinase_support` for the λ sweep.
+- `{sender}__{receiver}/kinase_support_scores.csv` — per-pair, per-contrast MEA-activity-weighted substrate evidence. Columns: `Path, EM, Target, Receptor, Ligand` plus per-contrast `mea_kinase_support_score_{contrast}`, `mea_kinase_support_sum_{contrast}`, `mea_n_distinct_kinases_{contrast}`, `mea_concordance_flag_{contrast}`.
+- `{sender}__{receiver}/kinase_routes.parquet` — per-pair sparse explanation: `(Path, contrast, kinase, mea_support_contribution, nes_sign)`. Each row is one kinase→substrate hit.
+- `{sender}__{receiver}/adjusted_rankings.csv` — `TPDS + λ × mea_kinase_support_score` for the λ sweep.
 - `{sender}__{receiver}/reranking_summary.json` — per-pair scoring statistics.
 - `aggregation/backbone_recurrence_by_contrast.csv` — R-EM-T triples shared across senders, by contrast.
 - `aggregation/hub_matrix_by_contrast.csv` — 22 × 22 sender × receiver signaling summary.

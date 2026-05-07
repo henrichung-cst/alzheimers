@@ -67,7 +67,7 @@ def create_connection(data_dir):
                "Receiver.group" AS receiver,
                Ligand, Receptor, EM, Target, Path,
                pathway_evidence, imputed_nodes,
-               TPDS, PDS, kinase_boost
+               TPDS, PDS, sik_kinase_boost
         FROM read_parquet('{parquet_glob}')
     """)
 
@@ -82,13 +82,13 @@ def aggregate_backbone_recurrence(con, pds_threshold, receiver_filter=None):
 
     sql = f"""
     WITH base AS (
-        SELECT sender, receiver, Receptor, EM, Target, PDS, kinase_boost
+        SELECT sender, receiver, Receptor, EM, Target, PDS, sik_kinase_boost
         FROM recv_all {where}
     ),
     per_sender AS (
         SELECT sender, receiver, Receptor, EM, Target,
                AVG(PDS) AS sender_mean_pds,
-               AVG(kinase_boost) AS sender_mean_kb
+               AVG(sik_kinase_boost) AS sender_mean_kb
         FROM base
         GROUP BY sender, receiver, Receptor, EM, Target
     ),
@@ -107,7 +107,7 @@ def aggregate_backbone_recurrence(con, pds_threshold, receiver_filter=None):
         ROUND(MEDIAN(sender_mean_pds), 6) AS median_pds,
         ROUND(STDDEV_SAMP(sender_mean_pds), 6) AS std_pds,
         ROUND(MAX(ABS(sender_mean_pds)), 6) AS max_abs_pds,
-        ROUND(AVG(sender_mean_kb), 6) AS mean_kinase_boost,
+        ROUND(AVG(sender_mean_kb), 6) AS mean_sik_kinase_boost,
         ROUND(
             SUM(CASE WHEN SIGN(sender_mean_pds) = SIGN(group_mean) THEN 1 ELSE 0 END)
                 ::FLOAT / COUNT(*),
@@ -136,7 +136,7 @@ def aggregate_hub_matrix(con, pds_threshold, receiver_filter=None):
               / COUNT(*), 4) AS pct_significant,
         ROUND(AVG(ABS(PDS)), 6) AS mean_abs_pds,
         ROUND(AVG(PDS), 6) AS mean_pds,
-        ROUND(AVG(kinase_boost), 6) AS mean_kinase_boost,
+        ROUND(AVG(sik_kinase_boost), 6) AS mean_sik_kinase_boost,
         COUNT(CASE WHEN PDS > ? THEN 1 END) AS n_upregulated,
         COUNT(CASE WHEN PDS < ? THEN 1 END) AS n_downregulated
     FROM recv_all {where}
@@ -163,7 +163,7 @@ def aggregate_target_convergence(con, pds_threshold, receiver_filter=None):
 
     sql = f"""
     WITH base AS (
-        SELECT sender, receiver, Target, Receptor, EM, PDS, kinase_boost
+        SELECT sender, receiver, Target, Receptor, EM, PDS, sik_kinase_boost
         FROM recv_all {where}
     ),
     per_sender AS (
@@ -176,7 +176,7 @@ def aggregate_target_convergence(con, pds_threshold, receiver_filter=None):
         SELECT receiver, Target,
                COUNT(DISTINCT Receptor || '::' || EM) AS n_routes,
                COUNT(*) AS n_pathways,
-               ROUND(AVG(kinase_boost), 6) AS mean_kinase_boost
+               ROUND(AVG(sik_kinase_boost), 6) AS mean_sik_kinase_boost
         FROM base
         GROUP BY receiver, Target
     )
@@ -189,12 +189,12 @@ def aggregate_target_convergence(con, pds_threshold, receiver_filter=None):
         rc.n_pathways,
         ROUND(AVG(ps.sender_mean_pds), 6) AS mean_pds,
         ROUND(MEDIAN(ps.sender_mean_pds), 6) AS median_pds,
-        rc.mean_kinase_boost,
+        rc.mean_sik_kinase_boost,
         ARG_MAX(ps.sender, ABS(ps.sender_mean_pds)) AS top_sender
     FROM per_sender ps
     JOIN route_counts rc ON ps.receiver = rc.receiver AND ps.Target = rc.Target
     GROUP BY ps.receiver, ps.Target, rc.n_routes, rc.n_pathways,
-             rc.mean_kinase_boost
+             rc.mean_sik_kinase_boost
     ORDER BY ps.receiver, n_senders_significant DESC, rc.n_routes DESC
     """
 
@@ -291,6 +291,21 @@ def _degree_median(ews, d):
 
 
 def run_backbone_permutations(backbone_df, shared, n_permutations):
+    """Backbone-level dual null model.
+
+    Currently disabled: the null relies on attribution-weighted edges and
+    `sub_raw_edges` / `all_mea_nes` exposed by `load_shared_data`, which
+    were removed when the kinase support entry adapters were stripped of
+    their per-pair attribution multiplier (git tag
+    `legacy-incytr-storage-cutover`). Re-enabling requires reformulating
+    the wiring null against the structural-only edge weights.
+    """
+    raise NotImplementedError(
+        "run_backbone_permutations is disabled after the attribution "
+        "multiplier strip; see git tag legacy-incytr-storage-cutover and "
+        "rebuild the null against structural-only edges before re-enabling."
+    )
+    # Unreachable below; retained for the rebuild reference.
     """Dual permutation null models for backbone-level kinase support.
 
     Operates on unique (receiver, EM, Target) backbones from the cross-pair

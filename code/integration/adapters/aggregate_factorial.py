@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 
 import config_integration as icfg
+from normalization import resolve_paths, write_config_tables_from_legacy
 
 CONTRASTS = list(icfg.FACTORIAL_CONTRASTS.keys())
 GENOTYPES = ["App", "Tau", "ApTt"]
@@ -284,6 +285,8 @@ def q4_backbone_recurrence(con, pval_threshold, out_path):
                ROUND(MAX(ABS(ps.sender_mean_tpds)), 6) AS max_abs_tpds,
                MIN(ps.sender_min_pval) AS tpds_pvalue,
                STRING_AGG(DISTINCT ps.sender, ',' ORDER BY ps.sender) AS sender_list,
+               STRING_AGG(DISTINCT ps.sender, ',' ORDER BY ps.sender)
+                   FILTER (ps.sender_min_pval < ?) AS significant_sender_list,
                p.pathway_evidence_backbone,
                p.n_expression_confirmed,
                p.n_kinase_imputed,
@@ -300,7 +303,7 @@ def q4_backbone_recurrence(con, pval_threshold, out_path):
         HAVING COUNT(DISTINCT ps.sender) FILTER (ps.sender_min_pval < ?) >= 2
         ORDER BY n_senders_significant DESC, max_abs_tpds DESC
         """
-        df = con.execute(sql, [pval_threshold, pval_threshold]).fetchdf()
+        df = con.execute(sql, [pval_threshold, pval_threshold, pval_threshold]).fetchdf()
         df.to_csv(out_path, mode="a" if wrote_header else "w",
                   header=not wrote_header, index=False)
         wrote_header = True
@@ -321,9 +324,9 @@ def q5_kinase_integration(con, pval_threshold):
             SELECT Path,
                    replace(replace(sender, '_', ' '), '-', '/') AS sender,
                    replace(replace(receiver, '_', ' '), '-', '/') AS receiver,
-                   kinase_support_score_{contrast} AS kss,
-                   n_distinct_kinases_{contrast} AS n_kinases,
-                   concordance_flag_{contrast} AS concordance
+                   mea_kinase_support_score_{contrast} AS kss,
+                   mea_n_distinct_kinases_{contrast} AS n_kinases,
+                   mea_concordance_flag_{contrast} AS concordance
             FROM kinase_all
         ),
         joined AS (
@@ -701,17 +704,22 @@ def _empty_perm_result(backbone_c, contrast):
 
 
 def run_factorial_permutations(backbone_path, n_permutations, out_path):
-    """Run backbone-level permutation tests for all 9 contrasts.
+    """Backbone-level dual null model.
 
-    Loads per-contrast kinase data from compute_kinase_support_factorial,
-    then runs dual null model (enrichment + wiring) independently per contrast.
-    Writes results incrementally per contrast to avoid OOM.
-
-    Memory strategy: loads backbone CSV once, slices per contrast, frees
-    the full DataFrame before running permutations. Each contrast uses
-    ~500MB peak (edge structures + permutation arrays).
+    Currently disabled: the null relies on attribution-weighted edges and
+    `sub_raw_edges` exposed by `load_shared_data`, both of which were
+    removed when the kinase support entry adapters were stripped of their
+    per-pair attribution multiplier (git tag
+    `legacy-incytr-storage-cutover`). Re-enabling requires reformulating
+    the wiring null against the structural-only edge weights.
     """
-    import gc
+    raise NotImplementedError(
+        "run_factorial_permutations is disabled after the attribution "
+        "multiplier strip; see git tag legacy-incytr-storage-cutover and "
+        "rebuild the null against structural-only edges before re-enabling."
+    )
+    # Unreachable below; retained for the rebuild reference.
+    import gc  # noqa: F401
     _sidecar_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "sidecar", "kinase_pack",
@@ -1147,6 +1155,23 @@ def main():
                           f"Null1={n1:,} ({100*n1/max(n_active,1):.1f}%), "
                           f"Null2={n2:,} ({100*n2/max(n_active,1):.1f}%)")
                 del perm_df
+
+    npaths = resolve_paths(config_id=icfg.resolve_config_id({
+        "pvalue_threshold": pval,
+        "n_permutations_aggregate": args.n_permutations,
+    }))
+    if os.path.exists(os.path.join(npaths.universe_dir, "backbones.parquet")):
+        print("\nNormalizing aggregation outputs...")
+        outputs = write_config_tables_from_legacy(
+            aggregation_dir=out_dir,
+            universe_dir=npaths.universe_dir,
+            config_dir=npaths.config_dir,
+            pvalue_threshold=pval,
+        )
+        print(f"  wrote {len(outputs)} config tables -> {npaths.config_dir}")
+    else:
+        print("\nSkipping normalized config tables: universe layer not found "
+              f"at {npaths.universe_dir}")
 
     total = time.monotonic() - t0
     print(f"\nFactorial aggregation complete ({total:.0f}s).")

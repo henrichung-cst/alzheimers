@@ -90,7 +90,7 @@ writeLines(
 cat(sprintf("Wrote %s\n", basename(json_path)))
 
 # ---------------------------------------------------------------------------
-# 2b. PhPDS_ps vs kinase_support_score redundancy check
+# 2b. PhPDS_ps vs mea_kinase_support_score redundancy check
 # ---------------------------------------------------------------------------
 ks_path <- file.path(int_dir, "kinase_support_scores.csv")
 if (file.exists(ks_path)) {
@@ -98,15 +98,15 @@ if (file.exists(ks_path)) {
   ks <- fread(ks_path)
   ks_merged <- merge(
     full[, .(Path, PhPDS_ps)],
-    ks[, .(Path, kinase_support_score)],
+    ks[, .(Path, mea_kinase_support_score)],
     by = "Path"
   )
   # Filter to pathways with nonzero external score
-  ks_nz <- ks_merged[kinase_support_score > 0 & !is.na(PhPDS_ps)]
+  ks_nz <- ks_merged[mea_kinase_support_score > 0 & !is.na(PhPDS_ps)]
   if (nrow(ks_nz) > 10) {
-    rho_ks <- cor(ks_nz$PhPDS_ps, ks_nz$kinase_support_score,
+    rho_ks <- cor(ks_nz$PhPDS_ps, ks_nz$mea_kinase_support_score,
                   method = "spearman", use = "complete.obs")
-    cat(sprintf("Spearman rho (PhPDS_ps vs kinase_support_score): %.4f (n=%d)\n",
+    cat(sprintf("Spearman rho (PhPDS_ps vs mea_kinase_support_score): %.4f (n=%d)\n",
                 rho_ks, nrow(ks_nz)))
 
     # Append to ranking_correlation.json

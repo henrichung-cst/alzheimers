@@ -1,12 +1,22 @@
 """Factorial all-pairs substrate-based kinase support scoring.
 
-Extends compute_kinase_support_all_pairs.py for the factorial pipeline.
-Processes all 462 pairs across 9 contrasts. For each contrast, builds a
-separate edge table (different MEA-significant kinases and NES values),
-then scores every pathway.
+Per pair x contrast: structural substrate evidence only (MEA-significant
+kinases whose substrates land on the pathway's EM/Target nodes, weighted by
+IDF and absolute MEA NES). No per-pair cell-type-attribution multiplier — the
+pair-mode pipeline applies one via ``apply_pair_weights`` from
+``unified_attribution.csv``, but that step (a) re-uses the live pipeline's
+WMB-class-keyed attribution scores under SEA-AD-subclass cell-type names
+(taxonomy mismatch produces silently-zero weights for every pair), and
+(b) bakes cell-type attribution into the support score, where it cannot be
+audited or re-joined cleanly downstream. Cell-type attribution is the live
+pipeline's job; this sidecar produces a per-pathway structural support that
+consumers can join to ``unified_attribution.csv`` post-hoc.
+
+Restore the prior pair-weighted behavior via ``git show
+legacy-incytr-storage-cutover:code/integration/sidecar/kinase_pack/compute_kinase_support_factorial.py``.
 
 Output per pair: kinase_support_scores.csv with per-contrast columns:
-  kinase_support_score_{contrast}, concordance_flag_{contrast}, etc.
+  mea_kinase_support_score_{contrast}, mea_concordance_flag_{contrast}, etc.
 
 Usage:
   python compute_kinase_support_factorial.py
@@ -37,7 +47,7 @@ from common import (load_mouse_gene_to_kinase_mapping,
                     sanitize_celltype_name)
 from compute_kinase_support import (
     _load_mea_kinases, _compute_idf_map,
-    build_substrate_edge_table, apply_pair_weights, compute_scores_fast,
+    build_substrate_edge_table, compute_scores_fast, edges_to_list_form,
 )
 import config_integration as icfg
 
@@ -77,19 +87,8 @@ def load_shared_data(contrast_filter=None):
     mouse_to_abbrevs = load_mouse_gene_to_kinase_mapping()
     print(f"  naming bridge: {sum(len(v) for v in mouse_to_abbrevs.values())} mappings")
 
-    # Pre-index attribution by (contrast, cell_type)
-    attr = pd.read_csv(icfg.UNIFIED_ATTRIBUTION_CSV)
-    attr_by_contrast_ct = {}
-    for contrast in contrasts_to_load:
-        attr_c = attr[attr["contrast"] == contrast]
-        attr_by_ct = {}
-        for _, row in attr_c.iterrows():
-            ct = row["cell_type"]
-            attr_by_ct.setdefault(ct, {})[row["kinase"]] = row["combined_score"]
-        attr_by_contrast_ct[contrast] = attr_by_ct
-    del attr
-
-    # Per-contrast: sig_kinases, edge tables, IDF
+    # Per-contrast: sig_kinases, edge tables, IDF. Each contrast's edge table
+    # is converted to list form once here (no per-pair attribution weighting).
     contrast_data = {}
     for contrast in contrasts_to_load:
         sig_kinases, all_mea_nes = _load_mea_kinases(
@@ -104,10 +103,7 @@ def load_shared_data(contrast_filter=None):
             sub_to_kins, idf_map, sig_kinases, mouse_to_abbrevs)
 
         contrast_data[contrast] = {
-            "sig_kinases": sig_kinases,
-            "all_mea_nes": all_mea_nes,
-            "idf_map": idf_map,
-            "sub_raw_edges": sub_raw_edges,
+            "sub_pair": edges_to_list_form(sub_raw_edges),
             "all_kinase_genes": all_kinase_genes,
         }
         print(f"  {contrast}: {len(sig_kinases)} sig kinases, "
@@ -116,12 +112,7 @@ def load_shared_data(contrast_filter=None):
     elapsed = time.monotonic() - t0
     print(f"  shared data loaded in {elapsed:.1f}s")
 
-    return {
-        "sub_to_kins": sub_to_kins,
-        "mouse_to_abbrevs": mouse_to_abbrevs,
-        "contrast_data": contrast_data,
-        "attr_by_contrast_ct": attr_by_contrast_ct,
-    }
+    return {"contrast_data": contrast_data}
 
 
 # ---------------------------------------------------------------------------
@@ -175,18 +166,6 @@ def discover_pairs(pair_filter=None):
 PATHWAY_ID_COLS = ["Path", "EM", "Target", "Receptor", "Ligand"]
 
 
-def compute_pair_attr_weights(attr_by_ct, sender, receiver, sender_discount):
-    """Build per-kinase attribution weights for a specific pair."""
-    weights = {}
-    for kin, score in attr_by_ct.get(receiver, {}).items():
-        weights[kin] = score * 1.0
-    for kin, score in attr_by_ct.get(sender, {}).items():
-        w = score * sender_discount
-        if kin not in weights or w > weights[kin]:
-            weights[kin] = w
-    return weights
-
-
 def process_one_pair(shared, pq_path, sender, receiver, *, emit_routes=False):
     """Score one pair across all 9 contrasts. Returns summary dict."""
     import pyarrow.parquet as pq
@@ -216,10 +195,7 @@ def process_one_pair(shared, pq_path, sender, receiver, *, emit_routes=False):
     routes_per_contrast = {} if emit_routes else None
     for contrast in icfg.FACTORIAL_CONTRASTS:
         cdata = shared["contrast_data"][contrast]
-        attr_by_ct = shared["attr_by_contrast_ct"][contrast]
-        attr_weights = compute_pair_attr_weights(
-            attr_by_ct, sender, receiver, icfg.SENDER_ATTRIBUTION_DISCOUNT)
-        sub_pair = apply_pair_weights(cdata["sub_raw_edges"], attr_weights)
+        sub_pair = cdata["sub_pair"]
 
         # Build pathways DataFrame with TPDS and PDS columns expected by
         # compute_scores_fast. Newer factorial runs emit native-style PDS
@@ -241,10 +217,10 @@ def process_one_pair(shared, pq_path, sender, receiver, *, emit_routes=False):
             routes_per_contrast[contrast] = routes_sink
 
         # Collect per-contrast columns
-        all_scores[f"kinase_support_score_{contrast}"] = scores_c["kinase_support_score"].values
-        all_scores[f"kinase_support_score_sum_{contrast}"] = scores_c["kinase_support_score_sum"].values
-        all_scores[f"n_distinct_kinases_{contrast}"] = scores_c["n_distinct_kinases"].values
-        all_scores[f"concordance_flag_{contrast}"] = scores_c["concordance_flag"].values
+        all_scores[f"mea_kinase_support_score_{contrast}"] = scores_c["mea_kinase_support_score"].values
+        all_scores[f"mea_kinase_support_sum_{contrast}"] = scores_c["mea_kinase_support_sum"].values
+        all_scores[f"mea_n_distinct_kinases_{contrast}"] = scores_c["mea_n_distinct_kinases"].values
+        all_scores[f"mea_concordance_flag_{contrast}"] = scores_c["mea_concordance_flag"].values
 
     t_score = time.monotonic() - t0 - t_read
 
@@ -279,10 +255,10 @@ def process_one_pair(shared, pq_path, sender, receiver, *, emit_routes=False):
             routes_df = pd.DataFrame(
                 rows,
                 columns=["Path", "contrast", "kinase",
-                         "support_contribution", "nes_sign"],
+                         "mea_support_contribution", "nes_sign"],
             )
-            routes_df["support_contribution"] = (
-                routes_df["support_contribution"].astype("float32")
+            routes_df["mea_support_contribution"] = (
+                routes_df["mea_support_contribution"].astype("float32")
             )
             routes_df["nes_sign"] = routes_df["nes_sign"].astype("int8")
             routes_df.to_parquet(
@@ -294,7 +270,7 @@ def process_one_pair(shared, pq_path, sender, receiver, *, emit_routes=False):
     # Summary JSON
     summary_data = {"n_pathways": n_pathways, "contrasts": {}}
     for contrast in icfg.FACTORIAL_CONTRASTS:
-        ks = out[f"kinase_support_score_{contrast}"]
+        ks = out[f"mea_kinase_support_score_{contrast}"]
         n_nz = int((ks > 0).sum())
         summary_data["contrasts"][contrast] = {
             "n_nonzero": n_nz,

@@ -806,7 +806,7 @@ format_export_columns <- function(dt, recv, conditions) {
   dt[, Receiver.group := recv]
   dt[, ID_1 := paste0(Path, "_", sender, "_", recv)]
   dt[, ID_2 := paste0(sender, "_", recv)]
-  dt[, kinase_boost := PDS - TPDS]
+  dt[, sik_kinase_boost := PDS - TPDS]
 
   dt
 }

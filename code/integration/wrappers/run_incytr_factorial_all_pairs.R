@@ -587,7 +587,7 @@ attach_sc_log2fc_factorial <- function(dt, cond_expr, recv, contrast_names,
     if (is.null(cc)) next
     ref_v <- recv_expr[[cc[1]]]; alt_v <- recv_expr[[cc[2]]]
     if (is.null(ref_v) || is.null(alt_v)) {
-      for (role in c("Ligand", "Receptor", "EM", "Target"))
+      for (role in ROLES)
         dt[, (paste0(role, "_sclog2FC_", cname)) := NA_real_]
       next
     }
@@ -656,8 +656,7 @@ compute_evaluation_factorial_vectorized <- function(dt, contrast_names,
                                                     score.weight = rep(0.5, 6)) {
   for (cname in contrast_names) {
     for (omic in c("pr", "ps", "py")) {
-      cols <- paste0(c("Ligand", "Receptor", "EM", "Target"),
-                     "_", omic, "_log2FC_", cname)
+      cols <- paste0(ROLES, "_", omic, "_log2FC_", cname)
       score_col <- switch(omic,
                           pr = paste0("PPDS_", cname),
                           ps = paste0("PhPDS_ps_", cname),
@@ -698,6 +697,8 @@ compute_evaluation_factorial_vectorized <- function(dt, contrast_names,
 # inter-node phosphorylation cascade is supported by the kinase reference.
 # Per-condition SiK_score reflects how specific the matched kinase is to the
 # receiver cell type at that (genotype, timepoint), via Cal_EI.
+ROLES <- c("Ligand", "Receptor", "EM", "Target")
+
 SIK_NAMES_FACT <- c("SiK_R_of_EM", "SiK_R_of_T", "SiK_EM_of_T",
                     "SiK_EM_of_R", "SiK_T_of_R", "SiK_T_of_EM")
 SIK_CASE_KEY_FACT <- data.frame(
@@ -742,7 +743,7 @@ compute_sik_factorial <- function(dt, kldata, cond_expr, cell_types, recv,
   }
   zero_out <- function(d, sik_genes = NULL) {
     if (is.null(sik_genes))
-      sik_genes <- matrix(NA_character_, nrow = n, ncol = 6)
+      sik_genes <- matrix(NA_character_, nrow = n, ncol = length(SIK_NAMES_FACT))
     d <- emit_match(d, sik_genes)
     for (cond in conditions) {
       d[, (paste0("SiK_score_", cond)) := 0]
@@ -762,8 +763,8 @@ compute_sik_factorial <- function(dt, kldata, cond_expr, cell_types, recv,
   }
   kl_pairs <- paste0(kl[["motif.geneName"]], "|", kl$gene)
 
-  sik_genes <- matrix(NA_character_, nrow = n, ncol = 6)
-  for (i in 1:6) {
+  sik_genes <- matrix(NA_character_, nrow = n, ncol = nrow(SIK_CASE_KEY_FACT))
+  for (i in seq_len(nrow(SIK_CASE_KEY_FACT))) {
     pairs <- paste0(dt[[SIK_CASE_KEY_FACT$Kinase[i]]], "|",
                     dt[[SIK_CASE_KEY_FACT$Substrate[i]]])
     matched <- pairs %in% kl_pairs
@@ -791,8 +792,8 @@ compute_sik_factorial <- function(dt, kldata, cond_expr, cell_types, recv,
     ei <- cal_ei_vec_fact(expr_mat, fold_threshold)
     ei_lookup <- setNames(ei[[recv]], k_gene)
 
-    ei_mat <- matrix(0, nrow = n, ncol = 6)
-    for (i in 1:6) {
+    ei_mat <- matrix(0, nrow = n, ncol = length(SIK_NAMES_FACT))
+    for (i in seq_along(SIK_NAMES_FACT)) {
       g <- sik_genes[, i]
       has <- !is.na(g)
       if (any(has)) ei_mat[has, i] <- unname(ei_lookup[g[has]])
@@ -1251,7 +1252,7 @@ for (recv in receivers_in_order) {
   dt[, ID_1 := paste0(Path, "_", sender, "_", recv)]
   dt[, ID_2 := paste0(sender, "_", recv)]
   for (cname in contrast_names) {
-    dt[, (paste0("kinase_boost_", cname)) :=
+    dt[, (paste0("sik_kinase_boost_", cname)) :=
          get(paste0("PDS_", cname)) - get(paste0("TPDS_", cname))]
   }
 
@@ -1261,18 +1262,17 @@ for (recv in receivers_in_order) {
                 "Ligand", "Receptor", "EM", "Target", "Path", "ID_1", "ID_2",
                 "pathway_evidence", "imputed_nodes", "n_animals", "df_resid",
                 SIK_NAMES_FACT)
-  roles <- c("Ligand", "Receptor", "EM", "Target")
   for (cname in contrast_names) {
     out_cols <- c(out_cols,
                   paste0("log2FC_", cname),
                   paste0("aFC_",    cname),
-                  paste0(roles, "_sclog2FC_", cname),
-                  paste0(roles, "_pr_log2FC_", cname),
-                  paste0(roles, "_pr_aFC_",    cname),
-                  paste0(roles, "_ps_log2FC_", cname),
-                  paste0(roles, "_ps_aFC_",    cname),
-                  paste0(roles, "_py_log2FC_", cname),
-                  paste0(roles, "_py_aFC_",    cname),
+                  paste0(ROLES, "_sclog2FC_", cname),
+                  paste0(ROLES, "_pr_log2FC_", cname),
+                  paste0(ROLES, "_pr_aFC_",    cname),
+                  paste0(ROLES, "_ps_log2FC_", cname),
+                  paste0(ROLES, "_ps_aFC_",    cname),
+                  paste0(ROLES, "_py_log2FC_", cname),
+                  paste0(ROLES, "_py_aFC_",    cname),
                   paste0("TPDS_", cname),
                   paste0("SE_", cname),
                   paste0("pvalue_", cname),
@@ -1284,7 +1284,7 @@ for (recv in receivers_in_order) {
                   paste0("Rme1_score_", cname),
                   paste0("multimodel_score_", cname),
                   paste0("PDS_", cname),
-                  paste0("kinase_boost_", cname),
+                  paste0("sik_kinase_boost_", cname),
                   paste0("pds_inference_scope_", cname))
   }
   for (cond in unique_conditions) {
