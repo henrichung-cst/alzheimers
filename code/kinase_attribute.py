@@ -352,8 +352,8 @@ def step_attribute():
     sig_base["_gene_upper"] = sig_base["gene_symbol"].fillna("").astype(str).str.upper()
     sig_base["mea_significant"] = (np.isfinite(sig_base["FDR"])
                                     & (sig_base["FDR"] < config.MEA_FDR_THRESH))
-    sig_base["residue_type"] = sig["residue_type"] if "residue_type" in sig.columns else "ST"
-    sig_base["track"] = sig["track"] if "track" in sig.columns else "st"
+    sig_base["residue_type"] = sig.get("residue_type", "ST")
+    sig_base["track"] = sig.get("track", "st")
 
     cell_type_df = pd.DataFrame({"cell_type": list(config.WMB_CLASSES)})
     unified = sig_base.merge(cell_type_df, how="cross")
@@ -395,12 +395,9 @@ def step_attribute():
                                  on=["_gene_upper", "cell_type", "_song_contrast"],
                                  how="left")
         unified = unified.drop(columns=["_song_contrast"])
-    if "song_lfc" not in unified.columns:
-        unified["song_lfc"] = np.nan
-    if "song_pval" not in unified.columns:
-        unified["song_pval"] = np.nan
-    if "song_fdr" not in unified.columns:
-        unified["song_fdr"] = np.nan
+    for _col in ("song_lfc", "song_pval", "song_fdr"):
+        if _col not in unified.columns:
+            unified[_col] = np.nan
     unified["song_concordance_score"] = np.where(
         np.isfinite(unified["song_lfc"]),
         np.sign(unified["NES"]) * unified["song_lfc"],
