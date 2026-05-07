@@ -1,5 +1,3 @@
-  return String(s || "").replace(/^_+|_+$/g, "").toUpperCase();
-}
 
 function _selectedAuditContrast(K, ki) {
   // Audit panel's Contrast picker drives this. Falls back to peak_NES when

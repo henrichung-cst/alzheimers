@@ -768,3 +768,5 @@ let _kinaseAuditSeq = 0;
 let _sourceCatalogKey = "mea_stoichiometry";
 
 function _normMotif(s) {
+  return String(s || "").replace(/^_+|_+$/g, "").toUpperCase();
+}

@@ -94,7 +94,41 @@ function syncHeaderFromStore() {
 // ---------------------------------------------------------------------------
 // Tabs
 // ---------------------------------------------------------------------------
+
+// Build the <nav#tab-bar> children from TAB_MANIFEST. Group order is fixed
+// by TAB_GROUP_ORDER; unknown groups (defensive) emit at the end. Emits bare
+// structure only — active state is owned by syncTabsFromStore().
+function _buildTabBar() {
+  const nav = document.getElementById("tab-bar");
+  if (!nav) return;
+  const byGroup = new Map();
+  for (const id of Object.keys(TAB_MANIFEST)) {
+    const m = TAB_MANIFEST[id];
+    if (!byGroup.has(m.group)) byGroup.set(m.group, []);
+    byGroup.get(m.group).push([id, m]);
+  }
+  const orderedGroups = TAB_GROUP_ORDER
+    .filter(g => byGroup.has(g))
+    .concat(Array.from(byGroup.keys()).filter(g => !TAB_GROUP_ORDER.includes(g)));
+  const parts = [];
+  orderedGroups.forEach((g, gi) => {
+    if (gi > 0) parts.push('<span class="tab-group-divider" aria-hidden="true"></span>');
+    parts.push('<span class="tab-group-label">'
+      + _escapeHtml(TAB_GROUP_LABELS[g] || g) + '</span>');
+    byGroup.get(g).forEach(([id, m]) => {
+      parts.push(
+        '<button id="tabbtn-' + id + '" role="tab" aria-selected="false"'
+        + ' aria-controls="tab-' + id + '"'
+        + ' data-tab="' + id + '" data-tab-group="' + g + '">'
+        + _escapeHtml(m.label) + '</button>'
+      );
+    });
+  });
+  nav.innerHTML = parts.join("");
+}
+
 function wireTabs() {
+  _buildTabBar();
   const tabs = Array.from(document.querySelectorAll("nav#tab-bar button"));
   tabs.forEach((btn, idx) => {
     btn.addEventListener("click", () => {

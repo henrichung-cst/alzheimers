@@ -1,3 +1,120 @@
+// ---------------------------------------------------------------------------
+// Temporal v2 — series builder (draft)
+// ---------------------------------------------------------------------------
+// Each series is a predicate over (kinase, contrast). Bar height = unique
+// kinases passing per (genotype, timepoint), split by NES sign when
+// requested. Series stack as small multiples (one row per series) so y-scales
+// stay independent.
+let _tv2State = null;
+let _tv2DecompCellsCache = null;
+let _tv2AttrTierByKinCtx = null;  // Map<`${kid}|${cidx}`, Array<{cell, rank}>>
+
+function _tv2EnsureAttrIndex() {
+  if (_tv2AttrTierByKinCtx) return;
+  _ensureKinaseIndexes();
+  const AI = PAYLOAD.attribution_index || {kinase_id:[]};
+  const m = new Map();
+  for (let j = 0; j < AI.kinase_id.length; j++) {
+    const kid = AI.kinase_id[j];
+    const cidx = AI.contrast_id[j];
+    const cell = AI.cell_type[j];
+    const tier = _combinedTierFor(kid, cidx, cell, AI.combined_confidence[j]);
+    const rank = _CONF_RANK[tier] || 0;
+    const key = kid + "|" + cidx;
+    let arr = m.get(key);
+    if (!arr) { arr = []; m.set(key, arr); }
+    arr.push({ cell, rank });
+  }
+  _tv2AttrTierByKinCtx = m;
+}
+
+function _tv2AttrPasses(ctxKey, cellsScope, threshold) {
+  // Returns true if at least one attribution row at (kid, contrastIdx) within
+  // the cell-type scope reaches the requested tier rank. threshold "" → pass.
+  if (!threshold) return true;
+  const wantRank = _CONF_RANK[threshold] || 0;
+  if (wantRank <= 0) return true;
+  const arr = _tv2AttrTierByKinCtx.get(ctxKey);
+  if (!arr) return false;
+  for (const r of arr) {
+    if (cellsScope !== "ALL" && r.cell !== cellsScope) continue;
+    if (r.rank >= wantRank) return true;
+  }
+  return false;
+}
+
+function _tv2DecompCellTypes() {
+  if (_tv2DecompCellsCache) return _tv2DecompCellsCache;
+  const D = PAYLOAD.decomposition_index || {cell_type:[]};
+  const s = new Set();
+  for (const c of D.cell_type) s.add(c);
+  _tv2DecompCellsCache = Array.from(s).sort();
+  return _tv2DecompCellsCache;
+}
+
+function _tv2DefaultSeries(layer) {
+  return {
+    layer: layer || "bulk",
+    cells: "ALL",
+    sign: "signed",
+    fdrBulk: 0.25,
+    fdrDecomp: 0.25,
+    agree: true,
+    attrTier: "",   // "" any | "low" | "moderate" | "high" | "very_high"
+  };
+}
+
+function _tv2InitState() {
+  if (_tv2State) return;
+  _tv2State = { series: [_tv2DefaultSeries("bulk")], shareY: false };
+}
+
+function _tv2Eval(series, kid, contrastIdx) {
+  // Returns null if the kinase fails the predicate at this contrast,
+  // else { sign: -1|0|+1 } based on bulk NES (or decomp NES when bulk absent).
+  const K = PAYLOAD.kinases;
+  const cName = CONTRASTS[contrastIdx];
+  const bulkNesCol = K["NES_" + cName];
+  const bulkFdrCol = K["FDR_" + cName];
+  const bulkNes = bulkNesCol ? bulkNesCol[kid] : null;
+  const bulkFdr = bulkFdrCol ? bulkFdrCol[kid] : null;
+  const bulkSig = bulkFdr != null && isFinite(bulkFdr) && bulkFdr < series.fdrBulk;
+
+  const ctxKey = kid + "|" + contrastIdx;
+  let dRows = (_decompByKinCtx && _decompByKinCtx.get(ctxKey)) || [];
+  if (series.cells !== "ALL") dRows = dRows.filter(r => r.cell_type === series.cells);
+  // For each decomp row at this kinase × contrast: sig + sign-vs-bulk.
+  let decompAnyPass = false;        // any decomp row sig at fdrDecomp (sign-agnostic)
+  let decompAgreePass = false;      // ≥1 decomp row sig AND sign-matches bulk
+  let decompDisagreePass = false;   // ≥1 decomp row sig AND sign-disagrees with bulk
+  let decompSignNes = null;
+  for (const r of dRows) {
+    if (r.fdr == null || !isFinite(r.fdr) || r.fdr >= series.fdrDecomp) continue;
+    if (r.nes == null || !isFinite(r.nes) || r.nes === 0) continue;
+    decompAnyPass = true;
+    if (decompSignNes == null || Math.abs(r.nes) > Math.abs(decompSignNes)) {
+      decompSignNes = r.nes;
+    }
+    if (bulkNes != null && bulkNes !== 0) {
+      if ((r.nes > 0) === (bulkNes > 0)) decompAgreePass = true;
+      else decompDisagreePass = true;
+    }
+  }
+
+  let pass, refNes;
+  if (series.layer === "bulk") { pass = bulkSig; refNes = bulkNes; }
+  else if (series.layer === "decomp") { pass = decompAnyPass; refNes = decompSignNes; }
+  else if (series.layer === "intersect") {
+    pass = bulkSig && (series.agree ? decompAgreePass : decompAnyPass);
+    refNes = bulkNes;
+  }
+  else if (series.layer === "contested") { pass = bulkSig && decompDisagreePass; refNes = bulkNes; }
+  else if (series.layer === "diff") { pass = bulkSig && !decompAnyPass; refNes = bulkNes; }
+  else { pass = false; refNes = null; }
+  if (!pass) return null;
+  // Attribution-tier gate: applies to any series, scoped to the same cells set.
+  if (series.attrTier && !_tv2AttrPasses(ctxKey, series.cells, series.attrTier)) {
+    return null;
   }
 
   const sign = (refNes == null || refNes === 0) ? 0 : (refNes > 0 ? 1 : -1);
@@ -5,7 +122,6 @@
   if (series.sign === "down" && sign > 0) return null;
   return { sign };
 }
-
 function _tv2Counts(series) {
   // Returns counts[g][t] = { up, down, total, upIds, downIds, totalIds } of unique kinases.
   _tv2EnsureAttrIndex();

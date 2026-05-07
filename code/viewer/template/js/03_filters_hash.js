@@ -44,7 +44,7 @@ function renderUnmetPrerequisite(panelEl, tab) {
 // to keep the URL short. Suppresses re-broadcast while applying inbound.
 // ---------------------------------------------------------------------------
 const _HASH_DEFAULTS = {
-  t: "signal", r: "ALL", s: "ALL",
+  t: "kinase", r: "ALL", s: "ALL",
   fdr: 0.25,
   k: null, b: null, ct: null,
 };

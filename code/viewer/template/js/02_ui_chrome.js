@@ -76,15 +76,11 @@ function renderHowToDrawer(tab) {
 
 // ---------------------------------------------------------------------------
 // View export — copy the current on-screen view (filters, methods preamble,
-// visible rows) as Markdown for pasting into an AI chatbot. Scope: kinase,
-// pathway, temporal, additivity, senders, graph. Reads DOM and Store state
-// directly so the export tracks exactly what is rendered.
+// visible rows) as Markdown for pasting into an AI chatbot. Reads DOM and
+// Store state directly so the export tracks exactly what is rendered.
 // ---------------------------------------------------------------------------
-const EXPORT_TABS = ["kinase","pathway","temporal","additivity","senders","graph"];
-
 function _exportFilterMap(tab) {
-  // Returns alphabetized {Label: "value"} for the filters this tab consumes,
-  // plus any tab-local thresholds.
+  // Returns alphabetized {Label: "value"} for the filters this tab consumes.
   const m = TAB_MANIFEST[tab] || { filters: [] };
   const f = Store.state.filters;
   const out = {};
@@ -92,37 +88,6 @@ function _exportFilterMap(tab) {
   if (m.filters.includes("pathwayEvidence")) out["Support"] = f.pathwayEvidence || "any";
   if (m.filters.includes("fdr")) out["FDR"] = "< " + f.fdr;
   if (f.tpdsSig && f.tpdsSig !== "OFF") out["TPDS p"] = "< " + f.tpdsSig;
-  // Tab-local thresholds (read from DOM so they reflect what the user set).
-  const grab = (id) => { const e = document.getElementById(id); return e ? e.value : null; };
-  if (tab === "temporal") {
-    out["Mode"] = Store.state.view.temporalLevel;
-    const v = grab("tm-score-min"); if (v != null && Number(v) > 0) out["|TPDS| min"] = v;
-    const tiss = grab("tm-tissue"); if (tiss && tiss !== "ALL") out["Tissue"] = tiss;
-    const met = grab("tm-metric"); if (met && Store.state.view.temporalLevel === "backbone") out["Metric"] = met;
-  }
-  if (tab === "additivity") {
-    out["Mode"] = grab("add-level") || "kinase";
-    out["Timepoint"] = grab("add-tp") || "ALL";
-    const v = grab("add-score-min"); if (v != null && Number(v) > 0) out["Score min"] = v;
-  }
-  if (tab === "pathway") {
-    const v = grab("pe-tpds-min"); if (v != null && Number(v) > 0) out["|TPDS| min"] = v;
-    out["Trajectory"] = (typeof peTrajectory !== "undefined" && peTrajectory) ? peTrajectory : "all";
-  }
-  if (tab === "senders") {
-    out["Compare"] = grab("sm-axis") || "timepoint";
-    out["Anchor"] = grab("sm-anchor") || "";
-    out["Mode"] = grab("sm-mode") || "count";
-  }
-  if (tab === "graph") {
-    out["Genotype"] = grab("graph-genotype") || "";
-    out["Timepoint"] = grab("graph-timepoint") || "";
-    out["Layout"] = grab("graph-layout") || "";
-    out["Min degree"] = grab("graph-min-degree") || "1";
-    const v = grab("graph-tpds-min"); if (v != null && Number(v) > 0) out["|TPDS| min"] = v;
-    const top = grab("graph-top-n"); if (top) out["Max edges"] = top;
-  }
-  // Sort alphabetically by key.
   const sorted = {};
   Object.keys(out).sort().forEach(k => { sorted[k] = out[k]; });
   return sorted;
@@ -143,14 +108,7 @@ function _exportSelectionChips() {
 
 function _exportDenominator(tab) {
   // Pull whichever subtitle/count element the tab already maintains.
-  const ids = {
-    kinase: "ke-count",
-    pathway: "pe-count",
-    temporal: "tm-subtitle",
-    additivity: "add-subtitle",
-    senders: "sm-subtitle",
-    graph: "graph-stats",
-  };
+  const ids = { kinase: "ke-count" };
   const el = document.getElementById(ids[tab]);
   return el ? el.textContent.trim() : "";
 }
@@ -177,74 +135,8 @@ function _exportTableFromDom(tableId) {
   return { headers, rows };
 }
 
-function _exportTableFromPlotly(elId) {
-  const el = document.getElementById(elId);
-  if (!el || !el.data || !el.data.length) return null;
-  // Generic flattening: for each trace, emit (trace_name, x, y).
-  const headers = ["Series", "X", "Y"];
-  const rows = [];
-  for (const tr of el.data) {
-    const name = tr.name || "";
-    const xs = tr.x || [];
-    const ys = tr.y || [];
-    const n = Math.max(xs.length, ys.length);
-    for (let i = 0; i < n; i++) {
-      const x = xs[i] != null ? String(xs[i]) : "";
-      const y = ys[i] != null ? (typeof ys[i] === "number" ? ys[i].toFixed(3) : String(ys[i])) : "";
-      rows.push([name, x, y]);
-    }
-  }
-  return { headers, rows };
-}
-
-function _exportTableFromHeatmaps(elIds) {
-  // Three Plotly heatmaps for senders. Each carries z (matrix), x (receivers),
-  // y (senders), name (panel label). Flatten cells with any non-null value.
-  const headers = ["Panel", "Sender", "Receiver", "Value"];
-  const rows = [];
-  for (const elId of elIds) {
-    const el = document.getElementById(elId);
-    if (!el || !el.data || !el.data.length) continue;
-    const tr = el.data[0];
-    const z = tr.z || [];
-    const xs = tr.x || [];
-    const ys = tr.y || [];
-    const panel = (el.layout && el.layout.title && el.layout.title.text) || tr.name || elId;
-    for (let i = 0; i < z.length; i++) {
-      for (let j = 0; j < (z[i] || []).length; j++) {
-        const v = z[i][j];
-        if (v == null) continue;
-        rows.push([String(panel), String(ys[i] || i), String(xs[j] || j), typeof v === "number" ? v.toFixed(3) : String(v)]);
-      }
-    }
-  }
-  return { headers, rows };
-}
-
-function _exportTableFromGraph() {
-  if (!_cyInstance) return null;
-  const headers = ["Type", "Id", "Label", "Degree/Weight", "Extra"];
-  const rows = [];
-  _cyInstance.nodes(":visible").forEach(n => {
-    rows.push(["node", n.id(), n.data("label") || "", String(n.degree(false)), n.data("kind") || ""]);
-  });
-  _cyInstance.edges(":visible").forEach(e => {
-    const w = e.data("weight");
-    rows.push(["edge", e.id(),
-      (e.source().data("label") || e.source().id()) + " → " + (e.target().data("label") || e.target().id()),
-      w == null ? "" : (typeof w === "number" ? w.toFixed(3) : String(w)),
-      e.data("genotype") || ""]);
-  });
-  return { headers, rows };
-}
-
 function _exportTable(tab) {
-  if (tab === "kinase")     return _exportTableFromDom("ke-table");
-  if (tab === "pathway")    return _exportTableFromDom("pe-table");
-  if (tab === "temporal")   return _exportTableFromPlotly("temporal-plot");
-  if (tab === "additivity") return _exportTableFromPlotly("add-plot");
-  if (tab === "senders")    return _exportTableFromHeatmaps(["sender-matrix-plot-0","sender-matrix-plot-1","sender-matrix-plot-2"]);
-  if (tab === "graph")      return _exportTableFromGraph();
+  if (tab === "kinase") return _exportTableFromDom("ke-table");
   return null;
 }
 
@@ -344,12 +236,7 @@ function _exportInjectButton(tab, hostSelector) {
 }
 
 function wireExportButtons() {
-  _exportInjectButton("kinase",     "#tab-kinase .ke-toolbar");
-  _exportInjectButton("pathway",    "#tab-pathway .ke-toolbar");
-  _exportInjectButton("temporal",   "#tab-temporal .detail-chips");
-  _exportInjectButton("additivity", "#tab-additivity .detail-chips");
-  _exportInjectButton("senders",    "#tab-senders .detail-chips");
-  _exportInjectButton("graph",      "#graph-controls");
+  _exportInjectButton("kinase", "#tab-kinase .ke-toolbar");
 }
 
 function wireDrawerResizer() {
@@ -461,31 +348,52 @@ function wireDrawerResizer() {
 }
 
 // ---------------------------------------------------------------------------
-// Per-tab manifest — declares which filters each tab consumes and what
-// prerequisites must be met before content can render. Single source of
-// truth for the filter-bar dim/hide logic and prerequisite empty states.
+// Per-tab manifest — single source of truth for tab group, label, consumed
+// header filters, prerequisites, and lifecycle hooks (wire, render,
+// rerenderOn, onChange). See MANIFEST.md "Adding a new tab" for the contract.
 // ---------------------------------------------------------------------------
+const TAB_GROUP_ORDER = ["landscape", "drilldown", "reference"];
+const TAB_GROUP_LABELS = {
+  landscape: "Landscape",
+  drilldown: "Drill-down",
+  reference: "Reference",
+};
+
 const TAB_MANIFEST = {
-  signal:     { group:"landscape", label:"Signal Map",
-                filters:[], requires:[] },
-  senders:    { group:"landscape", label:"Sender×Receiver",
-                filters:[], requires:[] },
-  temporal:   { group:"landscape", label:"Temporal",
-                filters:["fdr","pathwayEvidence","receiver"],
-                requires:[] },
-  additivity: { group:"landscape", label:"Additivity",
-                filters:["fdr","receiver","pathwayEvidence"],
-                requires:[] },
-  kinase:     { group:"drilldown", label:"Kinase",
-                filters:["fdr"], requires:[] },
-  pathway:    { group:"drilldown", label:"Pathway",
-                filters:["receiver","pathwayEvidence","fdr"],
-                requires:[] },
-  graph:      { group:"drilldown", label:"Graph",
-                filters:["receiver","pathwayEvidence"],
-                requires:[] },
-  methods:    { group:"reference", label:"Methods",
-                filters:[], requires:[] },
+  temporalv2: {
+    group: "landscape", label: "Temporal v2",
+    filters: [], requires: [],
+    wire: () => wireTemporalV2(),
+    render: () => renderTemporalV2(),
+    rerenderOn: { filters: true, selection: [] },
+  },
+  kinase: {
+    group: "drilldown", label: "Kinase",
+    filters: ["fdr"], requires: [],
+    wire: () => wireKinaseTable(),
+    render: () => {
+      renderKinaseExplorer();
+      const kid = Store.state.selection.kinase;
+      if (kid != null) renderKinaseDetail(kid);
+    },
+    rerenderOn: { filters: true, selection: ["celltype"] },
+    // Kinase-selection change skips the full table re-render: only the row
+    // highlight and detail panel update here. The full re-render runs after
+    // SliceCache.loadKinase resolves in the boot subscriber.
+    onChange: ({ tabChanged, kinaseSelChanged, kid }) => {
+      if (!kinaseSelChanged || tabChanged) return false;
+      _updateKinaseRowSelection(kid);
+      if (kid != null) renderKinaseDetail(kid);
+      return true;
+    },
+  },
+  methods: {
+    group: "reference", label: "Methods",
+    filters: [], requires: [],
+    wire: () => {},
+    render: () => {},
+    rerenderOn: {},
+  },
 };
 
 function syncFilterBarToTab(tab) {
