@@ -23,8 +23,8 @@ Read by analytical role, not creation order.
 
 | File | Role |
 |:---|:---|
-| [`deconvolution_infeasibility.md`](./deconvolution_infeasibility.md) | Synthetic validation proving deconvolution is infeasible on this dataset (figures + summary) |
 | [`report_writing_checklist.md`](./report_writing_checklist.md) | Reviewer-facing report writing guidance |
+| [`../archive/deconvolution/docs/deconvolution_infeasibility.md`](../archive/deconvolution/docs/deconvolution_infeasibility.md) | **Archived** — synthetic validation proving direct deconvolution is infeasible on this dataset. Source script + figures alongside under `archive/deconvolution/`. |
 
 ## Integrations
 
@@ -41,7 +41,7 @@ Read by analytical role, not creation order.
 
 - **What should we do next?** → [`foundation/`](./foundation/analysis_charter.md)
 - **How do external inputs map into runtime?** → [`integrations/`](./integrations/integrations-structure.md)
-- **Why was a path closed?** → [`foundation/analysis_rationale.md`](./foundation/analysis_rationale.md) + [`deconvolution_infeasibility.md`](./deconvolution_infeasibility.md)
+- **Why was a path closed?** → [`foundation/analysis_rationale.md`](./foundation/analysis_rationale.md) + [`../archive/deconvolution/docs/deconvolution_infeasibility.md`](../archive/deconvolution/docs/deconvolution_infeasibility.md)
 - **Historical context** → `archive/`
 
 ---
@@ -60,19 +60,18 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 | `data/incytr_collections/song/primary/proteomics/song_IMAC_compositeSites_merged_labeled (2).xlsx` | Composite phospho sites |
 | `data/incytr_collections/song/primary/proteomics/Sample_list_72mice (1).xlsx` | TMT channel ↔ animal mapping |
 | `data/incytr_collections/song/method_records/aobs_desp_standardized/inputs/A_obs_fractions.tsv` | Cell-type composition fractions (24 groups × 10 cell types) |
-| `data/incytr_collections/song/primary/snrnaseq/170_gex_celltypes_00.h5ad` | Paired snRNA-seq (63K nuclei, 28 animals) |
+| `data/incytr_collections/song/transcriptomics/170_gex_celltypes_00.h5ad` | Paired snRNA-seq (63K nuclei, 28 animals) |
 
 ### External atlases
 | Path | Contents |
 |:---|:---|
-| `data/external/allen_abc/` | Allen WMB + Aging Mouse cache (zstd-compressed) |
+| `data/external/allen_abc/` | Allen WMB cache (zstd-compressed) |
 | `data/external/sea_ad/` | SEA-AD MTG effect sizes (`effect_sizes{,_early,_late}.h5ad`, 139 supertypes) |
 
 ### Analysis cache
 | Path | Contents |
 |:---|:---|
 | `data/incytr_collections/song/analysis_cache/kinase_to_gene_mapping.csv` | Cached kinase → gene symbol mapping |
-| `data/incytr_collections/song/analysis_cache/allen_expression_cache.csv` | Cached Allen queries |
 
 ## Pipeline
 
@@ -97,14 +96,14 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 ### Supporting (`code/`)
 | Script | Runner | Output dir |
 |:---|:---|:---|
-| `atlas_reference.py` | `runners/supporting/run_atlas_reference.sh` | `outputs/reports/atlas_reference/` |
+| `atlas_reference.py` | `runners/supporting/run_atlas_reference.sh` | `data/external/sea_ad/`, `data/external/allen_abc/` |
 | `wmb_expression.py` | `runners/supporting/run_wmb_expression.sh` | `outputs/reports/wmb_expression/` |
 | `snrna_integration.py` | `runners/supporting/run_snrna_integration.sh` | `outputs/reports/snrna_integration/` |
 
 Additional supporting runners (ops utilities, no Python counterpart): `runners/supporting/compress_atlas_cache.sh`, `decompress_atlas_cache.sh`, `run_wmb_download.sh`, `run_extract_wmb_subset.sh`.
 
 ### Supplementary diagnostics (`code/supplementary/`)
-`fdr_stringent.py`, `threshold_sensitivity.py`, `aggregation_robustness.py`, `parent_protein_qc.py`, `deconvolution_infeasibility.py` — run via `runners/supplementary/run_reviewer_diagnostics.sh`. Output: `outputs/reports/supplementary/`.
+`fdr_stringent.py`, `threshold_sensitivity.py`, `aggregation_robustness.py`, `parent_protein_qc.py` — run via `runners/supplementary/run_reviewer_diagnostics.sh`. Output: `outputs/reports/supplementary/`. (The historical `deconvolution_infeasibility.py` proof has been frozen and moved to `archive/deconvolution/code/`.)
 
 ### Integration pipeline (`code/integration/`)
 Python adapters + R wrappers; config in `config_integration.py`.
@@ -125,7 +124,7 @@ Python adapters + R wrappers; config in `config_integration.py`.
 | `data_ingest/` | `sample_exclusions.csv`, `pca_plots/outlier_diagnostic.png` |
 | `kinase_attribution/` | `stoichiometry_matrix.csv`, `mea_stoichiometry.csv`, `site_level_ols.csv`, `unified_attribution.csv`, `attribution_summary.json`, `mea_global_shift.csv`, `winsorized_sites.csv` |
 | `attribution_recovery/` | **`kinase_hypothesis_table.csv` (primary deliverable)**, `kinase_activity_matrix.csv`, `celltype_evidence_table.csv`, `bubble_plots/` |
-| `atlas_reference/`, `wmb_expression/`, `snrna_integration/` | Supporting prerequisites |
+| `wmb_expression/`, `snrna_integration/` | Supporting prerequisites |
 | `supplementary/` | Reviewer-diagnostic results |
 
 ### Integration pipeline (`code/integration/intermediates/`)

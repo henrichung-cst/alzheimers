@@ -78,14 +78,10 @@ python code/attribution_recovery.py --summary           # Print cached results
 These must be run before the live pipeline if their outputs don't exist:
 
 ```bash
-# External Atlas Data Acquisition (SEA-AD + WMB + Aging Mouse from Allen Institute)
-python code/atlas_reference.py --aging     # Aging Mouse Brain Atlas
-python code/atlas_reference.py --sea-ad    # SEA-AD MTG (139 supertypes, human AD snRNA-seq)
-python code/atlas_reference.py --wmb       # Whole Mouse Brain characterization
-python code/atlas_reference.py --mapping   # Cross-atlas taxonomy mapping
-python code/atlas_reference.py --coverage  # Kinase gene coverage report
-python code/atlas_reference.py --run       # All steps in priority order
-python code/atlas_reference.py --summary   # Print cached results
+# External Atlas Data Acquisition (SEA-AD + WMB from Allen Institute)
+python code/atlas_reference.py --sea-ad        # SEA-AD MTG Nebula effect-size h5ads
+python code/atlas_reference.py --wmb-download  # All 13 WMB-10Xv3 log2 expression matrices (~95 GB)
+python code/atlas_reference.py --run           # SEA-AD + WMB download
 # Runner: bash code/runners/supporting/run_atlas_reference.sh
 
 # WMB Expression Export (required for unified attribution + marker assessment)
@@ -174,7 +170,7 @@ kinase_attribution.py + snrna_integration.py  ←  code/integration/
 
 ### Supporting Code
 
-- `atlas_reference.py` — External atlas acquisition: downloads WMB, Aging Mouse, and SEA-AD from Allen Institute. Produces structure reports, taxonomy mapping, kinase gene coverage. Exports cell-type taxonomy constants (`SUBCLASS_KEYWORDS`, `SEA_AD_SUBCLASSES`, `SUBCLASS_TO_5PLUS1`, `match_subclass`). Outputs to `outputs/reports/atlas_reference/`. Requires: `abc_atlas_access`, `anndata`, `boto3`.
+- `atlas_reference.py` — External atlas acquisition: downloads SEA-AD Nebula effect-size h5ads (`effect_sizes{,_early,_late}.h5ad`) from S3 and all 13 WMB-10Xv3 log2 expression matrices into the ABC project cache. Also exports kinase/phosphatase gene-list helpers and ABC cache utilities consumed by `wmb_expression.py`. Requires: `abc_atlas_access`, `anndata`, `boto3`.
 - `wmb_expression.py` — WMB expression export: per-class kinase/phosphatase expression from Allen WMB 10Xv3 (34 WMB classes, group-by on `wmb_meta["class"]`, no silent drops). Emits `outputs/reports/wmb_expression/wmb_kinase_expression.csv` (primary, class-level) + `wmb_kinase_expression_subclass.csv` (audit sidecar at WMB subclass level). Consumed by kinase_attribution.py unified attribution. Requires: `anndata`.
 - `snrna_integration.py` — Song snRNA-seq integration: computes pseudobulk expression from paired 170_gex_celltypes_00.h5ad (63K nuclei, 28 animals) keyed on Allen Cell Type Mapper `class_name` (rolled up to 34 WMB classes via `wmb_class_manifest.csv`); ~21 of 34 classes pass Song's confidence + animal-count gates. Within-cohort expression specificity and transcriptomic concordance via factorial OLS (males-only, pooled across timepoints). Outputs to `outputs/reports/snrna_integration/`. Requires: `anndata`, `scipy`, `statsmodels`.
 - `map_kinases_to_genes.py` — Kinase→gene symbol mapping utility.
@@ -212,21 +208,15 @@ Operational shell wrappers under `code/runners/`:
 - `data/incytr_collections/song/primary/proteomics/song_IMAC_compositeSites_merged_labeled (2).xlsx` — Phospho composite sites
 - `data/incytr_collections/song/primary/proteomics/Sample_list_72mice (1).xlsx` — TMT channel-to-animal sample mapping
 - `data/incytr_collections/song/method_records/aobs_desp_standardized/inputs/A_obs_fractions.tsv` — Cell-type composition fractions (24 × 10 cell types)
-- `data/external/allen_abc/` — Cached Allen Brain Cell Atlas data (WMB + Aging Mouse)
+- `data/external/allen_abc/` — Cached Allen Brain Cell Atlas data (WMB)
 - `data/external/sea_ad/` — SEA-AD MTG processed data (h5ad, 139 supertypes): `effect_sizes.h5ad` (full CPS), `effect_sizes_early.h5ad` (early/low-CPS), `effect_sizes_late.h5ad` (late/high-CPS)
 
 ### Supporting/Cached Data
 - `data/incytr_collections/song/analysis_cache/kinase_to_gene_mapping.csv` — Cached kinase→gene symbol mappings
-- `data/incytr_collections/song/analysis_cache/allen_expression_cache.csv` — Cached Allen Brain Atlas expression results
 - `outputs/reports/wmb_expression/wmb_kinase_expression.csv` — WMB expression matrix (required for unified attribution)
 
 ### Decomposition (CTM-native, branch-only — not in live pipeline)
-- `data/incytr_collections/song/proteomics/source/imac_median.csv` — Per-(site, group) Ser/Thr bulk medians; input to `code/deconvolution/build_wmb_decomposition.py`
-- `data/incytr_collections/song/proteomics/source/py_median.csv` — Same, Tyr track
-- `data/incytr_collections/song/proteomics/source/pr_median.csv` — Same, total proteome (gene-level)
-- `data/incytr_collections/song/proteomics/source/yuyu_samplekey.csv` — MS\_ID ↔ SCRNA Group bridge
-- `outputs/reports/deconvolution/wmb_decomposition/{ps,py,pr}_wmb_decomposition.csv` — Generated; per-(site, group, WMB class) decomposition
-- `outputs/reports/deconvolution/wmb_decomposition/wmb_class_size.csv` — Generated; WMB-class × group nucleus counts
+`code/deconvolution/build_wmb_decomposition.py` consumes per-(site, group) bulk medians (`imac_median.csv`, `py_median.csv`, `pr_median.csv`) and the `yuyu_samplekey.csv` MS\_ID↔SCRNA bridge. These were deleted from `data/incytr_collections/song/proteomics/source/` on 2026-05-07; re-pull from Google Drive via `pixi run ingest-gdrive-shared` before running the branch. Outputs: `outputs/reports/deconvolution/wmb_decomposition/{ps,py,pr}_wmb_decomposition.csv` + `wmb_class_size.csv`.
 
 ## Output
 
@@ -249,7 +239,6 @@ Operational shell wrappers under `code/runners/`:
   - `celltype_evidence_table.csv` — WMB-gated static evidence (1 row/kinase×celltype)
   - `kinase_hypothesis_table.csv` — kinase-first synthesis, **primary downstream deliverable**
   - `bubble_plots/` — Heatmaps, direction-over-time, additivity scatter, winsorization diagnostic
-- `outputs/reports/atlas_reference/` — Atlas structure reports, taxonomy mapping, coverage
 - `outputs/reports/wmb_expression/` — WMB expression export (supporting)
 
 ## Foundation Documentation
@@ -266,7 +255,7 @@ The `docs/foundation/` directory contains authoritative design documents:
 Other documentation:
 - `docs/integrations/kinase_incytr_integration.md` — Source of truth for the kinase ↔ Incytr integration (scoring model, runtime modes, configuration, outputs, limitations)
 - `docs/archive/legacy.md` — Legacy proportional decomposition method (historical reference)
-- `docs/deconvolution_infeasibility.md` — Synthetic validation proving deconvolution is infeasible on this dataset
+- `archive/deconvolution/docs/deconvolution_infeasibility.md` — Archived synthetic validation proving direct deconvolution is infeasible on this dataset (closed path, frozen). Source script + figures alongside under `archive/deconvolution/`.
 
 ## Gotchas
 

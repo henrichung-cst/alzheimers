@@ -115,40 +115,6 @@ N_CELL_TYPES = len(WMB_CLASSES)         # 34 — WMB-class spine
 SPECIFICITY_HIGH = 2.0 / N_CELL_TYPES   # ~0.059: ≥2× more specific than uniform across 34 classes
 SPECIFICITY_LOW = 1.0 / N_CELL_TYPES    # ~0.029: ≥1× uniform across 34 classes
 
-SNRNA_CLUSTER_TAXONOMY = {
-    "Astrocytes":              {"sea_ad_subclass": "Astrocyte",       "confidence": "unambiguous", "note": "Direct match"},
-    "Ptprz1-protoplasmic-astrocytes": {"sea_ad_subclass": "Astrocyte", "confidence": "unambiguous", "note": "Protoplasmic astrocyte subtype"},
-    "Excitatory-Rorb":         {"sea_ad_subclass": "L4 IT",           "confidence": "unambiguous", "note": "Rorb is the canonical L4 marker"},
-    "Excitatory-Pyramidal-Satb2-Cux2": {"sea_ad_subclass": "L2/3 IT", "confidence": "unambiguous", "note": "Satb2+Cux2 mark upper-layer IT"},
-    "Erbb4-VIP-inhibitory-neurons": {"sea_ad_subclass": "Vip",        "confidence": "unambiguous", "note": "VIP+ inhibitory"},
-    "VIP-positive-interneuron": {"sea_ad_subclass": "Vip",            "confidence": "unambiguous", "note": "VIP+ interneuron"},
-    "GABAergic-inhibitory-interneurons-VIP-positive": {"sea_ad_subclass": "Vip", "confidence": "unambiguous", "note": "VIP+ GABAergic"},
-    "Ndnf-positive-neurogliaform-inhibitory-interneurons-GABAergic": {"sea_ad_subclass": "Lamp5", "confidence": "unambiguous", "note": "Ndnf neurogliaform → Lamp5 subclass"},
-    "Oligodendrocytes":        {"sea_ad_subclass": "Oligodendrocyte", "confidence": "unambiguous", "note": "Direct match"},
-    "OPC":                     {"sea_ad_subclass": "OPC",             "confidence": "unambiguous", "note": "Direct match"},
-    "Microglia":               {"sea_ad_subclass": "Microglia-PVM",   "confidence": "unambiguous", "note": "Direct match"},
-    "Endothelial-cell":        {"sea_ad_subclass": "Endothelial",     "confidence": "unambiguous", "note": "Direct match"},
-    "Vascular-Leptomeningeal-Cells": {"sea_ad_subclass": "VLMC",      "confidence": "unambiguous", "note": "Direct match"},
-    "Excitatory-Pyramidal":    {"sea_ad_subclass": "L5 IT",           "confidence": "close", "note": "Deep pyramidal without upper-layer markers → L5 IT"},
-    "Foxp2-Excitatory-Neurons-layers-6-and-2-3": {"sea_ad_subclass": "L6 CT", "confidence": "close", "note": "Foxp2 is a strong L6 marker"},
-    "Glutamatergic-excitatory-neurons-Cortical-layer-2-4-pyramidal-neurons": {"sea_ad_subclass": "L2/3 IT", "confidence": "close", "note": "Layer 2-4 pyramidal, closest to L2/3 IT"},
-    "Pericyte":                {"sea_ad_subclass": "VLMC",            "confidence": "close", "note": "Mural/perivascular, closest SEA-AD type is VLMC"},
-    "glutamatergic-excitatory-neurons": {"sea_ad_subclass": "Generic_excitatory", "confidence": "ambiguous", "note": "No layer/marker info to resolve subclass"},
-    "Excitatory-neurons":      {"sea_ad_subclass": "Generic_excitatory", "confidence": "ambiguous", "note": "No layer/marker info to resolve subclass"},
-    "Inhibitory-Neurons":      {"sea_ad_subclass": "Generic_inhibitory", "confidence": "ambiguous", "note": "No marker info to resolve subclass"},
-    "GABAergic inhibitory interneurons": {"sea_ad_subclass": "Generic_inhibitory", "confidence": "ambiguous", "note": "No marker info to resolve subclass"},
-    "Erbb4-inhibitory-neurons": {"sea_ad_subclass": "Generic_inhibitory", "confidence": "ambiguous", "note": "MGE-derived (Erbb4) but could be Pvalb or Sst"},
-    "GABAergic-inhibitory-interneurons-Dlx6os1-Erbb4": {"sea_ad_subclass": "Generic_inhibitory", "confidence": "ambiguous", "note": "MGE-derived but cannot distinguish Pvalb/Sst"},
-    "Reln-neurons":            {"sea_ad_subclass": "Generic_inhibitory", "confidence": "ambiguous", "note": "Reelin expressed in multiple types"},
-    "Striatal-medium-spiny-neuron": {"sea_ad_subclass": "Medium spiny neurons", "confidence": "unmapped", "note": "Subcortical; preserved as researcher category"},
-    "Basal-Ganglia-GABAergic-Neurons": {"sea_ad_subclass": "Other",   "confidence": "unmapped", "note": "Subcortical"},
-    "Excitatory principal neurons in the hippocampal dentate gyrus": {"sea_ad_subclass": "Other", "confidence": "unmapped", "note": "Hippocampal, no cortical equivalent"},
-    "Excitatory-neurons-Cajal-Retzius-cells-layer-I-Reelin": {"sea_ad_subclass": "Other", "confidence": "unmapped", "note": "Cajal-Retzius, transient L1 cell type"},
-    "Choroid-Plexus-Epithelial-Cells": {"sea_ad_subclass": "Other",   "confidence": "unmapped", "note": "Non-parenchymal"},
-    "Ependymal-cell":          {"sea_ad_subclass": "Other",           "confidence": "unmapped", "note": "Non-parenchymal"},
-    "Cholinergic-Neurons":     {"sea_ad_subclass": "Other",           "confidence": "unmapped", "note": "No SEA-AD subclass"},
-}
-
 CLASS_TO_TISSUE_CATEGORY = {
     "01 IT-ET Glut": "Excitatory neurons",
     "02 NP-CT-L6b Glut": "Excitatory neurons",
@@ -264,13 +230,8 @@ SEA_AD_EFFECT_SIZES = {
     "early": os.path.join(SEA_AD_DIR, "effect_sizes_early.h5ad"),
     "late":  os.path.join(SEA_AD_DIR, "effect_sizes_late.h5ad"),
 }
-ALLEN_AGING_DIR = os.path.join(EXTERNAL_DATA_DIR, "allen_aging")
-ATLAS_REFERENCE_OUTPUT_DIR = os.path.join("outputs", "reports", "atlas_reference")
-
-WMB_SPOT_CHECK_KINASES = ["Gsk3b", "Cdk5", "Camk2a", "Mapk1", "Lrrk2"]
 
 WMB_DATASET_KEY = "WMB-10Xv3"
-AGING_DATASET_KEY = "Zeng-Aging-Mouse-10Xv3"
 
 WMB_ALL_REGION_KEYS = [
     "WMB-10Xv3-CB/log2",
@@ -363,31 +324,7 @@ A_OBS_FILE = os.path.join(
     SONG_WORKSPACE_DIR, "method_records", "aobs_desp_standardized",
     "inputs", "A_obs_fractions.tsv",
 )
-CLUSTERSIZE_FILE = os.path.join(
-    SONG_WORKSPACE_DIR, "method_records", "legacy_deconvolution_20250721",
-    "inputs", "yuyu_clustersize.csv",
-)
 KLDATA_FILE = os.path.join(SONG_WORKSPACE_DIR, "kinase", "kldata.csv")
-
-CLUSTERSIZE_POOL_MAP = {
-    "Excitatory_neurons": [
-        "Excitatory-Rorb", "Excitatory-Pyramidal", "Excitatory-Pyramidal-Satb2-Cux2",
-        "Foxp2-Excitatory-Neurons-layers-6-and-2-3", "glutamatergic-excitatory-neurons",
-        "Glutamatergic-excitatory-neurons-Cortical-layer-2-4-pyramidal-neurons",
-        "Excitatory principal neurons in the hippocampal dentate gyrus", "Excitatory-neurons",
-    ],
-    "Oligodendrocytes": ["Oligodendrocytes"],
-    "GABAergic_neurons": [
-        "Inhibitory-Neurons", "Erbb4-VIP-inhibitory-neurons", "Erbb4-inhibitory-neurons",
-        "VIP-positive-interneuron", "GABAergic inhibitory interneurons",
-        "GABAergic-inhibitory-interneurons-Dlx6os1-Erbb4",
-        "GABAergic-inhibitory-interneurons-VIP-positive",
-        "Ndnf-positive-neurogliaform-inhibitory-interneurons-GABAergic",
-        "Reln-neurons", "Basal-Ganglia-GABAergic-Neurons",
-    ],
-    "Astrocytes": ["Astrocytes", "Ptprz1-protoplasmic-astrocytes"],
-    "Microglia": ["Microglia"],
-}
 
 PHOSPHATASE_GENE_PREFIXES = [
     "Ppp", "Ptpn", "Ptpr", "Dusp", "Ppm", "Ssh", "Ctdsp", "Ctds",
