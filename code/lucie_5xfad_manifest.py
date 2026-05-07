@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT / "data" / "lucie_proteomics"
+DATA_DIR = ROOT / "data" / "raw" / "external" / "lucie_proteomics"
 OUT_PATH = ROOT / "docs" / "integrations" / "5xfad-lucie-manifest.json"
 SCAN_BYTES = 65536
 
