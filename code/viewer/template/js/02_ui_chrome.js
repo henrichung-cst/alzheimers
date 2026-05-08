@@ -378,8 +378,7 @@ const TAB_MANIFEST = {
     },
     rerenderOn: { filters: true, selection: ["celltype"] },
     // Kinase-selection change skips the full table re-render: only the row
-    // highlight and detail panel update here. The full re-render runs after
-    // SliceCache.loadKinase resolves in the boot subscriber.
+    // highlight and detail panel update here.
     onChange: ({ tabChanged, kinaseSelChanged, kid }) => {
       if (!kinaseSelChanged || tabChanged) return false;
       _updateKinaseRowSelection(kid);

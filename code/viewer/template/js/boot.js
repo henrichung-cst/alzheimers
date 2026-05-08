@@ -96,20 +96,6 @@ function boot() {
 
     if (filtersChanged || kinaseSelChanged || celltypeSelChanged) syncHeaderFromStore();
 
-    // Pre-render side effects that run regardless of which tab is active.
-    if (kinaseSelChanged) {
-      const kid = next.selection.kinase;
-      if (kid != null && SliceCache.kinaseBackboneSetSync(kid) === null) {
-        SliceCache.loadKinase(kid).then(() => {
-          if (Store.state.selection.kinase !== kid) return;
-          invalidateFilterCache();
-          _activeTabRender();
-        }).catch(e => console.warn("kinase slice load failed", e));
-      } else {
-        invalidateFilterCache();
-      }
-    }
-    if (celltypeSelChanged) invalidateFilterCache();
     if (backboneSelChanged) _refreshHighlightForBackbone(next.selection.backbone);
 
     if (tabChanged) {
