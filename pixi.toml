@@ -22,6 +22,7 @@ snrna = "python code/snrna_integration.py --run"
 bubbles = "python code/plot_attribution_bubbles.py"
 viewer = "python code/build_unified_viewer.py"
 install-incytr = "R CMD INSTALL --no-multiarch ../incytr"
+incytr-factorial = "bash code/integration/run_factorial.sh"
 
 [dependencies]
 python = "3.11.*"
