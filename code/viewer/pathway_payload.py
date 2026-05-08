@@ -14,23 +14,16 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
-import pyarrow.compute as pc
-import pyarrow.parquet as pq
 
 from .paths import (
     AGGREGATION_DIR,
     BACKBONE_REC_CSV,
     BACKBONE_VOCAB_CACHE,
-    EDGE_STREAM_BATCH,
     HERE,
-    SIDECAR_PARQUET,
-    UNIFIED_VIEWER_OUTPUT_DIR,
 )
 
 if TYPE_CHECKING:
@@ -99,79 +92,6 @@ def compute_sig_sets(data: "UnifiedData",
     packed_sorted = np.sort((bb << 8) | cn)
     sig_bb_ids = np.sort(np.unique(bb).astype(np.uint32))
     return sig_bb_ids, packed_sorted
-
-
-def write_sig_sidecar(data: "UnifiedData",
-                      bb_index: pd.DataFrame,
-                      progress: bool = True) -> dict:
-    """Stream the full edge parquet, keep only rows whose (backbone_id,
-    contrast_id) pair is in the sig_pair_set, write to SIDECAR_PARQUET.
-
-    Memory bound: one EDGE_STREAM_BATCH-row batch at a time (~20 MB).
-    """
-    sig_bb_ids, packed_sorted = compute_sig_sets(data, bb_index)
-    if len(packed_sorted) == 0:
-        raise RuntimeError("No significant (backbone, contrast) pairs found")
-
-    sig_bb_arr = pa.array(sig_bb_ids, type=pa.uint32())
-
-    os.makedirs(UNIFIED_VIEWER_OUTPUT_DIR, exist_ok=True)
-    pf = data.edges_pf
-    writer = None
-    total_rows = pf.metadata.num_rows
-    seen = 0
-    kept = 0
-    t0 = time.monotonic()
-
-    def _log():
-        if progress and seen % (EDGE_STREAM_BATCH * 50) == 0:
-            rate = seen / max(time.monotonic() - t0, 1e-6) / 1e6
-            print(f"  stream {seen:>14,}/{total_rows:,} "
-                  f"({rate:.1f} M/s) kept={kept:,}", flush=True)
-
-    try:
-        for batch in pf.iter_batches(batch_size=EDGE_STREAM_BATCH):
-            seen += batch.num_rows
-
-            mask1 = pc.is_in(batch["backbone_id"], value_set=sig_bb_arr)
-            batch = batch.filter(mask1)
-            if batch.num_rows == 0:
-                _log()
-                continue
-
-            bb_np = batch["backbone_id"].to_numpy().astype(np.int64)
-            cn_np = batch["contrast_id"].to_numpy().astype(np.int64)
-            packed = (bb_np << 8) | cn_np
-            idx = np.clip(np.searchsorted(packed_sorted, packed),
-                          0, len(packed_sorted) - 1)
-            keep_mask = packed_sorted[idx] == packed
-            if not keep_mask.any():
-                _log()
-                continue
-            batch = batch.filter(pa.array(keep_mask))
-
-            if writer is None:
-                writer = pq.ParquetWriter(
-                    SIDECAR_PARQUET, batch.schema,
-                    compression="zstd", compression_level=3,
-                )
-            writer.write_batch(batch)
-            kept += batch.num_rows
-            _log()
-    finally:
-        if writer is not None:
-            writer.close()
-
-    dt = time.monotonic() - t0
-    print(f"  sidecar: {kept:,} rows / {total_rows:,} scanned "
-          f"in {dt:.1f}s -> {SIDECAR_PARQUET}", flush=True)
-    return {
-        "sidecar_rows": kept,
-        "scanned_rows": total_rows,
-        "sig_backbones": int(len(sig_bb_ids)),
-        "sig_pairs": int(len(packed_sorted)),
-        "stream_seconds": round(dt, 1),
-    }
 
 
 # ---------------------------------------------------------------------------

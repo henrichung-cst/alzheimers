@@ -47,28 +47,13 @@ PAYLOAD_JSON = os.path.join(UNIFIED_VIEWER_DIR, "unified_viewer.payload.json")
 PAYLOAD_JSON_GZ = PAYLOAD_JSON + ".gz"
 UNIFIED_VIEWER_HTML = os.path.join(UNIFIED_VIEWER_DIR, "index.html")
 
-# Kinase-side artifacts (kept)
-PER_KINASE_SUMMARY = os.path.join(
-    UNIFIED_VIEWER_DIR, "edge_summaries", "per_kinase_summary.parquet"
-)
-EDGE_SLICES_KINASE_DIR = os.path.join(UNIFIED_VIEWER_DIR, "edge_slices", "kinase")
+# Decomp-OLS shards (lazy-loaded by the kinase audit drawer)
 EDGE_SLICES_DECOMP_OLS_DIR = os.path.join(
     UNIFIED_VIEWER_DIR, "edge_slices", "decomp_ols"
 )
 DECOMP_OLS_PARQUET = os.path.join(
     config.REPO_ROOT, "outputs", "reports", "deconvolution",
     "per_animal", "site_level_ols.parquet",
-)
-
-# Pathway-side artifacts (sunset candidates)
-SIDECAR_PARQUET = os.path.join(
-    UNIFIED_VIEWER_OUTPUT_DIR, "kinase_backbone_edges_sig.parquet"
-)
-PER_BACKBONE_SUMMARY = os.path.join(
-    UNIFIED_VIEWER_DIR, "edge_summaries", "per_backbone_summary.parquet"
-)
-EDGE_SLICES_BACKBONE_DIR = os.path.join(
-    UNIFIED_VIEWER_DIR, "edge_slices", "backbone"
 )
 
 # ---------------------------------------------------------------------------

@@ -16,11 +16,9 @@ The full 7.14 GB / 2.23B-row edge parquet is streamed via
 ParquetFile.iter_batches — it is never materialized in memory.
 
 Usage:
-    python code/build_unified_viewer.py              # build + html (default)
+    python code/build_unified_viewer.py              # payload + html (default)
     python code/build_unified_viewer.py --summary    # input row counts
-    python code/build_unified_viewer.py --sidecar    # sig parquet only
-    python code/build_unified_viewer.py --payload    # JSON only (needs sidecar)
-    python code/build_unified_viewer.py --build      # sidecar + payload
+    python code/build_unified_viewer.py --payload    # JSON only
     python code/build_unified_viewer.py --html       # write HTML (needs payload)
     python code/build_unified_viewer.py --validate   # write report md
 """
@@ -67,9 +65,7 @@ from viewer.paths import (  # noqa: E402
     BACKBONE_REC_CSV,
     DECOMP_OLS_PARQUET,
     EDGE_META_JSON,
-    EDGE_SLICES_BACKBONE_DIR,
     EDGE_SLICES_DECOMP_OLS_DIR,
-    EDGE_SLICES_KINASE_DIR,
     EDGE_STREAM_BATCH,
     EDGES_PARQUET,
     MEASUREMENT_TRACE_DIR,
@@ -77,13 +73,10 @@ from viewer.paths import (  # noqa: E402
     MEASUREMENT_TRACE_SCHEMA_VERSION,
     PAYLOAD_JSON,
     PAYLOAD_JSON_GZ,
-    PER_BACKBONE_SUMMARY,
-    PER_KINASE_SUMMARY,
     PIPELINE_OVERVIEW_DEST,
     PIPELINE_OVERVIEW_SRC,
     REPORT_MD,
     SCHEMA_VERSION,
-    SIDECAR_PARQUET,
     TOP_N_KINASES,
     UNIFIED_VIEWER_DIR,
     UNIFIED_VIEWER_HTML,
@@ -711,7 +704,6 @@ from viewer.pathway_payload import (  # noqa: E402
     _extract_pi0,
     build_backbone_index,
     compute_sig_sets,
-    write_sig_sidecar,
 )
 
 
@@ -1104,38 +1096,6 @@ def build_payload(data: UnifiedData) -> dict:
 
     contrasts = data.edge_metadata["contrasts"]
 
-    # Tier-1 edge summary (embedded). Tier-2 slices are loaded lazily by the
-    # browser from edge_slices/ — not embedded.
-    if not os.path.exists(PER_KINASE_SUMMARY):
-        raise SystemExit(
-            f"per_kinase_summary missing: {PER_KINASE_SUMMARY}. "
-            f"Run: pixi run python code/integration/adapters/build_edge_shards.py"
-        )
-    pk_summary_tbl = pq.read_table(PER_KINASE_SUMMARY)
-    per_kinase_summary = {name: pk_summary_tbl[name].to_pylist()
-                          for name in pk_summary_tbl.column_names}
-
-    # Distinct-backbone count per kinase (across contrasts). The per_kinase_summary
-    # table is keyed by (kinase, contrast) so summing n_backbones over-counts when a
-    # backbone supports the kinase in multiple contrasts. Compute distinct counts
-    # from the source edge parquet so the kinase table's #Backbones column matches
-    # the row count in the "Backbones supported" detail panel.
-    src_kb = pq.read_table(SIDECAR_PARQUET,
-                           columns=["kinase_id", "backbone_id"]).to_pandas()
-    _distinct = src_kb.groupby("kinase_id")["backbone_id"].nunique()
-    kinase_distinct_backbones = {
-        "kinase_id": _distinct.index.astype(int).tolist(),
-        "n_distinct_backbones": _distinct.values.astype(int).tolist(),
-    }
-    del src_kb, _distinct
-
-    kinase_index_path = os.path.join(EDGE_SLICES_KINASE_DIR, "index.json")
-    backbone_index_path = os.path.join(EDGE_SLICES_BACKBONE_DIR, "index.json")
-    with open(kinase_index_path) as f:
-        kinase_slice_index = json.load(f)
-    with open(backbone_index_path) as f:
-        backbone_slice_index = json.load(f)
-
     # Decomp-OLS slices: per-kinase per-cell-type substrate-site OLS, fetched on
     # demand by the Attribution drawer to back the per-cell pseudo-deconv NES.
     _kid_for_slices = {k: i for i, k in enumerate(data.edge_metadata["kinases"])}
@@ -1260,8 +1220,6 @@ def build_payload(data: UnifiedData) -> dict:
         "overview": _build_overview_slice(data),
         "tpdsDistribution": _build_tpds_distribution_slice(),
         "senderMatrix": _build_sender_matrix_slice(data, sender_order),
-        "per_kinase_summary": per_kinase_summary,
-        "kinase_distinct_backbones": kinase_distinct_backbones,
         "kinase_celltype_evidence": kinase_celltype_evidence,
         "attribution_index": attribution_index,
         "decomposition_index": decomposition_index,
@@ -1269,17 +1227,7 @@ def build_payload(data: UnifiedData) -> dict:
         "subclass_breakdown": _build_subclass_breakdown(kid),
         "audit_tables": build_audit_manifest(),
         "edge_slice_ref": {
-            "kinase_url": "edge_slices/kinase/",
-            "backbone_url": "edge_slices/backbone/",
-            "kinase_index": "edge_slices/kinase/index.json",
-            "backbone_index": "edge_slices/backbone/index.json",
-            "backbone_summary_url": "edge_summaries/per_backbone_summary.parquet",
-            "bucket_size": backbone_slice_index["bucket_size"],
             "schema_version": SCHEMA_VERSION,
-            "n_kinase_slices": kinase_slice_index["slice_count"],
-            "n_backbone_buckets": backbone_slice_index["bucket_count"],
-            "present_kinase_ids": kinase_slice_index["present_kinase_ids"],
-            "source_sha256": kinase_slice_index.get("source_sha256"),
             "decomp_ols_url": "edge_slices/decomp_ols/",
             "decomp_ols_index": "edge_slices/decomp_ols/index.json",
             "n_decomp_ols_slices": decomp_ols_slice_index.get("slice_count", 0),
@@ -1403,40 +1351,6 @@ def validate(data: UnifiedData) -> str:
     if gzip_bytes >= 20 * 1024 * 1024:
         errors.append(f"payload gzip {gzip_bytes/1e6:.1f} MB exceeds 20 MB cap")
 
-    # Edge-summary artifacts (Tier 1, embedded in payload)
-    pk_summary_rows = pk_summary_bytes = 0
-    pb_summary_rows = pb_summary_bytes = 0
-    if not os.path.exists(PER_KINASE_SUMMARY):
-        errors.append(f"per_kinase_summary missing: {PER_KINASE_SUMMARY}")
-    else:
-        pk_summary_rows = pq.ParquetFile(PER_KINASE_SUMMARY).metadata.num_rows
-        pk_summary_bytes = os.path.getsize(PER_KINASE_SUMMARY)
-    if not os.path.exists(PER_BACKBONE_SUMMARY):
-        errors.append(f"per_backbone_summary missing: {PER_BACKBONE_SUMMARY}")
-    else:
-        pb_summary_rows = pq.ParquetFile(PER_BACKBONE_SUMMARY).metadata.num_rows
-        pb_summary_bytes = os.path.getsize(PER_BACKBONE_SUMMARY)
-
-    # Tier-2 slice directories (lazy-loaded; not embedded)
-    n_kinase_slices = n_backbone_buckets = 0
-    slices_bytes = 0
-    if not os.path.isdir(EDGE_SLICES_KINASE_DIR):
-        errors.append(f"kinase slice dir missing: {EDGE_SLICES_KINASE_DIR}")
-    else:
-        n_kinase_slices = sum(1 for f in os.listdir(EDGE_SLICES_KINASE_DIR)
-                              if f.endswith(".parquet"))
-        slices_bytes += sum(os.path.getsize(os.path.join(EDGE_SLICES_KINASE_DIR, f))
-                            for f in os.listdir(EDGE_SLICES_KINASE_DIR)
-                            if f.endswith(".parquet"))
-    if not os.path.isdir(EDGE_SLICES_BACKBONE_DIR):
-        errors.append(f"backbone slice dir missing: {EDGE_SLICES_BACKBONE_DIR}")
-    else:
-        n_backbone_buckets = sum(1 for f in os.listdir(EDGE_SLICES_BACKBONE_DIR)
-                                 if f.endswith(".parquet"))
-        slices_bytes += sum(os.path.getsize(os.path.join(EDGE_SLICES_BACKBONE_DIR, f))
-                            for f in os.listdir(EDGE_SLICES_BACKBONE_DIR)
-                            if f.endswith(".parquet"))
-
     # Structural
     if payload is not None:
         pk = payload["kinases"]
@@ -1500,37 +1414,6 @@ def validate(data: UnifiedData) -> str:
                     f"observed_score"
                 )
 
-        # Tier-1 summary embedded in payload
-        pks = payload.get("per_kinase_summary", {})
-        if len(pks.get("kinase_id", [])) != pk_summary_rows:
-            errors.append(
-                f"per_kinase_summary rows in payload "
-                f"{len(pks.get('kinase_id', []))} != parquet {pk_summary_rows}"
-            )
-
-        # Tier-2 slice reference
-        esr = payload.get("edge_slice_ref", {})
-        if esr.get("n_kinase_slices") != n_kinase_slices:
-            errors.append(
-                f"edge_slice_ref.n_kinase_slices={esr.get('n_kinase_slices')} "
-                f"but {n_kinase_slices} parquet files on disk"
-            )
-        if esr.get("n_backbone_buckets") != n_backbone_buckets:
-            errors.append(
-                f"edge_slice_ref.n_backbone_buckets={esr.get('n_backbone_buckets')} "
-                f"but {n_backbone_buckets} parquet files on disk"
-            )
-
-        # Every kinase_id referenced in per_kinase_summary must be in kinases[]
-        summary_kids = set(pks.get("kinase_id", []))
-        payload_kids = set(payload["kinases"]["id"])
-        missing = summary_kids - payload_kids
-        if missing:
-            errors.append(
-                f"{len(missing)} per_kinase_summary kinase_id(s) absent from "
-                f"kinases[] (first 3: {sorted(missing)[:3]})"
-            )
-
         audit_tables = payload.get("audit_tables", {}).get("tables", {})
         expected_audit = {k for k, _, _ in AUDIT_TABLE_SPECS}
         missing_audit = expected_audit - set(audit_tables)
@@ -1570,10 +1453,6 @@ def validate(data: UnifiedData) -> str:
         "",
         f"- Payload JSON (raw): {raw_bytes/1e6:.2f} MB (cap 100)",
         f"- Payload JSON (gzip): {gzip_bytes/1e6:.2f} MB (cap 20)",
-        f"- per_kinase_summary: {pk_summary_bytes/1e3:.1f} KB, {pk_summary_rows:,} rows",
-        f"- per_backbone_summary: {pb_summary_bytes/1e3:.1f} KB, {pb_summary_rows:,} rows",
-        f"- Edge slice shards total: {slices_bytes/1e6:.1f} MB "
-        f"({n_kinase_slices} kinase + {n_backbone_buckets} backbone buckets)",
         "",
         "## Counts",
         "",
@@ -1619,16 +1498,13 @@ def validate(data: UnifiedData) -> str:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--summary", action="store_true", help="Print input counts (Unit 2.1 smoke test)")
-    ap.add_argument("--sidecar", action="store_true", help="Stream-filter full edges to _sig sidecar parquet")
-    ap.add_argument("--payload", action="store_true", help="Write JSON payload (requires sidecar)")
-    ap.add_argument("--build", action="store_true", help="Sidecar then payload")
+    ap.add_argument("--payload", action="store_true", help="Write JSON payload")
     ap.add_argument("--html", action="store_true", help="Write unified_viewer.html (requires payload)")
     ap.add_argument("--validate", action="store_true", help="Write Phase 2 validation report")
     args = ap.parse_args(argv)
 
-    if not any([args.summary, args.sidecar, args.payload, args.build,
-                args.html, args.validate]):
-        args.build = True
+    if not any([args.summary, args.payload, args.html, args.validate]):
+        args.payload = True
         args.html = True
 
     data = load_all_data()
@@ -1636,18 +1512,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.summary:
         print(json.dumps(data.summary(), indent=2))
 
-    if args.sidecar:
-        bb_index = build_backbone_index(data.backbone_recurrence)
-        write_sig_sidecar(data, bb_index)
-
     payload = None
     json_str = None
-    if args.payload or args.build:
-        if not os.path.exists(PER_KINASE_SUMMARY):
-            raise SystemExit(
-                f"edge shards missing; run: "
-                f"pixi run python code/integration/adapters/build_edge_shards.py"
-            )
+    if args.payload:
         payload = build_payload(data)
         sizes = write_payload(payload)
         json_str = sizes.pop("json_str")
