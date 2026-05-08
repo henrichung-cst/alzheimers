@@ -1,0 +1,50 @@
+INCYTR INTEGRATION FILES RELOCATED — 2026-05-08
+=================================================
+
+The legacy Incytr integration source (R wrappers, Python adapters,
+sidecars, tests, and orchestrator shell scripts) has been moved out
+of this repo to:
+
+    ~/Projects/work/incytr_integration_archive/
+
+This was done as part of a sprint-level cleanup of the alzheimers
+repo's data/code organization. We are aware that someone is in the
+middle of executing docs/incytr_remediation_plan.md (the structural
+fix for the shadow-fork problem). The relocation is meant to
+*support* that work, not interfere with it:
+
+  - Nothing was deleted. The full source tree is intact at the path
+    above and can be diffed, copied back, or referenced as needed.
+
+  - The Phase 1 stubs that already existed in this directory
+    (factorial.R, load.R, persist.R, views.sql, run_factorial.sh)
+    have been LEFT IN PLACE. Those are the future-state entry points
+    per the remediation plan.
+
+  - config_integration.py remains here. The remediation plan keeps
+    it ("kept, possibly trimmed").
+
+  - intermediates/ (1.9 GB of gitignored pipeline output) has been
+    left in place — orphaned, but harmless. Delete when convenient.
+
+What's at ~/Projects/work/incytr_integration_archive/:
+
+    adapters/           — Python data adapters (the "materialized
+                          derivations" layer the remediation plan
+                          flags for deletion)
+    wrappers/           — R wrappers (the shadow fork)
+    sidecar/            — kinase_pack/ and backbone_perms/
+    tests/              — R + Python tests of the old surface,
+                          including tests/edge_pruning/
+    incytr_runtime.sh   — INCYTR_LAYER_* registry
+    run_all_pairs.sh
+    run_factorial_all_pairs.sh
+    run_factorial_baseline_AB.sh
+    run_factorial_memory_gated.sh
+    run_imputation_verification.sh
+
+If you need any of these files back in the alzheimers repo to
+finish the remediation, just `mv` them. No git history was rewritten.
+
+Questions: ask in standup, or check CURRENT_SPRINT.md for the
+sprint context that motivated this move.
