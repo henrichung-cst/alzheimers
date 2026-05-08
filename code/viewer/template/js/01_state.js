@@ -7,22 +7,14 @@ const PAYLOAD = JSON.parse(document.getElementById("payload-data").textContent);
 const META = PAYLOAD.meta;
 const CONTRASTS = META.contrasts;
 const RECEIVERS = PAYLOAD.celltypes.name;
-const TISSUE_CAT = PAYLOAD.celltypes.tissue_category;
 const DISEASE_COLORS = META.diseaseColors;
-const PATHWAY_EVIDENCE_LABELS = {
-  "expression-confirmed": "Expression-confirmed",
-  "kinase-imputed": "Kinase-imputed",
-  "mixed": "Mixed",
-};
 
 // ---------------------------------------------------------------------------
 // Store — reducer-style with {selection, filters, view} slices
 // ---------------------------------------------------------------------------
 const INITIAL_STATE = {
   selection: { kinase:null, backbone:null, celltype:null },
-  filters:   { contrast:"ALL", direction:"ALL", receiver:"ALL", sender:null,
-               pathwayEvidence:"ALL", fdr:0.25, score:0.0, graphNodeIds:null,
-               tpdsSig:"OFF" },
+  filters:   { contrast:"ALL", fdr:0.25 },
   view:      { activeTab:"kinase", glossaryOpen:false,
                kinaseAuditTab:"measurement-trace",
                temporalLevel:"kinase" },

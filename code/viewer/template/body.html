@@ -1,22 +1,8 @@
 <body>
 <header id="app-header">
   <h1>Kinase + Pathway Viewer</h1>
-  <label class="filter-label" data-filter="receiver" data-metric="receiver">Receiver <select id="f-receiver" aria-label="Receiver filter"></select></label>
-  <label class="filter-label" data-filter="pathwayEvidence" data-metric="pathwayEvidence">Support <select id="f-pathway-evidence" aria-label="Pathway support filter">
-    <option value="ALL">All</option>
-    <option value="expression-confirmed">Expression-confirmed</option>
-    <option value="kinase-imputed">Kinase-imputed</option>
-    <option value="mixed">Mixed</option>
-  </select></label>
   <label class="filter-label" data-filter="fdr" data-metric="fdr">FDR &lt; <input id="f-fdr" aria-label="FDR threshold" type="number" step="0.05" min="0" max="1"
     value="0.25" style="width:60px;"></label>
-  <label class="filter-label" data-filter="tpdsSig" data-metric="tpdsSig"
-    title="Threshold on chain-level TPDS p-value. Off = no gate (every enumerated chain). 0.10/0.05/0.01 = require the chain's TPDS magnitude to be significantly non-zero at that level (min over senders). Distinct from the chain over-representation test, which gates kinase specificity rather than TPDS magnitude.">TPDS p &lt; <select id="f-tpds-sig" aria-label="TPDS p-value threshold">
-    <option value="OFF">off</option>
-    <option value="0.10">0.10</option>
-    <option value="0.05">0.05</option>
-    <option value="0.01">0.01</option>
-  </select></label>
   <button id="glossary-toggle" aria-controls="glossary-panel" aria-expanded="false" title="Open metric definitions and abbreviations">Glossary</button>
   <button id="f-selection-kinase-clear" class="chip" hidden>Clear kinase selection</button>
   <button id="f-selection-celltype-clear" class="chip" hidden>Clear cell-type selection</button>

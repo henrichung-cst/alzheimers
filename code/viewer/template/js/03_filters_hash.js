@@ -44,7 +44,7 @@ function renderUnmetPrerequisite(panelEl, tab) {
 // to keep the URL short. Suppresses re-broadcast while applying inbound.
 // ---------------------------------------------------------------------------
 const _HASH_DEFAULTS = {
-  t: "kinase", r: "ALL", s: "ALL",
+  t: "kinase",
   fdr: 0.25,
   k: null, b: null, ct: null,
 };
@@ -53,8 +53,8 @@ let _hashApplying = false;
 function _serializeHash() {
   const v = Store.state.view, f = Store.state.filters, s = Store.state.selection;
   const cur = {
-    t: v.activeTab, r: f.receiver,
-    s: f.pathwayEvidence, fdr: f.fdr,
+    t: v.activeTab,
+    fdr: f.fdr,
     k: s.kinase, b: s.backbone, ct: s.celltype,
   };
   const parts = [];
@@ -87,8 +87,6 @@ function applyHash() {
   });
   _hashApplying = true;
   try {
-    if (map.r != null) Store.dispatch({type:"SET_FILTER", key:"receiver", value:map.r});
-    if (map.s != null) Store.dispatch({type:"SET_FILTER", key:"pathwayEvidence", value:map.s});
     if (map.fdr != null) Store.dispatch({type:"SET_FILTER", key:"fdr", value:parseFloat(map.fdr)});
     if (map.k != null) Store.dispatch({type:"SET_SELECTION", key:"kinase", value:parseInt(map.k,10)});
     if (map.b != null) Store.dispatch({type:"SET_SELECTION", key:"backbone", value:parseInt(map.b,10)});

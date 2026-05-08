@@ -84,10 +84,7 @@ function _exportFilterMap(tab) {
   const m = TAB_MANIFEST[tab] || { filters: [] };
   const f = Store.state.filters;
   const out = {};
-  if (m.filters.includes("receiver")) out["Receiver"] = f.receiver || "ALL";
-  if (m.filters.includes("pathwayEvidence")) out["Support"] = f.pathwayEvidence || "any";
   if (m.filters.includes("fdr")) out["FDR"] = "< " + f.fdr;
-  if (f.tpdsSig && f.tpdsSig !== "OFF") out["TPDS p"] = "< " + f.tpdsSig;
   const sorted = {};
   Object.keys(out).sort().forEach(k => { sorted[k] = out[k]; });
   return sorted;
