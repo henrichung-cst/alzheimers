@@ -996,7 +996,6 @@ def _write_decomp_ols_slices(kid: dict, contrast_to_id: dict) -> dict:
 
 def build_payload(data: UnifiedData) -> dict:
     """Assemble the full JSON payload (no edges — that's the sidecar)."""
-    from kinase_library.utils._global_vars import family_colors as KL_FAMILY_COLORS
     from kinase_library.modules import data as kl_data
 
     kinases_slice = _build_kinases_slice(data)
@@ -1027,7 +1026,6 @@ def build_payload(data: UnifiedData) -> dict:
         "timepoints": list(config.TIMEPOINTS),
         "diseaseColors": dict(config.DISEASE_COLORS),
         "familyMap": fam,
-        "familyColors": dict(KL_FAMILY_COLORS),
     }
 
     kid = {k: i for i, k in enumerate(data.edge_metadata["kinases"])}
