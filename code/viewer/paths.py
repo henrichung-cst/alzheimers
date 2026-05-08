@@ -1,15 +1,4 @@
-"""Path and numeric constants for the unified viewer build.
-
-Single source of truth shared by `code/build_unified_viewer.py` and
-`code/viewer/pathway_payload.py`. No logic — just paths and tunables.
-
-Sections:
-- Top-level inputs (factorial aggregation outputs)
-- Viewer output dirs + payload paths
-- Kinase-side artifacts (kept; Kinase Explorer reads these)
-- Pathway-side artifacts (candidates for sunset)
-- Numeric tunables
-"""
+"""Path and numeric constants for the unified viewer build."""
 
 from __future__ import annotations
 
@@ -20,23 +9,6 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # code/
 sys.path.insert(0, HERE)
 
 import config  # noqa: E402
-import config_integration as icfg  # noqa: E402
-
-# ---------------------------------------------------------------------------
-# Inputs
-# ---------------------------------------------------------------------------
-AGGREGATION_DIR = os.path.join(icfg.FACTORIAL_ALL_PAIRS_DIR, "aggregation")
-EDGES_PARQUET = os.path.join(AGGREGATION_DIR, "kinase_backbone_edges.parquet")
-EDGE_META_JSON = os.path.join(AGGREGATION_DIR, "edge_index_metadata.json")
-
-# Pathway-side inputs (sunset candidates — only pathway tabs read these)
-BACKBONE_PERM_CSV = os.path.join(
-    AGGREGATION_DIR, "backbone_permutation_pvalues_by_contrast.csv"
-)
-BACKBONE_REC_CSV = os.path.join(
-    AGGREGATION_DIR, "backbone_recurrence_by_contrast.csv"
-)
-BACKBONE_VOCAB_CACHE = os.path.join(AGGREGATION_DIR, "backbone_vocab.parquet")
 
 # ---------------------------------------------------------------------------
 # Viewer outputs
@@ -70,7 +42,6 @@ REPORT_MD = os.path.join(config.REPO_ROOT, "pipeline_notes", "phase2_payload_rep
 # Numeric tunables
 # ---------------------------------------------------------------------------
 SCHEMA_VERSION = 1
-TOP_N_KINASES = 5                  # per (backbone, contrast) preview in JSON
-EDGE_STREAM_BATCH = 1_000_000      # rows per pyarrow batch; caps RAM
+TOP_N_KINASES = 5                  # per-kinase preview rows in JSON
 AUDIT_PREVIEW_ROWS = 25
 MEASUREMENT_TRACE_SCHEMA_VERSION = 3

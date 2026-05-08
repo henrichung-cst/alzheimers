@@ -58,16 +58,10 @@ import kinase_normalize as kattr  # noqa: E402  (Stage 1 helpers + load_sample_m
 # ---------------------------------------------------------------------------
 
 from viewer.paths import (  # noqa: E402
-    AGGREGATION_DIR,
     AUDIT_PREVIEW_ROWS,
     AUDIT_SOURCES_DIR,
-    BACKBONE_PERM_CSV,
-    BACKBONE_REC_CSV,
     DECOMP_OLS_PARQUET,
-    EDGE_META_JSON,
     EDGE_SLICES_DECOMP_OLS_DIR,
-    EDGE_STREAM_BATCH,
-    EDGES_PARQUET,
     MEASUREMENT_TRACE_DIR,
     MEASUREMENT_TRACE_INDEX,
     MEASUREMENT_TRACE_SCHEMA_VERSION,
@@ -527,15 +521,12 @@ class UnifiedData:
     kinase_hypothesis: pd.DataFrame
     mea_stoichiometry: pd.DataFrame
 
-    # Pathway-side
-    backbone_sig: pd.DataFrame
-    backbone_recurrence: pd.DataFrame
     unified_attribution: pd.DataFrame
     unified_attribution_full: pd.DataFrame
     decomposition: pd.DataFrame
 
-    # Edge parquet — metadata only, streamed at use time
-    edges_pf: pq.ParquetFile
+    # Vocabulary spine for kinase_id / contrast_id / cell_type ordering;
+    # derived in load_all_data from the live-pipeline outputs.
     edge_metadata: dict = field(default_factory=dict)
 
     def summary(self) -> dict:
@@ -544,14 +535,11 @@ class UnifiedData:
             "kinases": len(md.get("kinases", [])),
             "celltypes": len(md.get("celltypes", [])),
             "contrasts": len(md.get("contrasts", [])),
-            "backbones": md.get("backbones_n", 0),
-            "edges": self.edges_pf.metadata.num_rows,
+            "edges": md.get("n_edges", 0),
             "kinase_activity_rows": len(self.kinase_activity),
             "celltype_evidence_rows": len(self.celltype_evidence),
             "kinase_hypothesis_rows": len(self.kinase_hypothesis),
             "mea_rows": len(self.mea_stoichiometry),
-            "backbone_sig_rows": len(self.backbone_sig),
-            "backbone_recurrence_rows": len(self.backbone_recurrence),
             "unified_attribution_rows": len(self.unified_attribution),
             "decomposition_rows": len(self.decomposition),
         }
@@ -586,42 +574,6 @@ def load_all_data() -> UnifiedData:
     mea = pd.concat(mea_frames, ignore_index=True) if mea_frames else pd.DataFrame(
         columns=["kinase", "NES", "FDR", "contrast", "residue_type"])
 
-    backbone_sig = pd.read_csv(
-        BACKBONE_PERM_CSV,
-        usecols=[
-            "contrast", "receiver", "Receptor", "EM", "Target",
-            "observed_score", "pi0_null1", "pi0_null2", "significant_both",
-        ],
-        engine="pyarrow",
-    )
-    backbone_sig = backbone_sig[backbone_sig["significant_both"]].drop(
-        columns=["significant_both"]
-    ).reset_index(drop=True)
-    backbone_recurrence = pd.read_csv(
-        BACKBONE_REC_CSV,
-        usecols=[
-            "contrast", "receiver", "Receptor", "EM", "Target",
-            "n_senders", "n_senders_significant",
-            "mean_tpds", "max_abs_tpds", "tpds_pvalue", "sender_list",
-            "pathway_evidence_backbone",
-            "n_expression_confirmed", "n_kinase_imputed",
-            "imputed_nodes_union",
-        ],
-        dtype={"sender_list": "string", "imputed_nodes_union": "string",
-               "pathway_evidence_backbone": "string"},
-    )
-    # Hard significance gate: only keep recurrence rows whose (contrast,
-    # receiver, Receptor, EM, Target) tuple passed both permutation nulls.
-    # This drops ~90% of rows and removes spurious backbones from every tab.
-    _before = len(backbone_recurrence)
-    backbone_recurrence = backbone_recurrence.merge(
-        backbone_sig[["contrast", "receiver", "Receptor", "EM", "Target"]],
-        on=["contrast", "receiver", "Receptor", "EM", "Target"],
-        how="inner",
-    ).reset_index(drop=True)
-    print(f"  recurrence sig-gate: kept {len(backbone_recurrence):,}/{_before:,} "
-          f"rows ({100*len(backbone_recurrence)/_before:.1f}% pass both nulls)",
-          flush=True)
     unified_attribution = pd.read_csv(
         icfg.UNIFIED_ATTRIBUTION_CSV,
         usecols=[
@@ -654,57 +606,25 @@ def load_all_data() -> UnifiedData:
         _decomp_path, usecols=_decomp_cols,
     ) if os.path.exists(_decomp_path) else pd.DataFrame(columns=_decomp_cols)
 
-    edges_pf = pq.ParquetFile(EDGES_PARQUET)
-    with open(EDGE_META_JSON) as f:
-        edge_metadata = json.load(f)
-
-    # Extend the kinase universe to the union of edge_metadata kinases (which
-    # anchor edge slice IDs 0..N-1) and every kinase carried in the activity
-    # matrix — including pY kinases which post-date the Incytr edge build and
-    # therefore have no edges yet. New kinases append after the edge-anchored
-    # block, so existing kinase_id values in the edges parquet stay valid.
-    edge_kinases = list(edge_metadata.get("kinases", []))
-    edge_kinase_set = set(edge_kinases)
-    activity_kinases = list(dict.fromkeys(kinase_activity["kinase"].astype(str).tolist()))
-    extra_kinases = [k for k in activity_kinases if k not in edge_kinase_set]
-    if extra_kinases:
-        edge_metadata["kinases"] = edge_kinases + extra_kinases
-        edge_metadata["edge_kinase_count"] = len(edge_kinases)
-    else:
-        edge_metadata.setdefault("edge_kinase_count", len(edge_kinases))
+    # Vocabulary spine: derived from the live pipeline. kinase IDs follow
+    # activity-matrix order; contrasts follow the MEA output; cell-type IDs
+    # follow config.WMB_CLASSES (the canonical 34-class taxonomy).
+    edge_metadata = {
+        "kinases": list(dict.fromkeys(kinase_activity["kinase"].astype(str).tolist())),
+        "celltypes": list(config.WMB_CLASSES),
+        "contrasts": sorted(mea["contrast"].dropna().astype(str).unique().tolist()),
+    }
 
     return UnifiedData(
         kinase_activity=kinase_activity,
         celltype_evidence=celltype_evidence,
         kinase_hypothesis=kinase_hypothesis,
         mea_stoichiometry=mea,
-        backbone_sig=backbone_sig,
-        backbone_recurrence=backbone_recurrence,
         unified_attribution=unified_attribution,
         unified_attribution_full=unified_attribution_full,
         decomposition=decomposition,
-        edges_pf=edges_pf,
         edge_metadata=edge_metadata,
     )
-
-
-# ---------------------------------------------------------------------------
-# Pathway-side builders are imported from viewer.pathway_payload.
-# Anything below the kinase-side `_build_kinases_slice` / `_build_celltypes_slice`
-# pair was extracted from this file as part of the pathway-redesign code split.
-# ---------------------------------------------------------------------------
-
-from viewer.paths import BACKBONE_VOCAB_CACHE  # noqa: E402, F401
-from viewer.pathway_payload import (  # noqa: E402
-    _build_backbones_slice,
-    _build_overview_slice,
-    _build_sender_matrix_slice,
-    _build_tpds_distribution_slice,
-    _encode_sender_mask,
-    _extract_pi0,
-    build_backbone_index,
-    compute_sig_sets,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -748,10 +668,9 @@ def _build_kinases_slice(data: UnifiedData) -> dict:
     hyp = data.kinase_hypothesis.set_index("kinase")
     contrasts = data.edge_metadata["contrasts"]
 
-    edge_kinase_count = int(data.edge_metadata.get("edge_kinase_count", len(kinases)))
     cols: dict[str, list] = {
         "id": [], "name": [], "gene_symbol": [],
-        "residue_type": [], "has_edges": [],
+        "residue_type": [],
         "trajectory": [], "peak_contrast": [], "peak_NES": [],
         "n_sig_contrasts": [],
         "top_celltype_1": [], "top_celltype_2": [], "top_celltype_3": [],
@@ -767,7 +686,6 @@ def _build_kinases_slice(data: UnifiedData) -> dict:
     for k in kinases:
         cols["id"].append(kid[k])
         cols["name"].append(k)
-        cols["has_edges"].append(kid[k] < edge_kinase_count)
         ka_row = ka.loc[k] if k in ka.index else None
         hyp_row = hyp.loc[k] if k in hyp.index else None
 
@@ -1081,11 +999,8 @@ def build_payload(data: UnifiedData) -> dict:
     from kinase_library.utils._global_vars import family_colors as KL_FAMILY_COLORS
     from kinase_library.modules import data as kl_data
 
-    bb_index = build_backbone_index(data.backbone_recurrence)
-
     kinases_slice = _build_kinases_slice(data)
     celltypes_slice = _build_celltypes_slice(data)
-    backbones_slice, sender_order = _build_backbones_slice(data, bb_index)
 
     # Kinase family map
     try:
@@ -1111,24 +1026,8 @@ def build_payload(data: UnifiedData) -> dict:
         "diseaseGroups": list(config.DISEASE_GROUPS),
         "timepoints": list(config.TIMEPOINTS),
         "diseaseColors": dict(config.DISEASE_COLORS),
-        "tissueOrder": list(config.TISSUE_ORDER),
-        "tissueCategories": TISSUE_CATEGORIES,
-        "receiverToTissue": RECEIVER_TO_TISSUE,
-        "senderOrder": sender_order,
-        "fdrThreshDefault": config.MEA_FDR_THRESH,
-        "specificityHigh": round(config.SPECIFICITY_HIGH, 4),
-        "specificityLow": round(config.SPECIFICITY_LOW, 4),
-        "seaAdLfcMin": config.SEA_AD_LFC_MIN,
         "familyMap": fam,
         "familyColors": dict(KL_FAMILY_COLORS),
-        "pi0": _extract_pi0(data.backbone_sig, contrasts),
-        "contrast_sig_backbone_counts": {
-            c: int(data.backbone_recurrence.loc[
-                data.backbone_recurrence["contrast"] == c,
-                ["receiver", "Receptor", "EM", "Target"],
-            ].drop_duplicates().shape[0])
-            for c in contrasts
-        },
     }
 
     kid = {k: i for i, k in enumerate(data.edge_metadata["kinases"])}
@@ -1216,10 +1115,6 @@ def build_payload(data: UnifiedData) -> dict:
     payload = {
         "kinases": kinases_slice,
         "celltypes": celltypes_slice,
-        "backbones": backbones_slice,
-        "overview": _build_overview_slice(data),
-        "tpdsDistribution": _build_tpds_distribution_slice(),
-        "senderMatrix": _build_sender_matrix_slice(data, sender_order),
         "kinase_celltype_evidence": kinase_celltype_evidence,
         "attribution_index": attribution_index,
         "decomposition_index": decomposition_index,
@@ -1355,64 +1250,11 @@ def validate(data: UnifiedData) -> str:
     if payload is not None:
         pk = payload["kinases"]
         pc_ = payload["celltypes"]
-        pb = payload["backbones"]
 
         if len(pk["id"]) != n_kinases:
             errors.append(f"kinases rows {len(pk['id'])} != vocab {n_kinases}")
         if len(pc_["id"]) != n_celltypes:
             errors.append(f"celltypes rows {len(pc_['id'])} != vocab {n_celltypes}")
-        # backbones[] only covers recurrence-aware backbones (superset of sig),
-        # a strict subset of the edge parquet's 832K vocab. See docstring of
-        # build_backbone_index() for why the two sets differ.
-        if len(pb["id"]) > md["backbones_n"]:
-            errors.append(
-                f"backbones rows {len(pb['id'])} > edge vocab {md['backbones_n']}"
-            )
-        if len(set(pb["id"])) != len(pb["id"]):
-            errors.append("duplicate backbone ids in payload")
-        bb_index = build_backbone_index(data.backbone_recurrence)
-        sig_bb_ids, _ = compute_sig_sets(data, bb_index)
-        payload_bb_ids = set(pb["id"])
-        missing_sig = [int(b) for b in sig_bb_ids if int(b) not in payload_bb_ids]
-        if missing_sig:
-            errors.append(
-                f"{len(missing_sig)} sig backbone_id(s) absent from payload "
-                f"backbones[] (first 3: {missing_sig[:3]})"
-            )
-
-        bad = [rid for rid in pb["receiver_id"]
-               if rid < 0 or rid >= n_celltypes]
-        if bad:
-            errors.append(f"{len(bad)} orphan receiver_id(s) in backbones")
-
-        n_bb = len(pb["id"])
-        sig_mask_arr = np.asarray(pb["significant_both_mask"], dtype=np.int64)
-        for ci, c in enumerate(md["contrasts"]):
-            obs_key = f"observed_score_{c}"
-            tpds_key = f"mean_tpds_{c}"
-            if obs_key not in pb:
-                errors.append(f"missing backbones[{obs_key}]")
-                continue
-            if len(pb[obs_key]) != n_bb:
-                errors.append(
-                    f"{obs_key} length {len(pb[obs_key])} != id length {n_bb}"
-                )
-                continue
-            obs_notnull = np.array([v is not None for v in pb[obs_key]])
-            tpds_notnull = np.array([v is not None for v in pb[tpds_key]])
-            bad_rows = int(np.sum(obs_notnull & ~tpds_notnull))
-            if bad_rows:
-                errors.append(
-                    f"{obs_key}: {bad_rows} rows have sig observed_score but "
-                    f"no recurrence mean_tpds (sig should imply recurrence)"
-                )
-            sig_bit = ((sig_mask_arr >> ci) & 1).astype(bool)
-            missing_obs = int(np.sum(sig_bit & ~obs_notnull))
-            if missing_obs:
-                errors.append(
-                    f"{obs_key}: {missing_obs} sig-both rows missing "
-                    f"observed_score"
-                )
 
         audit_tables = payload.get("audit_tables", {}).get("tables", {})
         expected_audit = {k for k, _, _ in AUDIT_TABLE_SPECS}
@@ -1459,8 +1301,6 @@ def validate(data: UnifiedData) -> str:
         f"- kinases: {n_kinases}",
         f"- celltypes: {n_celltypes}",
         f"- contrasts: {n_contrasts}",
-        f"- backbones: {md['backbones_n']:,}",
-        f"- full edges (Phase 1): {md['n_edges']:,}",
         "",
         "## Memory",
         "",
