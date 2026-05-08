@@ -592,9 +592,7 @@ Object.defineProperty(window, "_keFilters", {
 let _keRows = null;
 let _keSigFdr = null;
 let _kinaseIdxById = null;
-let _backboneIdxById = null;
 let _evidenceByKinase = null;
-let _presentKinaseSet = null;
 let _decompByKey = null;
 let _decompByKinCtx = null;
 let _agreementByKey = null;

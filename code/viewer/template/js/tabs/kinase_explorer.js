@@ -170,12 +170,7 @@ function kinaseQualifies(kinaseId, filter) {
 
 function _buildKinaseRowModel() {
   const K = PAYLOAD.kinases;
-  const KDB = PAYLOAD.kinase_distinct_backbones || {kinase_id:[], n_distinct_backbones:[]};
   const famMap = META.familyMap || {};
-  const bbByK = new Array(K.id.length).fill(0);
-  for (let i = 0; i < KDB.kinase_id.length; i++) {
-    bbByK[KDB.kinase_id[i]] = KDB.n_distinct_backbones[i];
-  }
   const idxById = new Map();
   const out = [];
   for (let i = 0; i < K.id.length; i++) {
@@ -186,26 +181,16 @@ function _buildKinaseRowModel() {
       gene_symbol: K.gene_symbol[i] || "",
       family: famMap[K.name[i]] || "",
       residue_type: (K.residue_type && K.residue_type[i]) || "ST",
-      has_edges: K.has_edges ? !!K.has_edges[i] : true,
       trajectory: K.trajectory[i] || "",
       peak_contrast: K.peak_contrast[i] || "",
       peak_NES: K.peak_NES[i],
       top_celltype_1: K.top_celltype_1[i] || "",
-      n_backbones: bbByK[i],
       _fdr: CONTRASTS.map(c => K["FDR_" + c][i]),
       _nes: CONTRASTS.map(c => K["NES_" + c][i]),
     });
   }
   _kinaseIdxById = idxById;
   return out;
-}
-
-function _ensureBackboneIdx() {
-  if (_backboneIdxById !== null) return;
-  const BB = PAYLOAD.backbones;
-  const m = new Map();
-  for (let i = 0; i < BB.id.length; i++) m.set(BB.id[i], i);
-  _backboneIdxById = m;
 }
 
 function _ensureKinaseIdx() {
@@ -218,7 +203,6 @@ function _ensureKinaseIdx() {
 
 function _ensureKinaseIndexes() {
   if (_keRows === null) _keRows = _buildKinaseRowModel();
-  _ensureBackboneIdx();
   if (_evidenceByKinase === null) {
     const EV = PAYLOAD.kinase_celltype_evidence || {kinase_id:[]};
     const m = new Map();
@@ -229,10 +213,6 @@ function _ensureKinaseIndexes() {
       arr.push(k);
     }
     _evidenceByKinase = m;
-  }
-  if (_presentKinaseSet === null) {
-    const esr = PAYLOAD.edge_slice_ref || {};
-    _presentKinaseSet = new Set(esr.present_kinase_ids || []);
   }
   if (_decompByKey === null) {
     const D = PAYLOAD.decomposition_index || {kinase_id:[]};
