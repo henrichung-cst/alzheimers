@@ -182,14 +182,15 @@ kinase_enrich.py / kinase_attribute.py + snrna_integration.py  ←  code/integra
 
 ### Integration Code (Incytr)
 
-Cell-cell signaling integration under `code/integration/`. Connects bulk kinase activity (from live pipeline) with Incytr's snRNA-seq-based intercellular pathway inference across 462 sender-receiver pairs (22 subclasses). **Note:** the Incytr per-pair output directories use the prior 22-SEA-AD-subclass vocabulary; the integration adapters under `code/integration/adapters/` therefore continue to consume `config.SEA_AD_SUBCLASSES` and `config.SONG_SUBCLASS_MAP` (kept transitional for this purpose) until Incytr is re-run against the WMB-class taxonomy. See `code/integration/README.md` for full methodology.
+`code/integration/` is mid-rewrite. The legacy `wrappers/`, `adapters/`, `sidecar/`, `tests/`, and orchestrator shell scripts were relocated on 2026-05-08 to `~/Projects/work/incytr_integration_archive/` (see `code/integration/MOVED.txt`). The remediation plan is at `docs/incytr_remediation_plan.md`; the new architecture replaces the shadow-fork wrapper with a thin AD-specific shell that calls the upstream `incytr` R package directly.
 
-- `config_integration.py` — Integration-specific config (paths, thresholds, 10% detection threshold)
-- `adapters/` — Python data adapters: export expression, phospho, kinase-library data for R; compute kinase support scores; aggregate cross-pair results
-- `wrappers/` — R wrappers: `duckdb_enumeration.R` (combinatorial pathway enumeration via DuckDB), `receiver_scoring.R` (vectorized receiver-side scoring), `run_incytr_all_pairs.R` (462-pair orchestrator), `postprocess.R`, `verify_phase2.R`
-- `tests/edge_pruning/` — R-based diagnostic and validation scripts for enumeration scaling
-- `run_all_pairs.sh` — Shell runner for all-pairs pipeline (requires R + DuckDB + Incytr package)
-- Requires: R with `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow` packages; Python adapters use `kinase-library`, `anndata`
+What remains in-tree:
+
+- `config_integration.py` — paths, thresholds, contrast definitions (kept by the remediation plan)
+- `factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh` — Phase 1 stubs for the new architecture (incomplete; awaiting the production package API in `../incytr`)
+- `intermediates/` — gitignored output dir from the legacy pipeline (orphaned)
+
+R deps (`Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`) are still required by the Phase 1 stubs.
 
 ### Runners
 
@@ -203,25 +204,24 @@ Operational shell wrappers under `code/runners/`:
 - `supporting/run_atlas_reference.sh` — Atlas reference setup
 - `supporting/run_wmb_expression.sh` — WMB expression export
 
-**Caching:** External API calls (MyGene.info, Allen Brain Atlas) are cached inside `data/incytr_collections/song/analysis_cache/` to avoid redundant requests.
+**Caching:** External API calls (MyGene.info, Allen Brain Atlas) are cached inside `data/datasets/song/analysis_cache/` to avoid redundant requests.
 
 ## Key Data Files
 
 ### Live Pipeline Inputs
-- `data/incytr_collections/song/primary/proteomics/song2024_tmttotal_protein_quant_merged_labeled (2).xlsx` — 72-animal total proteome (6 plexes × 10 TMT channels)
-- `data/incytr_collections/song/primary/proteomics/song_IMAC_sitequant_merged_labeled (2).xlsx` — Phospho sitequant (per-site intensities)
-- `data/incytr_collections/song/primary/proteomics/song_IMAC_compositeSites_merged_labeled (2).xlsx` — Phospho composite sites
-- `data/incytr_collections/song/primary/proteomics/Sample_list_72mice (1).xlsx` — TMT channel-to-animal sample mapping
-- `data/incytr_collections/song/method_records/aobs_desp_standardized/inputs/A_obs_fractions.tsv` — Cell-type composition fractions (24 × 10 cell types)
+- `data/datasets/song/primary/proteomics/song2024_tmttotal_protein_quant_merged_labeled (2).xlsx` — 72-animal total proteome (6 plexes × 10 TMT channels)
+- `data/datasets/song/primary/phospho/song_IMAC_{sitequant,compositeSites}_merged_labeled (2).xlsx` — Phospho IMAC (pS/pT) site-level + composite
+- `data/datasets/song/primary/phospho/song_pY_{sitequant,compositeSites}_merged_labeled (2).xlsx` — Phospho pY site-level + composite (1st-class sibling to IMAC)
+- `data/datasets/song/primary/metadata/Sample_list_72mice (1).xlsx` — TMT channel-to-animal sample mapping
 - `data/external/allen_abc/` — Cached Allen Brain Cell Atlas data (WMB)
 - `data/external/sea_ad/` — SEA-AD MTG processed data (h5ad, 139 supertypes): `effect_sizes.h5ad` (full CPS), `effect_sizes_early.h5ad` (early/low-CPS), `effect_sizes_late.h5ad` (late/high-CPS)
 
 ### Supporting/Cached Data
-- `data/incytr_collections/song/analysis_cache/kinase_to_gene_mapping.csv` — Cached kinase→gene symbol mappings
+- `data/datasets/song/analysis_cache/kinase_to_gene_mapping.csv` — Cached kinase→gene symbol mappings
 - `outputs/reports/wmb_expression/wmb_kinase_expression.csv` — WMB expression matrix (required for unified attribution)
 
 ### Decomposition (CTM-native, branch-only — not in live pipeline)
-`code/deconvolution/build_wmb_decomposition.py` consumes per-(site, group) bulk medians (`imac_median.csv`, `py_median.csv`, `pr_median.csv`) and the `yuyu_samplekey.csv` MS\_ID↔SCRNA bridge. These were deleted from `data/incytr_collections/song/proteomics/source/` on 2026-05-07; re-pull from Google Drive via `pixi run ingest-gdrive-shared` before running the branch. Outputs: `outputs/reports/deconvolution/wmb_decomposition/{ps,py,pr}_wmb_decomposition.csv` + `wmb_class_size.csv`.
+`code/deconvolution/build_wmb_decomposition.py` consumes per-(site, group) bulk medians (`imac_median.csv`, `py_median.csv`, `pr_median.csv`) and the `yuyu_samplekey.csv` MS\_ID↔SCRNA bridge. These were deleted from `data/datasets/song/proteomics/source/` on 2026-05-07; re-pull from Google Drive via `pixi run ingest-gdrive-shared` before running the branch. Outputs: `outputs/reports/deconvolution/wmb_decomposition/{ps,py,pr}_wmb_decomposition.csv` + `wmb_class_size.csv`.
 
 ## Output
 
@@ -267,15 +267,14 @@ Other documentation:
 - **ANALYSIS_MODE controls sample filtering** — defaults to `males_only`. Set `ANALYSIS_MODE=full_cohort` for sensitivity analysis with both sexes. The mode affects `kinase_enrich.py`, `kinase_attribute.py`, and `kinase_mechanism.py` but NOT `kinase_normalize.py` (which always uses all 72 samples)
 - **Outlier detection requires stoichiometry** — `data_ingest.py --outliers` reads `stoichiometry_matrix.csv`, so `kinase_normalize.py` must be run first. Falls back to total proteome if unavailable
 - **Limited automated tests** — live pipeline has no unit tests; verify with `python code/kinase_summary.py`
-- **Song proteomics files must be mounted** — data_ingest.py reads Excel workbooks from `data/incytr_collections/song/primary/proteomics/`
+- **Song proteomics files must be mounted** — data_ingest.py reads Excel workbooks from `data/datasets/song/primary/proteomics/`
 - **WMB prerequisite** — `run_live_pipeline.sh` gates on `wmb_kinase_expression.csv` and `wmb_proteome_expression.csv`; run `run_wmb_expression.sh` first
 - **Atlas cache compressed** — raw h5ad files under `data/external/allen_abc/` are zstd-compressed to save space (~115 GB → ~26 GB). Decompress with `bash code/runners/supporting/decompress_atlas_cache.sh` before re-running `wmb_expression.py`. See `data/external/allen_abc/MANIFEST.json` for provenance
 - **SEA-AD data required** — Unified attribution needs SEA-AD effect sizes under `config.SEA_AD_DIR`
-- **API caching** — delete files under `data/incytr_collections/song/analysis_cache/` to force re-fetch
+- **API caching** — delete files under `data/datasets/song/analysis_cache/` to force re-fetch
 - **WMB expression memory** — `wmb_expression.py --proteome` processes 6,308 genes across 13 regions; use `skip_regional=True` and `chunk_size=2000` to avoid OOM (~30GB RAM available)
-- **A_obs is group-level** — `A_obs_fractions.tsv` has 24 rows (one per factorial group), not 72 (per-animal). Marker assessment correlates per-animal protein intensity with per-group composition, so most cell types yield q≈1.0 — this is expected
 - **Do not reopen closed paths** — direct deconvolution, factor model, two-compartment, and transcript-only rescue are all closed (see charter)
-- **Integration is Python+R** — `code/integration/` uses Python adapters for data export and R wrappers for Incytr/DuckDB. The R environment requires `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow` packages. Config lives in `config_integration.py`, not `config.py`
+- **Integration tree is mid-rewrite** — legacy R wrappers and Python adapters moved to `~/Projects/work/incytr_integration_archive/` on 2026-05-08; see `code/integration/MOVED.txt` and `docs/incytr_remediation_plan.md`. The Phase 1 stubs (`factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh`) remain in-tree. R deps (`Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`) are still required. Config lives in `config_integration.py`, not `config.py`
 
 ## Tooling & Environment
 

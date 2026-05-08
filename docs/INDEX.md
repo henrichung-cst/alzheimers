@@ -55,12 +55,11 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 ### Primary data (Song 72-animal cohort)
 | Path | Contents |
 |:---|:---|
-| `data/incytr_collections/song/primary/proteomics/song2024_tmttotal_protein_quant_merged_labeled (2).xlsx` | 72-animal TMT total proteome (6 plexes × 10 channels) |
-| `data/incytr_collections/song/primary/proteomics/song_IMAC_sitequant_merged_labeled (2).xlsx` | Phospho site-level quant |
-| `data/incytr_collections/song/primary/proteomics/song_IMAC_compositeSites_merged_labeled (2).xlsx` | Composite phospho sites |
-| `data/incytr_collections/song/primary/proteomics/Sample_list_72mice (1).xlsx` | TMT channel ↔ animal mapping |
-| `data/incytr_collections/song/method_records/aobs_desp_standardized/inputs/A_obs_fractions.tsv` | Cell-type composition fractions (24 groups × 10 cell types) |
-| `data/incytr_collections/song/transcriptomics/170_gex_celltypes_00.h5ad` | Paired snRNA-seq (63K nuclei, 28 animals) |
+| `data/datasets/song/primary/proteomics/song2024_tmttotal_protein_quant_merged_labeled (2).xlsx` | 72-animal TMT total proteome (6 plexes × 10 channels) |
+| `data/datasets/song/primary/phospho/song_IMAC_{sitequant,compositeSites}_merged_labeled (2).xlsx` | Phospho IMAC (pS/pT) — site-level + composite |
+| `data/datasets/song/primary/phospho/song_pY_{sitequant,compositeSites}_merged_labeled (2).xlsx` | Phospho pY — site-level + composite |
+| `data/datasets/song/primary/metadata/Sample_list_72mice (1).xlsx` | TMT channel ↔ animal mapping |
+| `data/datasets/song/transcriptomics/170_gex_celltypes_00.h5ad` | Paired snRNA-seq (63K nuclei, 28 animals) |
 
 ### External atlases
 | Path | Contents |
@@ -71,7 +70,7 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 ### Analysis cache
 | Path | Contents |
 |:---|:---|
-| `data/incytr_collections/song/analysis_cache/kinase_to_gene_mapping.csv` | Cached kinase → gene symbol mapping |
+| `data/datasets/song/analysis_cache/kinase_to_gene_mapping.csv` | Cached kinase → gene symbol mapping |
 
 ## Pipeline
 
@@ -82,6 +81,7 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 | 1. Ingest | `data_ingest.py` | `runners/main/run_data_ingest.sh` | `outputs/reports/data_ingest/` |
 | 2. Normalize + MEA + attribute | `kinase_attribution.py` | `runners/main/run_kinase_attribution.sh` | `outputs/reports/kinase_attribution/` |
 | 3. Recovery | `attribution_recovery.py` | `runners/main/run_attribution_recovery.sh` | `outputs/reports/attribution_recovery/` |
+| Plots | `plot_attribution_bubbles.py` | — | `outputs/reports/attribution_recovery/bubble_plots/` |
 | Bundled | — | `runners/main/run_live_pipeline.sh` | all of the above |
 | Dual-track | — | `runners/main/run_dual_analysis.sh` | `*_males_only/`, `*_full_cohort/` |
 
@@ -105,15 +105,16 @@ Additional supporting runners (ops utilities, no Python counterpart): `runners/s
 `fdr_stringent.py`, `threshold_sensitivity.py`, `aggregation_robustness.py`, `parent_protein_qc.py` — run via `runners/supplementary/run_reviewer_diagnostics.sh`. Output: `outputs/reports/supplementary/`. (The historical `deconvolution_infeasibility.py` proof has been frozen and moved to `archive/deconvolution/code/`.)
 
 ### Integration pipeline (`code/integration/`)
-Python adapters + R wrappers; config in `config_integration.py`.
 
-| Component | Files |
+Mid-rewrite as of 2026-05-08. Legacy `wrappers/`, `adapters/`, `sidecar/`, `tests/`, and orchestrator shell scripts have been relocated to `~/Projects/work/incytr_integration_archive/` (see `code/integration/MOVED.txt`). The remediation plan at [`incytr_remediation_plan.md`](./incytr_remediation_plan.md) defines the target architecture: a thin AD-specific shell that calls the upstream `incytr` R package directly.
+
+In-tree now:
+
+| File | Role |
 |:---|:---|
-| Python adapters | `adapters/export_expression{,_factorial}.py`, `export_phospho.py`, `export_kldata.py`, `export_kl_output{,_factorial}.py`, `export_kinase_imputed_genes{,_factorial}.py`, `compute_kinase_support{,_all_pairs,_factorial}.py`, `aggregate_cross_pair.py`, `aggregate_factorial.py`, `examine_factorial.py`, `build_edge_index.py`, `build_edge_shards.py`, `common.py` |
-| R wrappers | `wrappers/duckdb_enumeration.R`, `receiver_scoring.R`, `run_incytr{,_all_pairs,_factorial_all_pairs}.R`, `postprocess.R`, `verify_phase2.R`, `bootstrap_sensitivity.R` |
-| Runners | `run_all_pairs.sh` (single-contrast), `run_factorial_all_pairs.sh`, `run_factorial_memory_gated.sh`, `run_factorial_permutations.sh`, `run_imputation_verification.sh` |
-| Tests | `tests/edge_pruning/` — R-based diagnostic/validation scripts for enumeration scaling |
-| README | `code/integration/README.md` — integration methodology overview |
+| `config_integration.py` | Paths, thresholds, contrast definitions |
+| `factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh` | Phase 1 stubs for the new architecture (incomplete; blocked on production package API in `../incytr`) |
+| `README.md`, `MOVED.txt` | Pointers to the archive and the remediation plan |
 
 ## Outputs
 
@@ -122,18 +123,13 @@ Python adapters + R wrappers; config in `config_integration.py`.
 |:---|:---|
 | `data_ingest/` | `sample_exclusions.csv`, `pca_plots/outlier_diagnostic.png` |
 | `kinase_attribution/` | `stoichiometry_matrix.csv`, `mea_stoichiometry.csv`, `site_level_ols.csv`, `unified_attribution.csv`, `attribution_summary.json`, `mea_global_shift.csv`, `winsorized_sites.csv` |
-| `attribution_recovery/` | **`kinase_hypothesis_table.csv` (primary deliverable)**, `kinase_activity_matrix.csv`, `celltype_evidence_table.csv` |
+| `attribution_recovery/` | **`kinase_hypothesis_table.csv` (primary deliverable)**, `kinase_activity_matrix.csv`, `celltype_evidence_table.csv`, `bubble_plots/` |
 | `wmb_expression/`, `snrna_integration/` | Supporting prerequisites |
 | `supplementary/` | Reviewer-diagnostic results |
 
-### Integration pipeline (`code/integration/intermediates/`)
-| Dir | Key files |
-|:---|:---|
-| `factorial/` | Per-receiver kinase-imputed gene lists, expression matrices, `kldata.csv`, factorial kinase imputation summary |
-| `factorial/all_pairs/` | `recv_{subclass}.parquet` × 22 (with `imputed_nodes` provenance), `pair_summary.csv` |
-| `factorial/all_pairs/aggregation/` | `backbone_recurrence_by_contrast.csv`, `backbone_permutation_pvalues_by_contrast.csv` (superset with `significant_both` column), `kinase_backbone_edges.parquet`, `hub_matrix_by_contrast.csv`, `contrast_comparison.csv`, `temporal_dynamics.csv`, `target_convergence_by_contrast.csv`, `kinase_tpds_integration.csv`, `aggregation_metadata.json`, `hub_heatmap_grid.png`, `temporal_dynamics.png`, `kinase_coverage.png` |
-| `factorial/all_pairs/aggregation/examination/` | Additivity, trajectory, celltype-centrality figures |
-| `all_pairs/` | Single-contrast per-receiver parquets + aggregation |
+### Integration pipeline outputs
+
+Legacy outputs lived under `code/integration/intermediates/` (gitignored). That tree is now orphaned by the integration rewrite (see [`incytr_remediation_plan.md`](./incytr_remediation_plan.md)); the new architecture writes to `outputs/reports/incytr_factorial/` instead. Nothing currently regenerates either.
 
 ## Viewers
 

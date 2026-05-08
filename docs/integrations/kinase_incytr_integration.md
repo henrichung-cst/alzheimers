@@ -24,7 +24,7 @@ outputs/reports/kinase_attribution/
    stoichiometry_matrix.csv     (sites × samples)
 outputs/reports/attribution_recovery/
    (diagnostics consumed by export_phospho.py)
-data/incytr_collections/song/primary/transcriptomics/
+data/datasets/song/primary/transcriptomics/
    170_gex_celltypes_00.h5ad    (28 animals, 63K nuclei)
 data/.../kldata_pspy.csv        (static kinase-substrate reference)
 
@@ -275,7 +275,7 @@ Kinase abbreviation → human gene symbol uses MyGene.info, cached at `SONG_ANAL
 | `FACTORIAL_CONTRASTS` | 9 contrast vectors | Python | Same as `CONTRAST_COEFS` |
 | `PHOSPHO_FDR_GATE` | `0.25` | Python | MEA FDR gate for kinase support |
 | `DISCORDANCE_RANK_QUARTILE` | `0.25` | Python | |
-| `EXPRESSION_DETECTION_THRESHOLD` | `0.10` | **R env var `EXPR_DETECTION_THRESHOLD`** | Python constant is documentation; R wrappers read from environment with `0.10` default |
+| `EXPRESSION_DETECTION_THRESHOLD` | `0.5` | **R env var `EXPR_DETECTION_THRESHOLD`** | Native `Find_highexp_gene` 50%-percentile parity (ALZ-22 Path 1, 2026-05-07). Set to `0.10` to recover the snRNA-tuned rule. |
 | Kinase pack (kinase-imputed expansion + support score) | off | Shell env var `INCYTR_LAYER_KINASE_PACK` | See `code/integration/incytr_runtime.sh` registry |
 | `KINASE_IMPUTATION_FDR` | `0.10` | Python | Imputation gate, tighter than `PHOSPHO_FDR_GATE` |
 | `KINASE_IMPUTATION_ATTRIBUTION_TAU` | median `combined_score` | Python | Per-receiver cell-type gate |
@@ -338,7 +338,7 @@ Produces `incytr_object.rds` + CSVs. Output schema is not compatible with the al
 | `RUN_PERMUTATIONS` | `0` | single-contrast | Set to `1` to run dual-null backbone tests during aggregation |
 | `RUN_BOOTSTRAP` | `0` | all | Set to `1` to run L5 IT bootstrap sensitivity |
 | `MEMORY_LIMIT_GB` | `10` | R wrappers | In-R memory guard threshold |
-| `EXPR_DETECTION_THRESHOLD` | `0.10` | R wrappers | Expression detection threshold |
+| `EXPR_DETECTION_THRESHOLD` | `0.5` | R wrappers | Expression detection threshold (native `Find_highexp_gene` parity, ALZ-22 Path 1) |
 | `DUCKDB_TEMP_DIR` | `~/.cache/duckdb` | DuckDB | Spill directory (set by `.envrc`) |
 
 The `INCYTR_*` defaults live in a single registry: `code/integration/incytr_runtime.sh` (shell) mirrored by `code/integration/wrappers/incytr_runtime.R` (R). See `docs/integrations/incytr_layer_inventory.md`.

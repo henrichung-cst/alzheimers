@@ -63,19 +63,17 @@ alzheimers/
 │   │   ├── main/                   # Main pipeline stage runners
 │   │   ├── supporting/             # Supporting setup runners
 │   │   └── supplementary/          # Reviewer diagnostic runners
-│   ├── integration/                # Incytr intercellular signaling integration
-│   │   ├── adapters/               # Python: snRNA-seq export, kldata, phospho, kinase support scoring
-│   │   ├── wrappers/               # R: DuckDB enumeration, Incytr orchestration, bootstrap
-│   │   ├── tests/                  # Integration tests
-│   │   ├── config_integration.py   # Integration-specific configuration
-│   │   ├── run_phase1.sh           # Single-pair debug runner (Microglia-PVM -> L5 IT)
-│   │   ├── run_all_pairs.sh        # 462-pair single-contrast runner (App_4mo)
-│   │   ├── run_factorial_all_pairs.sh    # 462-pair × 9-contrast runner (primary)
-│   │   └── run_factorial_permutations.sh # per-contrast backbone dual-null tests
+│   ├── integration/                # Incytr integration — mid-rewrite (see docs/incytr_remediation_plan.md)
+│   │   ├── config_integration.py   # Integration-specific configuration (kept)
+│   │   ├── factorial.R, load.R, persist.R, views.sql, run_factorial.sh
+│   │   │                            # Phase 1 stubs for the new architecture
+│   │   ├── README.md, MOVED.txt    # Pointers to ~/Projects/work/incytr_integration_archive/
+│   │   └── intermediates/          # Gitignored legacy outputs (orphaned)
 │   ├── supplementary/              # Reviewer-response diagnostic analyses
 │   ├── data_ingest.py              # Main: data ingestion + characterization
 │   ├── kinase_attribution.py       # Main: stoichiometry + MEA + unified attribution
 │   ├── attribution_recovery.py     # Main: attribution recovery + final table assembly
+│   ├── plot_attribution_bubbles.py # Main: attribution visualizations
 │   ├── config.py                   # Supporting: shared configuration
 │   ├── atlas_reference.py          # Supporting: external-reference prep (SEA-AD, WMB, Aging Mouse)
 │   ├── wmb_expression.py           # Supporting: WMB expression export
@@ -84,7 +82,7 @@ alzheimers/
 │   ├── build_unified_viewer.py     # Standalone: unified kinase + pathway HTML viewer
 │   └── lucie_5xfad_manifest.py     # Standalone: 5xFAD integration/provenance
 ├── data/
-│   ├── incytr_collections/song/    # Authoritative localized Song workspace
+│   ├── datasets/song/    # Authoritative localized Song workspace
 │   ├── external/                   # Allen Brain Atlas (WMB, SEA-AD) cached data
 │   ├── gdrive_shared/              # Upstream collaborator archive mounts
 │   └── lucie_proteomics/           # Local 5xFAD upstream proteomics sources
@@ -129,7 +127,7 @@ mamba activate alzheimers
 
 The `alzheimers` environment requires Python 3.11 (kinase-library compatibility) and includes `kinase-library`, `anndata`, `gseapy`, `scikit-learn`, `matplotlib`, `seaborn`, `scipy`, `requests`, `natsort`.
 
-The Incytr integration additionally requires a separate R environment (`incytr`) with the Incytr package and DuckDB. See `code/integration/run_phase1.sh` for the dual-environment orchestration.
+The Incytr integration is mid-rewrite (see `docs/incytr_remediation_plan.md`); the legacy source has been moved to `~/Projects/work/incytr_integration_archive/`. The Phase 1 stubs in `code/integration/` still require an R environment with `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`.
 
 If you need the study data mounts:
 
@@ -164,7 +162,7 @@ bash code/runners/supporting/run_snrna_integration.sh  # Song within-cohort snRN
 
 ### Incytr Integration Pipeline
 
-Connects bulk kinase activity to intercellular signaling pathways. Requires the bulk pipeline (MEA results and unified attribution) to have been run first. The primary runner is `code/integration/run_factorial_all_pairs.sh` (462 pairs × 9 contrasts). See [`docs/integrations/kinase_incytr_integration.md`](docs/integrations/kinase_incytr_integration.md) for the full runtime spec — runners, environment variables, outputs, and configuration.
+Mid-rewrite. The legacy 462-pair × 9-contrast runner has been relocated to `~/Projects/work/incytr_integration_archive/run_factorial_all_pairs.sh`; in-tree only the Phase 1 stubs remain. See [`docs/incytr_remediation_plan.md`](docs/incytr_remediation_plan.md) for the target architecture and [`code/integration/MOVED.txt`](code/integration/MOVED.txt) for the move manifest.
 
 ### Supplementary Diagnostics
 
@@ -187,15 +185,15 @@ bash code/runners/supplementary/run_reviewer_diagnostics.sh
 | `wmb_expression/` | WMB per-subclass kinase/phosphatase expression matrix |
 | `snrna_integration/` | Song pseudobulk, within-cohort specificity, concordance |
 
-### Incytr Integration (`code/integration/intermediates/`)
+### Incytr Integration
 
-Primary outputs: 22 receiver-indexed Parquet files (`recv_{receiver}.parquet`) with all pathway scores, plus per-pair kinase support scores and cross-pair aggregation (backbone recurrence, hub matrix, target convergence). See [`code/integration/README.md`](code/integration/README.md#output-structure) for the full file inventory.
+Outputs are not currently regenerable in-tree. The legacy `code/integration/intermediates/` is gitignored and orphaned by the rewrite; the new architecture targets `outputs/reports/incytr_factorial/` (not yet wired up).
 
 ## Data Surfaces
 
 ### Song workspace
 
-The active Song dataset lives under `data/incytr_collections/song/`. Treat this as the authoritative local workspace. Upstream collaborator material under `data/gdrive_shared/` is archive and provenance, not a runtime dependency.
+The active Song dataset lives under `data/datasets/song/`. Treat this as the authoritative local workspace. Upstream collaborator material under `data/gdrive_shared/` is archive and provenance, not a runtime dependency.
 
 ### 5xFAD integrations
 
@@ -207,6 +205,6 @@ The active Song dataset lives under `data/incytr_collections/song/`. Treat this 
 
 - Use the `docs/foundation/` documents as the live analytical contract
 - Use `docs/foundation/repo_surface_index.md` when deciding whether a file is `main`, `supporting`, or `archived`
-- Prefer `data/incytr_collections/song/` over ad hoc files elsewhere in `data/`
+- Prefer `data/datasets/song/` over ad hoc files elsewhere in `data/`
 - Treat `archive/` as provenance and history, not as the default source of live methods
 - The integration pipeline is hypothesis-generating: frame results as convergent functional evidence, not mechanistic pathway validation
