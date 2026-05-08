@@ -3,25 +3,27 @@ import os
 import numpy as np
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SONG_WORKSPACE_DIR = os.path.join(REPO_ROOT, "data", "incytr_collections", "song")
+SONG_WORKSPACE_DIR = os.path.join(REPO_ROOT, "data", "datasets", "song")
 SONG_PRIMARY_DIR = os.path.join(SONG_WORKSPACE_DIR, "primary")
 SONG_PRIMARY_PROTEOMICS_DIR = os.path.join(SONG_PRIMARY_DIR, "proteomics")
+SONG_PRIMARY_PHOSPHO_DIR = os.path.join(SONG_PRIMARY_DIR, "phospho")
+SONG_PRIMARY_METADATA_DIR = os.path.join(SONG_PRIMARY_DIR, "metadata")
 
 # Phospho track input files (S/T via IMAC; Y via dedicated pY enrichment).
 SONG_IMAC_SITEQUANT_FILE = os.path.join(
-    SONG_PRIMARY_PROTEOMICS_DIR,
+    SONG_PRIMARY_PHOSPHO_DIR,
     "song_IMAC_sitequant_merged_labeled (2).xlsx",
 )
 SONG_IMAC_COMPOSITE_FILE = os.path.join(
-    SONG_PRIMARY_PROTEOMICS_DIR,
+    SONG_PRIMARY_PHOSPHO_DIR,
     "song_IMAC_compositeSites_merged_labeled (2).xlsx",
 )
 SONG_PY_SITEQUANT_FILE = os.path.join(
-    SONG_PRIMARY_PROTEOMICS_DIR,
+    SONG_PRIMARY_PHOSPHO_DIR,
     "song_pY_sitequant_merged_labeled (2).xlsx",
 )
 SONG_PY_COMPOSITE_FILE = os.path.join(
-    SONG_PRIMARY_PROTEOMICS_DIR,
+    SONG_PRIMARY_PHOSPHO_DIR,
     "song_pY_compositeSites_merged_labeled (2).xlsx",
 )
 
@@ -63,7 +65,6 @@ SONG_TRANSCRIPTOMICS_DIR = os.path.join(SONG_WORKSPACE_DIR, "transcriptomics")
 SONG_SNRNA_SAMPLE_MANIFEST = os.path.join(
     SONG_TRANSCRIPTOMICS_DIR, "snrna_sample_manifest.csv"
 )
-SONG_PROTEOMICS_DIR = os.path.join(SONG_WORKSPACE_DIR, "proteomics")
 SONG_ANALYSIS_CACHE_DIR = os.path.join(SONG_WORKSPACE_DIR, "analysis_cache")
 
 EXTERNAL_DATA_DIR = os.path.join(REPO_ROOT, "data", "external")
@@ -325,10 +326,6 @@ SAP_FACTORIAL = {
     "ApTt": (1, 1, 1),
 }
 
-A_OBS_FILE = os.path.join(
-    SONG_WORKSPACE_DIR, "method_records", "aobs_desp_standardized",
-    "inputs", "A_obs_fractions.tsv",
-)
 KLDATA_FILE = os.path.join(SONG_WORKSPACE_DIR, "kinase", "kldata.csv")
 
 PHOSPHATASE_GENE_PREFIXES = [

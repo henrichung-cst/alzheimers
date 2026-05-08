@@ -28,7 +28,7 @@ These are not co-equal pipeline stages, but the live pipeline expects them.
 
 | Surface | Status | Purpose |
 |:---|:---|:---|
-| `data/incytr_collections/song/` | required workspace | Local Song operational data surface |
+| `data/datasets/song/` | required workspace | Local Song operational data surface |
 | `outputs/reports/wmb_expression/wmb_kinase_expression.csv` | required for unified attribution | WMB expression specificity for cell-type attribution |
 | SEA-AD effect sizes under `config.SEA_AD_DIR` | required for unified attribution | External transcriptomic concordance reference |
 
@@ -40,10 +40,10 @@ total-proteome quality control.
 
 Inputs:
 
-- `data/incytr_collections/song/primary/proteomics/song2024_tmttotal_protein_quant_merged_labeled (2).xlsx`
-- `data/incytr_collections/song/primary/proteomics/Sample_list_72mice (1).xlsx`
-- `data/incytr_collections/song/primary/proteomics/song_IMAC_compositeSites_merged_labeled (2).xlsx`
-- `data/incytr_collections/song/primary/proteomics/song_IMAC_sitequant_merged_labeled (2).xlsx`
+- `data/datasets/song/primary/proteomics/song2024_tmttotal_protein_quant_merged_labeled (2).xlsx`
+- `data/datasets/song/primary/proteomics/Sample_list_72mice (1).xlsx`
+- `data/datasets/song/primary/proteomics/song_IMAC_compositeSites_merged_labeled (2).xlsx`
+- `data/datasets/song/primary/proteomics/song_IMAC_sitequant_merged_labeled (2).xlsx`
 - `config.A_OBS_FILE`
 - `config.MAPPING_CACHE_FILE`
 
@@ -73,8 +73,8 @@ concordance and WMB expression specificity for all significant kinases.
 Inputs:
 
 - `outputs/reports/data_ingest/sample_mapping.csv`
-- `data/incytr_collections/song/primary/proteomics/song2024_tmttotal_protein_quant_merged_labeled (2).xlsx`
-- `data/incytr_collections/song/primary/proteomics/song_IMAC_sitequant_merged_labeled (2).xlsx`
+- `data/datasets/song/primary/proteomics/song2024_tmttotal_protein_quant_merged_labeled (2).xlsx`
+- `data/datasets/song/primary/proteomics/song_IMAC_sitequant_merged_labeled (2).xlsx`
 - `outputs/reports/wmb_expression/wmb_kinase_expression.csv`
 - SEA-AD effect sizes under `config.SEA_AD_DIR`
 - `config.MAPPING_CACHE_FILE` (kinase-to-gene mapping)

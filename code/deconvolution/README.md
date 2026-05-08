@@ -41,23 +41,23 @@ code/deconvolution/
 ## Inputs
 
 All consumed read-only. The four bulk-median + samplekey files under
-`data/incytr_collections/song/proteomics/source/` were deleted on
+`data/datasets/song/proteomics/source/` were deleted on
 2026-05-07; re-pull via `pixi run ingest-gdrive-shared` and copy from
 `data/raw/external/gdrive_shared/integrations/yuyu01/documentation/incytr/deconvolution/`
 into that directory before running this branch.
 
 | File | Source |
 |---|---|
-| `data/incytr_collections/song/transcriptomics/170_gex_celltypes_00.h5ad` | snRNA-seq with Allen Cell Type Mapper `class_name` per nucleus |
-| `data/incytr_collections/song/proteomics/source/imac_median.csv` | Ser/Thr per-(site, group) bulk medians (re-pull) |
-| `data/incytr_collections/song/proteomics/source/py_median.csv` | Tyr per-(site, group) bulk medians (re-pull) |
-| `data/incytr_collections/song/proteomics/source/pr_median.csv` | Total proteome per-(gene, group) bulk medians (re-pull) |
-| `data/incytr_collections/song/proteomics/source/yuyu_samplekey.csv` | MS\_ID ↔ SCRNA\_ID/Group mapping (re-pull) |
+| `data/datasets/song/transcriptomics/170_gex_celltypes_00.h5ad` | snRNA-seq with Allen Cell Type Mapper `class_name` per nucleus |
+| `data/datasets/song/proteomics/source/imac_median.csv` | Ser/Thr per-(site, group) bulk medians (re-pull) |
+| `data/datasets/song/proteomics/source/py_median.csv` | Tyr per-(site, group) bulk medians (re-pull) |
+| `data/datasets/song/proteomics/source/pr_median.csv` | Total proteome per-(gene, group) bulk medians (re-pull) |
+| `data/datasets/song/proteomics/source/yuyu_samplekey.csv` | MS\_ID ↔ SCRNA\_ID/Group mapping (re-pull) |
 | `outputs/reports/kinase_attribution/raw_phospho_normalized.csv` (+ `_pY`) | live IRS-normalized per-animal phospho |
 | `outputs/reports/data_ingest/sample_mapping.csv` (+ `_exclusions`) | live per-animal sample-to-channel mapping |
 | `outputs/reports/snrna_integration/song_concordance.csv` | live snRNA pipeline (WMB-class) |
 | `outputs/reports/snrna_integration/song_expression_specificity.csv` | live snRNA pipeline (per-(class, gene) mean expression) |
-| `data/incytr_collections/song/analysis_cache/kinase_to_gene_mapping.csv` | live kinase-gene cache |
+| `data/datasets/song/analysis_cache/kinase_to_gene_mapping.csv` | live kinase-gene cache |
 
 The cell-type axis throughout is the WMB-class spine
 (`config.WMB_CLASSES`, 34 total). Of those, 24 are detectably present in the

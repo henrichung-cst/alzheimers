@@ -41,7 +41,7 @@ H5AD_FILE = config.SONG_H5AD_FILE
 # Inputs were removed from disk on 2026-05-07; re-pull via `pixi run
 # ingest-gdrive-shared` and copy into BULK_DIR before running this branch.
 BULK_DIR = os.path.join(
-    config.REPO_ROOT, "data", "incytr_collections", "song", "proteomics", "source",
+    config.REPO_ROOT, "data", "datasets", "song", "proteomics", "source",
 )
 SAMPLE_KEY_FILE = os.path.join(BULK_DIR, "yuyu_samplekey.csv")
 PS_BULK_FILE = os.path.join(BULK_DIR, "imac_median.csv")

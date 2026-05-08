@@ -6,7 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$SCRIPT_DIR/.."
 
-H5AD="data/incytr_collections/song/transcriptomics/170_gex_celltypes_00.h5ad"
+H5AD="data/datasets/song/transcriptomics/170_gex_celltypes_00.h5ad"
 if [[ ! -f "$H5AD" ]]; then
     echo "ERROR: h5ad file not found: $H5AD"
     echo "This file is required for snRNA integration."

@@ -1,6 +1,6 @@
 # OUT OF DATE — IGNORE
 
-Branch-only plan. The bulk-median inputs it describes were deleted from `data/incytr_collections/song/proteomics/source/` on 2026-05-07 and must be re-pulled via `pixi run ingest-gdrive-shared` before the plan can be executed. Live pipeline scope is in `CLAUDE.md`; the WMB-class spine is now established by the live stoichiometry pipeline, not this decomposition.
+Branch-only plan. The bulk-median inputs it describes were deleted from `data/datasets/song/proteomics/source/` on 2026-05-07 and must be re-pulled via `pixi run ingest-gdrive-shared` before the plan can be executed. Live pipeline scope is in `CLAUDE.md`; the WMB-class spine is now established by the live stoichiometry pipeline, not this decomposition.
 
 ---
 
@@ -49,11 +49,11 @@ single cell-type vocabulary end-to-end.
 
 | File | Role |
 |---|---|
-| `data/incytr_collections/song/transcriptomics/170_gex_celltypes_00.h5ad` | snRNA-seq with CTM `class_name` per nucleus (63,695 nuclei × 30,567 genes) |
-| `data/incytr_collections/song/proteomics/source/imac_median.csv` | Ser/Thr per-(site, group) bulk medians (24 groups) |
-| `data/incytr_collections/song/proteomics/source/py_median.csv` | Tyr per-(site, group) bulk medians (24 groups) |
-| `data/incytr_collections/song/proteomics/source/pr_median.csv` | Total proteome per-(gene, group) bulk medians (24 groups; for stoichiometry, optional downstream) |
-| `data/incytr_collections/song/proteomics/source/yuyu_samplekey.csv` | MS\_ID ↔ SCRNA\_ID/Group bridge |
+| `data/datasets/song/transcriptomics/170_gex_celltypes_00.h5ad` | snRNA-seq with CTM `class_name` per nucleus (63,695 nuclei × 30,567 genes) |
+| `data/datasets/song/proteomics/source/imac_median.csv` | Ser/Thr per-(site, group) bulk medians (24 groups) |
+| `data/datasets/song/proteomics/source/py_median.csv` | Tyr per-(site, group) bulk medians (24 groups) |
+| `data/datasets/song/proteomics/source/pr_median.csv` | Total proteome per-(gene, group) bulk medians (24 groups; for stoichiometry, optional downstream) |
+| `data/datasets/song/proteomics/source/yuyu_samplekey.csv` | MS\_ID ↔ SCRNA\_ID/Group bridge |
 | `data/external/allen_abc/wmb_class_manifest.csv` | CTM `class_name` → prefixed WMB class label |
 
 snRNA cross-check oracle: `outputs/reports/snrna_integration/song_concordance.csv`

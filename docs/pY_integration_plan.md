@@ -8,8 +8,8 @@ This is **net-new capability**, not reopening a closed path. The current pipelin
 
 ## Inputs (already on disk)
 
-- `data/incytr_collections/song/primary/proteomics/song_pY_sitequant_merged_labeled (2).xlsx` — 1,471 pY sites × 6 plexes
-- `data/incytr_collections/song/primary/proteomics/song_pY_compositeSites_merged_labeled (2).xlsx` — composite pY sites
+- `data/datasets/song/primary/proteomics/song_pY_sitequant_merged_labeled (2).xlsx` — 1,471 pY sites × 6 plexes
+- `data/datasets/song/primary/proteomics/song_pY_compositeSites_merged_labeled (2).xlsx` — composite pY sites
 - Parent-protein denominator: same `song2024_tmttotal_protein_quant_merged_labeled (2).xlsx` already loaded for the Ser/Thr track.
 - Sample mapping: same `Sample_list_72mice (1).xlsx` (TMT channels are identical across IMAC and pY workbooks).
 

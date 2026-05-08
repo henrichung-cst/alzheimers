@@ -11,7 +11,7 @@ Inputs:
   data/external/sea_ad/effect_sizes{,_early,_late}.h5ad
   outputs/reports/wmb_expression/wmb_kinase_expression.csv
   outputs/reports/snrna_integration/song_{specificity,concordance}.csv (optional)
-  data/incytr_collections/song/analysis_cache/kinase_to_gene_mapping.csv
+  data/datasets/song/analysis_cache/kinase_to_gene_mapping.csv
   config.SEAAD_TO_WMB_CLASS_FILE
 
 Outputs (under outputs/reports/kinase_attribution/):

@@ -7,8 +7,8 @@ version = "0.1.0"
 
 [tasks]
 ingest = "python code/data_ingest.py --run"
-ingest-gdrive-shared = "rclone copy gdrive_shared: data/raw/external/gdrive_shared/ --drive-root-folder-id 1syiic6d9DUJIc1sPL5wc8uL7Od3Dsq3Z --progress"
-ingest-lucie-proteomics = "rclone copy gdrive_shared: data/raw/external/lucie_proteomics/ --drive-root-folder-id 1uWjRb_ZnrDp9HwgijE48zhb8gvJjOr2P --progress"
+ingest-gdrive-shared = "rclone copy gdrive_shared: data/external/gdrive_shared/ --drive-root-folder-id 1syiic6d9DUJIc1sPL5wc8uL7Od3Dsq3Z --progress"
+ingest-lucie-proteomics = "rclone copy gdrive_shared: data/external/lucie_proteomics/ --drive-root-folder-id 1uWjRb_ZnrDp9HwgijE48zhb8gvJjOr2P --progress"
 normalize = "python code/kinase_normalize.py"
 enrich = { cmd = "python code/kinase_enrich.py", env = { ANALYSIS_MODE = "males_only" } }
 attribute = { cmd = "python code/kinase_attribute.py", env = { ANALYSIS_MODE = "males_only" } }

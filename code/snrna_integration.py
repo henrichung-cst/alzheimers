@@ -10,7 +10,7 @@ the 34 WMB classes. Song's dissection covers ~21 of 34 forebrain classes
 with sufficient nuclei (≥50); the rest are flagged in active_classes.csv.
 
 Inputs:
-  data/incytr_collections/song/transcriptomics/170_gex_celltypes_00.h5ad
+  data/datasets/song/transcriptomics/170_gex_celltypes_00.h5ad
 
 Outputs:
   outputs/reports/snrna_integration/pseudobulk_cpm.csv

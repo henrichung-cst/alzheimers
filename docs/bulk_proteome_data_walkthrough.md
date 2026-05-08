@@ -34,7 +34,7 @@ happens to the measured signal values.
 Raw file:
 
 ```
-data/incytr_collections/song/primary/proteomics/
+data/datasets/song/primary/proteomics/
   song2024_tmttotal_protein_quant_merged_labeled (2).xlsx
 ```
 
@@ -68,7 +68,7 @@ comparable to samples in other plexes until cross-plex normalization is done.
 Raw file:
 
 ```
-data/incytr_collections/song/primary/proteomics/
+data/datasets/song/primary/proteomics/
   song_IMAC_sitequant_merged_labeled (2).xlsx
 ```
 
@@ -105,7 +105,7 @@ plex2_130c_sn_mean  ->  p2_130c_sn_sum
 Raw file:
 
 ```
-data/incytr_collections/song/primary/proteomics/
+data/datasets/song/primary/proteomics/
   Sample_list_72mice (1).xlsx
 ```
 

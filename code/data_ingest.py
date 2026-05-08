@@ -6,14 +6,14 @@ Reads the raw Song 72-animal TMT proteomics workbooks and produces the
 structured tables that the downstream analysis (stoichiometry, attribution)
 consumes.  This is the first stage of the live pipeline.
 
-Inputs (all under data/incytr_collections/song/):
-  primary/proteomics/Sample_list_72mice (1).xlsx
+Inputs (all under data/datasets/song/):
+  primary/metadata/Sample_list_72mice (1).xlsx
       TMT plex layout — maps 72 animals to 6 plexes × 10 channels each.
   primary/proteomics/song2024_tmttotal_protein_quant_merged_labeled (2).xlsx
       Total proteome quantitation — ~5,000 proteins × 72 animals.
-  primary/proteomics/song_IMAC_sitequant_merged_labeled (2).xlsx
+  primary/phospho/song_IMAC_sitequant_merged_labeled (2).xlsx
       IMAC phospho site-level quantitation — ~4,000 S/T sites × 6 plexes.
-  primary/proteomics/song_IMAC_compositeSites_merged_labeled (2).xlsx
+  primary/phospho/song_IMAC_compositeSites_merged_labeled (2).xlsx
       IMAC phospho composite sites — ~3,000 grouped S/T sites.
   transcriptomics/170_gex_celltypes_00.h5ad
       Song snRNA-seq with Allen Cell Type Mapper labels (`class_name` per
@@ -75,15 +75,15 @@ TOTAL_PROTEOME_FILE = os.path.join(
     "song2024_tmttotal_protein_quant_merged_labeled (2).xlsx",
 )
 SAMPLE_LIST_FILE = os.path.join(
-    config.SONG_PRIMARY_PROTEOMICS_DIR,
+    config.SONG_PRIMARY_METADATA_DIR,
     "Sample_list_72mice (1).xlsx",
 )
 IMAC_COMPOSITE_FILE = os.path.join(
-    config.SONG_PRIMARY_PROTEOMICS_DIR,
+    config.SONG_PRIMARY_PHOSPHO_DIR,
     "song_IMAC_compositeSites_merged_labeled (2).xlsx",
 )
 IMAC_SITEQUANT_FILE = os.path.join(
-    config.SONG_PRIMARY_PROTEOMICS_DIR,
+    config.SONG_PRIMARY_PHOSPHO_DIR,
     "song_IMAC_sitequant_merged_labeled (2).xlsx",
 )
 # TMT genotype labels → SAP canonical condition names

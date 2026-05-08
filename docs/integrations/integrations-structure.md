@@ -10,7 +10,7 @@ This document describes the structure of the collaborator-owned upstream archive
 
 It is not the authoritative runtime layout for the Song dataset anymore. For Song (`yuyu01`), the authoritative localized workspace is now:
 
-- `data/incytr_collections/song/`
+- `data/datasets/song/`
 
 Use this document to understand the upstream archive and original source locations, not to choose default runtime paths for Song analyses.
 
@@ -21,7 +21,7 @@ The `data/gdrive_shared` directory contains subdirectories organized by data bat
 Interpretation:
 
 - for `5xFAD`, this tree is still an important upstream source area
-- for `Song` / `yuyu01`, this tree should now be treated as upstream archive and provenance source, while `data/incytr_collections/song/` is the operational workspace
+- for `Song` / `yuyu01`, this tree should now be treated as upstream archive and provenance source, while `data/datasets/song/` is the operational workspace
 
 ### `lore00` (5xFAD Source - Primary)
 
@@ -68,9 +68,9 @@ Historical pre-processed CSVs derived from the raw proteomics and transcriptomic
 
 Current operational note:
 
-- these historical upstream inputs have been localized and reorganized under `data/incytr_collections/song/`
+- these historical upstream inputs have been localized and reorganized under `data/datasets/song/`
 - the active Song `pr` / `ps` / `py` files in the localized workspace are regenerated `A_obs + DESP` outputs
-- the exact old collaborator outputs are preserved separately under `data/incytr_collections/song/proteomics/legacy/`
+- the exact old collaborator outputs are preserved separately under `data/datasets/song/proteomics/legacy/`
 
 ---
 

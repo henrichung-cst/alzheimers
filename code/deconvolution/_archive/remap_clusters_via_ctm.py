@@ -41,7 +41,7 @@ OBS_CSV = os.path.join(
     "deconvolution_with_new_clusters_20250721", "renamed_sobj_obs.csv",
 )
 H5AD = os.path.join(
-    REPO_ROOT, "data", "incytr_collections", "song", "transcriptomics",
+    REPO_ROOT, "data", "datasets", "song", "transcriptomics",
     "170_gex_celltypes_00.h5ad",
 )
 MANIFEST = os.path.join(

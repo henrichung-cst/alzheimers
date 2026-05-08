@@ -2,8 +2,9 @@
 """Stage 1 of kinase attribution: cross-plex IRS normalization + stoichiometry.
 
 Inputs:
-  data/incytr_collections/song/primary/proteomics/
+  data/datasets/song/primary/proteomics/
     song2024_tmttotal_protein_quant_merged_labeled (2).xlsx
+  data/datasets/song/primary/phospho/
     song_IMAC_sitequant_merged_labeled (2).xlsx  (or pY workbook for track=py)
   outputs/reports/data_ingest/sample_mapping.csv
   code/config.py
