@@ -17,9 +17,9 @@ Outputs (under outputs/reports/kinase_attribution/, track-suffixed):
   pca_plots/{tp_raw,tp_norm}_by_{plex,genotype,sex,timepoint}.png
 """
 
-import argparse
-import json
 import os
+import sys
+from pathlib import Path
 
 import matplotlib
 
@@ -29,7 +29,11 @@ import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
 
-import config
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from alz import config
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -502,53 +506,18 @@ def step_normalize(track, mapping, tp, sq):
     return stoich_df, raw_phospho_df, qc_df, norm_summary
 
 
-def _write_normalize_outputs(track_cfg, stoich_df, raw_phospho_df, qc_df, norm_summary):
-    """Persist Stage-1 outputs at the legacy CLI paths. Used by the script
-    entrypoint; the Kedro nodes route the same return values through the
-    catalog instead."""
-    print("\n--- 1.5 Saving outputs ---")
-    stoich_path = _track_output("stoichiometry_matrix.csv", track_cfg)
-    stoich_df.to_csv(stoich_path, index=False)
-    print(f"  Saved {stoich_path} ({stoich_df.shape})")
-
-    raw_path = _track_output("raw_phospho_normalized.csv", track_cfg)
-    raw_phospho_df.to_csv(raw_path, index=False)
-    print(f"  Saved {raw_path}")
-
-    qc_path = _track_output("stoichiometry_qc.csv", track_cfg)
-    qc_df.to_csv(qc_path, index=False)
-    print(f"  Saved {qc_path}")
-
-    norm_path = _track_output("normalization_summary.json", track_cfg)
-    with open(norm_path, "w") as f:
-        json.dump(norm_summary, f, indent=2)
-    print(f"  Saved {norm_path}")
-
-    print("\n  Stage 1 complete.")
-
-
 # ===========================================================================
 # CLI
 # ===========================================================================
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Stage 1 (standalone): Cross-plex normalization + stoichiometry",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument(
-        "--track", choices=["st", "py", "both"], default="both",
-        help="Phospho track: 'st', 'py', or 'both' (default).")
-    args = parser.parse_args()
+    """CLI shim: delegates to `kedro run --pipeline=normalize`."""
+    from kedro.framework.session import KedroSession
+    from kedro.framework.startup import bootstrap_project
 
-    tracks = ["st", "py"] if args.track == "both" else [args.track]
-    mapping = load_sample_mapping()
-    tp = pd.read_excel(TOTAL_PROTEOME_FILE, header=1)
-    for t in tracks:
-        track_cfg = _resolve_track(t)
-        sq = _load_phospho_track(track_cfg)
-        outputs = step_normalize(t, mapping, tp, sq)
-        _write_normalize_outputs(track_cfg, *outputs)
+    bootstrap_project(Path(__file__).resolve().parent.parent)
+    with KedroSession.create() as session:
+        session.run(pipeline_name="normalize")
 
 
 if __name__ == "__main__":
