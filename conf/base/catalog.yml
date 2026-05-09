@@ -80,3 +80,30 @@ py.mea_substrate_sets:
   type: pandas.CSVDataset
   filepath: outputs/reports/kinase_attribution/mea_substrate_sets_pY.csv
   save_args: {index: false}
+
+# attribute pipeline (single namespace, consumes both st.* and py.* MEA outputs).
+# Optional Song / WMB / SEA-AD inputs are guarded inside nodes via params; only
+# the always-present static inputs and the pipeline outputs are catalog-managed.
+kinase_to_gene_mapping:
+  type: pandas.CSVDataset
+  filepath: data/datasets/song/analysis_cache/kinase_to_gene_mapping.csv
+seaad_to_wmb_class:
+  type: pandas.CSVDataset
+  filepath: data/external/sea_ad/seaad_subclass_to_wmb_class.csv
+
+unified_attribution:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/unified_attribution.csv
+  save_args: {index: false}
+unified_attribution_full:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/unified_attribution_full.csv
+  save_args: {index: false}
+sea_ad_supertype_lfc:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/sea_ad_supertype_lfc.csv
+  save_args: {index: false}
+attribution_summary:
+  type: json.JSONDataset
+  filepath: outputs/reports/kinase_attribution/attribution_summary.json
+  save_args: {indent: 2}
