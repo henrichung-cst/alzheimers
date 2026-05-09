@@ -12,11 +12,8 @@ mkdir -p outputs/reports/attribution_recovery
 
 echo "=== Attribution recovery started at $(date) ===" | tee "$LOG"
 
-echo "--- S3: Kinase activity matrix + hypothesis table ---" | tee -a "$LOG"
-$PYTHON alz/attribution_recovery.py --kinase-profiles 2>&1 | tee -a "$LOG"
-
-echo "--- S4: Cell-type evidence table + kinase profiles ---" | tee -a "$LOG"
-$PYTHON alz/attribution_recovery.py --celltype-profiles 2>&1 | tee -a "$LOG"
+# The Kedro `recovery` pipeline produces all three hypothesis tables atomically.
+$PYTHON alz/attribution_recovery.py 2>&1 | tee -a "$LOG"
 
 echo "=== Attribution recovery finished at $(date) ===" | tee -a "$LOG"
 echo "Summary:"

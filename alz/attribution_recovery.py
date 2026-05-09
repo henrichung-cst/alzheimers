@@ -21,10 +21,16 @@ Outputs (all under outputs/reports/attribution_recovery/):
 
 import argparse
 import os
+import sys
+from pathlib import Path
 
 import pandas as pd
 
-import config
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from alz import config
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -498,36 +504,35 @@ def print_summary():
 
 
 # ===========================================================================
-# CLI
+# CLI shim — defers to the Kedro `recovery` pipeline.
 # ===========================================================================
 
 def main():
+    """CLI shim: delegates to `kedro run --pipeline=recovery`.
+
+    Legacy --kinase-profiles / --celltype-profiles / --hypothesis-tables /
+    --run flags collapse into a single Kedro pipeline run (which always
+    produces all three tables). --summary stays as a read-only mode that
+    prints cached results without re-running the pipeline.
+    """
     parser = argparse.ArgumentParser(
         description="Attribution Recovery: Kinase and cell-type hypothesis tables",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--kinase-profiles", action="store_true",
-                        help="S3: Kinase activity matrix + hypothesis table")
-    parser.add_argument("--celltype-profiles", action="store_true",
-                        help="S4: Cell-type evidence table + kinase profiles")
-    parser.add_argument("--hypothesis-tables", action="store_true",
-                        help="S3+S4: Run both new hypothesis table steps")
-    parser.add_argument("--run", action="store_true",
-                        help="Run all steps in order (S3+S4)")
     parser.add_argument("--summary", action="store_true",
-                        help="Print cached results summary")
-
+                        help="Print cached results summary (no pipeline run)")
     args = parser.parse_args()
 
-    if not any(vars(args).values()):
-        parser.error("At least one flag is required.")
-
-    if args.kinase_profiles or args.hypothesis_tables or args.run:
-        step_kinase_profiles()
-    if args.celltype_profiles or args.hypothesis_tables or args.run:
-        step_celltype_profiles()
-    if args.summary or args.run:
+    if args.summary:
         print_summary()
+        return
+
+    from kedro.framework.session import KedroSession
+    from kedro.framework.startup import bootstrap_project
+
+    bootstrap_project(Path(__file__).resolve().parent.parent)
+    with KedroSession.create() as session:
+        session.run(pipeline_name="recovery")
 
 
 if __name__ == "__main__":

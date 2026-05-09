@@ -13,7 +13,7 @@ normalize = "python alz/kinase_normalize.py"
 enrich = "python alz/kinase_enrich.py"
 attribute = "python alz/kinase_attribute.py"
 mechanism = "python alz/kinase_mechanism.py"
-recover = "python alz/attribution_recovery.py --run"
+recover = "python alz/attribution_recovery.py"
 live = { depends-on = ["ingest", "normalize", "enrich", "attribute", "recover"] }
 dual = "bash alz/runners/main/run_dual_analysis.sh"
 atlas = "python alz/atlas_reference.py --run"

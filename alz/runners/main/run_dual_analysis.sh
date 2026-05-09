@@ -41,7 +41,7 @@ echo "=========================================="
 $PYTHON alz/kinase_enrich.py
 $PYTHON alz/kinase_attribute.py
 $PYTHON alz/kinase_mechanism.py
-$PYTHON alz/attribution_recovery.py --run
+$PYTHON alz/attribution_recovery.py
 
 # Archive primary outputs
 rm -rf outputs/reports/kinase_attribution_males_only
@@ -61,7 +61,7 @@ export KEDRO_ENV=full_cohort
 $PYTHON alz/kinase_enrich.py
 $PYTHON alz/kinase_attribute.py
 $PYTHON alz/kinase_mechanism.py
-$PYTHON alz/attribution_recovery.py --run
+$PYTHON alz/attribution_recovery.py
 unset KEDRO_ENV
 
 # Archive sensitivity outputs
