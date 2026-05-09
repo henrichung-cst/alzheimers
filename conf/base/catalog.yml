@@ -149,3 +149,23 @@ attribution_summary:
   type: json.JSONDataset
   filepath: outputs/reports/kinase_attribution/attribution_summary.json
   save_args: {indent: 2}
+
+# mechanism pipeline (track-namespaced raw MEA + single-namespace combiner).
+# `unified_attribution_with_mechanism` writes back to the same file as
+# `unified_attribution`; distinct catalog keys avoid a self-loop.
+st.mea_raw_phospho:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/mea_raw_phospho.csv
+  save_args: {index: false}
+py.mea_raw_phospho:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/mea_raw_phospho_pY.csv
+  save_args: {index: false}
+mechanism_annotation:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/mechanism_annotation.csv
+  save_args: {index: false}
+unified_attribution_with_mechanism:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/unified_attribution.csv
+  save_args: {index: false}
