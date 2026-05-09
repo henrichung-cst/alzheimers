@@ -104,6 +104,18 @@ def _load_phospho_track(track_cfg):
             f"Phospho-track {cfg['name']} input not found: {path}"
         )
     df = pd.read_excel(path, header=1)
+    return _postprocess_phospho_df(df, cfg)
+
+
+def _postprocess_phospho_df(df, track_cfg):
+    """Canonicalise a pre-loaded phospho-track DataFrame to the IMAC schema.
+
+    Split out so Kedro's ExcelDataset can do the read while this helper does
+    the rename / site-id synthesis / residue-purity check that the legacy
+    script bundled with the disk read.
+    """
+    cfg = _resolve_track(track_cfg)
+    df = df.copy()
 
     # Rename sample columns: plex{N}_* → p{N}_* (only when prefix differs).
     if cfg["column_prefix"] == "plex":
@@ -240,23 +252,29 @@ def _run_pca_and_plot(quant_df, mapping, title_prefix, out_prefix):
 # Stage 1: Cross-plex normalization + stoichiometry
 # ===========================================================================
 
-def step_normalize(track="st"):
-    """Stage 1: IRS normalization and stoichiometry computation."""
+def step_normalize(track, mapping, tp, sq):
+    """Stage 1: IRS normalization and stoichiometry computation.
+
+    Pure-ish: takes pre-loaded inputs (sample mapping, total-proteome and
+    phospho-sitequant DataFrames) and returns ``(stoich_df, raw_phospho_df,
+    qc_df, summary_dict)``. PCA plots remain side effects (PNG writes) since
+    they're ancillary diagnostics, not catalog-managed outputs. The CLI
+    entrypoint loads inputs from disk; the Kedro nodes route catalog-loaded
+    DataFrames into this function.
+    """
     _ensure_output_dir()
     track_cfg = _resolve_track(track)
     print(f"\n=== Stage 1: Cross-Plex Normalization + Stoichiometry "
           f"(track={track_cfg['name']}/{track_cfg['label']}) ===\n")
 
-    # --- 1.0 Load sample mapping ---
-    mapping = load_sample_mapping()
+    # --- 1.0 Sample mapping ---
     sample_to_plex = dict(zip(mapping["column_name"], mapping["plex"]))
     bio_cols = mapping["column_name"].tolist()
     print(f"  {len(bio_cols)} biological samples across "
           f"{mapping['plex'].nunique()} plexes")
 
-    # --- 1.1 Load and IRS-normalize total proteome ---
+    # --- 1.1 IRS-normalize total proteome ---
     print("\n--- 1.1 Total proteome normalization ---")
-    tp = pd.read_excel(TOTAL_PROTEOME_FILE, header=1)
     tp_gene = tp["Gene Symbol"].copy()
 
     ref_cols_tp = {}
@@ -307,11 +325,10 @@ def step_normalize(track="st"):
     print(f"  Plex medians before: {plex_medians_before}")
     print(f"  Plex medians after:  {plex_medians_after}")
 
-    # --- 1.2 Load and IRS-normalize phospho sitequant ---
+    # --- 1.2 IRS-normalize phospho sitequant ---
     print(f"\n--- 1.2 Phospho sitequant normalization "
           f"(track={track_cfg['name']}) ---")
-    sq = _load_phospho_track(track_cfg)
-    print(f"  Loaded {len(sq)} phosphosites from {track_cfg['input_file']}")
+    print(f"  {len(sq)} phosphosites in input")
 
     phospho_bio_cols = [_proteome_to_phospho_col(c) for c in bio_cols]
     missing_pcols = [c for c in phospho_bio_cols if c not in sq.columns]
@@ -525,9 +542,12 @@ def main():
     args = parser.parse_args()
 
     tracks = ["st", "py"] if args.track == "both" else [args.track]
+    mapping = load_sample_mapping()
+    tp = pd.read_excel(TOTAL_PROTEOME_FILE, header=1)
     for t in tracks:
         track_cfg = _resolve_track(t)
-        outputs = step_normalize(track=t)
+        sq = _load_phospho_track(track_cfg)
+        outputs = step_normalize(t, mapping, tp, sq)
         _write_normalize_outputs(track_cfg, *outputs)
 
 

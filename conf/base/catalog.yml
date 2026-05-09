@@ -21,20 +21,62 @@ sample_mapping:
   save_args:
     index: false
 
+# normalize pipeline — track-namespaced. The total proteome Excel is shared
+# across tracks; each phospho sitequant Excel is per-track.
+total_proteome_xlsx:
+  type: pandas.ExcelDataset
+  filepath: "data/datasets/song/primary/proteomics/song2024_tmttotal_protein_quant_merged_labeled (2).xlsx"
+  load_args:
+    header: 1
+st.phospho_sitequant_xlsx:
+  type: pandas.ExcelDataset
+  filepath: "data/datasets/song/primary/phospho/song_IMAC_sitequant_merged_labeled (2).xlsx"
+  load_args:
+    header: 1
+py.phospho_sitequant_xlsx:
+  type: pandas.ExcelDataset
+  filepath: "data/datasets/song/primary/phospho/song_pY_sitequant_merged_labeled (2).xlsx"
+  load_args:
+    header: 1
+
+st.stoichiometry_qc:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/stoichiometry_qc.csv
+  save_args: {index: false}
+py.stoichiometry_qc:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/stoichiometry_qc_pY.csv
+  save_args: {index: false}
+
+st.normalization_summary:
+  type: json.JSONDataset
+  filepath: outputs/reports/kinase_attribution/normalization_summary.json
+  save_args: {indent: 2}
+py.normalization_summary:
+  type: json.JSONDataset
+  filepath: outputs/reports/kinase_attribution/normalization_summary_pY.json
+  save_args: {indent: 2}
+
 # enrich pipeline — track-namespaced via `pipeline(template, namespace="st"|"py")`.
-# Catalog keys use Kedro's `<namespace>.<name>` form.
+# Catalog keys use Kedro's `<namespace>.<name>` form. The `stoichiometry_matrix`
+# and `raw_phospho_normalized` entries are written by `normalize` and read by
+# `enrich`; `save_args.index: false` matches the legacy script's CSV layout.
 st.stoichiometry_matrix:
   type: pandas.CSVDataset
   filepath: outputs/reports/kinase_attribution/stoichiometry_matrix.csv
+  save_args: {index: false}
 py.stoichiometry_matrix:
   type: pandas.CSVDataset
   filepath: outputs/reports/kinase_attribution/stoichiometry_matrix_pY.csv
+  save_args: {index: false}
 st.raw_phospho_normalized:
   type: pandas.CSVDataset
   filepath: outputs/reports/kinase_attribution/raw_phospho_normalized.csv
+  save_args: {index: false}
 py.raw_phospho_normalized:
   type: pandas.CSVDataset
   filepath: outputs/reports/kinase_attribution/raw_phospho_normalized_pY.csv
+  save_args: {index: false}
 
 st.site_level_ols:
   type: pandas.CSVDataset
