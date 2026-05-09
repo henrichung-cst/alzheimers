@@ -21,31 +21,23 @@ Outputs (under outputs/reports/kinase_attribution/):
   attribution_summary.json
 """
 
-import argparse
-import json
 import os
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-import config
-from kinase_enrich import _resolve_track, _track_output
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-OUTPUT_DIR = config.KINASE_ATTRIBUTION_OUTPUT_DIR
-WMB_EXPRESSION_FILE = config.WMB_EXPRESSION_FILE
+from alz import config
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _ensure_output_dir():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-
 
 def _assign_confidence_and_basis_vectorized(unified):
     """Vectorized confidence + evidence-basis assignment for the unified table.
@@ -474,94 +466,17 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
 
 
 # ===========================================================================
-# Stage 3: Unified cell-type attribution
-# ===========================================================================
-
-def step_attribute():
-    """Stage 3: Unified cell-type attribution (SEA-AD concordance + WMB expression)."""
-    _ensure_output_dir()
-    print("\n=== Stage 3: Unified Cell-Type Attribution ===\n")
-
-    # 3a. Load MEA results from every track that produced an output and concat.
-    mea_by_track = []
-    for track_name, track_cfg in config.PHOSPHO_TRACKS.items():
-        mea_path = _track_output("mea_stoichiometry.csv", track_cfg)
-        if not os.path.exists(mea_path):
-            print(f"  Track {track_name}: {mea_path} not present, skipping")
-            continue
-        mea_by_track.append((track_cfg, pd.read_csv(mea_path)))
-    sig = _combine_mea_tracks(mea_by_track)
-    if len(sig) == 0:
-        print("  No MEA rows found. Stage 3 complete.")
-        return
-
-    # 3b. Map kinases to genes.
-    k2g = pd.read_csv(config.MAPPING_CACHE_FILE)
-    sig = _map_kinases_to_genes(sig, k2g)
-
-    # 3c. SEA-AD concordance.
-    if not os.path.exists(config.SEAAD_TO_WMB_CLASS_FILE):
-        raise FileNotFoundError(
-            f"SEA-AD → WMB class mapping not found at "
-            f"{config.SEAAD_TO_WMB_CLASS_FILE}. Generate via Phase 1c."
-        )
-    seaad_to_class_df = pd.read_csv(config.SEAAD_TO_WMB_CLASS_FILE)
-    sea_ad_df, supertype_df = _compute_sea_ad_concordance(
-        sig, seaad_to_class_df, config.SEA_AD_EFFECT_SIZES
-    )
-
-    if len(supertype_df) > 0:
-        supertype_path = os.path.join(OUTPUT_DIR, "sea_ad_supertype_lfc.csv")
-        supertype_df.to_csv(supertype_path, index=False)
-        print(f"  SEA-AD supertype LFCs: {len(supertype_df)} rows → "
-              f"{supertype_path}")
-
-    # 3d. WMB expression specificity.
-    wmb_df = pd.read_csv(WMB_EXPRESSION_FILE) if os.path.exists(WMB_EXPRESSION_FILE) else None
-    if wmb_df is None:
-        print(f"  WMB expression file not found at {WMB_EXPRESSION_FILE}")
-    wmb_top = _prepare_wmb_specificity(wmb_df)
-
-    # 3d′. Song within-cohort evidence (specificity + concordance).
-    song_sp_df = (pd.read_csv(config.SONG_EXPRESSION_FILE)
-                  if os.path.exists(config.SONG_EXPRESSION_FILE) else None)
-    song_spec_top = _prepare_song_specificity(song_sp_df)
-
-    song_cd_df = (pd.read_csv(config.SONG_CONCORDANCE_FILE)
-                  if os.path.exists(config.SONG_CONCORDANCE_FILE) else None)
-    song_cd_top, song_key_is_contrast = _prepare_song_concordance(song_cd_df)
-
-    # 3e. Combine into unified attribution table.
-    unified, attributed, summary = _assemble_unified(
-        sig, sea_ad_df, wmb_top, song_spec_top, song_cd_top, song_key_is_contrast
-    )
-
-    out_path = os.path.join(OUTPUT_DIR, "unified_attribution.csv")
-    attributed.to_csv(out_path, index=False)
-    print(f"\n  Saved {out_path} ({len(attributed)} attributed rows)")
-
-    full_path = os.path.join(OUTPUT_DIR, "unified_attribution_full.csv")
-    unified.to_csv(full_path, index=False)
-
-    summary_path = os.path.join(OUTPUT_DIR, "attribution_summary.json")
-    with open(summary_path, "w") as f:
-        json.dump(summary, f, indent=2)
-
-    print("\n  Stage 3 complete.")
-
-
-# ===========================================================================
 # CLI
 # ===========================================================================
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Stage 3 of kinase attribution: unified cell-type "
-                    "attribution (SEA-AD + WMB + Song).",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.parse_args()
-    step_attribute()
+    """CLI shim: delegates to `kedro run --pipeline=attribute`."""
+    from kedro.framework.session import KedroSession
+    from kedro.framework.startup import bootstrap_project
+
+    bootstrap_project(Path(__file__).resolve().parent.parent)
+    with KedroSession.create() as session:
+        session.run(pipeline_name="attribute")
 
 
 if __name__ == "__main__":
