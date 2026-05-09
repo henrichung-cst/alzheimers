@@ -15,15 +15,23 @@ Outputs (under outputs/reports/kinase_attribution/, track-suffixed):
   site_level_ols.csv
 """
 
-import argparse
 import os
+import sys
+from pathlib import Path
+
+# Bootstrap project root onto sys.path so direct invocation
+# (`python alz/kinase_enrich.py`) can resolve `from alz import config`.
+# Phase 2's bridge adds `alz/` to sys.path; this adds the parent.
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import numpy as np
 import pandas as pd
 from scipy import stats as sp_stats
 from statsmodels.stats.multitest import multipletests
 
-import config
+from alz import config
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -367,163 +375,16 @@ def _prepare_raw_ols(mapping, bio_cols, raw_df):
 
 
 # ===========================================================================
-# Stage 2: OLS site-level models + kinase enrichment
-# ===========================================================================
-
-def step_enrich(track="st"):
-    """Stage 2: OLS models + kinase enrichment + classification."""
-    _ensure_output_dir()
-    track_cfg = _resolve_track(track)
-    print(f"\n=== Stage 2: OLS Models + Kinase Enrichment "
-          f"({config.ANALYSIS_MODE}, track={track_cfg['name']}) ===\n")
-
-    mapping_full = load_sample_mapping()
-    mapping = _filter_samples(mapping_full)
-    bio_cols = mapping["column_name"].tolist()
-
-    stoich_path = _track_output("stoichiometry_matrix.csv", track_cfg)
-    raw_path = _track_output("raw_phospho_normalized.csv", track_cfg)
-    if not os.path.exists(stoich_path):
-        raise FileNotFoundError(f"{stoich_path} not found. Run --normalize first.")
-    stoich_df = pd.read_csv(stoich_path)
-    raw_df = pd.read_csv(raw_path)
-
-    X = _build_design_matrix(mapping, bio_cols)
-    X_np = X.values
-    print(f"  Design matrix: {X_np.shape} (samples x params)")
-    print(f"  Columns: {list(X.columns)}")
-
-    print("\n--- 2.1 OLS on stoichiometry ---")
-    Y_stoich = stoich_df[bio_cols].values
-    betas_s, pvals_s, nobs_s, xtxinv_s = _run_ols_all_sites(Y_stoich, X_np)
-
-    print("\n--- 2.2 OLS on raw phospho (log2-transformed) ---")
-    raw_vals = raw_df[bio_cols].values.copy()
-    raw_vals[raw_vals <= 0] = np.nan
-    with np.errstate(divide="ignore"):
-        Y_raw = np.log2(raw_vals)
-    betas_r, pvals_r, nobs_r, xtxinv_r = _run_ols_all_sites(Y_raw, X_np)
-
-    param_names = list(X.columns)
-
-    print("\n--- 2.3 Computing contrast LFCs and running kinase enrichment ---")
-    results_by_contrast = {}
-    for contrast_name, coefs in CONTRAST_COEFS.items():
-        c_vec = np.zeros(len(param_names))
-        for param, weight in coefs.items():
-            c_vec[param_names.index(param)] = weight
-
-        lfc_s = betas_s @ c_vec
-
-        # Per-site var_c = c' (X_i' X_i)^{-1} c — matches each site's design.
-        var_c_s = np.einsum("p,ipq,q->i", c_vec, xtxinv_s, c_vec)
-
-        residuals_s = Y_stoich - (X_np @ betas_s.T).T
-        dof_s = nobs_s - len(param_names)
-        dof_s[dof_s <= 0] = 1
-        sigma2_s = np.nansum(residuals_s ** 2, axis=1) / dof_s
-        se_contrast_s = np.sqrt(var_c_s * sigma2_s)
-        t_contrast_s = lfc_s / se_contrast_s
-        p_contrast_s = 2 * sp_stats.t.sf(np.abs(t_contrast_s),
-                                           df=dof_s)
-        fdr_s = _bh_fdr(p_contrast_s)
-
-        lfc_r = betas_r @ c_vec
-        var_c_r = np.einsum("p,ipq,q->i", c_vec, xtxinv_r, c_vec)
-        residuals_r = Y_raw - (X_np @ betas_r.T).T
-        dof_r = nobs_r - len(param_names)
-        dof_r[dof_r <= 0] = 1
-        sigma2_r = np.nansum(residuals_r ** 2, axis=1) / dof_r
-        se_contrast_r = np.sqrt(var_c_r * sigma2_r)
-        t_contrast_r = lfc_r / se_contrast_r
-        p_contrast_r = 2 * sp_stats.t.sf(np.abs(t_contrast_r), df=dof_r)
-        fdr_r = _bh_fdr(p_contrast_r)
-
-        results_by_contrast[contrast_name] = {
-            "stoich_lfc": lfc_s, "stoich_pval": p_contrast_s,
-            "stoich_fdr": fdr_s,
-            "raw_lfc": lfc_r, "raw_pval": p_contrast_r, "raw_fdr": fdr_r,
-        }
-
-        thresh = config.SITE_FDR_DIAGNOSTIC_THRESH
-        n_sig_s = np.sum(fdr_s < thresh)
-        n_sig_r = np.sum(fdr_r < thresh)
-        print(f"  {contrast_name}: stoich {n_sig_s} sig sites (FDR<{thresh}), "
-              f"raw {n_sig_r} sig sites")
-
-    print(f"\n--- 2.4 Running MEA kinase enrichment "
-          f"(stoichiometry, kin_type={track_cfg['kin_type']}) ---")
-    mea_stoich, shift_df, winsorized_df, substrate_df = _run_mea(
-        stoich_df["motif"], results_by_contrast, "stoich_lfc",
-        site_ids=stoich_df["site_id"].values,
-        gene_symbols=stoich_df["gene_symbol"].values,
-        track=track_cfg)
-
-    if len(winsorized_df) > 0:
-        winsorized_path = _track_output("winsorized_sites.csv", track_cfg)
-        winsorized_df.to_csv(winsorized_path, index=False)
-        print(f"  Saved {winsorized_path} ({len(winsorized_df)} clipped sites)")
-    if len(shift_df) > 0:
-        shift_path = _track_output("mea_global_shift.csv", track_cfg)
-        shift_df.to_csv(shift_path, index=False)
-        print(f"  Saved {shift_path} (median offsets removed per contrast)")
-    if len(substrate_df) > 0:
-        subs_path = _track_output("mea_substrate_sets.csv", track_cfg)
-        substrate_df.to_csv(subs_path, index=False)
-        print(f"  Saved {subs_path} ({len(substrate_df):,} kinase-motif rows "
-              f"across {substrate_df['kinase'].nunique()} kinases)")
-
-    mea_path = _track_output("mea_stoichiometry.csv", track_cfg)
-    mea_stoich.to_csv(mea_path, index=False)
-    n_sig_total = (mea_stoich["FDR"] < config.MEA_FDR_THRESH).sum() if len(mea_stoich) > 0 else 0
-    print(f"\n  Saved {mea_path} ({len(mea_stoich)} rows, {n_sig_total} significant)")
-
-    site_results = pd.DataFrame({
-        "site_id": stoich_df["site_id"].values,
-        "gene_symbol": stoich_df["gene_symbol"].values,
-        "matched_protein": stoich_df["matched_protein"].values,
-        "n_obs_stoich": nobs_s,
-    })
-    for cn in CONTRAST_COEFS:
-        res = results_by_contrast[cn]
-        site_results[f"stoich_lfc_{cn}"] = res["stoich_lfc"]
-        site_results[f"stoich_pval_{cn}"] = res["stoich_pval"]
-        site_results[f"stoich_fdr_{cn}"] = res["stoich_fdr"]
-        site_results[f"raw_lfc_{cn}"] = res["raw_lfc"]
-        site_results[f"raw_pval_{cn}"] = res["raw_pval"]
-        site_results[f"raw_fdr_{cn}"] = res["raw_fdr"]
-    site_path = _track_output("site_level_ols.csv", track_cfg)
-    site_results.to_csv(site_path, index=False)
-    print(f"  Saved {site_path} ({len(site_results)} rows)")
-
-    print(f"\n  Stage 2 complete (track={track_cfg['name']}).")
-
-
-# ===========================================================================
-# CLI
+# CLI shim — defers to the namespaced Kedro `enrich` pipeline.
 # ===========================================================================
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Stage 2 of kinase attribution: OLS site-level models + "
-                    "MEA kinase enrichment on stoichiometry. Standalone copy "
-                    "of step_enrich for fidelity comparison.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument(
-        "--track", choices=["st", "py", "both"], default="both",
-        help="Phospho track: 'st' (Ser/Thr via IMAC, legacy), 'py' (Tyr), "
-             "or 'both' (default; runs Stage 2 for each track sequentially).")
+    from kedro.framework.session import KedroSession
+    from kedro.framework.startup import bootstrap_project
 
-    args = parser.parse_args()
-
-    if args.track == "both":
-        tracks = ["st", "py"]
-    else:
-        tracks = [args.track]
-
-    for t in tracks:
-        step_enrich(track=t)
+    bootstrap_project(Path(__file__).resolve().parent.parent)
+    with KedroSession.create() as session:
+        session.run(pipeline_name="enrich")
 
 
 if __name__ == "__main__":
