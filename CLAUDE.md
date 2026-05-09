@@ -54,11 +54,11 @@ python alz/data_ingest.py --summary       # Print cached results
 
 **Stoichiometry, MEA enrichment, and unified attribution** — split into four stage modules plus a summary helper:
 
-The `ANALYSIS_MODE` environment variable controls sample filtering (default: `males_only`):
+Sample filtering (`analysis_mode`) lives in `conf/base/parameters.yml`. Default is `males_only`; `KEDRO_ENV=full_cohort` overlays `conf/full_cohort/parameters.yml` for the sensitivity analysis.
 ```bash
 python alz/kinase_normalize.py                            # Stage 1: IRS cross-plex normalization + stoichiometry (all 72 samples)
-ANALYSIS_MODE=males_only python alz/kinase_enrich.py      # Stage 2: OLS + MEA (males only, outliers excluded)
-ANALYSIS_MODE=males_only python alz/kinase_attribute.py   # Stage 3: Unified cell-type attribution
+python alz/kinase_enrich.py                               # Stage 2: OLS + MEA (males-only by default; KEDRO_ENV=full_cohort to switch)
+python alz/kinase_attribute.py                            # Stage 3: Unified cell-type attribution
 python alz/kinase_mechanism.py                            # Optional: raw phospho MEA + mechanism classification
 python alz/kinase_summary.py                              # Print cached results
 ```
@@ -139,7 +139,7 @@ The live pipeline is a 3-stage stoichiometry-corrected MEA enrichment + unified 
 ### Key Design Points
 
 - **Stoichiometry**: `log2(phospho) − log2(protein)` removes parent-protein abundance confounding
-- **Sample filtering**: `ANALYSIS_MODE` env var (default `males_only`); IRS normalization always uses all 72 samples, filtering applies at OLS time
+- **Sample filtering**: `analysis_mode` Kedro parameter in `conf/base/parameters.yml` (default `males_only`); `KEDRO_ENV=full_cohort` swaps to `conf/full_cohort/parameters.yml`. IRS normalization always uses all 72 samples; filtering applies at OLS time
 - **OLS model**: disease×timepoint interactions → 9 contrasts (3 diseases × 3 timepoints). Design matrix: const, App, Tau, Int, [female], time_4mo, time_6mo, App×time4, App×time6, Tau×time4, Tau×time6
 - **MEA**: GSEA pre-ranked on stoichiometry β values; median-centered then winsorized (1st/99th percentile) before ranking; FDR < 0.25
 - **Attribution**: 3 evidence sources (Song within-cohort, SEA-AD concordance, WMB specificity) weighted Song 3× : SEA-AD 1×; 34 WMB classes (Allen WMB published taxonomy, no silent drops); confidence tiers (high/moderate/low)
@@ -161,7 +161,7 @@ kinase_enrich.py / kinase_attribute.py + snrna_integration.py  ←  alz/integrat
 
 ### Live Code
 
-- `config.py` — Shared configuration: file paths, thresholds, enrichment method params, `WMB_CLASSES` list (34 WMB classes, single source of truth for the cell-type spine), `SEA_AD_SUBCLASSES` (transitional, used only by Incytr-integration adapters and supplementary scripts), sample filtering params (`OUTLIER_ZSCORE_THRESH`, `ANALYSIS_MODE`). Still structurally mixed with legacy settings.
+- `config.py` — Shared configuration: file paths, thresholds, enrichment method params, `WMB_CLASSES` list (34 WMB classes, single source of truth for the cell-type spine), `SEA_AD_SUBCLASSES` (transitional, used only by Incytr-integration adapters and supplementary scripts), `OUTLIER_ZSCORE_THRESH`. `ANALYSIS_MODE` is a bridge attribute that loads `analysis_mode` from Kedro parameters (`conf/base/parameters.yml`, KEDRO_ENV-switchable); Phase 4 will replace direct reads with node-injected `params:analysis_mode`. Still structurally mixed with legacy settings.
 - `data_ingest.py` — TMT channel mapping, phosphosite-to-protein matching, marker assessment, PCA quality control, outlier detection. Outputs to `outputs/reports/data_ingest/`. Requires: `scikit-learn`, `matplotlib`.
 - `kinase_normalize.py` — Stage 1: IRS cross-plex normalization (all 72 samples) + stoichiometry computation. Per-track (`--track st|py|both`). Outputs to `outputs/reports/kinase_attribution/`. Requires: `scikit-learn`, `matplotlib`.
 - `kinase_enrich.py` — Stage 2: sample filtering (outlier exclusion + sex), factorial OLS with disease×timepoint interactions (9 contrasts), MEA kinase enrichment (median-centered + winsorized). Per-track. Requires: `kinase-library`, `gseapy`.
@@ -264,7 +264,7 @@ Other documentation:
 
 ## Gotchas
 
-- **ANALYSIS_MODE controls sample filtering** — defaults to `males_only`. Set `ANALYSIS_MODE=full_cohort` for sensitivity analysis with both sexes. The mode affects `kinase_enrich.py`, `kinase_attribute.py`, and `kinase_mechanism.py` but NOT `kinase_normalize.py` (which always uses all 72 samples)
+- **`analysis_mode` controls sample filtering** — Kedro parameter in `conf/base/parameters.yml`, defaults to `males_only`. Use `KEDRO_ENV=full_cohort` to overlay `conf/full_cohort/parameters.yml` for sensitivity analysis with both sexes. Affects `kinase_enrich.py`, `kinase_attribute.py`, and `kinase_mechanism.py` but NOT `kinase_normalize.py` (which always uses all 72 samples). The legacy `ANALYSIS_MODE` env var was retired in Phase 3 — setting it is silently ignored
 - **Outlier detection requires stoichiometry** — `data_ingest.py --outliers` reads `stoichiometry_matrix.csv`, so `kinase_normalize.py` must be run first. Falls back to total proteome if unavailable
 - **Limited automated tests** — live pipeline has no unit tests; verify with `python alz/kinase_summary.py`
 - **Song proteomics files must be mounted** — data_ingest.py reads Excel workbooks from `data/datasets/song/primary/proteomics/`

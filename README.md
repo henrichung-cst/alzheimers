@@ -148,7 +148,7 @@ bash alz/runners/main/run_dual_analysis.sh     # males-only (primary) + full-coh
 
 Individual stages (`run_data_ingest.sh`, `run_kinase_attribution.sh`, `run_attribution_recovery.sh`) and module-level flags (`--run`, `--summary`, per-step flags) are documented in `CLAUDE.md`.
 
-The `ANALYSIS_MODE` environment variable controls sample filtering (default: `males_only`). Set `ANALYSIS_MODE=full_cohort` for sensitivity analysis with both sexes.
+Sample filtering is the `analysis_mode` Kedro parameter in `conf/base/parameters.yml` (default: `males_only`). Use `KEDRO_ENV=full_cohort` to overlay `conf/full_cohort/parameters.yml` for sensitivity analysis with both sexes.
 
 ### Supporting Prerequisites
 
