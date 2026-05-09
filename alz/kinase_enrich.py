@@ -244,9 +244,9 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
     """Run MEA (GSEA-based) kinase enrichment across contrasts.
 
     Median-centers and winsorizes (1st/99th pct) per contrast before GSEA
-    pre-rank. Median offsets logged to mea_global_shift.csv; clipped sites
-    logged to winsorized_sites.csv; substrate-set membership logged to
-    mea_substrate_sets.csv.
+    pre-rank. Returns a 4-tuple ``(mea_df, shift_df, winsorized_df,
+    substrate_df)``; callers (CLI shim or Kedro nodes) decide where to
+    persist them.
     """
     from kinase_library import RankedPhosData, create_kin_sub_sets
     from kinase_library.utils._global_vars import kl_method_comp_direction_dict
@@ -339,28 +339,14 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
                     "track": track_cfg["name"],
                 })
 
-    if outlier_records:
-        outlier_df = pd.DataFrame(outlier_records)
-        outlier_path = _track_output("winsorized_sites.csv", track_cfg)
-        outlier_df.to_csv(outlier_path, index=False)
-        print(f"  Saved {outlier_path} ({len(outlier_df)} clipped sites)")
-
-    if shift_records:
-        shift_df = pd.DataFrame(shift_records)
-        shift_path = _track_output("mea_global_shift.csv", track_cfg)
-        shift_df.to_csv(shift_path, index=False)
-        print(f"  Saved {shift_path} (median offsets removed per contrast)")
-
-    if substrate_records:
-        subs_df = pd.DataFrame(substrate_records)
-        subs_path = _track_output("mea_substrate_sets.csv", track_cfg)
-        subs_df.to_csv(subs_path, index=False)
-        print(f"  Saved {subs_path} ({len(subs_df):,} kinase-motif rows "
-              f"across {subs_df['kinase'].nunique()} kinases)")
-
+    outlier_df = pd.DataFrame(outlier_records)
+    shift_df = pd.DataFrame(shift_records)
+    substrate_df = pd.DataFrame(substrate_records)
     if enrichment_results:
-        return pd.concat(enrichment_results.values(), ignore_index=True)
-    return pd.DataFrame()
+        mea_df = pd.concat(enrichment_results.values(), ignore_index=True)
+    else:
+        mea_df = pd.DataFrame()
+    return mea_df, shift_df, outlier_df, substrate_df
 
 
 def _prepare_raw_ols(mapping, bio_cols, raw_df):
@@ -463,11 +449,26 @@ def step_enrich(track="st"):
 
     print(f"\n--- 2.4 Running MEA kinase enrichment "
           f"(stoichiometry, kin_type={track_cfg['kin_type']}) ---")
-    mea_stoich = _run_mea(
+    mea_stoich, shift_df, winsorized_df, substrate_df = _run_mea(
         stoich_df["motif"], results_by_contrast, "stoich_lfc",
         site_ids=stoich_df["site_id"].values,
         gene_symbols=stoich_df["gene_symbol"].values,
         track=track_cfg)
+
+    if len(winsorized_df) > 0:
+        winsorized_path = _track_output("winsorized_sites.csv", track_cfg)
+        winsorized_df.to_csv(winsorized_path, index=False)
+        print(f"  Saved {winsorized_path} ({len(winsorized_df)} clipped sites)")
+    if len(shift_df) > 0:
+        shift_path = _track_output("mea_global_shift.csv", track_cfg)
+        shift_df.to_csv(shift_path, index=False)
+        print(f"  Saved {shift_path} (median offsets removed per contrast)")
+    if len(substrate_df) > 0:
+        subs_path = _track_output("mea_substrate_sets.csv", track_cfg)
+        substrate_df.to_csv(subs_path, index=False)
+        print(f"  Saved {subs_path} ({len(substrate_df):,} kinase-motif rows "
+              f"across {substrate_df['kinase'].nunique()} kinases)")
+
     mea_path = _track_output("mea_stoichiometry.csv", track_cfg)
     mea_stoich.to_csv(mea_path, index=False)
     n_sig_total = (mea_stoich["FDR"] < config.MEA_FDR_THRESH).sum() if len(mea_stoich) > 0 else 0

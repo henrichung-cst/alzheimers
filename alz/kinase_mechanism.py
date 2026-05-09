@@ -74,7 +74,7 @@ def step_mechanism_annotation():
                 c_vec[param_names.index(param)] = weight
             results_by_contrast[contrast_name] = {"raw_lfc": betas_r @ c_vec}
         print(f"  [{track_cfg['name']}] running MEA on raw phospho...")
-        mea_raw = _run_mea(raw_df["motif"], results_by_contrast, "raw_lfc",
+        mea_raw, _, _, _ = _run_mea(raw_df["motif"], results_by_contrast, "raw_lfc",
                            site_ids=raw_df["site_id"].values,
                            gene_symbols=raw_df["gene_symbol"].values,
                            track=track_cfg["name"])
