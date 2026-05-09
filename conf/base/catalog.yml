@@ -169,3 +169,17 @@ unified_attribution_with_mechanism:
   type: pandas.CSVDataset
   filepath: outputs/reports/kinase_attribution/unified_attribution.csv
   save_args: {index: false}
+
+# recovery pipeline (single namespace, consumes both st./py.mea_stoichiometry).
+kinase_activity_matrix:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/attribution_recovery/kinase_activity_matrix.csv
+  save_args: {index: false}
+celltype_evidence_table:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/attribution_recovery/celltype_evidence_table.csv
+  save_args: {index: false}
+kinase_hypothesis_table:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/attribution_recovery/kinase_hypothesis_table.csv
+  save_args: {index: false}
