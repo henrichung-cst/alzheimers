@@ -1,0 +1,2 @@
+# Sensitivity-analysis cohort overlay. Activate via `KEDRO_ENV=full_cohort`.
+analysis_mode: full_cohort

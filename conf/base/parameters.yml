@@ -1,2 +1,6 @@
-# Pipeline parameters. Cohort selection moves here in Phase 3.
+# Pipeline parameters.
 proof_marker: phase2_smoke_test
+
+# Cohort selection (males-only primary, full-cohort sensitivity).
+# Override via `KEDRO_ENV=full_cohort` — see conf/full_cohort/parameters.yml.
+analysis_mode: males_only

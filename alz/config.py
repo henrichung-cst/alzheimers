@@ -81,7 +81,29 @@ MEA_SEED = 112123               # GSEApy default seed
 MEA_WINSORIZE_PERCENTILE = 1.0  # winsorize site LFCs at this percentile before MEA
 
 OUTLIER_ZSCORE_THRESH = 3.0     # within-group z-score threshold for outlier exclusion
-ANALYSIS_MODE = os.environ.get("ANALYSIS_MODE", "males_only")  # "males_only" or "full_cohort"
+
+
+def _load_analysis_mode() -> str:
+    # Cohort selection: source of truth is `conf/base/parameters.yml`.
+    # KEDRO_ENV=full_cohort overlays `conf/full_cohort/parameters.yml`.
+    # base_env/default_run_env must be set explicitly: when used standalone
+    # (outside `kedro run`), OmegaConfigLoader defaults them to "" and the
+    # recursive `**/parameters*` glob then sweeps every conf subdir into a
+    # single merge — duplicate-key check fires on the env files.
+    from pathlib import Path
+
+    from kedro.config import OmegaConfigLoader
+
+    conf_source = str(Path(REPO_ROOT) / "conf")
+    env = os.environ.get("KEDRO_ENV")
+    kwargs = {"conf_source": conf_source, "base_env": "base", "default_run_env": "local"}
+    if env:
+        kwargs["env"] = env
+    loader = OmegaConfigLoader(**kwargs)
+    return loader["parameters"]["analysis_mode"]
+
+
+ANALYSIS_MODE = _load_analysis_mode()  # "males_only" or "full_cohort"
 
 WMB_CLASSES = [
     "01 IT-ET Glut", "02 NP-CT-L6b Glut", "03 OB-CR Glut", "04 DG-IMN Glut",
