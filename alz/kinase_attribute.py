@@ -104,54 +104,59 @@ def _assign_confidence_and_basis_vectorized(unified):
     return conf, basis
 
 
-# ===========================================================================
-# Stage 3: Unified cell-type attribution
-# ===========================================================================
+def _combine_mea_tracks(mea_by_track):
+    """Concatenate per-track MEA results, injecting residue_type/track if absent.
 
-def step_attribute():
-    """Stage 3: Unified cell-type attribution (SEA-AD concordance + WMB expression)."""
-    _ensure_output_dir()
-    print("\n=== Stage 3: Unified Cell-Type Attribution ===\n")
-    # 3a. Load MEA results from every track that produced an output and concat.
+    `mea_by_track` is an iterable of (track_cfg, df) pairs. Returns the combined
+    `sig` DataFrame (no FDR filter — attribution gates on FDR later via the
+    `mea_significant` column on the cross-joined grid).
+    """
     mea_frames = []
-    for track_name, track_cfg in config.PHOSPHO_TRACKS.items():
-        mea_path = _track_output("mea_stoichiometry.csv", track_cfg)
-        if not os.path.exists(mea_path):
-            print(f"  Track {track_name}: {mea_path} not present, skipping")
+    for track_cfg, df in mea_by_track:
+        if df is None:
             continue
-        df = pd.read_csv(mea_path)
+        df = df.copy()
         if "residue_type" not in df.columns:
             df["residue_type"] = track_cfg["residue"]
         if "track" not in df.columns:
             df["track"] = track_cfg["name"]
         mea_frames.append(df)
-        print(f"  Track {track_name}: loaded {len(df)} rows from {mea_path}")
+        print(f"  Track {track_cfg['name']}: loaded {len(df)} rows")
     if not mea_frames:
         raise FileNotFoundError(
-            f"No MEA outputs found under {OUTPUT_DIR}; run --enrich first."
+            "No MEA outputs available; run the enrich pipeline first."
         )
     mea = pd.concat(mea_frames, ignore_index=True, sort=False)
     n_sig = (mea["FDR"] < config.MEA_FDR_THRESH).sum()
     print(f"  MEA results (combined): {len(mea)} total, {n_sig} significant "
           f"(FDR<{config.MEA_FDR_THRESH}) — building attribution from full grid")
-    sig = mea.copy()
-    if "residue_type" in sig.columns:
-        residue_breakdown = sig["residue_type"].value_counts().to_dict()
+    if "residue_type" in mea.columns:
+        residue_breakdown = mea["residue_type"].value_counts().to_dict()
         print(f"  By residue_type: {residue_breakdown}")
-    if len(sig) == 0:
-        print("  No MEA rows found. Stage 3 complete.")
-        return
+    return mea
 
-    # 3b. Map kinases to genes
-    k2g = pd.read_csv(config.MAPPING_CACHE_FILE)
-    kinase_to_gene = dict(zip(k2g["kinase_abbreviation"], k2g["gene_symbol"]))
-    sig["gene_symbol"] = sig["kinase"].map(
-        lambda k: kinase_to_gene.get(k, k))
 
-    # 3c. SEA-AD concordance (per kinase × cell type)
+def _map_kinases_to_genes(sig, k2g_df):
+    """Inject gene_symbol on `sig` from the kinase→gene mapping cache."""
+    sig = sig.copy()
+    kinase_to_gene = dict(zip(k2g_df["kinase_abbreviation"], k2g_df["gene_symbol"]))
+    sig["gene_symbol"] = sig["kinase"].map(lambda k: kinase_to_gene.get(k, k))
+    return sig
+
+
+def _compute_sea_ad_concordance(sig, seaad_to_class_df, sea_ad_paths):
+    """Compute per-(kinase, contrast, cell_type) SEA-AD LFCs + supertype audit.
+
+    Loads h5ads inside the function (anndata is not a built-in Kedro dataset and
+    the files are optional in degraded environments). Returns
+    ``(sea_ad_df, supertype_df)``. On ImportError or missing h5ads, prints a
+    warning and returns empty DataFrames so attribution can still degrade
+    gracefully (Song/WMB-only tiers).
+    """
     sea_ad_rows = []
     supertype_rows = []
     _supertype_emitted = set()
+
     try:
         import anndata as ad
 
@@ -168,7 +173,7 @@ def step_attribute():
         needed_strata = set(contrast_to_stratum.values())
         adata_by_stratum = {}
         for stratum in needed_strata:
-            path = config.SEA_AD_EFFECT_SIZES[stratum]
+            path = sea_ad_paths[stratum]
             if not os.path.exists(path):
                 raise FileNotFoundError(path)
             adata_by_stratum[stratum] = ad.read_h5ad(path)
@@ -181,12 +186,6 @@ def step_attribute():
         st_to_subclass = dict(zip(ref_adata.var_names, ref_adata.var["Subclass"]))
         gene_to_idx = {g: i for i, g in enumerate(ref_adata.obs_names)}
 
-        if not os.path.exists(config.SEAAD_TO_WMB_CLASS_FILE):
-            raise FileNotFoundError(
-                f"SEA-AD → WMB class mapping not found at "
-                f"{config.SEAAD_TO_WMB_CLASS_FILE}. Generate via Phase 1c."
-            )
-        seaad_to_class_df = pd.read_csv(config.SEAAD_TO_WMB_CLASS_FILE)
         seaad_to_class = dict(
             zip(seaad_to_class_df["seaad_subclass"],
                 seaad_to_class_df["wmb_class_label"])
@@ -289,63 +288,71 @@ def step_attribute():
         print("  " + "!" * 70)
 
     sea_ad_df = pd.DataFrame(sea_ad_rows)
+    supertype_df = pd.DataFrame(supertype_rows)
+    return sea_ad_df, supertype_df
 
-    if supertype_rows:
-        supertype_df = pd.DataFrame(supertype_rows)
-        supertype_path = os.path.join(OUTPUT_DIR, "sea_ad_supertype_lfc.csv")
-        supertype_df.to_csv(supertype_path, index=False)
-        print(f"  SEA-AD supertype LFCs: {len(supertype_df)} rows → "
-              f"{supertype_path}")
 
-    # 3d. WMB expression specificity (per kinase × subclass)
-    wmb_top = None
-    if os.path.exists(WMB_EXPRESSION_FILE):
-        wmb = pd.read_csv(WMB_EXPRESSION_FILE)
-        wmb["_gene_upper"] = wmb["gene_symbol"].str.upper()
-        wmb_top = (wmb.sort_values("specificity_score")
-                      .drop_duplicates(["_gene_upper", "cell_type"], keep="last")
-                      [["_gene_upper", "cell_type", "specificity_score",
-                        "mean_log2_expression", "fraction_cells_expressing",
-                        "binary_expressed"]]
-                      .rename(columns={
-                          "specificity_score": "wmb_specificity",
-                          "mean_log2_expression": "wmb_mean_log2_expression",
-                          "fraction_cells_expressing": "wmb_fraction_cells_expressing",
-                          "binary_expressed": "wmb_binary_expressed",
-                      }))
-        print(f"  WMB specificity: {len(wmb_top)} (gene, cell_type) pairs loaded")
-    else:
-        print(f"  WMB expression file not found at {WMB_EXPRESSION_FILE}")
+def _prepare_wmb_specificity(wmb_df):
+    """Reduce WMB expression export to top-(gene, cell_type) rows for merging."""
+    if wmb_df is None or len(wmb_df) == 0:
+        return None
+    wmb = wmb_df.copy()
+    wmb["_gene_upper"] = wmb["gene_symbol"].str.upper()
+    wmb_top = (wmb.sort_values("specificity_score")
+                  .drop_duplicates(["_gene_upper", "cell_type"], keep="last")
+                  [["_gene_upper", "cell_type", "specificity_score",
+                    "mean_log2_expression", "fraction_cells_expressing",
+                    "binary_expressed"]]
+                  .rename(columns={
+                      "specificity_score": "wmb_specificity",
+                      "mean_log2_expression": "wmb_mean_log2_expression",
+                      "fraction_cells_expressing": "wmb_fraction_cells_expressing",
+                      "binary_expressed": "wmb_binary_expressed",
+                  }))
+    print(f"  WMB specificity: {len(wmb_top)} (gene, cell_type) pairs loaded")
+    return wmb_top
 
-    # 3d′. Song within-cohort evidence (specificity + concordance)
-    song_spec_top = None
-    if os.path.exists(config.SONG_EXPRESSION_FILE):
-        song_sp = pd.read_csv(config.SONG_EXPRESSION_FILE)
-        song_sp["_gene_upper"] = song_sp["gene_symbol"].str.upper()
-        song_spec_top = (song_sp.sort_values("specificity_score")
-                                .drop_duplicates(["_gene_upper", "cell_type"], keep="last")
-                                [["_gene_upper", "cell_type", "specificity_score"]]
-                                .rename(columns={"specificity_score": "song_specificity"}))
-        print(f"  Song specificity: {len(song_spec_top)} (gene, cell_type) pairs loaded")
 
-    song_cd_top = None
-    _song_key_is_contrast = False
-    if os.path.exists(config.SONG_CONCORDANCE_FILE):
-        song_cd = pd.read_csv(config.SONG_CONCORDANCE_FILE)
-        contrast_col = "contrast" if "contrast" in song_cd.columns else "pathway"
-        _song_key_is_contrast = (contrast_col == "contrast")
-        keep_cols = ["gene_symbol", "cell_type", contrast_col, "song_lfc"]
-        for opt in ("song_pval", "song_fdr"):
-            if opt in song_cd.columns:
-                keep_cols.append(opt)
-        song_cd_top = song_cd[keep_cols].copy()
-        song_cd_top["_gene_upper"] = song_cd_top["gene_symbol"].str.upper()
-        song_cd_top = song_cd_top.rename(columns={contrast_col: "_song_contrast"})
-        song_cd_top = song_cd_top.drop(columns=["gene_symbol"])
-        print(f"  Song concordance: {len(song_cd_top)} (gene, cell_type, "
-              f"{contrast_col}) entries loaded")
+def _prepare_song_specificity(song_sp_df):
+    if song_sp_df is None or len(song_sp_df) == 0:
+        return None
+    song_sp = song_sp_df.copy()
+    song_sp["_gene_upper"] = song_sp["gene_symbol"].str.upper()
+    song_spec_top = (song_sp.sort_values("specificity_score")
+                            .drop_duplicates(["_gene_upper", "cell_type"], keep="last")
+                            [["_gene_upper", "cell_type", "specificity_score"]]
+                            .rename(columns={"specificity_score": "song_specificity"}))
+    print(f"  Song specificity: {len(song_spec_top)} (gene, cell_type) pairs loaded")
+    return song_spec_top
 
-    # 3e. Combine into unified attribution table (vectorized cross-join + merges).
+
+def _prepare_song_concordance(song_cd_df):
+    """Returns (song_cd_top, key_is_contrast) or (None, False) if absent."""
+    if song_cd_df is None or len(song_cd_df) == 0:
+        return None, False
+    contrast_col = "contrast" if "contrast" in song_cd_df.columns else "pathway"
+    key_is_contrast = (contrast_col == "contrast")
+    keep_cols = ["gene_symbol", "cell_type", contrast_col, "song_lfc"]
+    for opt in ("song_pval", "song_fdr"):
+        if opt in song_cd_df.columns:
+            keep_cols.append(opt)
+    song_cd_top = song_cd_df[keep_cols].copy()
+    song_cd_top["_gene_upper"] = song_cd_top["gene_symbol"].str.upper()
+    song_cd_top = song_cd_top.rename(columns={contrast_col: "_song_contrast"})
+    song_cd_top = song_cd_top.drop(columns=["gene_symbol"])
+    print(f"  Song concordance: {len(song_cd_top)} (gene, cell_type, "
+          f"{contrast_col}) entries loaded")
+    return song_cd_top, key_is_contrast
+
+
+def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
+                      song_cd_top, song_key_is_contrast):
+    """Cross-join sig × WMB classes, layer in evidence merges, score, and label.
+
+    Returns ``(unified_full, unified_attributed, summary_dict)``.
+    `unified_full` keeps every row (including confidence='none'); `unified_attributed`
+    is the sorted, filtered slice that downstream consumers use.
+    """
     print(f"  Building unified base: {len(sig)} sig rows × "
           f"{len(config.WMB_CLASSES)} WMB classes")
     sig_base = sig[["kinase", "gene_symbol", "contrast", "NES", "FDR"]].copy()
@@ -358,7 +365,7 @@ def step_attribute():
     cell_type_df = pd.DataFrame({"cell_type": list(config.WMB_CLASSES)})
     unified = sig_base.merge(cell_type_df, how="cross")
 
-    if len(sea_ad_df) > 0:
+    if sea_ad_df is not None and len(sea_ad_df) > 0:
         sea_ad_join = sea_ad_df[[
             "kinase", "contrast", "cell_type",
             "sea_ad_lfc", "sea_ad_n_supertypes", "sea_ad_stratum",
@@ -389,7 +396,7 @@ def step_attribute():
         unified["song_specificity"] = np.nan
 
     if song_cd_top is not None:
-        unified["_song_contrast"] = (unified["contrast"] if _song_key_is_contrast
+        unified["_song_contrast"] = (unified["contrast"] if song_key_is_contrast
                                      else unified["contrast"].str.split("_").str[0])
         unified = unified.merge(song_cd_top,
                                  on=["_gene_upper", "cell_type", "_song_contrast"],
@@ -437,13 +444,6 @@ def step_attribute():
     attributed = unified[unified["combined_confidence"] != "none"].copy()
     attributed = attributed.sort_values("combined_score", ascending=False)
 
-    out_path = os.path.join(OUTPUT_DIR, "unified_attribution.csv")
-    attributed.to_csv(out_path, index=False)
-    print(f"\n  Saved {out_path} ({len(attributed)} attributed rows)")
-
-    full_path = os.path.join(OUTPUT_DIR, "unified_attribution_full.csv")
-    unified.to_csv(full_path, index=False)
-
     if len(attributed) > 0:
         print(f"\n  Attribution summary:")
         n_kinase_contrast = attributed.groupby(["kinase", "contrast"]).ngroups
@@ -470,6 +470,79 @@ def step_attribute():
         "by_contrast": (attributed["contrast"].value_counts()
                         .to_dict() if len(attributed) > 0 else {}),
     }
+    return unified, attributed, summary
+
+
+# ===========================================================================
+# Stage 3: Unified cell-type attribution
+# ===========================================================================
+
+def step_attribute():
+    """Stage 3: Unified cell-type attribution (SEA-AD concordance + WMB expression)."""
+    _ensure_output_dir()
+    print("\n=== Stage 3: Unified Cell-Type Attribution ===\n")
+
+    # 3a. Load MEA results from every track that produced an output and concat.
+    mea_by_track = []
+    for track_name, track_cfg in config.PHOSPHO_TRACKS.items():
+        mea_path = _track_output("mea_stoichiometry.csv", track_cfg)
+        if not os.path.exists(mea_path):
+            print(f"  Track {track_name}: {mea_path} not present, skipping")
+            continue
+        mea_by_track.append((track_cfg, pd.read_csv(mea_path)))
+    sig = _combine_mea_tracks(mea_by_track)
+    if len(sig) == 0:
+        print("  No MEA rows found. Stage 3 complete.")
+        return
+
+    # 3b. Map kinases to genes.
+    k2g = pd.read_csv(config.MAPPING_CACHE_FILE)
+    sig = _map_kinases_to_genes(sig, k2g)
+
+    # 3c. SEA-AD concordance.
+    if not os.path.exists(config.SEAAD_TO_WMB_CLASS_FILE):
+        raise FileNotFoundError(
+            f"SEA-AD → WMB class mapping not found at "
+            f"{config.SEAAD_TO_WMB_CLASS_FILE}. Generate via Phase 1c."
+        )
+    seaad_to_class_df = pd.read_csv(config.SEAAD_TO_WMB_CLASS_FILE)
+    sea_ad_df, supertype_df = _compute_sea_ad_concordance(
+        sig, seaad_to_class_df, config.SEA_AD_EFFECT_SIZES
+    )
+
+    if len(supertype_df) > 0:
+        supertype_path = os.path.join(OUTPUT_DIR, "sea_ad_supertype_lfc.csv")
+        supertype_df.to_csv(supertype_path, index=False)
+        print(f"  SEA-AD supertype LFCs: {len(supertype_df)} rows → "
+              f"{supertype_path}")
+
+    # 3d. WMB expression specificity.
+    wmb_df = pd.read_csv(WMB_EXPRESSION_FILE) if os.path.exists(WMB_EXPRESSION_FILE) else None
+    if wmb_df is None:
+        print(f"  WMB expression file not found at {WMB_EXPRESSION_FILE}")
+    wmb_top = _prepare_wmb_specificity(wmb_df)
+
+    # 3d′. Song within-cohort evidence (specificity + concordance).
+    song_sp_df = (pd.read_csv(config.SONG_EXPRESSION_FILE)
+                  if os.path.exists(config.SONG_EXPRESSION_FILE) else None)
+    song_spec_top = _prepare_song_specificity(song_sp_df)
+
+    song_cd_df = (pd.read_csv(config.SONG_CONCORDANCE_FILE)
+                  if os.path.exists(config.SONG_CONCORDANCE_FILE) else None)
+    song_cd_top, song_key_is_contrast = _prepare_song_concordance(song_cd_df)
+
+    # 3e. Combine into unified attribution table.
+    unified, attributed, summary = _assemble_unified(
+        sig, sea_ad_df, wmb_top, song_spec_top, song_cd_top, song_key_is_contrast
+    )
+
+    out_path = os.path.join(OUTPUT_DIR, "unified_attribution.csv")
+    attributed.to_csv(out_path, index=False)
+    print(f"\n  Saved {out_path} ({len(attributed)} attributed rows)")
+
+    full_path = os.path.join(OUTPUT_DIR, "unified_attribution_full.csv")
+    unified.to_csv(full_path, index=False)
+
     summary_path = os.path.join(OUTPUT_DIR, "attribution_summary.json")
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
