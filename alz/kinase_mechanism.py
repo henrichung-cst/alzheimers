@@ -19,14 +19,19 @@ Outputs (under outputs/reports/kinase_attribution/):
   unified_attribution.csv        — gets a 'mechanism_annotation' column merged in
 """
 
-import argparse
 import os
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-import config
-from kinase_enrich import (
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from alz import config
+from alz.kinase_enrich import (
     CONTRAST_COEFS,
     _filter_samples,
     _prepare_raw_ols,
@@ -171,13 +176,13 @@ def step_mechanism_annotation():
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Optional mechanism annotation: raw phospho MEA + "
-                    "abundance/activity/both classification.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.parse_args()
-    step_mechanism_annotation()
+    """CLI shim: delegates to `kedro run --pipeline=mechanism`."""
+    from kedro.framework.session import KedroSession
+    from kedro.framework.startup import bootstrap_project
+
+    bootstrap_project(Path(__file__).resolve().parent.parent)
+    with KedroSession.create() as session:
+        session.run(pipeline_name="mechanism")
 
 
 if __name__ == "__main__":
