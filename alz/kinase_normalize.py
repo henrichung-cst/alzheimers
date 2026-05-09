@@ -469,20 +469,6 @@ def step_normalize(track="st"):
 
     qc_df = pd.DataFrame(qc_rows)
 
-    # --- 1.5 Save outputs ---
-    print("\n--- 1.5 Saving outputs ---")
-    stoich_path = _track_output("stoichiometry_matrix.csv", track_cfg)
-    stoich_df.to_csv(stoich_path, index=False)
-    print(f"  Saved {stoich_path} ({stoich_df.shape})")
-
-    raw_path = _track_output("raw_phospho_normalized.csv", track_cfg)
-    raw_phospho_df.to_csv(raw_path, index=False)
-    print(f"  Saved {raw_path}")
-
-    qc_path = _track_output("stoichiometry_qc.csv", track_cfg)
-    qc_df.to_csv(qc_path, index=False)
-    print(f"  Saved {qc_path}")
-
     norm_summary = {
         "track": track_cfg["name"],
         "normalization_method": norm_method,
@@ -496,13 +482,32 @@ def step_normalize(track="st"):
         "pca_before": pca_before,
         "pca_after": pca_after,
     }
+    return stoich_df, raw_phospho_df, qc_df, norm_summary
+
+
+def _write_normalize_outputs(track_cfg, stoich_df, raw_phospho_df, qc_df, norm_summary):
+    """Persist Stage-1 outputs at the legacy CLI paths. Used by the script
+    entrypoint; the Kedro nodes route the same return values through the
+    catalog instead."""
+    print("\n--- 1.5 Saving outputs ---")
+    stoich_path = _track_output("stoichiometry_matrix.csv", track_cfg)
+    stoich_df.to_csv(stoich_path, index=False)
+    print(f"  Saved {stoich_path} ({stoich_df.shape})")
+
+    raw_path = _track_output("raw_phospho_normalized.csv", track_cfg)
+    raw_phospho_df.to_csv(raw_path, index=False)
+    print(f"  Saved {raw_path}")
+
+    qc_path = _track_output("stoichiometry_qc.csv", track_cfg)
+    qc_df.to_csv(qc_path, index=False)
+    print(f"  Saved {qc_path}")
+
     norm_path = _track_output("normalization_summary.json", track_cfg)
     with open(norm_path, "w") as f:
         json.dump(norm_summary, f, indent=2)
     print(f"  Saved {norm_path}")
 
     print("\n  Stage 1 complete.")
-    return stoich_df, raw_phospho_df
 
 
 # ===========================================================================
@@ -521,7 +526,9 @@ def main():
 
     tracks = ["st", "py"] if args.track == "both" else [args.track]
     for t in tracks:
-        step_normalize(track=t)
+        track_cfg = _resolve_track(t)
+        outputs = step_normalize(track=t)
+        _write_normalize_outputs(track_cfg, *outputs)
 
 
 if __name__ == "__main__":
