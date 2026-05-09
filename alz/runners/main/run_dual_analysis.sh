@@ -32,15 +32,16 @@ if [[ ! -f outputs/reports/data_ingest/sample_exclusions.csv ]]; then
 fi
 
 # ── Track 1: Males-only (primary) ──────────────────────────────────────────
+# Cohort defaults to males_only via conf/base/parameters.yml.
 echo ""
 echo "=========================================="
 echo "  PRIMARY ANALYSIS: males-only"
 echo "=========================================="
 
-ANALYSIS_MODE=males_only $PYTHON alz/kinase_enrich.py
-ANALYSIS_MODE=males_only $PYTHON alz/kinase_attribute.py
-ANALYSIS_MODE=males_only $PYTHON alz/kinase_mechanism.py
-ANALYSIS_MODE=males_only $PYTHON alz/attribution_recovery.py --run
+$PYTHON alz/kinase_enrich.py
+$PYTHON alz/kinase_attribute.py
+$PYTHON alz/kinase_mechanism.py
+$PYTHON alz/attribution_recovery.py --run
 
 # Archive primary outputs
 rm -rf outputs/reports/kinase_attribution_males_only
@@ -50,15 +51,18 @@ cp -r outputs/reports/attribution_recovery outputs/reports/attribution_recovery_
 echo "  Archived to outputs/reports/*_males_only/"
 
 # ── Track 2: Full cohort (sensitivity) ────────────────────────────────────
+# KEDRO_ENV=full_cohort overlays conf/full_cohort/parameters.yml.
 echo ""
 echo "=========================================="
 echo "  SENSITIVITY ANALYSIS: full cohort"
 echo "=========================================="
 
-ANALYSIS_MODE=full_cohort $PYTHON alz/kinase_enrich.py
-ANALYSIS_MODE=full_cohort $PYTHON alz/kinase_attribute.py
-ANALYSIS_MODE=full_cohort $PYTHON alz/kinase_mechanism.py
-ANALYSIS_MODE=full_cohort $PYTHON alz/attribution_recovery.py --run
+export KEDRO_ENV=full_cohort
+$PYTHON alz/kinase_enrich.py
+$PYTHON alz/kinase_attribute.py
+$PYTHON alz/kinase_mechanism.py
+$PYTHON alz/attribution_recovery.py --run
+unset KEDRO_ENV
 
 # Archive sensitivity outputs
 rm -rf outputs/reports/kinase_attribution_full_cohort
