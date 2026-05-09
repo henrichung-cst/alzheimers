@@ -20,3 +20,63 @@ sample_mapping:
   filepath: outputs/reports/data_ingest/sample_mapping.csv
   save_args:
     index: false
+
+# enrich pipeline — track-namespaced via `pipeline(template, namespace="st"|"py")`.
+# Catalog keys use Kedro's `<namespace>.<name>` form.
+st.stoichiometry_matrix:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/stoichiometry_matrix.csv
+py.stoichiometry_matrix:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/stoichiometry_matrix_pY.csv
+st.raw_phospho_normalized:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/raw_phospho_normalized.csv
+py.raw_phospho_normalized:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/raw_phospho_normalized_pY.csv
+
+st.site_level_ols:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/site_level_ols.csv
+  save_args: {index: false}
+py.site_level_ols:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/site_level_ols_pY.csv
+  save_args: {index: false}
+
+st.mea_stoichiometry:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/mea_stoichiometry.csv
+  save_args: {index: false}
+py.mea_stoichiometry:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/mea_stoichiometry_pY.csv
+  save_args: {index: false}
+
+st.mea_global_shift:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/mea_global_shift.csv
+  save_args: {index: false}
+py.mea_global_shift:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/mea_global_shift_pY.csv
+  save_args: {index: false}
+
+st.winsorized_sites:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/winsorized_sites.csv
+  save_args: {index: false}
+py.winsorized_sites:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/winsorized_sites_pY.csv
+  save_args: {index: false}
+
+st.mea_substrate_sets:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/mea_substrate_sets.csv
+  save_args: {index: false}
+py.mea_substrate_sets:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/mea_substrate_sets_pY.csv
+  save_args: {index: false}

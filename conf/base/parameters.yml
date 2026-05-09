@@ -4,3 +4,10 @@ proof_marker: phase2_smoke_test
 # Cohort selection (males-only primary, full-cohort sensitivity).
 # Override via `KEDRO_ENV=full_cohort` — see conf/full_cohort/parameters.yml.
 analysis_mode: males_only
+
+# Optional outlier exclusions (path may not exist; node guards in-line).
+sample_exclusions_path: outputs/reports/data_ingest/sample_exclusions.csv
+
+# Per-track names (consumed by the namespaced enrich pipeline).
+track_st: st
+track_py: py

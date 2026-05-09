@@ -81,16 +81,18 @@ def load_sample_exclusions():
     return set(df.loc[df["excluded"], "mouse_id"])
 
 
-def _filter_samples(mapping):
-    """Apply outlier exclusion + sex filter based on config.ANALYSIS_MODE."""
+def _filter_samples(mapping, analysis_mode=None):
+    """Apply outlier exclusion + sex filter. analysis_mode falls back to config.ANALYSIS_MODE."""
+    if analysis_mode is None:
+        analysis_mode = config.ANALYSIS_MODE
     excluded = load_sample_exclusions()
     n0 = len(mapping)
     filt = mapping[~mapping["mouse_id"].isin(excluded)].copy()
     n_excl = n0 - len(filt)
-    if config.ANALYSIS_MODE == "males_only":
+    if analysis_mode == "males_only":
         filt = filt[filt["sex"] == "M"].copy()
     n_final = len(filt)
-    print(f"  Sample filter ({config.ANALYSIS_MODE}): {n0} -> {n_final} "
+    print(f"  Sample filter ({analysis_mode}): {n0} -> {n_final} "
           f"({n_excl} outliers excluded, {n0 - n_excl - n_final} sex-filtered)")
     return filt
 
@@ -128,13 +130,15 @@ def _bh_fdr(pvals):
     return result
 
 
-def _build_design_matrix(mapping, bio_cols):
+def _build_design_matrix(mapping, bio_cols, analysis_mode=None):
     """Build the factorial OLS design matrix.
 
     males_only mode:  N x 10 (const, App, Tau, Int, time_4mo, time_6mo,
                                App_x_time4, App_x_time6, Tau_x_time4, Tau_x_time6)
     full_cohort mode: N x 11 (adds 'female' column)
     """
+    if analysis_mode is None:
+        analysis_mode = config.ANALYSIS_MODE
     meta = mapping.set_index("column_name").loc[bio_cols].reset_index()
 
     X = pd.DataFrame(index=range(len(bio_cols)))
@@ -143,7 +147,7 @@ def _build_design_matrix(mapping, bio_cols):
         X[factor] = meta["genotype"].map(
             lambda g, f=factor: GENOTYPE_CODING[g][f]).astype(float)
 
-    if config.ANALYSIS_MODE != "males_only":
+    if analysis_mode != "males_only":
         X["female"] = (meta["sex"] == "F").astype(float)
 
     X["time_4mo"] = (meta["timepoint"] == "4mo").astype(float)
