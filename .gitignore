@@ -1,8 +1,8 @@
 # Public repo policy: track code, docs, and repo policy.
 *
 !/.gitignore
-!/code/
-!/code/**
+!/alz/
+!/alz/**
 !README.md
 !CLAUDE.md
 !/docs/
@@ -11,9 +11,9 @@
 !pixi.lock
 !.envrc
 # Ignore generated Python cache files.
-/code/__pycache__/
-/code/**/*.pyc
-code/integration/intermediates/
+/alz/__pycache__/
+/alz/**/*.pyc
+alz/integration/intermediates/
 # pixi environments
 .pixi/*
 !.pixi/config.toml

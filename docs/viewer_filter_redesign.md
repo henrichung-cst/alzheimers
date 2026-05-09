@@ -1,7 +1,7 @@
 # Unified Viewer — Filter & Tab Redesign Plan
 
 Status: design draft awaiting approval. Implementation has not started.
-Scope: `code/build_unified_viewer.py` filter bar, `TAB_MANIFEST`, the
+Scope: `alz/build_unified_viewer.py` filter bar, `TAB_MANIFEST`, the
 Sender × Receiver tab, the Graph tab, and removal of the Evidence Audit tab.
 
 ## Problem

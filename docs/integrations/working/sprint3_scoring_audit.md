@@ -28,12 +28,12 @@ a. **incytr package** — `R/analysis.R::Cal_SigProb` and
    pass `em_promiscuity_weight = FALSE` explicitly, so no test changes needed.
 
 b. **alzheimers wrapper** —
-   `code/integration/wrappers/run_incytr_factorial_all_pairs.R` line 1035–1041:
+   `alz/integration/wrappers/run_incytr_factorial_all_pairs.R` line 1035–1041:
    hard-codes `em_w_vec <- em_weight_log(...)` and folds it into the third
    Hill component. Gate this with an env var (default off) so the factorial
    all-pairs scoring matches the package default.
 
-After flipping defaults, `code/integration/tests/run_degenerate_2cond.sh`
+After flipping defaults, `alz/integration/tests/run_degenerate_2cond.sh`
 shows `sigprob` as a clean must-match slot (already was), confirming the
 revert is in effect. **`evaluation.PDS` continues to drift by ~0.089** — but
 inspection of the Sprint 0 synthetic fixture reveals why: all three EM nodes
@@ -100,7 +100,7 @@ change.
 
 1. Edit `R/analysis.R` and `R/factorial.R` to flip three `em_promiscuity_weight = TRUE` defaults to `FALSE` (and update `@param` doc strings).
 2. Edit `run_incytr_factorial_all_pairs.R` to gate `em_w_vec` application behind `Sys.getenv("ENABLE_EM_PROMISCUITY_WEIGHT", "0") == "1"`.
-3. `bash code/integration/tests/run_degenerate_2cond.sh` — `evaluation.PDS` must move from a drift slot to a must-match slot.
+3. `bash alz/integration/tests/run_degenerate_2cond.sh` — `evaluation.PDS` must move from a drift slot to a must-match slot.
 4. `Rscript -e 'pkgload::load_all("../incytr"); testthat::test_dir("../incytr/tests/testthat")'` — must remain 593/593 (or higher).
-5. `bash code/integration/tests/run_duckdb_enumeration_equiv.sh` — must continue to pass.
-6. `bash code/integration/tests/run_verify_phase2.sh` — must continue to SKIP gracefully or pass.
+5. `bash alz/integration/tests/run_duckdb_enumeration_equiv.sh` — must continue to pass.
+6. `bash alz/integration/tests/run_verify_phase2.sh` — must continue to SKIP gracefully or pass.

@@ -23,7 +23,7 @@ files or downstream stages.
   slot proliferation is the *structural enabler* of the `SiK_score_*` drift,
   but is **inert when `kldata = NULL`** (the parameter default).
 
-The factorial wrapper (`code/integration/wrappers/run_incytr_factorial_all_pairs.R`)
+The factorial wrapper (`alz/integration/wrappers/run_incytr_factorial_all_pairs.R`)
 makes zero calls to `Integr_kinasedata`, so the slot proliferation is
 observationally inert in the production pipeline. The previously-flagged
 `SiK_score_*` golden drift is owned by INC-28 (see §3 below); INC-13 is the
@@ -100,8 +100,8 @@ path).**
 
 ### 5. `ALZ-9` / `ALZ-11` / `ALZ-12` — backbone permutations as separate stage — SIGN OFF
 
-`code/integration/run_factorial_permutations.sh` invokes
-`code/integration/adapters/aggregate_factorial.py::_run_permutation_one_contrast`
+`alz/integration/run_factorial_permutations.sh` invokes
+`alz/integration/adapters/aggregate_factorial.py::_run_permutation_one_contrast`
 once per contrast (9 contrasts: App/Tau/ApTt × 2mo/4mo/6mo) and concatenates
 per-contrast results into
 `intermediates/factorial/all_pairs/aggregation/backbone_permutation_pvalues_by_contrast.csv`.
@@ -117,7 +117,7 @@ gate native PDS).** Matches audit-plan §5 Sprint 5 directive verbatim.
 
 ### 6. `ALZ-20` (`19de928`) — `compute_kinase_support_factorial.py` as separate downstream — SIGN OFF
 
-`code/integration/adapters/compute_kinase_support_factorial.py` reads baseline
+`alz/integration/adapters/compute_kinase_support_factorial.py` reads baseline
 `recv_*.parquet` (line 128) and writes per-pair sidecar files:
 - `factorial/all_pairs/{sender}__{receiver}/kinase_support_scores.csv` (line 260)
 - optional `kinase_routes.parquet` (line 278)
@@ -185,14 +185,14 @@ unaffected because the underlying gating logic is correct — only the flag
 
 ## Verification gate (run order)
 
-1. `bash code/integration/tests/run_degenerate_2cond.sh` — must-match
+1. `bash alz/integration/tests/run_degenerate_2cond.sh` — must-match
    SigProb/FC slots remain bitwise-clean against native; `evaluation.PDS` and
    `SiK_score_*` drift remain owned by INC-28 (additive kinase channel; not a
    regression on the baseline `kldata = NULL` path).
-2. `bash code/integration/tests/run_duckdb_enumeration_equiv.sh` — DuckDB
+2. `bash alz/integration/tests/run_duckdb_enumeration_equiv.sh` — DuckDB
    enumeration with `cutoff_SigProb = 0` produces bitwise-identical pathway
    set to native `pathway_inference()`.
-3. `bash code/integration/tests/run_verify_phase2.sh` — SKIP (no Phase 1/2
+3. `bash alz/integration/tests/run_verify_phase2.sh` — SKIP (no Phase 1/2
    fixture committed; gracefully handled).
 4. `Rscript -e 'pkgload::load_all("../incytr"); testthat::test_dir("../incytr/tests/testthat")'`
    → 593/593 (no regression).

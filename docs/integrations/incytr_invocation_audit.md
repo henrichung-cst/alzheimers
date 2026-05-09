@@ -2,7 +2,7 @@
 
 This audit compares the native Incytr-style result schema visible in
 `sample.xlsx` with the current Alzheimer's factorial Incytr invocation under
-`code/integration/`.
+`alz/integration/`.
 
 ## Executive summary
 
@@ -43,7 +43,7 @@ current factorial invocation only partially does this.
 ### What goes in now
 
 The simplified baseline factorial runner,
-`code/integration/run_factorial_all_pairs.sh`, executes these adapters:
+`alz/integration/run_factorial_all_pairs.sh`, executes these adapters:
 
 1. `export_expression_factorial.py` for transcriptomics.
 2. `export_multiomics_evidence_factorial.py` for total proteome, S/T PTM, and
@@ -55,7 +55,7 @@ The simplified baseline factorial runner,
 Optional kinase augmentation is enabled with:
 
 ```bash
-ENABLE_KINASE_AUGMENTATION=1 bash code/integration/run_factorial_all_pairs.sh
+ENABLE_KINASE_AUGMENTATION=1 bash alz/integration/run_factorial_all_pairs.sh
 ```
 
 That optional path runs `export_kldata.py`, `export_kl_output_factorial.py`,
@@ -102,7 +102,7 @@ enrichment.
 ### How new data should be added
 
 New data should enter through Python adapters that write stable intermediate
-files under `code/integration/intermediates/factorial/`, not through direct
+files under `alz/integration/intermediates/factorial/`, not through direct
 joins inside the R scorer. The R layer should consume prepared, schema-checked
 tables.
 
@@ -184,7 +184,7 @@ compatibility mode that maps SEA-AD subclasses onto WMB classes.
 The production runner is:
 
 ```bash
-bash code/integration/run_factorial_all_pairs.sh
+bash alz/integration/run_factorial_all_pairs.sh
 ```
 
 That runner executes by default:
@@ -196,7 +196,7 @@ That runner executes by default:
 Kinase augmentation is opt-in:
 
 ```bash
-ENABLE_KINASE_AUGMENTATION=1 bash code/integration/run_factorial_all_pairs.sh
+ENABLE_KINASE_AUGMENTATION=1 bash alz/integration/run_factorial_all_pairs.sh
 ```
 
 The R wrapper writes wide receiver Parquet at:

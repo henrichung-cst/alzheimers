@@ -26,7 +26,7 @@ If a change spans two buckets (e.g., a function that both extends to factorial A
 |---|---|---|---|
 | Upstream HEAD at fork | `incytr` | `93b9881` (2025-10-12, changhanhe@gmail.com) | "Native Incytr." Ground truth for native behavior. |
 | Our incytr HEAD | `incytr` | current `main` | All package-level changes since fork. |
-| Our alzheimers HEAD | `alzheimers` | current `main` | All wrapper code under `code/integration/`. |
+| Our alzheimers HEAD | `alzheimers` | current `main` | All wrapper code under `alz/integration/`. |
 | Audit working branch | `alzheimers` | `incytr-audit` (to create) | Where audit-driven reverts and refactors land. |
 | Audit working branch | `incytr` | `incytr-audit` (to create) | Same, package side. |
 | Parking branch | `incytr` | `parking/incytr-discretionary` (to create) | Carries reverted-from-baseline discretionary code as cherry-picks; navigable via tags. |
@@ -100,7 +100,7 @@ Five sprints. Each ends with a signed-off ledger snapshot and a passing test gat
 
 Deliverables:
 1. Confirm upstream `93b9881` is still upstream HEAD; if not, advance the reference and note it in §3.
-2. Enumerate every commit `1e64f41 → HEAD` in `incytr` and every commit touching `code/integration/` in `alzheimers`. Produce a raw commit list (input to the ledger) at `docs/integrations/incytr_audit_commit_list.md`.
+2. Enumerate every commit `1e64f41 → HEAD` in `incytr` and every commit touching `alz/integration/` in `alzheimers`. Produce a raw commit list (input to the ledger) at `docs/integrations/incytr_audit_commit_list.md`.
 3. Create branches: `incytr-audit` (both repos), `parking/incytr-discretionary` (incytr only).
 4. Stand up the equivalence-test harness: a script that runs native Incytr at `93b9881` on `examples/5xad_data/` and saves golden output to `tests/golden/native_93b9881/`. Run once, commit golden artifacts.
 5. Stand up the corresponding wrapper-side runner: a degenerate two-condition invocation of the alzheimers factorial pipeline that emits a comparable artifact.
@@ -207,14 +207,14 @@ These need explicit verdicts even though they are A-bucket "necessary" extension
 ## 9. Out of scope
 
 - Re-running Incytr against the WMB-class taxonomy (currently mapped via `SEA_AD_SUBCLASSES`). Tracked separately; vocabulary choice is wrapper-side, not Incytr-side.
-- Changes to the bulk kinase pipeline (`code/kinase_attribution.py` etc.). The audit treats `unified_attribution.csv` and `mea_stoichiometry.csv` as input.
+- Changes to the bulk kinase pipeline (`alz/kinase_attribution.py` etc.). The audit treats `unified_attribution.csv` and `mea_stoichiometry.csv` as input.
 - Upstream contribution. If the audit identifies fixes that upstream Incytr should have, that's a follow-up — not blocking.
 
 ## 10. Status checklist
 
 - [x] Sprint 0: scaffolding _(2026-05-05; branches + golden harness + native/current goldens + pre-audit diff + ledger seeded — see `incytr_audit_pre_diff.md`)_
-- [x] Sprint 1: factorial extension (Section A) _(2026-05-05; 28 A-bucket signed off, 4 design decisions recorded, PDS drift attributed to INC-25 → Sprint 3, SiK_score drift attributed to INC-28 + co-suspect INC-13 → Sprint 5; degenerate 2-cond runner at `code/integration/tests/run_degenerate_2cond.sh`; 593/593 testthat passing)_
-- [x] Sprint 2: performance (Section B) _(2026-05-05; 9 B-bucket rows signed off, INC-37 split into perf + correctness (INC-37.b, fix-forward, no Sprint 3/4 re-route), DuckDB enumerator bitwise-equivalent to native `pathway_inference` with pre-prune cutoffs disabled, `verify_phase2.R` promoted to `code/integration/tests/run_verify_phase2.sh`; 593/593 testthat passing)_
+- [x] Sprint 1: factorial extension (Section A) _(2026-05-05; 28 A-bucket signed off, 4 design decisions recorded, PDS drift attributed to INC-25 → Sprint 3, SiK_score drift attributed to INC-28 + co-suspect INC-13 → Sprint 5; degenerate 2-cond runner at `alz/integration/tests/run_degenerate_2cond.sh`; 593/593 testthat passing)_
+- [x] Sprint 2: performance (Section B) _(2026-05-05; 9 B-bucket rows signed off, INC-37 split into perf + correctness (INC-37.b, fix-forward, no Sprint 3/4 re-route), DuckDB enumerator bitwise-equivalent to native `pathway_inference` with pre-prune cutoffs disabled, `verify_phase2.R` promoted to `alz/integration/tests/run_verify_phase2.sh`; 593/593 testthat passing)_
 - [x] Sprint 3: scoring formula changes (Section C, group 1) _(2026-05-05; INC-25 EM promiscuity weight reverted to default-off in package + env-gated in wrapper, parking-in-place per ENABLE_KINASE_AUGMENTATION precedent; ALZ-22 wrapper gene-admission divergence signed off as snRNA-seq config; INC-DESIGN-5 `logi()` k parameter audit confirmed no drift; Sprint 1 attribution amended — synthetic fixture has `em_degree=1` making INC-25 a no-op there, residual PDS drift now owned by Sprint 5 INC-28; 593/593 testthat passing)_
 - [x] Sprint 4: filtering and pathway universe (Section C, group 2) _(2026-05-05; 6 C-bucket filter rows resolved — ALZ-18.b DuckDB pre-prune kept-flagged with `DUCKDB_CUTOFF_SIGPROB` env-var opt-out (mathematically lossless for any reasonable top-K cut), ALZ-19 + ALZ-23 confirmed parked behind default-off `ENABLE_KINASE_AUGMENTATION`/`ENABLE_CELLTYPE_MAPPING`, INC-30/INC-30.b/ALZ-2 signed off as PTM scope expansion / default-inert filter; wrapper edit limited to 1 line in `run_incytr_factorial_all_pairs.R:86` plus env-var forwarding in `run_factorial_all_pairs.sh:85`; 593/593 testthat passing; DuckDB equivalence preserved on `cutoff_SigProb = 0` path)_
 - [x] Sprint 5: added analysis layers + native SiK reinstatement (Section C, group 3) _(2026-05-05; 9 C-bucket added-layer rows resolved — INC-13 N-condition kinase scoring signed off as legacy-collapse-preserved when `kldata=NULL`; INC-26 docs-only; INC-27 `Permutation_test(type=...)` additive with native default; INC-28 augmented kinase channel signed off as default-inert (drift attribution finalized: SiK_score_* ~0.18 + residual PDS ~0.089 are the expected signatures of the augmented channel on the synthetic golden, not regressions); INC-29 adapters not on default code path; ALZ-9/11/12 backbone permutations confirmed sidecar (q-values never gate native PDS); ALZ-20 external kinase support score confirmed sidecar (no λ-style PDS rerank exists — λ at `aggregate_factorial.py:499` is Storey's pi0 q-value parameter); INC-DESIGN-6 records that native SiK is *absent* from the factorial wrapper, not gated off, and defers the wiring to a follow-up PR (audit-plan's `ENABLE_KINASE_AUGMENTATION` flag does not exist in code — actual flag is `ENABLE_KINASE_IMPUTATION`); 593/593 testthat passing; doc-only sprint, no incytr or alzheimers code edits)_

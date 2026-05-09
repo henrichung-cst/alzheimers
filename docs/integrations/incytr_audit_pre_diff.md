@@ -118,7 +118,7 @@ Sprint 1 closed with the following outcomes against the implications listed abov
 
 1. **`sigprob`/`sc_FC`/`p_value`/`pr_FC`/`ps_FC`/`py_FC` bitwise match — confirmed and signed off.**
    The wrapper-side degenerate 2-condition runner at
-   `code/integration/tests/run_degenerate_2cond.sh` re-asserts this each run
+   `alz/integration/tests/run_degenerate_2cond.sh` re-asserts this each run
    and hard-fails on any drift in those slots. Used as the regression
    anchor for Sprints 2–5.
 
@@ -145,7 +145,7 @@ The four §7 open design decisions are recorded as `INC-DESIGN-1..4` in the
 ledger with `disposition = signed-off` and `verdict_date = 2026-05-05`.
 
 Sprint 1 introduced no code changes to the `incytr` package (read-only
-sprint). Wrapper-side artifact: `code/integration/tests/run_degenerate_2cond.sh`.
+sprint). Wrapper-side artifact: `alz/integration/tests/run_degenerate_2cond.sh`.
 Working note: `docs/integrations/working/sprint1_factorial_surface.md`.
 
 ## Sprint 2 verdict addendum (2026-05-05)
@@ -176,7 +176,7 @@ runners.
 
 2. **DuckDB enumeration (ALZ-18) bitwise-equivalent to native
    `pathway_inference()`.** Verified by
-   `code/integration/tests/run_duckdb_enumeration_equiv.sh` on the synthetic
+   `alz/integration/tests/run_duckdb_enumeration_equiv.sh` on the synthetic
    12-gene × 40-cell × 2-condition fixture with `cutoff_SigProb = 0` and
    `em_promiscuity_weight = FALSE`. The runner sorts both pathway sets and
    compares (Ligand, Receptor, EM, Target) tuples bitwise. Pre-prune cutoffs
@@ -186,9 +186,9 @@ runners.
 
 3. **Vectorized receiver scoring (ALZ-15) promoted to a one-command runner.**
    `verify_phase2.R` is now invoked via
-   `code/integration/tests/run_verify_phase2.sh` at `tol=1e-10`. The runner
+   `alz/integration/tests/run_verify_phase2.sh` at `tol=1e-10`. The runner
    gracefully SKIPs when Phase 1 per-pair CSVs and Phase 2 receiver Parquets
-   aren't both present (i.e., when `code/integration/intermediates/all_pairs/`
+   aren't both present (i.e., when `alz/integration/intermediates/all_pairs/`
    doesn't have a fully-run pipeline output); when they exist, mismatch is a
    hard failure.
 
@@ -200,8 +200,8 @@ runners.
 
 5. **No new package-level commits.** Sprint 2 was read-only for the `incytr`
    package, same as Sprint 1. All artifacts land in `alzheimers`:
-   `code/integration/tests/run_duckdb_enumeration_equiv.sh`,
-   `code/integration/tests/run_verify_phase2.sh`, ledger updates, and
+   `alz/integration/tests/run_duckdb_enumeration_equiv.sh`,
+   `alz/integration/tests/run_verify_phase2.sh`, ledger updates, and
    `docs/integrations/working/sprint2_perf_split.md`.
 
 ## Sprint 3 verdict addendum (2026-05-05)
@@ -212,7 +212,7 @@ that modify the SigProb / TPDS / PDS formulas relative to native Incytr.
 1. **INC-25 (`abde752` EM promiscuity weight) — reverted to default-off,
    parking-in-place.** Three package-side default flips (`em_promiscuity_weight = TRUE → FALSE` in `Cal_SigProb`, `Cal_SigProb_animal`,
    `run_factorial`) plus an env-var gate in
-   `code/integration/wrappers/run_incytr_factorial_all_pairs.R`
+   `alz/integration/wrappers/run_incytr_factorial_all_pairs.R`
    (`ENABLE_EM_PROMISCUITY_WEIGHT=1` to opt back in). Pattern matches
    the `ENABLE_KINASE_AUGMENTATION` precedent — code preserved behind
    a default-off flag rather than physically removed. No empirical or
@@ -255,7 +255,7 @@ that modify the SigProb / TPDS / PDS formulas relative to native Incytr.
    - Package edits: 3 default-flip lines plus `@param` docstring updates
      in `R/analysis.R` and `R/factorial.R`.
    - Wrapper edits: env-var gate around `em_w_vec` application in
-     `code/integration/wrappers/run_incytr_factorial_all_pairs.R`.
+     `alz/integration/wrappers/run_incytr_factorial_all_pairs.R`.
    - Working note: `docs/integrations/working/sprint3_scoring_audit.md`.
    - Verification: `run_degenerate_2cond.sh` (must-match slots clean),
      `run_duckdb_enumeration_equiv.sh` (still equivalent), 593/593
@@ -269,7 +269,7 @@ Six rows finalised; one wrapper file edited (1 line plus env-var forwarding).
 1. **`ALZ-18.b` (split from ALZ-18) — DuckDB pre-prune `cutoff_SigProb = 0.01`.**
    Native `Cal_SigProb` defaults `cutoff_SigProb = NULL` at
    `93b9881:R/analysis.R:606`. The wrapper's 0.01 pre-prune
-   (`code/integration/wrappers/duckdb_enumeration.R:67,150–163,294–295`,
+   (`alz/integration/wrappers/duckdb_enumeration.R:67,150–163,294–295`,
    centralised at `run_incytr_factorial_all_pairs.R:86`) was kept as a
    performance optimisation and gated behind a `DUCKDB_CUTOFF_SIGPROB` env
    var. Mathematical justification: pathways below 0.01 SigProb in BOTH
@@ -281,7 +281,7 @@ Six rows finalised; one wrapper file edited (1 line plus env-var forwarding).
 
 2. **`ALZ-19` kinase-imputed receiver expansion + `EXPR_IMPUTATION_FLOOR`.**
    Already shell-gated on `ENABLE_KINASE_AUGMENTATION=1` at
-   `code/integration/run_factorial_all_pairs.sh:70`. Confirmed by reading
+   `alz/integration/run_factorial_all_pairs.sh:70`. Confirmed by reading
    the wrapper that no `kinase_imputed_genes__*.csv` files exist on disk
    without the flag; `load_imputed_for_recv_factorial(recv)` returns NULL
    and the rescue block at `run_incytr_factorial_all_pairs.R:473` short-
@@ -308,7 +308,7 @@ Six rows finalised; one wrapper file edited (1 line plus env-var forwarding).
    when set).**
 
 5. **`ALZ-23` (new row, `ENABLE_CELLTYPE_MAPPING`).** Default branch in
-   `code/integration/adapters/export_multiomics_evidence_factorial.py:42`
+   `alz/integration/adapters/export_multiomics_evidence_factorial.py:42`
    returns identity mapping (`{ct: ct for ct in cell_types}`,
    strategy = `"exact_or_global"`); WMB classes are passed through
    unchanged. The legacy SEA-AD-to-WMB compatibility map is loaded only
@@ -316,10 +316,10 @@ Six rows finalised; one wrapper file edited (1 line plus env-var forwarding).
    ENABLE_CELLTYPE_MAPPING).** No code change.
 
 6. **Sprint 4 deliverables.**
-   - Wrapper edits: 1 line in `code/integration/wrappers/run_incytr_factorial_all_pairs.R:86`
+   - Wrapper edits: 1 line in `alz/integration/wrappers/run_incytr_factorial_all_pairs.R:86`
      (replaces hard-coded `cutoff_SigProb <- 0.01` with
      `Sys.getenv("DUCKDB_CUTOFF_SIGPROB", "0.01")`); env-var forwarding
-     in `code/integration/run_factorial_all_pairs.sh:85` for
+     in `alz/integration/run_factorial_all_pairs.sh:85` for
      `ENABLE_EM_PROMISCUITY_WEIGHT`, `ENABLE_CELLTYPE_MAPPING`, and
      `DUCKDB_CUTOFF_SIGPROB`, plus the script-header doc block.
    - No `incytr` package edits.

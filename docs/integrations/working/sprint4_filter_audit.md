@@ -9,9 +9,9 @@ and `ENABLE_EM_PROMISCUITY_WEIGHT` precedents).
 
 ### 1. DuckDB pre-prune `cutoff_SigProb = 0.01` (`ALZ-18.b`, split from `ALZ-18`) — KEEP-FLAGGED
 
-`code/integration/wrappers/duckdb_enumeration.R:67, 150–163, 294–295` and
+`alz/integration/wrappers/duckdb_enumeration.R:67, 150–163, 294–295` and
 the centralised assignment at
-`code/integration/wrappers/run_incytr_factorial_all_pairs.R:86` apply a
+`alz/integration/wrappers/run_incytr_factorial_all_pairs.R:86` apply a
 SigProb pre-prune at 0.01: a pathway is dropped if its 3-edge Hill product
 < 0.01 in *both* conditions. Native Incytr default is `cutoff_SigProb = NULL`
 (no pre-prune) — verified at
@@ -42,7 +42,7 @@ native `pathway_inference()`, so the opt-out is verified live on every run.
 
 ### 2. `ALZ-19` kinase-imputed receiver expansion + `EXPR_IMPUTATION_FLOOR` — SIGN OFF
 
-`code/integration/run_factorial_all_pairs.sh:70` short-circuits the entire
+`alz/integration/run_factorial_all_pairs.sh:70` short-circuits the entire
 `export_kinase_imputed_genes_factorial.py` step when
 `ENABLE_KINASE_AUGMENTATION != 1`, so no `kinase_imputed_genes__*.csv` files
 exist on disk by default. Inside the wrapper,
@@ -65,7 +65,7 @@ isolation.
 
 Native Incytr has no `Ack_FC`, `KGG_FC`, `Rme1_FC`, or pY tracks. INC-30
 introduces these slots in `R/Incytr_class.R` and `ALZ-2` adds the bulk-side
-parallel under `code/data_ingest.py` and integration adapters.
+parallel under `alz/data_ingest.py` and integration adapters.
 
 **Verdict: signed-off as scope expansion.** The new slots are additive: they
 produce additional output columns parallel to the existing serine/threonine
@@ -93,7 +93,7 @@ all omics slots when set).**
 
 ### 5. `ALZ-23` `ENABLE_CELLTYPE_MAPPING` (WMB ↔ SEA-AD remap) — SIGN OFF
 
-`code/integration/adapters/export_multiomics_evidence_factorial.py:42` short-
+`alz/integration/adapters/export_multiomics_evidence_factorial.py:42` short-
 circuits to identity mapping (`{ct: ct for ct in cell_types}`,
 strategy = `"exact_or_global"`) when `ENABLE_CELLTYPE_MAPPING != "1"`. The
 default branch (no remapping) emits omics columns keyed on the WMB-class
@@ -105,14 +105,14 @@ through `run_factorial_all_pairs.sh:85`.
 
 ## Verification gate (run order)
 
-1. `bash code/integration/tests/run_degenerate_2cond.sh` → must-match slots
+1. `bash alz/integration/tests/run_degenerate_2cond.sh` → must-match slots
    bitwise-clean against native; PTM "data not found … skipped" notes confirm
    INC-30/ALZ-2 are inert when PTM data is absent.
-2. `bash code/integration/tests/run_duckdb_enumeration_equiv.sh` → DuckDB
+2. `bash alz/integration/tests/run_duckdb_enumeration_equiv.sh` → DuckDB
    enumeration with `cutoff_SigProb = 0` produces bitwise-identical pathway
    set to native `pathway_inference()`, confirming the
    `DUCKDB_CUTOFF_SIGPROB=0` opt-out is genuine native-equivalent.
-3. `bash code/integration/tests/run_verify_phase2.sh` → SKIP (no Phase 1/2
+3. `bash alz/integration/tests/run_verify_phase2.sh` → SKIP (no Phase 1/2
    fixture committed; gracefully handled).
 4. `Rscript -e 'pkgload::load_all("../incytr"); testthat::test_dir("../incytr/tests/testthat")'`
    → 593/593 (no regression).

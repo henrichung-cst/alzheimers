@@ -16,7 +16,7 @@ y = A b + noise
 
 This is a standard linear inverse problem. Its solvability depends on the information content of **A** — how much independent compositional variation exists across the 24 groups.
 
-All code for this analysis is in `code/supplementary/deconvolution_infeasibility.py`. Figures are in `outputs/reports/deconvolution_infeasibility/`.
+All code for this analysis is in `alz/supplementary/deconvolution_infeasibility.py`. Figures are in `outputs/reports/deconvolution_infeasibility/`.
 
 ## 1. Characterizing the Composition Matrix
 
@@ -146,7 +146,7 @@ For the design logic behind the pivot away from deconvolution, see [`analysis_ra
 ## Reproducibility
 
 ```bash
-python code/supplementary/deconvolution_infeasibility.py --run
+python alz/supplementary/deconvolution_infeasibility.py --run
 ```
 
 All figures are generated from the observed composition matrix (`A_obs_fractions.tsv`) and synthetic data with fixed random seed (42). No external data beyond the composition matrix is required.

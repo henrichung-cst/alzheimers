@@ -1,7 +1,7 @@
 # Unified Viewer — Writing Style Guide
 
 Reference for all panel notes, drawer content, tooltips, and annotations in
-`code/build_unified_viewer.py`. Apply when writing new copy or revising existing text.
+`alz/build_unified_viewer.py`. Apply when writing new copy or revising existing text.
 
 ## Audience floor
 
@@ -112,7 +112,7 @@ sees on the figure.
 ## Six-section structure for figure descriptions
 
 Drawer copy for any figure tab follows this fixed order. The renderer
-in `code/build_unified_viewer.py:renderHowToDrawer` produces these
+in `alz/build_unified_viewer.py:renderHowToDrawer` produces these
 section headers automatically when a `TAB_GUIDE` entry uses the
 `{ preamble, method, shows, howTo, conclusions, toggles }` schema.
 

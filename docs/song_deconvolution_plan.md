@@ -41,7 +41,7 @@ decomposition output:
 24 MY Glut, 25 Pineal Glut, 26 P GABA, 27 MY GABA, 28 CB GABA
 ```
 
-The live attribution program (`code/kinase_attribution.py`) operates on the
+The live attribution program (`alz/kinase_attribution.py`) operates on the
 same 34-class spine; the deconvolution branch and the live program share a
 single cell-type vocabulary end-to-end.
 
@@ -58,13 +58,13 @@ single cell-type vocabulary end-to-end.
 
 snRNA cross-check oracle: `outputs/reports/snrna_integration/song_concordance.csv`
 and `song_expression_specificity.csv`, both produced by
-`code/snrna_integration.py` on the same WMB-class axis.
+`alz/snrna_integration.py` on the same WMB-class axis.
 
 ## 4. Stage-by-stage pipeline
 
 ### Stage 0 — CTM-native proportional decomposition
 
-`code/deconvolution/build_wmb_decomposition.py`. For each gene, group, and
+`alz/deconvolution/build_wmb_decomposition.py`. For each gene, group, and
 WMB class:
 
 ```

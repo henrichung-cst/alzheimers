@@ -106,7 +106,7 @@ When user clicks a kinase row, if no contrast is uniquely determined by the filt
 
 **Phase 5 — Verify**
 - Audit kinases AURA, AURB, plus 3 random others against raw `unified_attribution_full.csv` to confirm pill ↔ verdict ↔ cell-types count agree under every filter state
-- Run `pixi run live` end-to-end is NOT required (viewer-only change); rebuild viewer with `python code/build_unified_viewer.py`
+- Run `pixi run live` end-to-end is NOT required (viewer-only change); rebuild viewer with `python alz/build_unified_viewer.py`
 
 ## Out of scope
 

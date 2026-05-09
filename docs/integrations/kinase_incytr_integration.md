@@ -6,7 +6,7 @@ Source of truth for the integration layer that connects the live kinase-attribut
 
 Bridge bulk kinase activity (MEA on stoichiometry β values across 9 disease×timepoint contrasts) with Incytr's snRNA-seq–based intercellular pathway inference across 462 sender-receiver pairs (22 SEA-AD subclasses × 21, excluding self-pairs).
 
-> **Migration note (2026-04-30):** the live kinase pipeline now reports cell types at the **34 WMB class** level (see `docs/foundation/concordance.md`). The Incytr integration here continues to operate against the prior **22-SEA-AD-subclass** vocabulary because the Incytr per-pair output directories were enumerated under those names. The integration adapters (`code/integration/adapters/`) read `config.SEA_AD_SUBCLASSES` and `config.SONG_SUBCLASS_MAP` (kept transitional in `config.py` for this purpose) and consume the existing `unified_attribution.csv` by re-collapsing WMB classes back to SEA-AD-subclass names where applicable. Re-running Incytr against the WMB-class taxonomy is a separate scoped follow-up.
+> **Migration note (2026-04-30):** the live kinase pipeline now reports cell types at the **34 WMB class** level (see `docs/foundation/concordance.md`). The Incytr integration here continues to operate against the prior **22-SEA-AD-subclass** vocabulary because the Incytr per-pair output directories were enumerated under those names. The integration adapters (`alz/integration/adapters/`) read `config.SEA_AD_SUBCLASSES` and `config.SONG_SUBCLASS_MAP` (kept transitional in `config.py` for this purpose) and consume the existing `unified_attribution.csv` by re-collapsing WMB classes back to SEA-AD-subclass names where applicable. Re-running Incytr against the WMB-class taxonomy is a separate scoped follow-up.
 
 - **Cell types:** 22 SEA-AD-mapped subclasses with snRNA-seq coverage (Incytr-side; the kinase pipeline reports at WMB class level).
 - **Pairs:** 462 sender-receiver combinations.
@@ -30,7 +30,7 @@ data/.../kldata_pspy.csv        (static kinase-substrate reference)
 
             │  Python adapters (alzheimers env)
             ▼
-code/integration/intermediates/[factorial/]
+alz/integration/intermediates/[factorial/]
    expression_matrix.mtx  expression_{genes,barcodes,metadata}.csv
    kl_output.csv          kldata.csv
    phospho_{WT,App}.csv   kinase_imputed_genes__{receiver}[__{contrast}].csv
@@ -39,12 +39,12 @@ code/integration/intermediates/[factorial/]
 
             │  R wrappers (incytr env)
             ▼
-code/integration/intermediates/[factorial/]all_pairs/
+alz/integration/intermediates/[factorial/]all_pairs/
    recv_{receiver}.parquet      (22 files; columns depend on mode)
 
             │  Python adapters (alzheimers env)
             ▼
-code/integration/intermediates/[factorial/]all_pairs/
+alz/integration/intermediates/[factorial/]all_pairs/
    {sender}__{receiver}/kinase_support_scores.csv
    {sender}__{receiver}/adjusted_rankings.csv
    {sender}__{receiver}/reranking_summary.json
@@ -63,7 +63,7 @@ outputs/incytr/
 
             │  aggregate_{cross_pair,factorial}.py
             ▼
-code/integration/intermediates/[factorial/]all_pairs/aggregation/
+alz/integration/intermediates/[factorial/]all_pairs/aggregation/
    backbone_recurrence[_by_contrast].csv
    hub_matrix[_by_contrast].csv
    target_convergence[_by_contrast].csv
@@ -100,7 +100,7 @@ The factorial mode is the primary production path. Single-contrast mode (`App_4m
 
 ## 4. Component inventory
 
-### Python adapters (`code/integration/adapters/`)
+### Python adapters (`alz/integration/adapters/`)
 
 | File | Role |
 |---|---|
@@ -120,7 +120,7 @@ The factorial mode is the primary production path. Single-contrast mode (`App_4m
 | `aggregate_factorial.py` | Factorial cross-pair aggregation (per-contrast) + `--permutations` |
 | `examine_factorial.py` | Final interpretive stage: additivity, temporal trajectories, cell-type centrality, kinase concordance, publication figures |
 
-### R wrappers (`code/integration/wrappers/`)
+### R wrappers (`alz/integration/wrappers/`)
 
 | File | Role |
 |---|---|
@@ -133,7 +133,7 @@ The factorial mode is the primary production path. Single-contrast mode (`App_4m
 | `bootstrap_sensitivity.R` | Gated by `RUN_BOOTSTRAP=1`: L5 IT bootstrap (500 iter) and 20% detection-threshold comparison |
 | `verify_phase2.R` | Manual regression: confirms vectorized scoring matches pair-centric Incytr S4 output. Run after edits to `receiver_scoring.R` |
 
-### Shell runners (`code/integration/`)
+### Shell runners (`alz/integration/`)
 
 | File | Role |
 |---|---|
@@ -276,7 +276,7 @@ Kinase abbreviation → human gene symbol uses MyGene.info, cached at `SONG_ANAL
 | `PHOSPHO_FDR_GATE` | `0.25` | Python | MEA FDR gate for kinase support |
 | `DISCORDANCE_RANK_QUARTILE` | `0.25` | Python | |
 | `EXPRESSION_DETECTION_THRESHOLD` | `0.5` | **R env var `EXPR_DETECTION_THRESHOLD`** | Native `Find_highexp_gene` 50%-percentile parity (ALZ-22 Path 1, 2026-05-07). Set to `0.10` to recover the snRNA-tuned rule. |
-| Kinase pack (kinase-imputed expansion + support score) | off | Shell env var `INCYTR_LAYER_KINASE_PACK` | See `code/integration/incytr_runtime.sh` registry |
+| Kinase pack (kinase-imputed expansion + support score) | off | Shell env var `INCYTR_LAYER_KINASE_PACK` | See `alz/integration/incytr_runtime.sh` registry |
 | `KINASE_IMPUTATION_FDR` | `0.10` | Python | Imputation gate, tighter than `PHOSPHO_FDR_GATE` |
 | `KINASE_IMPUTATION_ATTRIBUTION_TAU` | median `combined_score` | Python | Per-receiver cell-type gate |
 | `EXPR_IMPUTATION_FLOOR` | `0.05` | R | Minimum `det_rates` for imputed survivors |
@@ -290,14 +290,14 @@ Kinase abbreviation → human gene symbol uses MyGene.info, cached at `SONG_ANAL
 
 ## 7. Running the integration
 
-Prerequisites: the bulk pipeline (`code/runners/main/run_live_pipeline.sh`) has been run; `mea_stoichiometry.csv` and `unified_attribution.csv` exist.
+Prerequisites: the bulk pipeline (`alz/runners/main/run_live_pipeline.sh`) has been run; `mea_stoichiometry.csv` and `unified_attribution.csv` exist.
 
 ### Factorial all-pairs (primary)
 
 ```bash
-bash code/integration/run_factorial_all_pairs.sh
-bash code/integration/run_factorial_all_pairs.sh --skip-adapters  # checkpoint resume
-PAIR_FILTER="Microglia-PVM:L5 IT" bash code/integration/run_factorial_all_pairs.sh
+bash alz/integration/run_factorial_all_pairs.sh
+bash alz/integration/run_factorial_all_pairs.sh --skip-adapters  # checkpoint resume
+PAIR_FILTER="Microglia-PVM:L5 IT" bash alz/integration/run_factorial_all_pairs.sh
 ```
 
 Stages executed:
@@ -312,8 +312,8 @@ Stages executed:
 ### Single-contrast all-pairs (App_4mo only)
 
 ```bash
-bash code/integration/run_all_pairs.sh
-bash code/integration/run_all_pairs.sh --skip-adapters
+bash alz/integration/run_all_pairs.sh
+bash alz/integration/run_all_pairs.sh --skip-adapters
 ```
 
 Same stages with `_all_pairs` adapter/wrapper variants; aggregation via `aggregate_cross_pair.py`; permutations via `--permutations` flag.
@@ -321,7 +321,7 @@ Same stages with `_all_pairs` adapter/wrapper variants; aggregation via `aggrega
 ### Single-pair reference (debug)
 
 ```bash
-bash code/integration/run_phase1.sh
+bash alz/integration/run_phase1.sh
 ```
 
 Produces `incytr_object.rds` + CSVs. Output schema is not compatible with the all-pairs Parquet path.
@@ -341,13 +341,13 @@ Produces `incytr_object.rds` + CSVs. Output schema is not compatible with the al
 | `EXPR_DETECTION_THRESHOLD` | `0.5` | R wrappers | Expression detection threshold (native `Find_highexp_gene` parity, ALZ-22 Path 1) |
 | `DUCKDB_TEMP_DIR` | `~/.cache/duckdb` | DuckDB | Spill directory (set by `.envrc`) |
 
-The `INCYTR_*` defaults live in a single registry: `code/integration/incytr_runtime.sh` (shell) mirrored by `code/integration/wrappers/incytr_runtime.R` (R). See `docs/integrations/incytr_layer_inventory.md`.
+The `INCYTR_*` defaults live in a single registry: `alz/integration/incytr_runtime.sh` (shell) mirrored by `alz/integration/wrappers/incytr_runtime.R` (R). See `docs/integrations/incytr_layer_inventory.md`.
 
 ## 8. Outputs
 
 ### Factorial all-pairs (primary)
 
-Under `code/integration/intermediates/factorial/all_pairs/`:
+Under `alz/integration/intermediates/factorial/all_pairs/`:
 
 - `recv_{receiver}.parquet` (22 files) — columns: `sender, Ligand, Receptor, EM, Target, Path, pathway_evidence, imputed_nodes, n_animals, df_resid`, plus per-contrast `TPDS_{contrast}`, `SE_{contrast}`, `pvalue_{contrast}`, `sik_kinase_boost_{contrast}` (= `PDS - TPDS`, structural-SiK lift) for each of 9 contrasts.
 - `pair_summary.csv` — 462-row summary (pathway counts, timing, status).

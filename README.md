@@ -54,11 +54,11 @@ Important guardrails:
 ```text
 alzheimers/
 ├── archive/
-│   ├── code/                       # Archived Python/R code (SAP, enrichment, side analyses)
+│   ├── alz/                       # Archived Python/R code (SAP, enrichment, side analyses)
 │   ├── deconv/                     # Archived benchmark and transition workspace
 │   ├── runners/                    # Archived validation and side-workflow runners
 │   └── sap_docs/                   # Archived SAP design, atlas, and transition notes
-├── code/
+├── alz/
 │   ├── runners/
 │   │   ├── main/                   # Main pipeline stage runners
 │   │   ├── supporting/             # Supporting setup runners
@@ -112,8 +112,8 @@ The Allen Brain Atlas and SEA-AD reference data under `data/external/` is zstd-c
 **Manual control:**
 
 ```bash
-bash code/runners/supporting/compress_atlas_cache.sh [tier1|tier2|tier3|WMB|sea_ad|subset]
-bash code/runners/supporting/decompress_atlas_cache.sh [WMB|subset|sea_ad|Aging]
+bash alz/runners/supporting/compress_atlas_cache.sh [tier1|tier2|tier3|WMB|sea_ad|subset]
+bash alz/runners/supporting/decompress_atlas_cache.sh [WMB|subset|sea_ad|Aging]
 ```
 
 ## Environment Setup
@@ -127,7 +127,7 @@ mamba activate alzheimers
 
 The `alzheimers` environment requires Python 3.11 (kinase-library compatibility) and includes `kinase-library`, `anndata`, `gseapy`, `scikit-learn`, `matplotlib`, `seaborn`, `scipy`, `requests`, `natsort`.
 
-The Incytr integration is mid-rewrite (see `docs/incytr_remediation_plan.md`); the legacy source has been moved to `~/Projects/work/incytr_integration_archive/`. The Phase 1 stubs in `code/integration/` still require an R environment with `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`.
+The Incytr integration is mid-rewrite (see `docs/incytr_remediation_plan.md`); the legacy source has been moved to `~/Projects/work/incytr_integration_archive/`. The Phase 1 stubs in `alz/integration/` still require an R environment with `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`.
 
 If you need the study data mounts:
 
@@ -142,8 +142,8 @@ All scripts run from the repo root. See [`docs/foundation/live_pipeline_contract
 ### Bulk Pipeline
 
 ```bash
-bash code/runners/main/run_live_pipeline.sh     # all three stages in order
-bash code/runners/main/run_dual_analysis.sh     # males-only (primary) + full-cohort (sensitivity)
+bash alz/runners/main/run_live_pipeline.sh     # all three stages in order
+bash alz/runners/main/run_dual_analysis.sh     # males-only (primary) + full-cohort (sensitivity)
 ```
 
 Individual stages (`run_data_ingest.sh`, `run_kinase_attribution.sh`, `run_attribution_recovery.sh`) and module-level flags (`--run`, `--summary`, per-step flags) are documented in `CLAUDE.md`.
@@ -155,21 +155,21 @@ The `ANALYSIS_MODE` environment variable controls sample filtering (default: `ma
 Run these before the bulk pipeline if their outputs don't exist:
 
 ```bash
-bash code/runners/supporting/run_atlas_reference.sh   # SEA-AD + WMB + Aging Mouse
-bash code/runners/supporting/run_wmb_expression.sh     # WMB expression export
-bash code/runners/supporting/run_snrna_integration.sh  # Song within-cohort snRNA-seq
+bash alz/runners/supporting/run_atlas_reference.sh   # SEA-AD + WMB + Aging Mouse
+bash alz/runners/supporting/run_wmb_expression.sh     # WMB expression export
+bash alz/runners/supporting/run_snrna_integration.sh  # Song within-cohort snRNA-seq
 ```
 
 ### Incytr Integration Pipeline
 
-Mid-rewrite. The legacy 462-pair × 9-contrast runner has been relocated to `~/Projects/work/incytr_integration_archive/run_factorial_all_pairs.sh`; in-tree only the Phase 1 stubs remain. See [`docs/incytr_remediation_plan.md`](docs/incytr_remediation_plan.md) for the target architecture and [`code/integration/MOVED.txt`](code/integration/MOVED.txt) for the move manifest.
+Mid-rewrite. The legacy 462-pair × 9-contrast runner has been relocated to `~/Projects/work/incytr_integration_archive/run_factorial_all_pairs.sh`; in-tree only the Phase 1 stubs remain. See [`docs/incytr_remediation_plan.md`](docs/incytr_remediation_plan.md) for the target architecture and [`alz/integration/MOVED.txt`](alz/integration/MOVED.txt) for the move manifest.
 
 ### Supplementary Diagnostics
 
 Reviewer-response analyses that validate pipeline choices. Run after the bulk pipeline:
 
 ```bash
-bash code/runners/supplementary/run_reviewer_diagnostics.sh
+bash alz/runners/supplementary/run_reviewer_diagnostics.sh
 ```
 
 ## Key Outputs
@@ -187,7 +187,7 @@ bash code/runners/supplementary/run_reviewer_diagnostics.sh
 
 ### Incytr Integration
 
-Outputs are not currently regenerable in-tree. The legacy `code/integration/intermediates/` is gitignored and orphaned by the rewrite; the new architecture targets `outputs/reports/incytr_factorial/` (not yet wired up).
+Outputs are not currently regenerable in-tree. The legacy `alz/integration/intermediates/` is gitignored and orphaned by the rewrite; the new architecture targets `outputs/reports/incytr_factorial/` (not yet wired up).
 
 ## Data Surfaces
 

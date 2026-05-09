@@ -2,7 +2,7 @@
 
 Status: design handoff brief.
 Audience: frontend/product designer reviewing the kinase tab UX.
-Implementation surface: `code/build_unified_viewer.py`, generated to `outputs/reports/unified_viewer/index.html`.
+Implementation surface: `alz/build_unified_viewer.py`, generated to `outputs/reports/unified_viewer/index.html`.
 
 ## Intent
 

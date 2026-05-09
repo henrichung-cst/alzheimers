@@ -48,7 +48,7 @@ Reference upstream pin: `93b9881` (tree-identical to current `upstream/master` H
 - [ ] `90c60e8` 2026-03-05 12:51:04 -0600 — Reorganize project directory structure _bucket: TBD_
 - [ ] `6eeeac5` 2026-03-05 12:28:23 -0600 — Update documentation for development ... _bucket: TBD_
 
-## `alzheimers` repo — `code/integration/` history (21 commits)
+## `alzheimers` repo — `alz/integration/` history (21 commits)
 
 - [ ] `8ca0a64` 2026-05-04 13:22:24 -0400 — checkpoint: subclass-attribution branch bef... _bucket: TBD_
 - [ ] `0adcca8` 2026-04-28 17:49:34 -0400 — feat: add tyrosine phospho (pY) track paral... _bucket: TBD_

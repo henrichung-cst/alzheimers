@@ -101,9 +101,9 @@ diverse), and Tyr-kinase substrate recognition relies on features
 (SH2 docking, +3 hydrophobic) more correlated across families than the
 flanking-residue signatures Ser/Thr kinases use.
 
-Implementation: `code/config.py:PHOSPHO_TRACKS[track]["kl_thresh"]`.
-Read by `code/kinase_attribution.py` (`step_enrich`) and
-`code/deconvolution/mea_per_celltype.py`. The legacy `config.KL_THRESH`
+Implementation: `alz/config.py:PHOSPHO_TRACKS[track]["kl_thresh"]`.
+Read by `alz/kinase_attribution.py` (`step_enrich`) and
+`alz/deconvolution/mea_per_celltype.py`. The legacy `config.KL_THRESH`
 constant is retained for backwards-compat but should not be added to
 new code paths.
 

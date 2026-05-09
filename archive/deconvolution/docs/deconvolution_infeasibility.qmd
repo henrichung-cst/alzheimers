@@ -40,7 +40,7 @@ This looks like an ordinary linear regression problem. We have 24 observations a
 
 If all 24 groups have nearly identical cell-type compositions, then $\mathbf{A}$ does not give us enough leverage to separate the contributions of different cell types --- no matter how sophisticated our regression method is. This is analogous to trying to estimate the effect of two correlated predictors in a regression: if they always move together, you cannot tell their effects apart.
 
-All code for this analysis is in `code/supplementary/deconvolution_infeasibility.py`. Figures are in `outputs/reports/deconvolution_infeasibility/`.
+All code for this analysis is in `alz/supplementary/deconvolution_infeasibility.py`. Figures are in `outputs/reports/deconvolution_infeasibility/`.
 
 ## How Much Does Composition Vary? {#sec-composition}
 
@@ -320,7 +320,7 @@ This analysis provides the unifying explanation: the composition geometry is the
 All results can be regenerated from the composition matrix alone:
 
 ```bash
-python code/supplementary/deconvolution_infeasibility.py --run
+python alz/supplementary/deconvolution_infeasibility.py --run
 ```
 
 The analysis uses a fixed random seed (42) and requires no external data beyond `A_obs_fractions.tsv`.

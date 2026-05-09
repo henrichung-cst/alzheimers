@@ -25,7 +25,7 @@ These materials should not be treated as if they have the same status. This poli
 | `supplementary` | Reviewer-response diagnostics that validate pipeline choices without modifying the main pipeline (read from canonical CSV outputs; no imports from main modules) |
 | `archived` | Historical, compatibility, validation, or side-workflow code not needed for the current mainline conclusions |
 
-Generated caches (`code/__pycache__/`, etc.) are excluded from this index.
+Generated caches (`alz/__pycache__/`, etc.) are excluded from this index.
 
 ## Main
 
@@ -43,14 +43,14 @@ Generated caches (`code/__pycache__/`, etc.) are excluded from this index.
 
 | Path | Reason |
 |:---|:---|
-| `code/data_ingest.py` | Live Stage 1 total-proteome ingestion and characterization |
-| `code/kinase_attribution.py` | Live stoichiometry, MEA enrichment, and unified cell-type attribution |
-| `code/attribution_recovery.py` | Live final attribution-table assembly |
-| `code/runners/main/run_data_ingest.sh` | Operational wrapper for data ingestion |
-| `code/runners/main/run_kinase_attribution.sh` | Operational wrapper for kinase attribution |
-| `code/runners/main/run_attribution_recovery.sh` | Operational wrapper for attribution recovery |
-| `code/runners/main/run_live_pipeline.sh` | Bundled end-to-end live runner |
-| `code/runners/main/run_dual_analysis.sh` | Dual-track (males-only primary + full-cohort sensitivity) |
+| `alz/data_ingest.py` | Live Stage 1 total-proteome ingestion and characterization |
+| `alz/kinase_attribution.py` | Live stoichiometry, MEA enrichment, and unified cell-type attribution |
+| `alz/attribution_recovery.py` | Live final attribution-table assembly |
+| `alz/runners/main/run_data_ingest.sh` | Operational wrapper for data ingestion |
+| `alz/runners/main/run_kinase_attribution.sh` | Operational wrapper for kinase attribution |
+| `alz/runners/main/run_attribution_recovery.sh` | Operational wrapper for attribution recovery |
+| `alz/runners/main/run_live_pipeline.sh` | Bundled end-to-end live runner |
+| `alz/runners/main/run_dual_analysis.sh` | Dual-track (males-only primary + full-cohort sensitivity) |
 
 ### Outputs that must remain reproducible
 
@@ -72,28 +72,28 @@ Generated caches (`code/__pycache__/`, etc.) are excluded from this index.
 
 | Path | Reason |
 |:---|:---|
-| `code/config.py` | Shared configuration (still structurally mixed with legacy settings) |
-| `code/atlas_reference.py` | External-reference acquisition for SEA-AD and WMB |
-| `code/wmb_expression.py` | WMB expression export (required for unified attribution) |
-| `code/snrna_integration.py` | Song snRNA-seq pseudobulk, specificity, and concordance |
-| `code/plot_attribution_bubbles.py` | Attribution visualization |
-| `code/build_unified_viewer.py` | Kinase + pathway HTML viewer (cross-entity) |
-| `code/map_kinases_to_genes.py` | Shared kinase→gene mapping utility |
-| `code/lucie_5xfad_manifest.py` | Lucie 5xFAD integration/provenance utility |
-| `code/runners/supporting/run_atlas_reference.sh` | Atlas/reference setup |
-| `code/runners/supporting/run_wmb_expression.sh` | WMB expression export |
-| `code/runners/supporting/run_snrna_integration.sh` | snRNA-seq integration |
-| `code/integration/**` | Kinase ↔ Incytr integration (Python adapters + R wrappers; see `docs/integrations/kinase_incytr_integration.md`) |
+| `alz/config.py` | Shared configuration (still structurally mixed with legacy settings) |
+| `alz/atlas_reference.py` | External-reference acquisition for SEA-AD and WMB |
+| `alz/wmb_expression.py` | WMB expression export (required for unified attribution) |
+| `alz/snrna_integration.py` | Song snRNA-seq pseudobulk, specificity, and concordance |
+| `alz/plot_attribution_bubbles.py` | Attribution visualization |
+| `alz/build_unified_viewer.py` | Kinase + pathway HTML viewer (cross-entity) |
+| `alz/map_kinases_to_genes.py` | Shared kinase→gene mapping utility |
+| `alz/lucie_5xfad_manifest.py` | Lucie 5xFAD integration/provenance utility |
+| `alz/runners/supporting/run_atlas_reference.sh` | Atlas/reference setup |
+| `alz/runners/supporting/run_wmb_expression.sh` | WMB expression export |
+| `alz/runners/supporting/run_snrna_integration.sh` | snRNA-seq integration |
+| `alz/integration/**` | Kinase ↔ Incytr integration (Python adapters + R wrappers; see `docs/integrations/kinase_incytr_integration.md`) |
 
 ## Supplementary
 
 | Path | Reason |
 |:---|:---|
-| `code/supplementary/fdr_stringent.py` | Q4: MEA at FDR < 0.10 vs < 0.25 |
-| `code/supplementary/threshold_sensitivity.py` | Q1: Confidence tier threshold sweep |
-| `code/supplementary/aggregation_robustness.py` | Q2: Supertype-to-subclass aggregation comparison |
-| `code/supplementary/parent_protein_qc.py` | Q5: Parent protein QC for activity-driven kinases |
-| `code/runners/supplementary/run_reviewer_diagnostics.sh` | Bundled reviewer diagnostics runner |
+| `alz/supplementary/fdr_stringent.py` | Q4: MEA at FDR < 0.10 vs < 0.25 |
+| `alz/supplementary/threshold_sensitivity.py` | Q1: Confidence tier threshold sweep |
+| `alz/supplementary/aggregation_robustness.py` | Q2: Supertype-to-subclass aggregation comparison |
+| `alz/supplementary/parent_protein_qc.py` | Q5: Parent protein QC for activity-driven kinases |
+| `alz/runners/supplementary/run_reviewer_diagnostics.sh` | Bundled reviewer diagnostics runner |
 
 ## Archived
 

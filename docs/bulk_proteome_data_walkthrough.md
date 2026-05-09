@@ -376,7 +376,7 @@ Apply that factor to the raw animal value:
 ```
 
 The normalized proteome matrix is used in memory by
-`code/kinase_attribution.py`. It is not written as its own CSV in the current
+`alz/kinase_attribution.py`. It is not written as its own CSV in the current
 pipeline. We can still verify it indirectly because it is exactly the
 denominator used to compute stoichiometry in the next step.
 

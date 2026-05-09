@@ -11,7 +11,7 @@ Three distinct evidence channels, all keyed by kinase:
 |---|---|---|---|
 | (1) Bulk MEA | `kinase_attribution.py` → `mea_stoichiometry.csv` | kinase × contrast | Is this kinase modulated overall in disease? |
 | (2) Bulk-MEA reference attribution | `kinase_attribution.py --attribute` → `unified_attribution.csv` | kinase × cell type × contrast (inferred) | Given (1) fires, which cell types likely host it, based on WMB specificity + SEA-AD LFC + Song LFC? |
-| (3) Per-cell-type MEA | `code/deconvolution/run_per_animal.py` → `kinase_enrichment_46clusters.csv` + `kinase_enrichment_wmb_rollup.csv` | kinase × cell type × contrast (measured via proportion proxy) | Is this kinase modulated within this cell type? |
+| (3) Per-cell-type MEA | `alz/deconvolution/run_per_animal.py` → `kinase_enrichment_46clusters.csv` + `kinase_enrichment_wmb_rollup.csv` | kinase × cell type × contrast (measured via proportion proxy) | Is this kinase modulated within this cell type? |
 
 Channels (2) and (3) both carry a cell-type axis but reach it by different routes:
 - (2) is reference-driven: it accepts (1) as a real bulk hit and uses external reference data to point at which cell types likely host the activity.
@@ -24,12 +24,12 @@ These are complementary, not competing estimates of the same thing.
 ### Update — adopted resolution
 
 The "Defensible options" table below is historical. The decomposition pipeline
-now runs natively on the WMB-class spine: `code/deconvolution/build_wmb_decomposition.py`
+now runs natively on the WMB-class spine: `alz/deconvolution/build_wmb_decomposition.py`
 aggregates raw counts directly from the snRNA-seq h5ad on Allen CTM `class_name`,
 applies the proportional formula, and emits `*_wmb_decomposition.csv` directly
 on the WMB axis. There is no soft-mass projection step in the live path; the
 46-cluster crosswalk + projection module are archived under
-`code/deconvolution/_archive/`. The question shifted from "how to project
+`alz/deconvolution/_archive/`. The question shifted from "how to project
 46→27" to "why project at all" — re-aggregating on the CTM axis is mechanically
 identical to Yuyu's proportional formula but removes a layer of interpretation.
 
@@ -57,7 +57,7 @@ Same 63,695 nuclei. The 12-vs-27 delta is the lossy hand-annotation step. Re-map
 
 ### Root cause of the lossy step
 
-`code/deconvolution/yuyu_46_to_wmb_class.csv` is a 46 → WMB-class crosswalk built by hand:
+`alz/deconvolution/yuyu_46_to_wmb_class.csv` is a 46 → WMB-class crosswalk built by hand:
 
 - 31 named populations at uneven granularity ("Astrocytes", "VIP-positive-interneuron"), each force-mapped to one WMB class.
 - 15 unnamed `cluster-XX` leftovers blanket-labeled "Unclassified" rather than mapped.
@@ -66,7 +66,7 @@ Several CTM-resolved classes (`05 OB-IMN GABA`, `08 CNU-MGE GABA`, `13 CNU-HYa G
 
 ### Non-destructive remap (implemented)
 
-`code/deconvolution/extract_yuyu_obs.R` extracts per-nucleus metadata from `renamed_sobj.rds` (joined to the 170 h5ad on barcode → 63,695 nuclei). `code/deconvolution/remap_clusters_via_ctm.py` builds two new files alongside the original (which is left untouched):
+`alz/deconvolution/extract_yuyu_obs.R` extracts per-nucleus metadata from `renamed_sobj.rds` (joined to the 170 h5ad on barcode → 63,695 nuclei). `alz/deconvolution/remap_clusters_via_ctm.py` builds two new files alongside the original (which is left untouched):
 
 - `yuyu_46_to_wmb_class_v2.csv` — hard plurality assignment per cluster, with audit columns: `plurality_fraction`, `n_nuclei`, `second_class`, `second_fraction`, `wmb_class_v1_hand`, `agrees_with_v1`.
 - `yuyu_46_to_wmb_class_soft.csv` — full mass matrix `cluster × WMB-class`, row-normalized to fractions over 27 CTM-reachable classes.
@@ -156,7 +156,7 @@ Disagreement is informative:
 
 ## Cluster→WMB rollup loss (smaller issue, worth noting)
 
-`code/deconvolution/rollup_wmb.py` picks one cluster per (kinase, contrast, WMB_class, track) group by max|NES| (ties broken by lowest FDR), among bulk-sig clusters only.
+`alz/deconvolution/rollup_wmb.py` picks one cluster per (kinase, contrast, WMB_class, track) group by max|NES| (ties broken by lowest FDR), among bulk-sig clusters only.
 
 - 1,664 rollup rows; 985 of these (59%) draw from groups with ≥2 bulk-sig clusters in the same WMB class.
 - Of those 985, **23 (2.3%) have mixed NES signs across clusters in the same WMB class**.

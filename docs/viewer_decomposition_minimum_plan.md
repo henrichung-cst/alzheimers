@@ -23,7 +23,7 @@ There is no ambiguity. The branch's MEA driver passes `kin_type="ser_thr"` for t
 
 ## Concrete changes (one file)
 
-### 1. `code/build_unified_viewer.py` — payload assembly
+### 1. `alz/build_unified_viewer.py` — payload assembly
 
 - Register `outputs/reports/deconvolution/per_animal/kinase_enrichment_wmb.csv` alongside the existing CSV inputs.
 - Subset to columns `(kinase, wmb_class, contrast, NES, FDR)`. Drop `track` after subsetting; it carries no additional information for the viewer.
@@ -40,7 +40,7 @@ There is no ambiguity. The branch's MEA driver passes `kin_type="ser_thr"` for t
   ```
 - Add to `payload` next to `attribution_index`.
 
-### 2. `code/build_unified_viewer.py` — JS verdict renderer
+### 2. `alz/build_unified_viewer.py` — JS verdict renderer
 
 - Build a JS lookup `_decompByKey: Map<"kid|cid|ct", {nes, fdr}>` once at startup, alongside the existing kinase indexes.
 - Extend `ATTR_VERDICT_COLS` (insert between `song_lfc` and `combined_score`):
@@ -59,7 +59,7 @@ The branch ran 16 of 34 WMB classes. Missing classes show "—" in the new colum
 
 ## Verification
 
-1. Build viewer with `python code/build_unified_viewer.py`. Confirm `index.html` opens and the Kinase tab loads.
+1. Build viewer with `python alz/build_unified_viewer.py`. Confirm `index.html` opens and the Kinase tab loads.
 2. Pick CDK5, contrast `App_6mo`. Confirm two new columns appear after Song LFC, populated for cell types where the branch produced output.
 3. Pick FYN (Tyr kinase). Confirm `decomp_nes` populates from the source `py` rows (verify by spot-checking `kinase_enrichment_wmb.csv` filtered to `kinase=FYN`).
 4. Pick a kinase with no decomposition output for the selected contrast. Confirm "—" renders without errors.
@@ -71,7 +71,7 @@ The branch ran 16 of 34 WMB classes. Missing classes show "—" in the new colum
 
 | Path | Change |
 |---|---|
-| `code/build_unified_viewer.py` | Add CSV registration, payload build for `decomposition_index`, two `ATTR_VERDICT_COLS` entries, JS lookup + render |
+| `alz/build_unified_viewer.py` | Add CSV registration, payload build for `decomposition_index`, two `ATTR_VERDICT_COLS` entries, JS lookup + render |
 
 No new files, no Python module restructuring, no docs.
 

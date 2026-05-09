@@ -6,19 +6,19 @@ what each stage requires, what it produces, and how the stages connect.
 
 The live ordered sequence is:
 
-1. `bash code/runners/main/run_data_ingest.sh`
-2. `bash code/runners/main/run_kinase_attribution.sh`
-3. `bash code/runners/main/run_attribution_recovery.sh`
+1. `bash alz/runners/main/run_data_ingest.sh`
+2. `bash alz/runners/main/run_kinase_attribution.sh`
+3. `bash alz/runners/main/run_attribution_recovery.sh`
 
 For the bundled front door, use:
 
 ```bash
-bash code/runners/main/run_live_pipeline.sh
+bash alz/runners/main/run_live_pipeline.sh
 ```
 
 Supporting setup is separate from the front door. In particular:
 
-- `code/atlas_reference.py` remains supporting external-reference setup
+- `alz/atlas_reference.py` remains supporting external-reference setup
 - `outputs/reports/wmb_expression/wmb_kinase_expression.csv` remains a required
   supporting input for unified attribution
 
@@ -115,7 +115,7 @@ which aggregates across all sites for a given kinase. The site-level genotype
 contrast betas are what feed into MEA, so sex and timepoint are controlled for
 but not interrogated as moderators.
 
-See `code/kinase_attribution.py` (`_build_design_matrix`, `GENOTYPE_CODING`,
+See `alz/kinase_attribution.py` (`_build_design_matrix`, `GENOTYPE_CODING`,
 `CONTRAST_COEFS`) and `config.py` for the implementation.
 
 Canonical outputs:

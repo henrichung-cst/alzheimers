@@ -74,7 +74,7 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 
 ## Pipeline
 
-### Live bulk pipeline (`code/`)
+### Live bulk pipeline (`alz/`)
 | Stage | Script | Runner | Output dir |
 |:---|:---|:---|:---|
 | Config | `config.py` | — | — |
@@ -85,14 +85,14 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 | Bundled | — | `runners/main/run_live_pipeline.sh` | all of the above |
 | Dual-track | — | `runners/main/run_dual_analysis.sh` | `*_males_only/`, `*_full_cohort/` |
 
-### Standalone utilities (`code/`)
+### Standalone utilities (`alz/`)
 | Script | Purpose |
 |:---|:---|
 | `map_kinases_to_genes.py` | Kinase → gene symbol mapping utility |
 | `lucie_5xfad_manifest.py` | Proteomics manifest builder for Lucie 5xFAD integration |
 | `build_unified_viewer.py` | See Viewers section below |
 
-### Supporting (`code/`)
+### Supporting (`alz/`)
 | Script | Runner | Output dir |
 |:---|:---|:---|
 | `atlas_reference.py` | `runners/supporting/run_atlas_reference.sh` | `data/external/sea_ad/`, `data/external/allen_abc/` |
@@ -101,12 +101,12 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 
 Additional supporting runners (ops utilities, no Python counterpart): `runners/supporting/compress_atlas_cache.sh`, `decompress_atlas_cache.sh`, `run_wmb_download.sh`, `run_extract_wmb_subset.sh`.
 
-### Supplementary diagnostics (`code/supplementary/`)
+### Supplementary diagnostics (`alz/supplementary/`)
 `fdr_stringent.py`, `threshold_sensitivity.py`, `aggregation_robustness.py`, `parent_protein_qc.py` — run via `runners/supplementary/run_reviewer_diagnostics.sh`. Output: `outputs/reports/supplementary/`. (The historical `deconvolution_infeasibility.py` proof has been frozen and moved to `archive/deconvolution/code/`.)
 
-### Integration pipeline (`code/integration/`)
+### Integration pipeline (`alz/integration/`)
 
-Mid-rewrite as of 2026-05-08. Legacy `wrappers/`, `adapters/`, `sidecar/`, `tests/`, and orchestrator shell scripts have been relocated to `~/Projects/work/incytr_integration_archive/` (see `code/integration/MOVED.txt`). The remediation plan at [`incytr_remediation_plan.md`](./incytr_remediation_plan.md) defines the target architecture: a thin AD-specific shell that calls the upstream `incytr` R package directly.
+Mid-rewrite as of 2026-05-08. Legacy `wrappers/`, `adapters/`, `sidecar/`, `tests/`, and orchestrator shell scripts have been relocated to `~/Projects/work/incytr_integration_archive/` (see `alz/integration/MOVED.txt`). The remediation plan at [`incytr_remediation_plan.md`](./incytr_remediation_plan.md) defines the target architecture: a thin AD-specific shell that calls the upstream `incytr` R package directly.
 
 In-tree now:
 
@@ -129,10 +129,10 @@ In-tree now:
 
 ### Integration pipeline outputs
 
-Legacy outputs lived under `code/integration/intermediates/` (gitignored). That tree is now orphaned by the integration rewrite (see [`incytr_remediation_plan.md`](./incytr_remediation_plan.md)); the new architecture writes to `outputs/reports/incytr_factorial/` instead. Nothing currently regenerates either.
+Legacy outputs lived under `alz/integration/intermediates/` (gitignored). That tree is now orphaned by the integration rewrite (see [`incytr_remediation_plan.md`](./incytr_remediation_plan.md)); the new architecture writes to `outputs/reports/incytr_factorial/` instead. Nothing currently regenerates either.
 
 ## Viewers
 
 | Viewer | Builder | Input | Output |
 |:---|:---|:---|:---|
-| Kinase + pathway | `code/build_unified_viewer.py` | `kinase_hypothesis_table.csv`, `kinase_activity_matrix.csv`, `celltype_evidence_table.csv`, `mea_stoichiometry.csv`, `site_level_ols.csv`, `backbone_recurrence_by_contrast.csv`, `backbone_permutation_pvalues_by_contrast.csv`, `unified_attribution.csv`, `kinase_backbone_edges.parquet` | `outputs/reports/unified_viewer/index.html` + payload JSON + sharded edge slices |
+| Kinase + pathway | `alz/build_unified_viewer.py` | `kinase_hypothesis_table.csv`, `kinase_activity_matrix.csv`, `celltype_evidence_table.csv`, `mea_stoichiometry.csv`, `site_level_ols.csv`, `backbone_recurrence_by_contrast.csv`, `backbone_permutation_pvalues_by_contrast.csv`, `unified_attribution.csv`, `kinase_backbone_edges.parquet` | `outputs/reports/unified_viewer/index.html` + payload JSON + sharded edge slices |

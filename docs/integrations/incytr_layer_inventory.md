@@ -70,8 +70,8 @@ Legend: ✂ delete · ✓ keep · ❓ decide
 | `INC-30` | PTM scope expansion: `Ack_FC` / `KGG_FC` / `Rme1_FC` slots and parallel scoring path. | Additive; "data not found … skipped" when PTM omics absent. | ✓ | Nothing. | **Verified 2026-05-06**: `Ack_FC`/`KGG_FC`/`Rme1_FC` are handled identically to native `ps_FC`/`py_FC` at slot declaration (`Incytr_class.R:71-75`), `score_omics_layer` dispatch (`evaluation.R:67-71`), export `cbind` (`evaluation.R:358-375`), and iteration (`utils.R:162`). Pure parallel extension to new PTM types — no scoring divergence. Stays in. |
 | `INC-30.b` | `cutoff_SigProb` filter applied uniformly across all omics slots. | Default-inert (`cutoff_SigProb = NULL` on the package default code path; wrapper sets `0.01`). | ✓ | Nothing — filter is structurally clean and matches native default behavior when not set. | The cutoff *value* is the `INCYTR_CUTOFF_SIGPROB` knob below. The filter machinery itself is fine. |
 | `ALZ-19` | Kinase-imputed gene expansion adapter + soft-rescue weighting in factorial wrapper. | Shell-gated behind `ENABLE_KINASE_IMPUTATION=1` (off by default). | 📦 park (kinase pack) | Existing per-feature env var collapses into `INCYTR_LAYER_KINASE_PACK`. Code path stays; rescue block at `run_incytr_factorial_all_pairs.R:471–495` and `EXPR_IMPUTATION_FLOOR` constant remain, gated by the unified flag. | Future Section C re-activation. Bundled with ALZ-20 as a coherent kinase extension pack so they're toggled together (they're conceptually the same feature: kinase-aware extensions). |
-| `ALZ-20` | `compute_kinase_support_factorial.py` sidecar (IDF, sender-attribution discount, median aggregation). Reads `recv_*.parquet`, writes `kinase_support_scores.csv` + optional `kinase_routes.parquet` per pair. | Sidecar; not invoked from `run_factorial_all_pairs.sh`. | 📦 park (kinase pack) | Move under `code/integration/sidecar/kinase_pack/` to make sidecar status obvious in the path. Invocation gated by `INCYTR_LAYER_KINASE_PACK=1`. | Future Section C re-activation alongside ALZ-19. |
-| `ALZ-9` / `ALZ-11` / `ALZ-12` | Backbone permutations (within-receiver shuffle "enrichment null" + "wiring null"); separate runner `run_factorial_permutations.sh` writing `backbone_permutation_pvalues_by_contrast.csv`. | Sidecar; never gates native PDS. | 📦 park (backbone perms) | Move runner + helpers to `code/integration/sidecar/backbone_perms/`. Invocation gated by `INCYTR_LAYER_BACKBONE_PERMS=1`. | Park pending design revisit: the distinction between "backbone" and "pathway" needs to be re-examined before this is reactivated. The null-distribution machinery itself is sound; the conceptual carving is what needs work. |
+| `ALZ-20` | `compute_kinase_support_factorial.py` sidecar (IDF, sender-attribution discount, median aggregation). Reads `recv_*.parquet`, writes `kinase_support_scores.csv` + optional `kinase_routes.parquet` per pair. | Sidecar; not invoked from `run_factorial_all_pairs.sh`. | 📦 park (kinase pack) | Move under `alz/integration/sidecar/kinase_pack/` to make sidecar status obvious in the path. Invocation gated by `INCYTR_LAYER_KINASE_PACK=1`. | Future Section C re-activation alongside ALZ-19. |
+| `ALZ-9` / `ALZ-11` / `ALZ-12` | Backbone permutations (within-receiver shuffle "enrichment null" + "wiring null"); separate runner `run_factorial_permutations.sh` writing `backbone_permutation_pvalues_by_contrast.csv`. | Sidecar; never gates native PDS. | 📦 park (backbone perms) | Move runner + helpers to `alz/integration/sidecar/backbone_perms/`. Invocation gated by `INCYTR_LAYER_BACKBONE_PERMS=1`. | Park pending design revisit: the distinction between "backbone" and "pathway" needs to be re-examined before this is reactivated. The null-distribution machinery itself is sound; the conceptual carving is what needs work. |
 
 ---
 
@@ -90,7 +90,7 @@ the wrapper / shell / package.
 ### Single registry
 
 The defaults and their consumption sites are defined in **one** place:
-`code/integration/wrappers/incytr_runtime.R` (or equivalent module). The
+`alz/integration/wrappers/incytr_runtime.R` (or equivalent module). The
 wrapper, shell runner, and any sidecar invocation all read from this registry.
 No package-level defaults override the registry; the registry is the contract.
 
@@ -123,7 +123,7 @@ No package-level defaults override the registry; the registry is the contract.
 5. **Cutoff**: keep as option; default `0.0` (native). Production-runtime tuning is a future Section C decision.
 
 Convention: `📦 park` means the layer stays in the codebase but is moved under
-`code/integration/sidecar/<pack>/` and gated by a single `INCYTR_LAYER_*` env
+`alz/integration/sidecar/<pack>/` and gated by a single `INCYTR_LAYER_*` env
 var; off by default.
 
 ---
@@ -154,14 +154,14 @@ Smallest / safest first; each step is one PR, gated by 593/593 testthat +
 
 ### Phase 2 — standardize invocation
 
-5. **Create `code/integration/wrappers/incytr_runtime.R`**: single registry of `INCYTR_LAYER_KINASE_PACK`, `INCYTR_LAYER_BACKBONE_PERMS`, `INCYTR_CUTOFF_SIGPROB`. All defaults declared here.
+5. **Create `alz/integration/wrappers/incytr_runtime.R`**: single registry of `INCYTR_LAYER_KINASE_PACK`, `INCYTR_LAYER_BACKBONE_PERMS`, `INCYTR_CUTOFF_SIGPROB`. All defaults declared here.
 6. **Migrate `ENABLE_KINASE_IMPUTATION` → `INCYTR_LAYER_KINASE_PACK`**: rename, point reads at the registry, no behavior change.
 7. **Migrate `DUCKDB_CUTOFF_SIGPROB` → `INCYTR_CUTOFF_SIGPROB`**: rename, default `0.01 → 0.0`, point reads at the registry. Run a one-shot benchmark on a real all-pairs run to record the actual runtime / output-size cost of `0.0` for future reference.
 
 ### Phase 3 — relocate parked sidecars
 
-8. **Move kinase pack**: `compute_kinase_support_factorial.py` → `code/integration/sidecar/kinase_pack/`. `export_kinase_imputed_genes_factorial.py` and the wrapper rescue block stay where they are but the rescue block reads `INCYTR_LAYER_KINASE_PACK` instead of `ENABLE_KINASE_IMPUTATION`. Add a small README at `code/integration/sidecar/kinase_pack/README.md` explaining the pack and the activation flag.
-9. **Move backbone perms**: `run_factorial_permutations.sh` → `code/integration/sidecar/backbone_perms/`. Helper functions stay in `aggregate_factorial.py` (deletion would require a larger refactor) but are gated behind the registry flag at their call sites. README notes the design-revisit reason for the park.
+8. **Move kinase pack**: `compute_kinase_support_factorial.py` → `alz/integration/sidecar/kinase_pack/`. `export_kinase_imputed_genes_factorial.py` and the wrapper rescue block stay where they are but the rescue block reads `INCYTR_LAYER_KINASE_PACK` instead of `ENABLE_KINASE_IMPUTATION`. Add a small README at `alz/integration/sidecar/kinase_pack/README.md` explaining the pack and the activation flag.
+9. **Move backbone perms**: `run_factorial_permutations.sh` → `alz/integration/sidecar/backbone_perms/`. Helper functions stay in `aggregate_factorial.py` (deletion would require a larger refactor) but are gated behind the registry flag at their call sites. README notes the design-revisit reason for the park.
 
 ### Phase 4 — done
 
@@ -169,7 +169,7 @@ After Phase 3:
 
 - Production wrapper (defaults) = pure Section A + Section B + INC-30 PTM (data-conditional). No Section C active.
 - All three optional knobs read from one registry, one prefix.
-- Sidecar status legible from path (`code/integration/sidecar/<pack>/`).
+- Sidecar status legible from path (`alz/integration/sidecar/<pack>/`).
 - Audit's must-match gates (`run_degenerate_2cond.sh`, `run_duckdb_enumeration_equiv.sh`) still pass; testthat 593/593 still green.
 
 ---
@@ -197,14 +197,14 @@ For each deleted layer, the revival recipe is:
   470/470; `run_degenerate_2cond.sh` + `run_duckdb_enumeration_equiv.sh`
   passing.
 - 2026-05-06: **Phase 2 complete** — `INCYTR_*` namespace standardized.
-  Single registry at `code/integration/incytr_runtime.sh` (shell) +
-  `code/integration/wrappers/incytr_runtime.R` (R). `ENABLE_KINASE_IMPUTATION`
+  Single registry at `alz/integration/incytr_runtime.sh` (shell) +
+  `alz/integration/wrappers/incytr_runtime.R` (R). `ENABLE_KINASE_IMPUTATION`
   → `INCYTR_LAYER_KINASE_PACK` (default flipped on→off). `DUCKDB_CUTOFF_SIGPROB`
   → `INCYTR_CUTOFF_SIGPROB` (default `0.01` → `0.0`, native-equivalent).
   Anchor gates re-verified.
 - 2026-05-06: **Phase 3 complete** — parked sidecars relocated.
-  `compute_kinase_support_factorial.py` → `code/integration/sidecar/kinase_pack/`;
-  `run_factorial_permutations.sh` → `code/integration/sidecar/backbone_perms/`.
+  `compute_kinase_support_factorial.py` → `alz/integration/sidecar/kinase_pack/`;
+  `run_factorial_permutations.sh` → `alz/integration/sidecar/backbone_perms/`.
   READMEs added at each path documenting activation flag and revival pointers.
   Backbone-perms call site in `aggregate_factorial.py --permutations` now
   hard-gated by `INCYTR_LAYER_BACKBONE_PERMS=1`. Production wrapper defaults

@@ -20,7 +20,7 @@ These paths are closed and should not drive new code. See [`analysis_rationale.m
 | Path | Status |
 |:---|:---|
 | Direct cell-type deconvolution from the 24-group design | Closed — not identifiable |
-| Proportional decomposition with snRNA-seq prior (`code/deconvolution/`) | Branch-only, not in live path; CTM-native on WMB-class spine; uses the snRNA pseudobulk as a per-(group, WMB class, gene) prior rather than inferring cell-type effects from `A_obs + bulk` alone |
+| Proportional decomposition with snRNA-seq prior (`alz/deconvolution/`) | Branch-only, not in live path; CTM-native on WMB-class spine; uses the snRNA pseudobulk as a per-(group, WMB class, gene) prior rather than inferring cell-type effects from `A_obs + bulk` alone |
 | Joint kinase-activity factor model | Closed — composition bottleneck |
 | Two-compartment neuronal/glial simplification | Closed — failed validation |
 | Transcript-only rescue | Closed — no defensible attribution |

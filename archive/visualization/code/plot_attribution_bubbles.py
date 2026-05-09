@@ -10,9 +10,9 @@ Produces three plot types per tissue category:
    timepoint, testing whether the double-transgenic behaves additively
 
 Usage:
-    python code/plot_attribution_bubbles.py               # all attributed kinases
-    python code/plot_attribution_bubbles.py --top 50      # top 50 per category
-    python code/plot_attribution_bubbles.py --out /path
+    python alz/plot_attribution_bubbles.py               # all attributed kinases
+    python alz/plot_attribution_bubbles.py --top 50      # top 50 per category
+    python alz/plot_attribution_bubbles.py --out /path
 """
 
 import argparse

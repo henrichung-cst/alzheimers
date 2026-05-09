@@ -43,33 +43,33 @@ pixi run recover    # cross-contrast + final tables
 
 **Data ingestion and characterization** (`data_ingest.py`):
 ```bash
-python code/data_ingest.py --mapping       # §1: TMT channel-to-animal sample mapping (72 animals, 6 plexes)
-python code/data_ingest.py --phospho-match # §2: Phosphosite-to-protein matching (91.7% match rate)
-python code/data_ingest.py --markers       # §3: Cell-type marker protein assessment (WMB atlas, requires wmb_expression --proteome)
-python code/data_ingest.py --quality       # §4: Data quality (PCA, batch effects, missingness)
-python code/data_ingest.py --outliers      # §5: Statistical outlier detection (within-group robust z-scores)
-python code/data_ingest.py --run           # All steps in order
-python code/data_ingest.py --summary       # Print cached results
+python alz/data_ingest.py --mapping       # §1: TMT channel-to-animal sample mapping (72 animals, 6 plexes)
+python alz/data_ingest.py --phospho-match # §2: Phosphosite-to-protein matching (91.7% match rate)
+python alz/data_ingest.py --markers       # §3: Cell-type marker protein assessment (WMB atlas, requires wmb_expression --proteome)
+python alz/data_ingest.py --quality       # §4: Data quality (PCA, batch effects, missingness)
+python alz/data_ingest.py --outliers      # §5: Statistical outlier detection (within-group robust z-scores)
+python alz/data_ingest.py --run           # All steps in order
+python alz/data_ingest.py --summary       # Print cached results
 ```
 
 **Stoichiometry, MEA enrichment, and unified attribution** — split into four stage modules plus a summary helper:
 
 The `ANALYSIS_MODE` environment variable controls sample filtering (default: `males_only`):
 ```bash
-python code/kinase_normalize.py                            # Stage 1: IRS cross-plex normalization + stoichiometry (all 72 samples)
-ANALYSIS_MODE=males_only python code/kinase_enrich.py      # Stage 2: OLS + MEA (males only, outliers excluded)
-ANALYSIS_MODE=males_only python code/kinase_attribute.py   # Stage 3: Unified cell-type attribution
-python code/kinase_mechanism.py                            # Optional: raw phospho MEA + mechanism classification
-python code/kinase_summary.py                              # Print cached results
+python alz/kinase_normalize.py                            # Stage 1: IRS cross-plex normalization + stoichiometry (all 72 samples)
+ANALYSIS_MODE=males_only python alz/kinase_enrich.py      # Stage 2: OLS + MEA (males only, outliers excluded)
+ANALYSIS_MODE=males_only python alz/kinase_attribute.py   # Stage 3: Unified cell-type attribution
+python alz/kinase_mechanism.py                            # Optional: raw phospho MEA + mechanism classification
+python alz/kinase_summary.py                              # Print cached results
 ```
 
 **Final attribution-table assembly** (`attribution_recovery.py`):
 ```bash
-python code/attribution_recovery.py --kinase-profiles   # S3: Kinase activity matrix + hypothesis table
-python code/attribution_recovery.py --celltype-profiles # S4: Cell-type evidence table + kinase profiles
-python code/attribution_recovery.py --hypothesis-tables # S3+S4: Run both new hypothesis table steps
-python code/attribution_recovery.py --run               # All steps in order
-python code/attribution_recovery.py --summary           # Print cached results
+python alz/attribution_recovery.py --kinase-profiles   # S3: Kinase activity matrix + hypothesis table
+python alz/attribution_recovery.py --celltype-profiles # S4: Cell-type evidence table + kinase profiles
+python alz/attribution_recovery.py --hypothesis-tables # S3+S4: Run both new hypothesis table steps
+python alz/attribution_recovery.py --run               # All steps in order
+python alz/attribution_recovery.py --summary           # Print cached results
 ```
 
 ### Supporting Prerequisites
@@ -78,24 +78,24 @@ These must be run before the live pipeline if their outputs don't exist:
 
 ```bash
 # External Atlas Data Acquisition (SEA-AD + WMB from Allen Institute)
-python code/atlas_reference.py --sea-ad        # SEA-AD MTG Nebula effect-size h5ads
-python code/atlas_reference.py --wmb-download  # All 13 WMB-10Xv3 log2 expression matrices (~95 GB)
-python code/atlas_reference.py --run           # SEA-AD + WMB download
-# Runner: bash code/runners/supporting/run_atlas_reference.sh
+python alz/atlas_reference.py --sea-ad        # SEA-AD MTG Nebula effect-size h5ads
+python alz/atlas_reference.py --wmb-download  # All 13 WMB-10Xv3 log2 expression matrices (~95 GB)
+python alz/atlas_reference.py --run           # SEA-AD + WMB download
+# Runner: bash alz/runners/supporting/run_atlas_reference.sh
 
 # WMB Expression Export (required for unified attribution + marker assessment)
-python code/wmb_expression.py --run       # Compute WMB per-cell-type kinase expression matrix
-python code/wmb_expression.py --proteome  # Compute proteome-wide WMB expression (for --markers)
-python code/wmb_expression.py --summary   # Print cached results
-# Runner: bash code/runners/supporting/run_wmb_expression.sh
+python alz/wmb_expression.py --run       # Compute WMB per-cell-type kinase expression matrix
+python alz/wmb_expression.py --proteome  # Compute proteome-wide WMB expression (for --markers)
+python alz/wmb_expression.py --summary   # Print cached results
+# Runner: bash alz/runners/supporting/run_wmb_expression.sh
 
 # Song snRNA-seq Integration (within-cohort evidence from paired animals)
-python code/snrna_integration.py --pseudobulk    # S1: pseudobulk from 170 h5ad (28 animals → ~21 of 34 WMB classes)
-python code/snrna_integration.py --specificity   # S2: within-cohort expression specificity
-python code/snrna_integration.py --concordance   # S3: within-cohort transcriptomic concordance (males-only OLS)
-python code/snrna_integration.py --run           # All stages in order
-python code/snrna_integration.py --summary       # Print cached results
-# Runner: bash code/runners/supporting/run_snrna_integration.sh
+python alz/snrna_integration.py --pseudobulk    # S1: pseudobulk from 170 h5ad (28 animals → ~21 of 34 WMB classes)
+python alz/snrna_integration.py --specificity   # S2: within-cohort expression specificity
+python alz/snrna_integration.py --concordance   # S3: within-cohort transcriptomic concordance (males-only OLS)
+python alz/snrna_integration.py --run           # All stages in order
+python alz/snrna_integration.py --summary       # Print cached results
+# Runner: bash alz/runners/supporting/run_snrna_integration.sh
 ```
 
 ### Supplementary Diagnostics
@@ -103,20 +103,20 @@ python code/snrna_integration.py --summary       # Print cached results
 Reviewer-response analyses that validate pipeline choices. Run after the main pipeline:
 
 ```bash
-bash code/runners/supplementary/run_reviewer_diagnostics.sh   # All diagnostics
+bash alz/runners/supplementary/run_reviewer_diagnostics.sh   # All diagnostics
 # Or individually:
-python code/supplementary/fdr_stringent.py --run              # Q4: FDR < 0.10 comparison
-python code/supplementary/threshold_sensitivity.py --run      # Q1: Confidence tier sweep
-python code/supplementary/aggregation_robustness.py --run     # Q2: Aggregation method comparison
-python code/supplementary/parent_protein_qc.py --run          # Q5: Activity-driven parent QC
+python alz/supplementary/fdr_stringent.py --run              # Q4: FDR < 0.10 comparison
+python alz/supplementary/threshold_sensitivity.py --run      # Q1: Confidence tier sweep
+python alz/supplementary/aggregation_robustness.py --run     # Q2: Aggregation method comparison
+python alz/supplementary/parent_protein_qc.py --run          # Q5: Activity-driven parent QC
 ```
 
 ### Standalone Utilities
 
 ```bash
-python code/map_kinases_to_genes.py       # Kinase→gene symbol mapping
-python code/build_unified_viewer.py       # Interactive HTML viewer (kinase + pathway + cross-entity)
-python code/lucie_5xfad_manifest.py       # Lucie 5xFAD proteomics manifest builder
+python alz/map_kinases_to_genes.py       # Kinase→gene symbol mapping
+python alz/build_unified_viewer.py       # Interactive HTML viewer (kinase + pathway + cross-entity)
+python alz/lucie_5xfad_manifest.py       # Lucie 5xFAD proteomics manifest builder
 ```
 
 ## Architecture
@@ -156,7 +156,7 @@ config.py  ←  atlas_reference.py  ←  wmb_expression.py
 config.py  ←  snrna_integration.py
 
 Integration:
-kinase_enrich.py / kinase_attribute.py + snrna_integration.py  ←  code/integration/
+kinase_enrich.py / kinase_attribute.py + snrna_integration.py  ←  alz/integration/
 ```
 
 ### Live Code
@@ -182,7 +182,7 @@ kinase_enrich.py / kinase_attribute.py + snrna_integration.py  ←  code/integra
 
 ### Integration Code (Incytr)
 
-`code/integration/` is mid-rewrite. The legacy `wrappers/`, `adapters/`, `sidecar/`, `tests/`, and orchestrator shell scripts were relocated on 2026-05-08 to `~/Projects/work/incytr_integration_archive/` (see `code/integration/MOVED.txt`). The remediation plan is at `docs/incytr_remediation_plan.md`; the new architecture replaces the shadow-fork wrapper with a thin AD-specific shell that calls the upstream `incytr` R package directly.
+`alz/integration/` is mid-rewrite. The legacy `wrappers/`, `adapters/`, `sidecar/`, `tests/`, and orchestrator shell scripts were relocated on 2026-05-08 to `~/Projects/work/incytr_integration_archive/` (see `alz/integration/MOVED.txt`). The remediation plan is at `docs/incytr_remediation_plan.md`; the new architecture replaces the shadow-fork wrapper with a thin AD-specific shell that calls the upstream `incytr` R package directly.
 
 What remains in-tree:
 
@@ -194,7 +194,7 @@ R deps (`Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`) are still required by 
 
 ### Runners
 
-Operational shell wrappers under `code/runners/`:
+Operational shell wrappers under `alz/runners/`:
 - `main/run_live_pipeline.sh` — Bundled front door (data_ingest → kinase_attribution → attribution_recovery, gates on WMB prerequisite)
 - `main/run_dual_analysis.sh` — **Dual-track runner**: males-only (primary) + full-cohort (sensitivity), archives outputs to `*_males_only/` and `*_full_cohort/` directories
 - `main/run_data_ingest.sh` — Data ingestion wrapper
@@ -221,7 +221,7 @@ Operational shell wrappers under `code/runners/`:
 - `outputs/reports/wmb_expression/wmb_kinase_expression.csv` — WMB expression matrix (required for unified attribution)
 
 ### Decomposition (CTM-native, branch-only — not in live pipeline)
-`code/deconvolution/build_wmb_decomposition.py` consumes per-(site, group) bulk medians (`imac_median.csv`, `py_median.csv`, `pr_median.csv`) and the `yuyu_samplekey.csv` MS\_ID↔SCRNA bridge. These were deleted from `data/datasets/song/proteomics/source/` on 2026-05-07; re-pull from Google Drive via `pixi run ingest-gdrive-shared` before running the branch. Outputs: `outputs/reports/deconvolution/wmb_decomposition/{ps,py,pr}_wmb_decomposition.csv` + `wmb_class_size.csv`.
+`alz/deconvolution/build_wmb_decomposition.py` consumes per-(site, group) bulk medians (`imac_median.csv`, `py_median.csv`, `pr_median.csv`) and the `yuyu_samplekey.csv` MS\_ID↔SCRNA bridge. These were deleted from `data/datasets/song/proteomics/source/` on 2026-05-07; re-pull from Google Drive via `pixi run ingest-gdrive-shared` before running the branch. Outputs: `outputs/reports/deconvolution/wmb_decomposition/{ps,py,pr}_wmb_decomposition.csv` + `wmb_class_size.csv`.
 
 ## Output
 
@@ -266,15 +266,15 @@ Other documentation:
 
 - **ANALYSIS_MODE controls sample filtering** — defaults to `males_only`. Set `ANALYSIS_MODE=full_cohort` for sensitivity analysis with both sexes. The mode affects `kinase_enrich.py`, `kinase_attribute.py`, and `kinase_mechanism.py` but NOT `kinase_normalize.py` (which always uses all 72 samples)
 - **Outlier detection requires stoichiometry** — `data_ingest.py --outliers` reads `stoichiometry_matrix.csv`, so `kinase_normalize.py` must be run first. Falls back to total proteome if unavailable
-- **Limited automated tests** — live pipeline has no unit tests; verify with `python code/kinase_summary.py`
+- **Limited automated tests** — live pipeline has no unit tests; verify with `python alz/kinase_summary.py`
 - **Song proteomics files must be mounted** — data_ingest.py reads Excel workbooks from `data/datasets/song/primary/proteomics/`
 - **WMB prerequisite** — `run_live_pipeline.sh` gates on `wmb_kinase_expression.csv` and `wmb_proteome_expression.csv`; run `run_wmb_expression.sh` first
-- **Atlas cache compressed** — raw h5ad files under `data/external/allen_abc/` are zstd-compressed to save space (~115 GB → ~26 GB). Decompress with `bash code/runners/supporting/decompress_atlas_cache.sh` before re-running `wmb_expression.py`. See `data/external/allen_abc/MANIFEST.json` for provenance
+- **Atlas cache compressed** — raw h5ad files under `data/external/allen_abc/` are zstd-compressed to save space (~115 GB → ~26 GB). Decompress with `bash alz/runners/supporting/decompress_atlas_cache.sh` before re-running `wmb_expression.py`. See `data/external/allen_abc/MANIFEST.json` for provenance
 - **SEA-AD data required** — Unified attribution needs SEA-AD effect sizes under `config.SEA_AD_DIR`
 - **API caching** — delete files under `data/datasets/song/analysis_cache/` to force re-fetch
 - **WMB expression memory** — `wmb_expression.py --proteome` processes 6,308 genes across 13 regions; use `skip_regional=True` and `chunk_size=2000` to avoid OOM (~30GB RAM available)
 - **Do not reopen closed paths** — direct deconvolution, factor model, two-compartment, and transcript-only rescue are all closed (see charter)
-- **Integration tree is mid-rewrite** — legacy R wrappers and Python adapters moved to `~/Projects/work/incytr_integration_archive/` on 2026-05-08; see `code/integration/MOVED.txt` and `docs/incytr_remediation_plan.md`. The Phase 1 stubs (`factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh`) remain in-tree. R deps (`Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`) are still required. Config lives in `config_integration.py`, not `config.py`
+- **Integration tree is mid-rewrite** — legacy R wrappers and Python adapters moved to `~/Projects/work/incytr_integration_archive/` on 2026-05-08; see `alz/integration/MOVED.txt` and `docs/incytr_remediation_plan.md`. The Phase 1 stubs (`factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh`) remain in-tree. R deps (`Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`) are still required. Config lives in `config_integration.py`, not `config.py`
 
 ## Tooling & Environment
 

@@ -216,9 +216,9 @@ The outputs are convergent functional evidence for candidate intercellular signa
 
 ```bash
 pixi run live                                                  # bulk: ingest → normalize → enrich → attribute → recover
-bash code/integration/run_factorial_all_pairs.sh               # 462 pairs × 9 contrasts
-bash code/integration/run_factorial_permutations.sh            # per-contrast dual-null backbone tests
-python code/integration/adapters/examine_factorial.py --run    # additivity, temporal, cell-type, kinase interpretation
+bash alz/integration/run_factorial_all_pairs.sh               # 462 pairs × 9 contrasts
+bash alz/integration/run_factorial_permutations.sh            # per-contrast dual-null backbone tests
+python alz/integration/adapters/examine_factorial.py --run    # additivity, temporal, cell-type, kinase interpretation
 ```
 
 Environment variables that matter at run time: `ANALYSIS_MODE` (`males_only` default or `full_cohort`), `PAIR_FILTER` (e.g. `"Microglia-PVM:L5 IT"` or `"*:L5 IT"` to restrict), `ENABLE_KINASE_IMPUTATION` (default on), and `MEMORY_LIMIT_GB` (R memory guard, default 10, runs under a 12 GB systemd scope).

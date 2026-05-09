@@ -1,6 +1,6 @@
 # Incytr Pipeline Remediation Plan
 
-> **Heads-up to the implementing engineer (2026-05-08):** the legacy `wrappers/`, `adapters/`, `sidecar/`, and `tests/` trees described below have been **physically relocated** out of the alzheimers repo to `~/Projects/work/incytr_integration_archive/` as part of a separate cleanup sprint. The Phase 1 stubs (`factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh`) and `config_integration.py` remain at `code/integration/`. Nothing was deleted — `mv` files back if you need them in-tree to finish the rewrite. See `code/integration/MOVED.txt` for the manifest.
+> **Heads-up to the implementing engineer (2026-05-08):** the legacy `wrappers/`, `adapters/`, `sidecar/`, and `tests/` trees described below have been **physically relocated** out of the alzheimers repo to `~/Projects/work/incytr_integration_archive/` as part of a separate cleanup sprint. The Phase 1 stubs (`factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh`) and `config_integration.py` remain at `alz/integration/`. Nothing was deleted — `mv` files back if you need them in-tree to finish the rewrite. See `alz/integration/MOVED.txt` for the manifest.
 
 **Status:** Required, not optional. This is a structural error, not a refactor opportunity.
 **Audience:** Senior engineer assigned to implement.
@@ -20,14 +20,14 @@ The factorial Incytr pipeline in this repository is architecturally broken. The 
 
 ### 1.1 The wrapper does not wrap
 
-`code/integration/wrappers/run_incytr_factorial_all_pairs.R` calls `library(Incytr)` at line 140 and **calls zero exported incytr functions afterward**. Verified by exhaustive grep for `Cal_SigProb`, `Cal_PDS`, `Cal_foldchange`, `Cal_scFC`, `Pathway_evaluation`, `pathway_inference`, `Export_results`, `run_factorial`, `Kinase_exploration`, `Find_highexp_gene`, `Integr_kinasedata`, `Merge_results`, `Permutation_test`, `create_Incytr`, `Infer_5step_pathways`, `Generate_indicator`, `Expr_bygroup`, `Contrast_SigProb`, `object_update` across the file. The four matches that exist are all comments saying "Mirror of …", "matching …", "parity per …".
+`alz/integration/wrappers/run_incytr_factorial_all_pairs.R` calls `library(Incytr)` at line 140 and **calls zero exported incytr functions afterward**. Verified by exhaustive grep for `Cal_SigProb`, `Cal_PDS`, `Cal_foldchange`, `Cal_scFC`, `Pathway_evaluation`, `pathway_inference`, `Export_results`, `run_factorial`, `Kinase_exploration`, `Find_highexp_gene`, `Integr_kinasedata`, `Merge_results`, `Permutation_test`, `create_Incytr`, `Infer_5step_pathways`, `Generate_indicator`, `Expr_bygroup`, `Contrast_SigProb`, `object_update` across the file. The four matches that exist are all comments saying "Mirror of …", "matching …", "parity per …".
 
 The package is loaded for kinase database tables and nothing else. Every numerical step — sigprob, scFC, factorial OLS, evaluation, kinase scoring — is **reimplemented** in:
 
-- `code/integration/wrappers/receiver_scoring.R::compute_sigprob_vectorized`
-- `code/integration/wrappers/receiver_scoring.R::compute_scfc_vectorized`
-- `code/integration/wrappers/run_incytr_factorial_all_pairs.R:649` (the local `Pathway_evaluation` mirror)
-- `code/integration/wrappers/duckdb_enumeration.R` (replaces `Infer_5step_pathways`)
+- `alz/integration/wrappers/receiver_scoring.R::compute_sigprob_vectorized`
+- `alz/integration/wrappers/receiver_scoring.R::compute_scfc_vectorized`
+- `alz/integration/wrappers/run_incytr_factorial_all_pairs.R:649` (the local `Pathway_evaluation` mirror)
+- `alz/integration/wrappers/duckdb_enumeration.R` (replaces `Infer_5step_pathways`)
 
 This is a shadow fork. Comments saying "matching upstream" are aspirational, not enforced. There is no test that pins the wrapper's output against `incytr::run_factorial()`.
 
@@ -37,7 +37,7 @@ The wrapper assembles its 503-column wide-by-contrast output schema by hand at `
 
 ### 1.3 The "adapter" layer materializes derivations as primary outputs
 
-`code/integration/adapters/aggregate_factorial.py` produces seven CSV files:
+`alz/integration/adapters/aggregate_factorial.py` produces seven CSV files:
 
 - `backbone_provenance.csv`
 - `contrast_comparison.csv`
@@ -70,13 +70,13 @@ This cannot be patched. It must be torn out.
 
 **Eliminate shadow forks and the materialized-derivations layer.**
 
-When the pipeline runs incytr, it must call incytr. The wrapper must be a wrapper — thin, AD-specific, with no math. Every primary output must come from a function in the incytr package. Every derived output must be a SQL view, not a materialized file. Every file in `code/integration/` must serve exactly one of: data loading, persistence, or orchestration.
+When the pipeline runs incytr, it must call incytr. The wrapper must be a wrapper — thin, AD-specific, with no math. Every primary output must come from a function in the incytr package. Every derived output must be a SQL view, not a materialized file. Every file in `alz/integration/` must serve exactly one of: data loading, persistence, or orchestration.
 
 At completion:
 
-- `git grep -E "Mirror of|matching upstream|parity per|reimplemented from" code/integration/` returns zero results.
-- `git grep "library(Incytr)" code/integration/` returns exactly one R file.
-- No file in `code/integration/` reimplements math defined in `incytr/R/`.
+- `git grep -E "Mirror of|matching upstream|parity per|reimplemented from" alz/integration/` returns zero results.
+- `git grep "library(Incytr)" alz/integration/` returns exactly one R file.
+- No file in `alz/integration/` reimplements math defined in `incytr/R/`.
 - No CSV is written by any pipeline step. Parquet only.
 - No JSON-per-pair file is written. Runtime metadata is one parquet appended per pair.
 - Aggregation tables are SQL views in one file, queried on demand.
@@ -86,7 +86,7 @@ At completion:
 ## 3. Non-goals
 
 - **Backwards compatibility.** No deprecation flags. No legacy entrypoints. No "_v2" suffixes. The new code replaces the old code in the same PR.
-- **Snapshot preservation.** Pinned baselines under `outputs/reports/incytr_baseline_AB/` and intermediates under `code/integration/intermediates/factorial/all_pairs/` are deleted. Recover from git history if needed.
+- **Snapshot preservation.** Pinned baselines under `outputs/reports/incytr_baseline_AB/` and intermediates under `alz/integration/intermediates/factorial/all_pairs/` are deleted. Recover from git history if needed.
 - **Performance retuning.** Performance work happens upstream where the math lives. The wrapper does not optimize.
 - **Scope expansion.** Cell-type vocabulary, contrast design, AD data loaders are unchanged in semantics.
 
@@ -99,19 +99,19 @@ There is one boundary:
 | Concern | Owner |
 |---|---|
 | Math, statistical models, schema of returned data, package-level orchestration | `incytr` package (`/home/hchung/Projects/work/incytr/`) |
-| AD-specific data loading, persistence layout, cross-pair derivations as views, run-level orchestration | this repo (`code/integration/`) |
+| AD-specific data loading, persistence layout, cross-pair derivations as views, run-level orchestration | this repo (`alz/integration/`) |
 
-After remediation, `code/integration/` looks like this and contains nothing else:
+After remediation, `alz/integration/` looks like this and contains nothing else:
 
 ```
-code/integration/
+alz/integration/
 ├── README.md                       # describes the new architecture, no historical notes
 ├── config_integration.py           # paths and thresholds (kept, possibly trimmed)
 ├── factorial.R                     # ~200-line entry point — calls incytr exclusively
 ├── load.R                          # AD-specific data loaders (expression, PTM, design)
 ├── persist.R                       # parquet writer + hive-partition layout helpers
 ├── views.sql                       # all derivations defined once
-└── run_factorial.sh                # one-line shell entry: Rscript code/integration/factorial.R
+└── run_factorial.sh                # one-line shell entry: Rscript alz/integration/factorial.R
 ```
 
 The directories `wrappers/`, `adapters/`, `intermediates/`, `sidecar/`, and `tests/edge_pruning/` cease to exist.
@@ -125,7 +125,7 @@ outputs/reports/incytr_factorial/
 ├── routes/
 │   └── sender=<S>/receiver=<R>/data.parquet  # MEA-joined kinase route data (if retained)
 ├── pair_metadata.parquet                 # 1 row/pair: timing, status, n_pre, n_post
-└── views.sql                             # symlink or copy of code/integration/views.sql
+└── views.sql                             # symlink or copy of alz/integration/views.sql
 ```
 
 No CSV. No per-pair JSON. No per-pair directory of unstructured artifacts.
@@ -202,13 +202,13 @@ These tests live in the package and stay forever. They are the contract.
 
 In **one commit** in this repo:
 
-1. Write `code/integration/factorial.R`. Approximate shape (~200 lines including I/O, argparse, logging):
+1. Write `alz/integration/factorial.R`. Approximate shape (~200 lines including I/O, argparse, logging):
 
    ```r
    library(Incytr)
    library(arrow)
-   source("code/integration/load.R")
-   source("code/integration/persist.R")
+   source("alz/integration/load.R")
+   source("alz/integration/persist.R")
 
    args <- parse_args(commandArgs(trailingOnly = TRUE))
    inputs <- load_ad_factorial_inputs(args$config)
@@ -228,11 +228,11 @@ In **one commit** in this repo:
    )
    ```
 
-2. Write `code/integration/load.R`. AD-specific data loading. ~150 lines. No math.
+2. Write `alz/integration/load.R`. AD-specific data loading. ~150 lines. No math.
 
-3. Write `code/integration/persist.R`. Hive-partition writers + categorical encoding. ~80 lines.
+3. Write `alz/integration/persist.R`. Hive-partition writers + categorical encoding. ~80 lines.
 
-4. Write `code/integration/views.sql`. Defines:
+4. Write `alz/integration/views.sql`. Defines:
    - `backbone_provenance` (per-receiver `SELECT DISTINCT`)
    - `contrast_comparison` (GROUP BY pair × contrast)
    - `temporal_dynamics` (parses contrast string, same group-by)
@@ -243,14 +243,14 @@ In **one commit** in this repo:
 
    These are CREATE VIEW statements. They are not materialized.
 
-5. Write `code/integration/run_factorial.sh`. One-line invocation:
+5. Write `alz/integration/run_factorial.sh`. One-line invocation:
    ```bash
    #!/usr/bin/env bash
    set -euo pipefail
-   exec Rscript code/integration/factorial.R "$@"
+   exec Rscript alz/integration/factorial.R "$@"
    ```
 
-6. Update `pixi.toml` so `pixi run incytr-factorial` calls `code/integration/run_factorial.sh`.
+6. Update `pixi.toml` so `pixi run incytr-factorial` calls `alz/integration/run_factorial.sh`.
 
 The wrapper must not contain sender/receiver nested scoring loops. Pair filtering is allowed only as input selection passed to the package production engine.
 
@@ -258,7 +258,7 @@ The wrapper must not contain sender/receiver nested scoring loops. Pair filterin
 
 ### Phase 3 — Decide what survives in the Python adapter layer
 
-Every file in `code/integration/adapters/` either justifies itself in writing or is deleted in Phase 5. The implementing engineer writes one paragraph per surviving adapter answering: *what does the new R wrapper not do that this script does, and which downstream consumer (named) needs it?*
+Every file in `alz/integration/adapters/` either justifies itself in writing or is deleted in Phase 5. The implementing engineer writes one paragraph per surviving adapter answering: *what does the new R wrapper not do that this script does, and which downstream consumer (named) needs it?*
 
 **Default-keep candidates (subject to the paragraph test):**
 
@@ -270,20 +270,20 @@ Every file in `code/integration/adapters/` either justifies itself in writing or
 - `aggregate_cross_pair.py` — same.
 - `compute_kinase_support_all_pairs.py` — orchestration; the new R wrapper handles iteration.
 - `examine_factorial.py` — diagnostic redundant with views.
-- `export_kl_output_factorial.py`, `export_kl_output.py`, `export_multiomics_evidence_factorial.py`, `export_kinase_imputed_genes_factorial.py`, `export_kinase_imputed_genes.py`, `export_expression_factorial.py`, `export_expression.py`, `export_phospho.py`, `export_kldata.py` — all data movement scripts written to feed the shadow-fork wrapper. The new architecture loads data inside `code/integration/load.R` directly. These scripts have no consumer.
-- `normalization.py` — if the math is upstream-equivalent, it dies; if AD-specific, it moves to `code/integration/load.R` or a small `normalization.py` that survives by name only.
+- `export_kl_output_factorial.py`, `export_kl_output.py`, `export_multiomics_evidence_factorial.py`, `export_kinase_imputed_genes_factorial.py`, `export_kinase_imputed_genes.py`, `export_expression_factorial.py`, `export_expression.py`, `export_phospho.py`, `export_kldata.py` — all data movement scripts written to feed the shadow-fork wrapper. The new architecture loads data inside `alz/integration/load.R` directly. These scripts have no consumer.
+- `normalization.py` — if the math is upstream-equivalent, it dies; if AD-specific, it moves to `alz/integration/load.R` or a small `normalization.py` that survives by name only.
 - `build_edge_index.py` — verify whether the unified viewer consumes its output. If yes, the consumer is rewritten to query the new parquet store directly. The adapter dies.
 - `common.py` — depends on what's left. Probably dies.
 
-**Acceptance for Phase 3:** a written disposition for every file in `code/integration/adapters/`. Surviving files are listed in the README. Everything else is queued for Phase 5 deletion.
+**Acceptance for Phase 3:** a written disposition for every file in `alz/integration/adapters/`. Surviving files are listed in the README. Everything else is queued for Phase 5 deletion.
 
 ### Phase 4 — Migrate downstream consumers
 
-Anything that currently reads from `code/integration/intermediates/factorial/all_pairs/` or `outputs/reports/incytr_baseline_AB/` is rewritten to read from `outputs/reports/incytr_factorial/`. Known consumers:
+Anything that currently reads from `alz/integration/intermediates/factorial/all_pairs/` or `outputs/reports/incytr_baseline_AB/` is rewritten to read from `outputs/reports/incytr_factorial/`. Known consumers:
 
-- `code/build_unified_viewer.py` — already pruned of factorial backbone reads in the recent viewer cleanup; reverify there are no stragglers.
+- `alz/build_unified_viewer.py` — already pruned of factorial backbone reads in the recent viewer cleanup; reverify there are no stragglers.
 - Any `pixi.toml` task that references the old layout.
-- Any `code/runners/` script that references the old wrapper.
+- Any `alz/runners/` script that references the old wrapper.
 - Any documentation cross-link.
 
 A consumer that cannot be migrated is a consumer that the new architecture does not support. Either fix the consumer or document why the feature is being dropped.
@@ -295,23 +295,23 @@ A consumer that cannot be migrated is a consumer that the new architecture does 
 In **one PR**, after Phases 1–4 are merged and the new pipeline is producing correct output:
 
 ```bash
-git rm -r code/integration/wrappers/
-git rm -r code/integration/adapters/                 # except files that survived Phase 3
-git rm -r code/integration/sidecar/
-git rm -r code/integration/tests/edge_pruning/
-git rm -r code/integration/intermediates/
-git rm    code/integration/run_all_pairs.sh
-git rm    code/integration/run_factorial_all_pairs.sh
-git rm    code/integration/run_factorial_baseline_AB.sh
-git rm    code/integration/run_factorial_memory_gated.sh
-git rm    code/integration/run_imputation_verification.sh
-git rm    code/integration/incytr_runtime.sh
+git rm -r alz/integration/wrappers/
+git rm -r alz/integration/adapters/                 # except files that survived Phase 3
+git rm -r alz/integration/sidecar/
+git rm -r alz/integration/tests/edge_pruning/
+git rm -r alz/integration/intermediates/
+git rm    alz/integration/run_all_pairs.sh
+git rm    alz/integration/run_factorial_all_pairs.sh
+git rm    alz/integration/run_factorial_baseline_AB.sh
+git rm    alz/integration/run_factorial_memory_gated.sh
+git rm    alz/integration/run_imputation_verification.sh
+git rm    alz/integration/incytr_runtime.sh
 git rm -r outputs/reports/incytr_baseline_AB/
 ```
 
 In the same PR, rewrite (do not annotate, do not deprecate):
 
-- `code/integration/README.md`
+- `alz/integration/README.md`
 - `docs/integrations/kinase_incytr_integration.md`
 - `docs/integrations/incytr_audit_ledger.md`
 - `CLAUDE.md` — sections describing `wrappers/`, `adapters/`, the seven aggregation tables, the dual-track `run_factorial_all_pairs.sh` path, the list of "supporting prerequisites" that reference deleted scripts.
@@ -359,11 +359,11 @@ Current state as of 2026-05-08:
 [x] incytr worktree had a native run_factorial_all_pairs() scaffold, now classified as the wrong abstraction.
 [x] incytr worktree has Export_results(format = c("long", "wide")).
 [x] Focused incytr tests for long export/all-pairs orchestration passed for the rejected scaffold. Those scaffold tests were removed and are not Phase 1 acceptance evidence.
-[x] code/integration/factorial.R, load.R, persist.R, views.sql, run_factorial.sh exist.
-[x] pixi.toml defines incytr-factorial -> code/integration/run_factorial.sh.
+[x] alz/integration/factorial.R, load.R, persist.R, views.sql, run_factorial.sh exist.
+[x] pixi.toml defines incytr-factorial -> alz/integration/run_factorial.sh.
 [x] 2026-05-08 rerun: repo R files parse cleanly.
 [x] 2026-05-08 rerun: temporary-library Incytr exposed the rejected `run_factorial_all_pairs()` scaffold and `Export_results(..., format = ...)`.
-[x] 2026-05-08 safety update: `code/integration/factorial.R` now fails before loading AD inputs while the production package API is missing. It still needs to be pointed at the final production package API.
+[x] 2026-05-08 safety update: `alz/integration/factorial.R` now fails before loading AD inputs while the production package API is missing. It still needs to be pointed at the final production package API.
 [x] 2026-05-08 package cleanup: `run_factorial_all_pairs()` and `run_factorial_receivers()` scaffold APIs, exports, docs, and scaffold tests were removed from the package worktree.
 [x] 2026-05-08 production-engine start: `incytr` source now exposes two explicit production primitives, `construct_factorial_paths()` and `score_factorial_paths()`. Candidate construction and factorial scoring are separate package responsibilities; no public network/orchestrator API is accepted. The current slice performs package-owned constrained candidate construction and vectorized per-animal SigProb/OLS scoring without `pathway_inference()` or per-pair S4 objects. Synthetic package tests cover single-pair parity, multi-sender output, and pre-scoring join guards. This is not Phase 1 acceptance yet: high-degree scale tests, package-owned multiomics/SiK parity, and full AD smoke validation remain open.
 [ ] incytr exposes the final production factorial API with package-owned constrained pathway construction and batched scoring.
@@ -378,9 +378,9 @@ Latest execution attempt, 2026-05-08:
 
 - `which pixi` fails in the active shell; the managed task runner is unavailable on `PATH`.
 - Active R libraries report `arrow = FALSE`, `duckdb = FALSE`, `DBI = FALSE`, `Incytr = TRUE`.
-- `PAIR_FILTER="Microglia-PVM:L5 IT" bash code/integration/run_factorial.sh` fails before pipeline execution with `Error in library(arrow) : there is no package called 'arrow'`.
-- `git grep "library(Incytr)" code/integration/` still returns legacy wrapper and edge-pruning test hits; the Phase 5 deletion gate remains closed.
-- `git grep -E "Mirror of|matching upstream|parity per|reimplemented from" code/integration/` still returns legacy wrapper comments; the Phase 5 deletion gate remains closed.
+- `PAIR_FILTER="Microglia-PVM:L5 IT" bash alz/integration/run_factorial.sh` fails before pipeline execution with `Error in library(arrow) : there is no package called 'arrow'`.
+- `git grep "library(Incytr)" alz/integration/` still returns legacy wrapper and edge-pruning test hits; the Phase 5 deletion gate remains closed.
+- `git grep -E "Mirror of|matching upstream|parity per|reimplemented from" alz/integration/` still returns legacy wrapper comments; the Phase 5 deletion gate remains closed.
 - A later managed-environment 1x1 smoke attempt reached native Incytr object creation and showed the implementation is operationally unsafe. Root cause from static review: `run_factorial_all_pairs()` calls `pathway_inference(obj, DB)` without gene-use filters, and Incytr expands null gene filters to all genes before cartesian pathway joins. Algebraic DB-degree estimation, without materializing the join, gives approximately `613,028,009` unrestricted candidate pathway rows for the bundled mouse DB before downstream filtering/evaluation. This must be fixed upstream before any further execution.
 
 Final sign-off checklist:
@@ -389,12 +389,12 @@ Final sign-off checklist:
 [ ] incytr/main contains all six revised PRs from Phase 1.
 [ ] incytr/tests/testthat/test-factorial-parity.R passes.
 [ ] incytr has tests proving production execution avoids repeated one-pair work and avoids unbounded candidate materialization.
-[ ] code/integration/factorial.R exists and is < 250 lines.
-[ ] code/integration/wrappers/ does not exist.
-[ ] code/integration/adapters/ contains only files with written justification.
-[ ] No file in code/integration/ contains the strings: "Mirror of", "matching upstream", "parity per", "reimplemented".
-[ ] git grep "library(Incytr)" code/integration/ returns exactly one match.
-[ ] No CSV is written by code/integration/ at runtime.
+[ ] alz/integration/factorial.R exists and is < 250 lines.
+[ ] alz/integration/wrappers/ does not exist.
+[ ] alz/integration/adapters/ contains only files with written justification.
+[ ] No file in alz/integration/ contains the strings: "Mirror of", "matching upstream", "parity per", "reimplemented".
+[ ] git grep "library(Incytr)" alz/integration/ returns exactly one match.
+[ ] No CSV is written by alz/integration/ at runtime.
 [ ] No JSON-per-pair file is written at runtime.
 [ ] outputs/reports/incytr_factorial/views.sql exists; the seven legacy CSVs do not.
 [ ] pixi run viewer succeeds.

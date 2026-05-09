@@ -111,11 +111,11 @@ Give more weight to kinases whose cell-type attribution is supported by multiple
 
 Primary files:
 
-- `code/integration/intermediates/factorial/all_pairs/recv_*.parquet`
-- `code/integration/intermediates/factorial/all_pairs/aggregation/hub_matrix_by_contrast.csv`
-- `code/integration/intermediates/factorial/all_pairs/aggregation/contrast_comparison.csv`
-- `code/integration/intermediates/factorial/all_pairs/aggregation/target_convergence_by_contrast.csv`
-- `code/integration/intermediates/factorial/all_pairs/aggregation/temporal_dynamics.csv`
+- `alz/integration/intermediates/factorial/all_pairs/recv_*.parquet`
+- `alz/integration/intermediates/factorial/all_pairs/aggregation/hub_matrix_by_contrast.csv`
+- `alz/integration/intermediates/factorial/all_pairs/aggregation/contrast_comparison.csv`
+- `alz/integration/intermediates/factorial/all_pairs/aggregation/target_convergence_by_contrast.csv`
+- `alz/integration/intermediates/factorial/all_pairs/aggregation/temporal_dynamics.csv`
 
 Interpretation purpose:
 
@@ -131,9 +131,9 @@ Current run anchors:
 
 Primary files:
 
-- `code/integration/intermediates/factorial/all_pairs/aggregation/backbone_recurrence_by_contrast.csv`
-- `code/integration/intermediates/factorial/all_pairs/aggregation/backbone_permutation_pvalues_by_contrast.csv`
-- `code/integration/intermediates/factorial/all_pairs/aggregation/kinase_backbone_edges.parquet`
+- `alz/integration/intermediates/factorial/all_pairs/aggregation/backbone_recurrence_by_contrast.csv`
+- `alz/integration/intermediates/factorial/all_pairs/aggregation/backbone_permutation_pvalues_by_contrast.csv`
+- `alz/integration/intermediates/factorial/all_pairs/aggregation/kinase_backbone_edges.parquet`
 - `outputs/reports/kinase_backbone_edges_sig.parquet`
 
 Interpretation purpose:
@@ -154,12 +154,12 @@ The strongest backbones should show:
 
 Primary files:
 
-- `code/integration/intermediates/factorial/all_pairs/aggregation/examination/additivity_summary.csv`
-- `code/integration/intermediates/factorial/all_pairs/aggregation/examination/additivity_by_pair_timepoint.csv`
-- `code/integration/intermediates/factorial/all_pairs/aggregation/examination/trajectory_classification.csv`
-- `code/integration/intermediates/factorial/all_pairs/aggregation/examination/celltype_centrality.csv`
-- `code/integration/intermediates/factorial/all_pairs/aggregation/examination/kinase_validation_summary.txt`
-- `code/integration/intermediates/factorial/all_pairs/aggregation/examination/figure_overview.png`
+- `alz/integration/intermediates/factorial/all_pairs/aggregation/examination/additivity_summary.csv`
+- `alz/integration/intermediates/factorial/all_pairs/aggregation/examination/additivity_by_pair_timepoint.csv`
+- `alz/integration/intermediates/factorial/all_pairs/aggregation/examination/trajectory_classification.csv`
+- `alz/integration/intermediates/factorial/all_pairs/aggregation/examination/celltype_centrality.csv`
+- `alz/integration/intermediates/factorial/all_pairs/aggregation/examination/kinase_validation_summary.txt`
+- `alz/integration/intermediates/factorial/all_pairs/aggregation/examination/figure_overview.png`
 
 Interpretation purpose:
 
@@ -529,10 +529,10 @@ This registry should be treated as part of the analysis record. Any result that 
 
 Create one acquisition script per source family rather than one monolithic downloader:
 
-- `code/validation/acquire_amp_ad.py`
-- `code/validation/acquire_sea_ad.py`
-- `code/validation/acquire_phosphoproteomics.py`
-- `code/validation/acquire_neuropro.py`
+- `alz/validation/acquire_amp_ad.py`
+- `alz/validation/acquire_sea_ad.py`
+- `alz/validation/acquire_phosphoproteomics.py`
+- `alz/validation/acquire_neuropro.py`
 
 The scripts should:
 

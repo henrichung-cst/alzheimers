@@ -1,7 +1,7 @@
 # Unified Viewer — Refined-Minimal Review Pass
 
 Status: proposed.
-Scope: edits confined to `code/build_unified_viewer.py` (embedded JS / HTML / CSS). No payload schema changes, no Python data-loading changes, no new tabs.
+Scope: edits confined to `alz/build_unified_viewer.py` (embedded JS / HTML / CSS). No payload schema changes, no Python data-loading changes, no new tabs.
 
 The prior IA refactor (tab grouping, adaptive filter bar, prerequisite cards, breadcrumbs, URL hash state) is **already implemented** — `TAB_MANIFEST`, `FILTER_REASONS`, `syncFilterBarToTab`, `syncBreadcrumb`, `renderUnmetPrerequisite`, and the breadcrumb nav are all in place. This plan only addresses what remains.
 
@@ -99,7 +99,7 @@ No color, no shadows, no new components.
 
 ## Critical files
 
-`code/build_unified_viewer.py` — only file edited. Sections touched (line numbers approximate):
+`alz/build_unified_viewer.py` — only file edited. Sections touched (line numbers approximate):
 
 - **CSS** (~880–940): drawer styles, typography variables, spacing tokens.
 - **HTML template** (~1003–1100): drawer toggle button + drawer container.

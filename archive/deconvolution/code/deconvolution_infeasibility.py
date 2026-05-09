@@ -18,10 +18,10 @@ Approach:
 All figures are saved to outputs/reports/deconvolution_infeasibility/.
 
 Usage:
-    python code/supplementary/deconvolution_infeasibility.py --run
-    python code/supplementary/deconvolution_infeasibility.py --svd
-    python code/supplementary/deconvolution_infeasibility.py --synthetic
-    python code/supplementary/deconvolution_infeasibility.py --sweep
+    python alz/supplementary/deconvolution_infeasibility.py --run
+    python alz/supplementary/deconvolution_infeasibility.py --svd
+    python alz/supplementary/deconvolution_infeasibility.py --synthetic
+    python alz/supplementary/deconvolution_infeasibility.py --sweep
 """
 
 import argparse
