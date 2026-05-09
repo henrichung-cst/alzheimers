@@ -1,0 +1,2 @@
+# Datasets are declared here as Phase 4 migrates each stage to Kedro nodes.
+# Catalog grows incrementally; adding entries pre-emptively rots.

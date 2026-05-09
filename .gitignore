@@ -9,7 +9,12 @@
 !/docs/**
 !pixi.toml
 !pixi.lock
+!pyproject.toml
 !.envrc
+!/conf/
+!/conf/**
+/conf/local/*
+!/conf/local/.gitkeep
 # Ignore generated Python cache files.
 /alz/__pycache__/
 /alz/**/*.pyc

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alzheimers"
+version = "0.1.0"
+description = "Stoichiometry-corrected kinase attribution pipeline for Alzheimer's phosphoproteomics."
+requires-python = ">=3.11"
+
+[tool.setuptools]
+packages = ["alz"]
+
+[tool.kedro]
+package_name = "alz"
+project_name = "alzheimers"
+kedro_init_version = "1.3.1"
+source_dir = "."
+
+[tool.kedro_telemetry]
+project_id = "53144db8939f4009952c42bf959bab7c"
