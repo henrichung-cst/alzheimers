@@ -91,10 +91,8 @@ def _classify_mechanisms(mea_raw, mea_stoich):
                 mechanism = "both"
             elif in_stoich:
                 mechanism = "activity_driven"
-            elif in_raw:
-                mechanism = "abundance_driven"
             else:
-                mechanism = "non_significant"
+                mechanism = "abundance_driven"
 
             s_fdr = stoich_c[stoich_c["kinase"] == kinase]["FDR"].values
             r_fdr = raw_c[raw_c["kinase"] == kinase]["FDR"].values

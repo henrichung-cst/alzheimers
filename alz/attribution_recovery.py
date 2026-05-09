@@ -37,7 +37,6 @@ from alz import config
 # ---------------------------------------------------------------------------
 
 OUTPUT_DIR = config.ATTRIBUTION_RECOVERY_OUTPUT_DIR
-KINASE_ATTR_DIR = config.KINASE_ATTRIBUTION_OUTPUT_DIR
 
 CONTRASTS = [
     "App_2mo", "App_4mo", "App_6mo",
@@ -48,50 +47,6 @@ NES_COLS = [f"{c}_NES" for c in CONTRASTS]
 FDR_COLS = [f"{c}_FDR" for c in CONTRASTS]
 
 _SUSTAINED_RATIO_THRESH = 1.5
-
-
-def _ensure_output_dir():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-
-# ---------------------------------------------------------------------------
-# Loaders
-# ---------------------------------------------------------------------------
-
-def _load_mea_stoichiometry():
-    """Load MEA stoichiometry from every available phospho track and concatenate.
-
-    Reads `mea_stoichiometry.csv` (legacy S/T) and `mea_stoichiometry_pY.csv`
-    (Tyr) when present. Adds `residue_type` and `track` columns when missing
-    (for legacy files predating the pY refactor).
-    """
-    frames = []
-    for track_name, track_cfg in config.PHOSPHO_TRACKS.items():
-        suffix = track_cfg["output_suffix"]
-        fname = f"mea_stoichiometry{suffix}.csv"
-        path = os.path.join(KINASE_ATTR_DIR, fname)
-        if not os.path.exists(path):
-            continue
-        df = pd.read_csv(path)
-        if "residue_type" not in df.columns:
-            df["residue_type"] = track_cfg["residue"]
-        if "track" not in df.columns:
-            df["track"] = track_cfg["name"]
-        frames.append(df)
-    if not frames:
-        raise FileNotFoundError(
-            f"No mea_stoichiometry*.csv found in {KINASE_ATTR_DIR}. "
-            f"Run kinase_enrich.py first."
-        )
-    return pd.concat(frames, ignore_index=True, sort=False)
-
-
-def _load_unified_attribution_full():
-    path = os.path.join(KINASE_ATTR_DIR, "unified_attribution_full.csv")
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"{path} not found. Run kinase_attribute.py first.")
-    return pd.read_csv(path)
 
 
 def _build_gene_symbol_map(uaf_full, mea):
@@ -401,61 +356,6 @@ def step_attribution_recovery(mea, uaf_full):
 
 
 # ===========================================================================
-# S3: Kinase-first hypothesis tables
-# ===========================================================================
-
-def step_kinase_profiles():
-    """S3: Kinase activity matrix (Table 1) and kinase hypothesis table (Table 3)."""
-    _ensure_output_dir()
-    print("\n=== S3: Kinase Activity Profiles ===\n")
-
-    mea = _load_mea_stoichiometry()
-    uaf_full = _load_unified_attribution_full()
-    t1, _, t3 = step_attribution_recovery(mea, uaf_full)
-
-    t1_path = os.path.join(OUTPUT_DIR, "kinase_activity_matrix.csv")
-    t1.to_csv(t1_path, index=False)
-    print(f"  Saved {t1_path} ({len(t1)} kinases)")
-
-    t3_path = os.path.join(OUTPUT_DIR, "kinase_hypothesis_table.csv")
-    t3.to_csv(t3_path, index=False)
-    print(f"  Saved {t3_path} ({len(t3)} kinases)")
-
-    print(f"\n  Trajectory distribution:")
-    for label, cnt in t1["trajectory_label"].value_counts().items():
-        print(f"    {label}: {cnt}")
-    print(f"\n  Kinases with >=1 cell-type candidate: "
-          f"{(t3['n_celltype_candidates'] > 0).sum()}")
-    print(f"  Kinases with high-confidence attribution: "
-          f"{t3['has_high_conf_attribution'].sum()}")
-    print("\n  S3 complete.")
-
-
-# ===========================================================================
-# S4: Cell-type-first hypothesis tables
-# ===========================================================================
-
-def step_celltype_profiles():
-    """S4: Cell-type evidence table (Table 2)."""
-    _ensure_output_dir()
-    print("\n=== S4: Cell-Type Evidence Table ===\n")
-
-    uaf_full = _load_unified_attribution_full()
-    t2 = _build_celltype_evidence(uaf_full)
-
-    t2_path = os.path.join(OUTPUT_DIR, "celltype_evidence_table.csv")
-    t2.to_csv(t2_path, index=False)
-    print(f"  Saved {t2_path} ({len(t2)} kinase-celltype pairs)")
-
-    print(f"\n  {t2['kinase'].nunique()} kinases above WMB expression gate")
-    print(f"  {len(t2)} (kinase, cell_type) pairs in evidence table")
-    print(f"\n  Kinase candidates per cell type:")
-    for ct, cnt in t2["cell_type"].value_counts().items():
-        print(f"    {ct}: {cnt}")
-    print("\n  S4 complete.")
-
-
-# ===========================================================================
 # Summary
 # ===========================================================================
 
@@ -503,21 +403,9 @@ def print_summary():
     print()
 
 
-# ===========================================================================
-# CLI shim — defers to the Kedro `recovery` pipeline.
-# ===========================================================================
-
 def main():
-    """CLI shim: delegates to `kedro run --pipeline=recovery`.
-
-    Legacy --kinase-profiles / --celltype-profiles / --hypothesis-tables /
-    --run flags collapse into a single Kedro pipeline run (which always
-    produces all three tables). --summary stays as a read-only mode that
-    prints cached results without re-running the pipeline.
-    """
     parser = argparse.ArgumentParser(
         description="Attribution Recovery: Kinase and cell-type hypothesis tables",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--summary", action="store_true",
                         help="Print cached results summary (no pipeline run)")

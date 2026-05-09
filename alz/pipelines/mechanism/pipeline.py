@@ -1,14 +1,3 @@
-"""Track-namespaced mechanism pipeline.
-
-The per-track raw-phospho MEA is namespaced (st + py); classification and
-unified-attribution merge are single-namespace combiners that consume both
-tracks via `<ns>.mea_raw_phospho` and `<ns>.mea_stoichiometry` catalog keys.
-
-The merge node writes back to `unified_attribution.csv` (same on-disk path
-as the attribute pipeline's output) via the `unified_attribution_with_mechanism`
-catalog key — distinct keys, same file, no circular dependency.
-"""
-
 from kedro.pipeline import Pipeline, node, pipeline as modular_pipeline
 
 from .nodes import classify_mechanisms, mea_raw_phospho_track, merge_into_unified
@@ -19,7 +8,7 @@ def _track_template() -> Pipeline:
         node(
             func=mea_raw_phospho_track,
             inputs=["raw_phospho_normalized", "sample_mapping",
-                    "params:track"],
+                    "params:analysis_mode", "params:track"],
             outputs="mea_raw_phospho",
             name="mea_raw_phospho_track",
         ),
@@ -31,7 +20,10 @@ def _track(namespace: str, track_param: str) -> Pipeline:
         _track_template(),
         namespace=namespace,
         inputs={"sample_mapping"},
-        parameters={"params:track": f"params:{track_param}"},
+        parameters={
+            "params:analysis_mode": "params:analysis_mode",
+            "params:track": f"params:{track_param}",
+        },
     )
 
 

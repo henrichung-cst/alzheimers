@@ -1,11 +1,3 @@
-"""Nodes for the mechanism pipeline.
-
-Thin wrappers over `alz.kinase_mechanism` helpers so the legacy CLI shim and
-the Kedro pipeline run the same code paths. Per-track raw-phospho MEA is
-namespaced; classification and unified-attribution merge are single-namespace
-combiners that consume both tracks.
-"""
-
 from __future__ import annotations
 
 import pandas as pd
@@ -20,10 +12,10 @@ from alz.kinase_mechanism import (
 
 def mea_raw_phospho_track(raw_phospho_normalized: pd.DataFrame,
                           sample_mapping: pd.DataFrame,
+                          analysis_mode: str,
                           track: str) -> pd.DataFrame:
-    """Per-track raw-phospho OLS + MEA. Returns the per-track MEA DataFrame."""
     track_cfg = _resolve_track(track)
-    mapping = _filter_samples(sample_mapping)
+    mapping = _filter_samples(sample_mapping, analysis_mode=analysis_mode)
     mea_raw = _run_track_raw_mea(track_cfg, raw_phospho_normalized, mapping)
     if mea_raw is None:
         return pd.DataFrame()
@@ -33,7 +25,6 @@ def mea_raw_phospho_track(raw_phospho_normalized: pd.DataFrame,
 def classify_mechanisms(st_mea_raw: pd.DataFrame, py_mea_raw: pd.DataFrame,
                         st_mea_stoich: pd.DataFrame, py_mea_stoich: pd.DataFrame
                         ) -> pd.DataFrame:
-    """Combine raw + stoich MEAs across tracks → mechanism annotation table."""
     raw_frames = [df for df in (st_mea_raw, py_mea_raw)
                   if df is not None and not df.empty]
     if not raw_frames:
@@ -53,6 +44,5 @@ def classify_mechanisms(st_mea_raw: pd.DataFrame, py_mea_raw: pd.DataFrame,
 
 def merge_into_unified(unified_attribution: pd.DataFrame,
                        mechanism_annotation: pd.DataFrame) -> pd.DataFrame:
-    """Add `mechanism_annotation` column to unified attribution table."""
     return _merge_mechanism_into_unified(unified_attribution,
                                          mechanism_annotation)

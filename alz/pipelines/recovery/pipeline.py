@@ -1,10 +1,3 @@
-"""Single-namespace attribution-recovery pipeline.
-
-Combines per-track MEA stoichiometry and assembles the three hypothesis
-tables (kinase activity matrix, cell-type evidence, kinase hypothesis
-table). All compute lives in pure helpers in `alz.attribution_recovery`.
-"""
-
 from kedro.pipeline import Pipeline, node
 
 from .nodes import combine_mea_stoichiometry, compute_recovery_tables
