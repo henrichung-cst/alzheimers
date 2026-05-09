@@ -377,6 +377,24 @@ def _build_kinase_hypothesis_table(t1, t2):
 
 
 # ===========================================================================
+# Pure compute orchestrator
+# ===========================================================================
+
+def step_attribution_recovery(mea, uaf_full):
+    """Compute all three recovery tables from in-memory inputs.
+
+    Returns ``(kinase_activity_matrix, celltype_evidence_table,
+    kinase_hypothesis_table)``. Side-effect free; callers (CLI shim or
+    Kedro nodes) decide where to persist the outputs.
+    """
+    gene_map = _build_gene_symbol_map(uaf_full, mea)
+    t1 = _build_kinase_activity_matrix(mea, gene_map)
+    t2 = _build_celltype_evidence(uaf_full)
+    t3 = _build_kinase_hypothesis_table(t1, t2)
+    return t1, t2, t3
+
+
+# ===========================================================================
 # S3: Kinase-first hypothesis tables
 # ===========================================================================
 
@@ -387,15 +405,12 @@ def step_kinase_profiles():
 
     mea = _load_mea_stoichiometry()
     uaf_full = _load_unified_attribution_full()
-    gene_map = _build_gene_symbol_map(uaf_full, mea)
+    t1, _, t3 = step_attribution_recovery(mea, uaf_full)
 
-    t1 = _build_kinase_activity_matrix(mea, gene_map)
     t1_path = os.path.join(OUTPUT_DIR, "kinase_activity_matrix.csv")
     t1.to_csv(t1_path, index=False)
     print(f"  Saved {t1_path} ({len(t1)} kinases)")
 
-    t2 = _build_celltype_evidence(uaf_full)
-    t3 = _build_kinase_hypothesis_table(t1, t2)
     t3_path = os.path.join(OUTPUT_DIR, "kinase_hypothesis_table.csv")
     t3.to_csv(t3_path, index=False)
     print(f"  Saved {t3_path} ({len(t3)} kinases)")
@@ -420,8 +435,8 @@ def step_celltype_profiles():
     print("\n=== S4: Cell-Type Evidence Table ===\n")
 
     uaf_full = _load_unified_attribution_full()
-
     t2 = _build_celltype_evidence(uaf_full)
+
     t2_path = os.path.join(OUTPUT_DIR, "celltype_evidence_table.csv")
     t2.to_csv(t2_path, index=False)
     print(f"  Saved {t2_path} ({len(t2)} kinase-celltype pairs)")
