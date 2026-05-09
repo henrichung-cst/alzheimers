@@ -1,2 +1,22 @@
-# Datasets are declared here as Phase 4 migrates each stage to Kedro nodes.
+# Datasets are declared as Phase 4 migrates each stage to Kedro nodes.
 # Catalog grows incrementally; adding entries pre-emptively rots.
+
+# ingest_mapping pipeline
+song_tmt_layout:
+  type: pandas.ExcelDataset
+  filepath: "data/datasets/song/primary/metadata/Sample_list_72mice (1).xlsx"
+  load_args:
+    sheet_name: "TMT plex layout"
+
+song_total_proteome_columns:
+  type: pandas.ExcelDataset
+  filepath: "data/datasets/song/primary/proteomics/song2024_tmttotal_protein_quant_merged_labeled (2).xlsx"
+  load_args:
+    header: 1
+    nrows: 0
+
+sample_mapping:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/data_ingest/sample_mapping.csv
+  save_args:
+    index: false
