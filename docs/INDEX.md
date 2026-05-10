@@ -24,6 +24,10 @@ Read by analytical role, not creation order.
 | File | Role |
 |:---|:---|
 | [`report_writing_checklist.md`](./report_writing_checklist.md) | Reviewer-facing report writing guidance |
+| [`result_analysis_plan.md`](./result_analysis_plan.md) | Interpretation framework: how to move from generated outputs to biological claims |
+| [`allen_ctx_hpf_disagreement.md`](./allen_ctx_hpf_disagreement.md) | Reviewer FAQ: why our cell-type verdicts may differ from the Allen ctx+HPF Transcriptomics Explorer |
+| [`viewer_style.md`](./viewer_style.md) | Writing-style guide for unified-viewer copy (panels, drawers, tooltips) |
+| [`plex_covariate_plan.md`](./plex_covariate_plan.md) | **Deferred plan** — TMT plex covariate addition for males-only OLS (diagnostic complete, activation pending) |
 | [`../archive/deconvolution/docs/deconvolution_infeasibility.md`](../archive/deconvolution/docs/deconvolution_infeasibility.md) | **Archived** — synthetic validation proving direct deconvolution is infeasible on this dataset. Source script + figures alongside under `archive/deconvolution/`. |
 
 ## Integrations

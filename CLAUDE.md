@@ -45,9 +45,8 @@ pixi run recover    # cross-contrast + final tables
 ```bash
 python alz/data_ingest.py --mapping       # §1: TMT channel-to-animal sample mapping (72 animals, 6 plexes)
 python alz/data_ingest.py --phospho-match # §2: Phosphosite-to-protein matching (91.7% match rate)
-python alz/data_ingest.py --markers       # §3: Cell-type marker protein assessment (WMB atlas, requires wmb_expression --proteome)
-python alz/data_ingest.py --quality       # §4: Data quality (PCA, batch effects, missingness)
-python alz/data_ingest.py --outliers      # §5: Statistical outlier detection (within-group robust z-scores)
+python alz/data_ingest.py --quality       # §3: Data quality (PCA, batch effects, missingness)
+python alz/data_ingest.py --outliers      # §4: Statistical outlier detection (within-group robust z-scores)
 python alz/data_ingest.py --run           # All steps in order
 python alz/data_ingest.py --summary       # Print cached results
 ```
@@ -109,6 +108,7 @@ python alz/supplementary/fdr_stringent.py --run              # Q4: FDR < 0.10 co
 python alz/supplementary/threshold_sensitivity.py --run      # Q1: Confidence tier sweep
 python alz/supplementary/aggregation_robustness.py --run     # Q2: Aggregation method comparison
 python alz/supplementary/parent_protein_qc.py --run          # Q5: Activity-driven parent QC
+python alz/supplementary/deconvolution_feasibility.py --run  # Q6: Marker→composition concordance via factorial OLS (closes deconvolution-feasibility, requires wmb_expression --proteome)
 ```
 
 ### Standalone Utilities

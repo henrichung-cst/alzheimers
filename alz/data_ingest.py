@@ -15,10 +15,6 @@ Inputs (all under data/datasets/song/):
       IMAC phospho site-level quantitation — ~4,000 S/T sites × 6 plexes.
   primary/phospho/song_IMAC_compositeSites_merged_labeled (2).xlsx
       IMAC phospho composite sites — ~3,000 grouped S/T sites.
-  transcriptomics/170_gex_celltypes_00.h5ad
-      Song snRNA-seq with Allen Cell Type Mapper labels (`class_name` per
-      nucleus, already at WMB-class resolution). Read by --markers to
-      compute per-(sample group × WMB class) composition fractions.
   transcriptomics/snrna_sample_manifest.csv  (optional)
       Manifest linking mouse IDs to snRNA-seq sample IDs.
 
@@ -30,10 +26,6 @@ Outputs (all under outputs/reports/data_ingest/):
       Per-site match of IMAC phosphosites to total proteome parent proteins.
   matching_summary.json
       Summary statistics for phosphosite-to-protein matching.
-  datadriven_marker_assessment.csv
-      Data-driven cell-type marker assessment from WMB atlas expression:
-      per-gene specificity scores, correlation with snRNA-seq composition,
-      Storey q-values.  Requires wmb_expression.py --proteome output.
   data_quality.json
       Missingness, batch-effect, and PCA summary statistics.
   pca_plots/pca_by_{plex,genotype,sex,timepoint}.png
@@ -42,9 +34,11 @@ Outputs (all under outputs/reports/data_ingest/):
 Steps (run individually or all at once with --run):
   §1 --mapping        TMT channel-to-animal sample mapping
   §2 --phospho-match  Phosphosite-to-protein matching
-  §3 --markers        Cell-type marker protein assessment (WMB atlas, data-driven)
-  §4 --quality        Data quality (missingness, batch effects, PCA)
-  §5 --outliers       Statistical outlier detection (within-group z-scores)
+  §3 --quality        Data quality (missingness, batch effects, PCA)
+  §4 --outliers       Statistical outlier detection (within-group z-scores)
+
+The marker→composition concordance diagnostic that previously sat here as §3
+has moved to alz/supplementary/deconvolution_feasibility.py.
 """
 
 import argparse
@@ -487,269 +481,11 @@ def step_phospho_match():
     print(f"\n  Saved: {sum_path}")
 
 
-# ===========================================================================
-# §3  Cell-Type Marker Protein Assessment (WMB atlas, data-driven)
-# ===========================================================================
+# §3 (Marker → composition concordance) lives in
+# alz/supplementary/deconvolution_feasibility.py — it is a closed-question
+# diagnostic, not input characterization. Run via
+# `python alz/supplementary/deconvolution_feasibility.py --run`.
 
-
-def _compute_class_fractions():
-    """Recompute snRNA composition fractions at WMB-class resolution.
-
-    Counts nuclei per (sample group × class_name) directly from the Song
-    h5ad (`config.SONG_H5AD_FILE`), where `class_name` is the Allen Cell
-    Type Mapper assignment already at WMB-class resolution. Sample group
-    IDs are derived from the h5ad `sample` field by stripping the leading
-    animal code (e.g. ``C198_ma_2mo_WTyp`` → ``ma_2mo_WTyp``). Nuclei
-    below `config.SONG_MIN_SUBCLASS_PROB` are dropped.
-
-    Returns
-    -------
-    pd.DataFrame
-        Index: sample group IDs (24 rows, e.g. ``fe_2mo_AppP``).
-        Columns: WMB class labels with nonzero counts (subset of
-        ``config.WMB_CLASSES``).
-    """
-    import anndata as ad
-
-    manifest = pd.read_csv(config.WMB_CLASS_MANIFEST_FILE)
-    name_to_label = dict(zip(manifest["class_name"], manifest["class_label"]))
-
-    adata = ad.read_h5ad(config.SONG_H5AD_FILE, backed="r")
-    obs = adata.obs[["sample", "class_name", "class_prob"]].copy()
-    n_total = len(obs)
-    obs = obs[obs["class_prob"] >= config.SONG_MIN_SUBCLASS_PROB]
-    obs = obs.dropna(subset=["class_name"])
-    obs["wmb_class"] = obs["class_name"].map(name_to_label)
-    obs = obs.dropna(subset=["wmb_class"])
-    obs["group"] = obs["sample"].str.replace(r"^[^_]+_", "", regex=True)
-
-    counts = (
-        obs.groupby(["group", "wmb_class"], observed=True)
-           .size()
-           .unstack(fill_value=0)
-    )
-    fractions = counts.div(counts.sum(axis=1), axis=0)
-    fractions.index.name = "sample_id"
-
-    fractions = fractions.loc[:, (fractions > 0).any(axis=0)]
-    n_kept = int(counts.values.sum())
-    print(f"  Class fractions: {fractions.shape[1]} WMB classes × "
-          f"{fractions.shape[0]} groups "
-          f"({n_kept}/{n_total} nuclei after class_prob filter)")
-    return fractions
-
-
-def step_markers():
-    """Identify cell-type markers from WMB atlas expression, test against proteome.
-
-    Uses the proteome-wide WMB expression matrix (from wmb_expression.py --proteome)
-    to rank genes by cell-type specificity, then correlates the top markers with
-    snRNA-seq composition fractions.
-    """
-    _ensure_output_dir()
-    print("§3: Cell-type marker protein assessment (WMB atlas)...")
-
-    wmb_path = config.WMB_PROTEOME_EXPRESSION_FILE
-    if not os.path.exists(wmb_path):
-        raise FileNotFoundError(
-            f"WMB proteome expression not found at {wmb_path}. "
-            "Run: python alz/wmb_expression.py --proteome"
-        )
-
-    wmb = pd.read_csv(wmb_path)
-    print(f"  WMB proteome expression: {len(wmb)} rows")
-
-    meta, quant, mapping = load_total_proteome()
-    gene_upper = meta["Gene Symbol"].astype(str).str.upper()
-
-    # Recompute snRNA composition fractions at WMB-class resolution
-    class_fracs = _compute_class_fractions()
-    available_frac_cols = set(class_fracs.columns)
-
-    # Map each WMB class → composition column. Classes with no snRNA clusters
-    # mapped (e.g., subcortical, brainstem, cerebellum) → None.
-    class_to_frac_col = {}
-    for cls in config.WMB_CLASSES:
-        class_to_frac_col[cls] = cls if cls in available_frac_cols else None
-
-    # Pre-compute lookups used in the inner loop
-    col_to_idx = {col: i for i, col in enumerate(quant.columns)}
-    gene_to_row = {}
-    for i, g in enumerate(gene_upper):
-        gene_to_row.setdefault(g, i)  # first occurrence wins
-
-    # Pre-compute snRNA animal → (quant column index, sample group ID) pairs
-    snrna_animals = mapping[mapping["has_snrna_seq"]].copy()
-    snrna_pairs = []  # [(col_idx, group_id), ...]
-    for _, srow in snrna_animals.iterrows():
-        col = srow["column_name"]
-        gid = srow["phospho_group_id"]
-        if col in col_to_idx and gid in class_fracs.index:
-            snrna_pairs.append((col_to_idx[col], gid))
-
-    records = []
-    cell_types = wmb["cell_type"].unique()
-
-    for ct in sorted(cell_types):
-        ct_df = wmb[wmb["cell_type"] == ct].copy()
-        # Only consider genes that are expressed (mean > 1, fraction > 10%)
-        ct_expr = ct_df[ct_df["binary_expressed"]].copy()
-        ct_expr = ct_expr.sort_values("specificity_score", ascending=False)
-
-        frac_col = class_to_frac_col.get(ct)
-        has_composition = frac_col is not None
-
-        # Pre-extract composition values for this cell type (constant across genes)
-        if has_composition and snrna_pairs:
-            frac_dict = class_fracs[frac_col].to_dict()
-            comp_by_pair = [(ci, frac_dict[gid])
-                           for ci, gid in snrna_pairs
-                           if not np.isnan(frac_dict.get(gid, np.nan))]
-        else:
-            comp_by_pair = []
-
-        for rank, (_, row) in enumerate(ct_expr.iterrows(), 1):
-            gene_human = row["gene_symbol_human"]
-            gene_mouse = row["gene_symbol_mouse"]
-
-            row_idx = gene_to_row.get(gene_human)
-            found = row_idx is not None
-
-            rec = {
-                "cell_type": ct,
-                "rank_in_cell_type": rank,
-                "gene_symbol": gene_mouse,
-                "gene_symbol_human": gene_human,
-                "specificity_score": row["specificity_score"],
-                "wmb_mean_expression": row["mean_log2_expression"],
-                "wmb_fraction_expressing": row["fraction_cells_expressing"],
-                "found_in_total_proteome": found,
-                "mean_intensity": np.nan,
-                "correlation_with_snrna_composition": np.nan,
-                "correlation_pvalue": np.nan,
-                "composition_resolution": "class" if has_composition else "none",
-            }
-
-            if found:
-                intensities = quant.iloc[row_idx].values.astype(float)
-                rec["mean_intensity"] = float(np.nanmean(intensities))
-
-                # Correlation with snRNA-seq composition at subclass resolution
-                if comp_by_pair:
-                    prot_vals = []
-                    comp_vals = []
-                    for col_idx, cv in comp_by_pair:
-                        pv = intensities[col_idx]
-                        if not np.isnan(pv):
-                            prot_vals.append(pv)
-                            comp_vals.append(cv)
-                    if len(prot_vals) >= 5:
-                        r, p = stats.pearsonr(prot_vals, comp_vals)
-                        rec["correlation_with_snrna_composition"] = float(r)
-                        rec["correlation_pvalue"] = float(p)
-
-            records.append(rec)
-
-    df = pd.DataFrame(records)
-
-    # Direction label based on correlation sign
-    df["direction"] = np.where(
-        df["correlation_with_snrna_composition"].isna(), "",
-        np.where(df["correlation_with_snrna_composition"] > 0, "positive", "negative")
-    )
-
-    # Storey's q-value correction per cell type
-    df["qvalue"] = np.nan
-    df["pi0"] = np.nan
-    for ct in sorted(cell_types):
-        ct_mask = (df["cell_type"] == ct) & df["correlation_pvalue"].notna()
-        pvals = df.loc[ct_mask, "correlation_pvalue"].values
-        if len(pvals) < 10:
-            continue
-        # Storey's procedure: BH with estimated pi0
-        # statsmodels doesn't have native Storey's, so we implement pi0 estimation
-        # and apply it as an adjusted BH
-        lambdas = np.arange(0.05, 0.95, 0.05)
-        pi0_estimates = np.array([np.mean(pvals > lam) / (1 - lam) for lam in lambdas])
-        # Natural cubic spline fit at lambda=max — use conservative estimate
-        pi0_hat = min(float(pi0_estimates[-1]), 1.0)
-        pi0_hat = max(pi0_hat, 1.0 / len(pvals))  # floor
-
-        # BH procedure then scale by pi0
-        n_tests = len(pvals)
-        sorted_idx = np.argsort(pvals)
-        sorted_pvals = pvals[sorted_idx]
-        # q_i = min(p_i * n * pi0 / rank, q_{i+1})
-        qvals = np.zeros(n_tests)
-        ranks = np.arange(1, n_tests + 1)
-        raw_q = sorted_pvals * n_tests * pi0_hat / ranks
-        # Enforce monotonicity (from largest to smallest)
-        qvals[sorted_idx[-1]] = min(raw_q[-1], 1.0)
-        for i in range(n_tests - 2, -1, -1):
-            qvals[sorted_idx[i]] = min(raw_q[i], qvals[sorted_idx[i + 1]])
-        qvals = np.clip(qvals, 0, 1)
-
-        df.loc[ct_mask, "qvalue"] = qvals
-        df.loc[ct_mask, "pi0"] = pi0_hat
-        print(f"  {ct}: π₀={pi0_hat:.3f} ({len(pvals)} tests)")
-
-    # Add tissue category for researcher-level reporting
-    df["tissue_category"] = df["cell_type"].map(config.CLASS_TO_TISSUE_CATEGORY)
-
-    out_path = os.path.join(OUTPUT_DIR, "datadriven_marker_assessment.csv")
-    df.to_csv(out_path, index=False)
-    n_with_comp = (df["composition_resolution"] == "subclass").sum()
-    print(f"\n  Saved: {out_path} ({len(df)} rows, "
-          f"{n_with_comp} with subclass-resolution composition)")
-
-    # Summary: top markers per cell type
-    for ct in sorted(cell_types):
-        ct_df = df[df["cell_type"] == ct]
-        n_total = len(ct_df)
-        n_in_proteome = ct_df["found_in_total_proteome"].sum()
-        has_q = ct_df["qvalue"].notna()
-        sig_raw = ct_df[ct_df["correlation_pvalue"] < 0.05]
-        sig_q = ct_df[ct_df["qvalue"] < 0.10]
-        pi0 = ct_df["pi0"].dropna().iloc[0] if has_q.any() else np.nan
-
-        comp_res = ct_df["composition_resolution"].iloc[0] if len(ct_df) > 0 else "none"
-        tissue = ct_df["tissue_category"].iloc[0] if len(ct_df) > 0 else "?"
-        print(f"\n  {ct} [{tissue}] (π₀={pi0:.3f}, composition={comp_res}):")
-        print(f"    Expressed+specific: {n_total}, in proteome: {n_in_proteome}")
-        print(f"    Raw p<0.05: {len(sig_raw)}, Storey q<0.10: {len(sig_q)}")
-
-        if len(sig_q) > 0:
-            n_pos = len(sig_q[sig_q["direction"] == "positive"])
-            n_neg = len(sig_q[sig_q["direction"] == "negative"])
-            print(f"    Direction: {n_pos} positive, {n_neg} negative")
-
-            for direction in ["positive", "negative"]:
-                dir_df = sig_q[sig_q["direction"] == direction].sort_values("qvalue")
-                if len(dir_df) == 0:
-                    continue
-                print(f"    Top {direction} markers (by q-value):")
-                for _, r in dir_df.head(5).iterrows():
-                    print(f"      {r['gene_symbol']:12s} spec={r['specificity_score']:.3f}, "
-                          f"r={r['correlation_with_snrna_composition']:+.3f}, "
-                          f"p={r['correlation_pvalue']:.4f}, q={r['qvalue']:.4f}")
-
-        # Show top-5 by specificity regardless
-        top5 = ct_df.head(5)
-        print(f"    Top-5 by specificity:")
-        for _, r in top5.iterrows():
-            found_str = "YES" if r["found_in_total_proteome"] else "no"
-            corr_str = (f"r={r['correlation_with_snrna_composition']:+.3f}"
-                       if not np.isnan(r["correlation_with_snrna_composition"])
-                       else "N/A")
-            q_str = (f"q={r['qvalue']:.3f}"
-                    if not np.isnan(r["qvalue"]) else "")
-            print(f"      {r['gene_symbol']:12s} spec={r['specificity_score']:.3f}, "
-                  f"proteome={found_str}, corr={corr_str} {q_str}")
-
-
-# ===========================================================================
-# §4  Data Quality Assessment
-# ===========================================================================
 
 
 def step_quality():
@@ -1129,26 +865,12 @@ def print_summary():
     else:
         print(f"\n§2 Phosphosite-to-Protein Matching: not run yet")
 
-    # Markers (data-driven, WMB atlas)
-    mk_path = os.path.join(OUTPUT_DIR, "datadriven_marker_assessment.csv")
-    if os.path.exists(mk_path):
-        mk = pd.read_csv(mk_path)
-        print(f"\n§3 Cell-Type Marker Proteins (WMB atlas, data-driven):")
-        for ct in sorted(mk["cell_type"].unique()):
-            ct_df = mk[mk["cell_type"] == ct]
-            n_in_proteome = ct_df["found_in_total_proteome"].sum()
-            sig_q = ct_df[ct_df["qvalue"] < 0.10]
-            print(f"  {ct}: {len(ct_df)} genes, {n_in_proteome} in proteome, "
-                  f"{len(sig_q)} significant (q<0.10)")
-    else:
-        print(f"\n§3 Cell-Type Marker Proteins: not run yet")
-
     # Data quality
     dq_path = os.path.join(OUTPUT_DIR, "data_quality.json")
     if os.path.exists(dq_path):
         with open(dq_path) as f:
             dq = json.load(f)
-        print(f"\n§4 Data Quality:")
+        print(f"\n§3 Data Quality:")
         m = dq.get("missingness", {})
         print(f"  Missingness: {100*m.get('total_fraction', 0):.1f}%")
         pca_ve = dq.get("pca", {}).get("variance_explained", [])
@@ -1160,7 +882,7 @@ def print_summary():
             vals = list(be.values())
             print(f"  Plex median range: {min(vals):.0f} – {max(vals):.0f}")
     else:
-        print(f"\n§4 Data Quality: not run yet")
+        print(f"\n§3 Data Quality: not run yet")
 
     print()
 
@@ -1184,16 +906,12 @@ def main():
         help="§2: Phosphosite-to-protein matching",
     )
     group.add_argument(
-        "--markers", action="store_true",
-        help="§3: Cell-type marker protein assessment (WMB atlas, data-driven)",
-    )
-    group.add_argument(
         "--quality", action="store_true",
-        help="§4: Data quality assessment (PCA, batch effects, missingness)",
+        help="§3: Data quality assessment (PCA, batch effects, missingness)",
     )
     group.add_argument(
         "--outliers", action="store_true",
-        help="§5: Statistical outlier detection (within-group z-scores)",
+        help="§4: Statistical outlier detection (within-group z-scores)",
     )
     group.add_argument(
         "--run", action="store_true",
@@ -1215,9 +933,6 @@ def main():
 
     if args.phospho_match or args.run:
         step_phospho_match()
-
-    if args.markers or args.run:
-        step_markers()
 
     if args.quality or args.run:
         step_quality()

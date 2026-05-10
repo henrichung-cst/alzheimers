@@ -46,6 +46,10 @@ $PYTHON alz/supplementary/aggregation_robustness.py --run 2>&1 | tee -a "$LOG"
 note "Running Q5: Parent protein QC"
 $PYTHON alz/supplementary/parent_protein_qc.py --run 2>&1 | tee -a "$LOG"
 
+# --- Q6: Deconvolution feasibility (marker → composition concordance) ---
+note "Running Q6: Deconvolution feasibility (marker → composition concordance)"
+$PYTHON alz/supplementary/deconvolution_feasibility.py --run 2>&1 | tee -a "$LOG"
+
 note "Reviewer diagnostics finished"
 
 echo ""
@@ -54,3 +58,4 @@ $PYTHON alz/supplementary/fdr_stringent.py --summary
 $PYTHON alz/supplementary/threshold_sensitivity.py --summary
 $PYTHON alz/supplementary/aggregation_robustness.py --summary
 $PYTHON alz/supplementary/parent_protein_qc.py --summary
+$PYTHON alz/supplementary/deconvolution_feasibility.py --summary
