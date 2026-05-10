@@ -43,12 +43,18 @@ Generated caches (`alz/__pycache__/`, etc.) are excluded from this index.
 
 | Path | Reason |
 |:---|:---|
-| `alz/data_ingest.py` | Live Stage 1 total-proteome ingestion and characterization |
-| `alz/kinase_attribution.py` | Live stoichiometry, MEA enrichment, and unified cell-type attribution |
-| `alz/attribution_recovery.py` | Live final attribution-table assembly |
+| `alz/data_ingest.py` | Live Stage 1 total-proteome ingestion and characterization (CLI shim; ingest_mapping is a Kedro pipeline) |
+| `alz/kinase_normalize.py` | Live Stage 2 IRS normalization + stoichiometry (CLI shim over `alz/pipelines/normalize/`) |
+| `alz/kinase_enrich.py` | Live Stage 3 factorial OLS + MEA kinase enrichment (CLI shim over `alz/pipelines/enrich/`) |
+| `alz/kinase_attribute.py` | Live Stage 4 unified cell-type attribution (CLI shim over `alz/pipelines/attribute/`) |
+| `alz/kinase_mechanism.py` | Optional supplementary stage: raw-phospho MEA + mechanism classification (CLI shim over `alz/pipelines/mechanism/`) |
+| `alz/attribution_recovery.py` | Live Stage 5 final hypothesis-table assembly (CLI shim over `alz/pipelines/recovery/`) |
+| `alz/pipelines/{ingest_mapping,normalize,enrich,attribute,mechanism,recovery}/` | Kedro pipeline definitions registered in `alz/pipeline_registry.py` |
+| `alz/pipeline_registry.py`, `alz/settings.py`, `pyproject.toml` | Kedro project bootstrap |
+| `conf/base/{catalog,parameters}.yml`, `conf/full_cohort/parameters.yml` | Kedro Data Catalog + parameters (cohort selection lives here) |
 | `alz/runners/main/run_data_ingest.sh` | Operational wrapper for data ingestion |
-| `alz/runners/main/run_kinase_attribution.sh` | Operational wrapper for kinase attribution |
-| `alz/runners/main/run_attribution_recovery.sh` | Operational wrapper for attribution recovery |
+| `alz/runners/main/run_kinase_attribution.sh` | Operational wrapper for normalize → enrich → attribute |
+| `alz/runners/main/run_attribution_recovery.sh` | Operational wrapper for recovery |
 | `alz/runners/main/run_live_pipeline.sh` | Bundled end-to-end live runner |
 | `alz/runners/main/run_dual_analysis.sh` | Dual-track (males-only primary + full-cohort sensitivity) |
 
@@ -83,7 +89,7 @@ Generated caches (`alz/__pycache__/`, etc.) are excluded from this index.
 | `alz/runners/supporting/run_atlas_reference.sh` | Atlas/reference setup |
 | `alz/runners/supporting/run_wmb_expression.sh` | WMB expression export |
 | `alz/runners/supporting/run_snrna_integration.sh` | snRNA-seq integration |
-| `alz/integration/**` | Kinase ↔ Incytr integration (Python adapters + R wrappers; see `docs/integrations/kinase_incytr_integration.md`) |
+| `alz/integration/**` | Kinase ↔ Incytr integration (Phase 1 stubs only — `factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh`, `config_integration.py`; legacy wrappers/adapters relocated to `~/Projects/work/incytr_integration_archive/` on 2026-05-08; see `docs/integrations/kinase_incytr_integration.md` and `docs/incytr_remediation_plan.md`) |
 
 ## Supplementary
 

@@ -21,17 +21,17 @@ between similar-sized universes.
 
 | Site | File | Universe | Method | Threshold |
 |---|---|---|---|---|
-| Bulk MEA (stoichiometry) | `kinase_attribution.py` | ~78 kinases × 9 contrasts | BH (gseapy internal) | FDR < 0.25 |
-| Bulk MEA (raw phospho, mechanism) | `kinase_attribution.py` | ~78 kinases × 9 contrasts | BH (gseapy internal) | FDR < 0.25 |
-| Site-level OLS | `kinase_attribution.py` | ~7,000 sites × 9 contrasts | BH per-contrast | FDR < 0.25 |
-| snRNA concordance | `snrna_integration.py` | ~385 kinase genes × (cell_type × contrast) | BH per (cell_type, contrast), restricted to kinase universe | FDR < 0.25 (informational; cohort underpowered, see below) |
-| Cohort concordance (deconvolution) | `deconvolution/cohort_concordance.py` | ~43 strata | BH | FDR < 0.25 |
-| Per-cell-type kinase MEA (deconvolution) | `deconvolution/mea_per_celltype.py` | ~78 kinases × strata | BH (gseapy internal) | FDR < 0.25 |
-| Backbone permutation recurrence | `integration/adapters/aggregate_factorial.py` | thousands of backbones | **Storey's q** | q < 0.05 |
-| Marker-protein assessment | `data_ingest.py` | ~6,300 proteins × 10 cell types | **Storey's q** | q < 0.10 |
-| Cross-pair pathway integration | `integration/adapters/aggregate_cross_pair.py` | varies (often 100s) | BH | FDR < 0.25 |
-| Kinase-support null tests | `integration/adapters/compute_kinase_support.py` | varies | BH | FDR < 0.25 |
-| FDR-stringent supplementary | `supplementary/fdr_stringent.py` | same as bulk MEA | BH (gseapy internal) | FDR < 0.10 (sensitivity check) |
+| Bulk MEA (stoichiometry) | `alz/pipelines/enrich/` (helpers in `alz/kinase_enrich.py`) | ~78 kinases × 9 contrasts | BH (gseapy internal) | FDR < 0.25 |
+| Bulk MEA (raw phospho, mechanism) | `alz/pipelines/mechanism/` (helpers in `alz/kinase_mechanism.py`) | ~78 kinases × 9 contrasts | BH (gseapy internal) | FDR < 0.25 |
+| Site-level OLS | `alz/pipelines/enrich/` (helpers in `alz/kinase_enrich.py`) | ~7,000 sites × 9 contrasts | BH per-contrast | FDR < 0.25 |
+| snRNA concordance | `alz/snrna_integration.py` | ~385 kinase genes × (cell_type × contrast) | BH per (cell_type, contrast), restricted to kinase universe | FDR < 0.25 (informational; cohort underpowered, see below) |
+| Cohort concordance (deconvolution) | `alz/deconvolution/cohort_concordance.py` | ~43 strata | BH | FDR < 0.25 |
+| Per-cell-type kinase MEA (deconvolution) | `alz/deconvolution/mea_per_celltype.py` | ~78 kinases × strata | BH (gseapy internal) | FDR < 0.25 |
+| Backbone permutation recurrence | `integration/adapters/aggregate_factorial.py` (archived 2026-05-08 — see `docs/archive/kinase_incytr_integration_pre_remediation.md`) | thousands of backbones | **Storey's q** | q < 0.05 |
+| Marker-protein assessment | `alz/data_ingest.py` | ~6,300 proteins × 10 cell types | **Storey's q** | q < 0.10 |
+| Cross-pair pathway integration | `integration/adapters/aggregate_cross_pair.py` (archived 2026-05-08) | varies (often 100s) | BH | FDR < 0.25 |
+| Kinase-support null tests | `integration/adapters/compute_kinase_support.py` (archived 2026-05-08) | varies | BH | FDR < 0.25 |
+| FDR-stringent supplementary | `alz/supplementary/fdr_stringent.py` | same as bulk MEA | BH (gseapy internal) | FDR < 0.10 (sensitivity check) |
 
 ## Why the snRNA universe is restricted to kinase genes
 
@@ -60,14 +60,16 @@ stringent gate.
 ## Implementation conventions
 
 - Always import from `statsmodels.stats.multitest`, not hand-rolled BH.
-- The `_bh_fdr` helper in `kinase_attribution.py` is a NaN-safe wrapper
+- The `_bh_fdr` helper in `alz/kinase_enrich.py` is a NaN-safe wrapper
   around `multipletests(method="fdr_bh")`; numerics are identical.
 - When BH is applied per-stratum (per contrast, per cell type, etc.),
   document the stratum in the column name or accompanying comment so
   readers know what universe a given FDR is over.
-- Storey implementation lives in `integration/adapters/aggregate_factorial.py`
-  (`_storey_qvalue`); `data_ingest.py` has its own inlined Storey for
-  marker assessment. Both use the same standard π₀ estimator at λ = 0.5–0.95.
+- Storey implementation lived in `integration/adapters/aggregate_factorial.py`
+  (`_storey_qvalue`) — archived 2026-05-08 along with the rest of the
+  legacy integration tree. `alz/data_ingest.py` has its own inlined Storey
+  for marker assessment. Both use the same standard π₀ estimator at
+  λ = 0.5–0.95.
 
 ## Track-specific KL_THRESH (Ser/Thr vs Tyr MEA)
 
@@ -102,7 +104,7 @@ diverse), and Tyr-kinase substrate recognition relies on features
 flanking-residue signatures Ser/Thr kinases use.
 
 Implementation: `alz/config.py:PHOSPHO_TRACKS[track]["kl_thresh"]`.
-Read by `alz/kinase_attribution.py` (`step_enrich`) and
+Read by `alz/pipelines/enrich/` (helpers in `alz/kinase_enrich.py`) and
 `alz/deconvolution/mea_per_celltype.py`. The legacy `config.KL_THRESH`
 constant is retained for backwards-compat but should not be added to
 new code paths.

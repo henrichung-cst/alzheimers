@@ -231,13 +231,15 @@ silently dropped.
 
 | Component | File | Function/Lines |
 |-----------|------|----------------|
-| Raw concordance scores | `kinase_attribution.py` | `_compute_effective_concordance()` |
-| Confidence + evidence basis | `kinase_attribution.py` | `_assign_confidence_and_basis()` |
-| Vectorized weighted blend | `kinase_attribution.py` | `step_attribute()` lines 1250–1270 |
-| SEA-AD pathway matching | `kinase_attribution.py` | `step_attribute()` lines 1046–1100 |
-| Song pathway-specific LFCs | `snrna_integration.py` | `step_concordance()` |
-| Song subclass mapping | `config.py` | `SONG_SUBCLASS_MAP` |
-| Top cell-type ranking | `attribution_recovery.py` | `_build_kinase_hypothesis_table()` |
-| High-confidence flag | `attribution_recovery.py` | `_build_kinase_hypothesis_table()` lines 276–282 |
-| Viewer score presets | `build_unified_viewer.py` | `SCORE_PRESETS` (Kinase Explorer side panel) |
-| Weight configuration | `config.py` | `SONG_CONCORDANCE_WEIGHT`, `SEA_AD_CONCORDANCE_WEIGHT` |
+| Raw concordance scores | `alz/kinase_attribute.py` | `_compute_effective_concordance()` |
+| Confidence + evidence basis | `alz/kinase_attribute.py` | `_assign_confidence_and_basis_vectorized()` |
+| Vectorized weighted blend | `alz/kinase_attribute.py` | `step_attribute()` |
+| SEA-AD pathway matching | `alz/kinase_attribute.py` | `step_attribute()` |
+| Pipeline orchestration | `alz/pipelines/attribute/{nodes,pipeline}.py` | Kedro nodes wrap pure helpers |
+| CLI shim | `alz/kinase_attribute.py` | `main()` (delegates to `KedroSession`) |
+| Song pathway-specific LFCs | `alz/snrna_integration.py` | `step_concordance()` |
+| Song subclass mapping | `alz/config.py` | `SONG_SUBCLASS_MAP` |
+| Top cell-type ranking | `alz/attribution_recovery.py` | `_build_kinase_hypothesis_table()` |
+| High-confidence flag | `alz/attribution_recovery.py` | `_build_kinase_hypothesis_table()` |
+| Viewer score presets | `alz/build_unified_viewer.py` | `SCORE_PRESETS` (Kinase Explorer side panel) |
+| Weight configuration | `alz/config.py` | `SONG_CONCORDANCE_WEIGHT`, `SEA_AD_CONCORDANCE_WEIGHT` |
