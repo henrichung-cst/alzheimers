@@ -6,7 +6,7 @@ suppressPackageStartupMessages({
 
 parse_args <- function(argv) {
   args <- list(
-    input_dir = "alz/integration/intermediates/factorial",
+    input_dir = "data/incytr_factorial_inputs",
     out_dir = "outputs/reports/incytr_factorial",
     pair_filter = Sys.getenv("PAIR_FILTER", "")
   )

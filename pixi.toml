@@ -23,6 +23,7 @@ snrna = "python alz/snrna_integration.py --run"
 bubbles = "python alz/plot_attribution_bubbles.py"
 viewer = "python alz/build_unified_viewer.py"
 install-incytr = "R CMD INSTALL --no-multiarch ../incytr"
+export-factorial-inputs = "python alz/integration/export_factorial_inputs.py"
 incytr-factorial = "bash alz/integration/run_factorial.sh"
 
 [dependencies]

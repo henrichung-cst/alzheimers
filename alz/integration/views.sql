@@ -86,11 +86,6 @@ SELECT
 FROM receiver_cache
 GROUP BY sender, receiver, contrast, Target;
 
-CREATE OR REPLACE VIEW kinase_tpds_integration AS
-SELECT *
-FROM receiver_cache
-WHERE false;
-
 CREATE OR REPLACE VIEW backbone_recurrence_by_contrast AS
 SELECT
   contrast,
