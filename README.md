@@ -14,10 +14,10 @@ Use the documentation by role, not by creation date:
 - [`docs/foundation/analysis_rationale.md`](docs/foundation/analysis_rationale.md): why the project pivoted away from direct deconvolution
 - [`docs/foundation/live_pipeline_contract.md`](docs/foundation/live_pipeline_contract.md): exact live stage contract, outputs, and ordered run sequence
 - [`docs/foundation/statistical_constraints.md`](docs/foundation/statistical_constraints.md): identifiability limits and interpretation guardrails
-- [`docs/foundation/repo_surface_index.md`](docs/foundation/repo_surface_index.md): explicit `main` / `supporting` / `archived` file inventory
-- [`docs/integrations/kinase_incytr_integration.md`](docs/integrations/kinase_incytr_integration.md): Incytr integration — scoring, runtime modes, configuration, outputs
+- [`docs/foundation/repo_retention_policy.md`](docs/foundation/repo_retention_policy.md): explicit `main` / `supporting` / `archived` file inventory
+- [`docs/integrations/kinase_incytr_integration.md`](docs/integrations/kinase_incytr_integration.md): kinase ↔ Incytr integration — Phase 1 stub inventory + handoff diagram
+- [`docs/incytr_remediation_plan.md`](docs/incytr_remediation_plan.md): authoritative architectural plan for the integration rewrite
 - [`docs/INDEX.md`](docs/INDEX.md): map of the live documentation set
-- [`docs/integrations/integrations-structure.md`](docs/integrations/integrations-structure.md): upstream archive layout and current operational data locations
 - [`docs/report_writing_checklist.md`](docs/report_writing_checklist.md): report-writing guidance derived from reviewer feedback
 
 Historical context lives under `archive/`.
@@ -29,8 +29,8 @@ The live workflow has two major components:
 ### 1. Stoichiometry-corrected kinase attribution (bulk pipeline)
 
 1. **Data ingestion** (`data_ingest.py`) -- TMT channel mapping, phosphosite-to-protein matching (91.7%), marker assessment, PCA quality control, statistical outlier detection
-2. **Kinase attribution** (`kinase_attribution.py`) -- IRS cross-plex normalization (all 72 samples), stoichiometry computation, factorial OLS per site with disease x timepoint interactions (9 time-resolved contrasts), MEA kinase enrichment on median-centered + winsorized stoichiometry beta values, unified cell-type attribution combining SEA-AD concordance and WMB expression specificity
-3. **Attribution recovery** (`attribution_recovery.py`) -- Cross-contrast consistency analysis and final attribution table assembly (kinase activity matrix, cell-type evidence table, kinase hypothesis table, cell-type kinase profiles)
+2. **Normalize → enrich → attribute** (`kinase_normalize.py` → `kinase_enrich.py` → `kinase_attribute.py`, each a CLI shim over the corresponding Kedro pipeline under `alz/pipelines/`) -- IRS cross-plex normalization (all 72 samples), stoichiometry computation, factorial OLS per site with disease x timepoint interactions (9 time-resolved contrasts), MEA kinase enrichment on median-centered + winsorized stoichiometry beta values, unified cell-type attribution combining SEA-AD concordance and WMB expression specificity
+3. **Attribution recovery** (`attribution_recovery.py`, CLI shim over the `recovery` Kedro pipeline) -- Cross-contrast consistency analysis and final attribution table assembly (kinase activity matrix, cell-type evidence table, kinase hypothesis table)
 
 ### 2. Intercellular signaling integration (Incytr pipeline)
 
@@ -70,9 +70,21 @@ alzheimers/
 │   │   ├── README.md, MOVED.txt    # Pointers to ~/Projects/work/incytr_integration_archive/
 │   │   └── intermediates/          # Gitignored legacy outputs (orphaned)
 │   ├── supplementary/              # Reviewer-response diagnostic analyses
-│   ├── data_ingest.py              # Main: data ingestion + characterization
-│   ├── kinase_attribution.py       # Main: stoichiometry + MEA + unified attribution
-│   ├── attribution_recovery.py     # Main: attribution recovery + final table assembly
+│   ├── pipelines/                  # Kedro pipelines (live arc + ingest_mapping)
+│   │   ├── ingest_mapping/         # TMT channel-to-animal mapping
+│   │   ├── normalize/              # IRS normalization + stoichiometry
+│   │   ├── enrich/                 # Factorial OLS + MEA kinase enrichment
+│   │   ├── attribute/              # Unified cell-type attribution
+│   │   ├── mechanism/              # Optional: raw-phospho MEA + classification
+│   │   └── recovery/               # Hypothesis-table assembly
+│   ├── pipeline_registry.py        # Kedro pipeline registry
+│   ├── settings.py                 # Kedro settings
+│   ├── data_ingest.py              # Main: data ingestion + characterization (CLI shim)
+│   ├── kinase_normalize.py         # Main: stoichiometry (CLI shim over normalize pipeline)
+│   ├── kinase_enrich.py            # Main: MEA kinase enrichment (CLI shim over enrich pipeline)
+│   ├── kinase_attribute.py         # Main: unified attribution (CLI shim over attribute pipeline)
+│   ├── kinase_mechanism.py         # Supplementary: mechanism classification (CLI shim)
+│   ├── attribution_recovery.py     # Main: hypothesis-table assembly (CLI shim over recovery pipeline)
 │   ├── plot_attribution_bubbles.py # Main: attribution visualizations
 │   ├── config.py                   # Supporting: shared configuration
 │   ├── atlas_reference.py          # Supporting: external-reference prep (SEA-AD, WMB, Aging Mouse)
@@ -105,7 +117,7 @@ The Allen Brain Atlas and SEA-AD reference data under `data/external/` is zstd-c
 | 2 | Unused SEA-AD cell-level h5ad | 23.5 GB | ~5 GB | Not referenced by any pipeline code |
 | 3 | WMB gene-subset h5ad (13 regions) | 51 GB | ~14 GB | Auto-decompressed by `wmb_expression.py` |
 
-**Kept uncompressed** (runtime dependencies): `effect_sizes.h5ad`, `effect_sizes_early.h5ad`, `effect_sizes_late.h5ad` (read by `kinase_attribution.py`), and `cell_metadata_with_cluster_annotation.csv` (read by ABC cache API).
+**Kept uncompressed** (runtime dependencies): `effect_sizes.h5ad`, `effect_sizes_early.h5ad`, `effect_sizes_late.h5ad` (read by `alz/kinase_attribute.py`), and `cell_metadata_with_cluster_annotation.csv` (read by ABC cache API).
 
 **Auto-decompress:** `wmb_expression.py --run` and `--proteome` transparently decompress tier 3 subset files before computation and recompress them afterward. A sentinel file ensures cleanup even after interruption.
 
@@ -204,7 +216,7 @@ The active Song dataset lives under `data/datasets/song/`. Treat this as the aut
 ## Conventions
 
 - Use the `docs/foundation/` documents as the live analytical contract
-- Use `docs/foundation/repo_surface_index.md` when deciding whether a file is `main`, `supporting`, or `archived`
+- Use `docs/foundation/repo_retention_policy.md` when deciding whether a file is `main`, `supporting`, or `archived`
 - Prefer `data/datasets/song/` over ad hoc files elsewhere in `data/`
 - Treat `archive/` as provenance and history, not as the default source of live methods
 - The integration pipeline is hypothesis-generating: frame results as convergent functional evidence, not mechanistic pathway validation

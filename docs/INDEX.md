@@ -30,8 +30,9 @@ Read by analytical role, not creation order.
 
 | File | Role |
 |:---|:---|
-| [`integrations/kinase_incytr_integration.md`](./integrations/kinase_incytr_integration.md) | Source of truth for the kinase ↔ Incytr integration (scoring model, runtime modes, config, outputs, limitations) |
-| [`integrations/integrations-structure.md`](./integrations/integrations-structure.md) | Upstream data bundle structure (gdrive_shared) |
+| [`integrations/kinase_incytr_integration.md`](./integrations/kinase_incytr_integration.md) | In-tree Phase 1 stub inventory + one-way handoff diagram (thin pointer to the remediation plan) |
+| [`incytr_remediation_plan.md`](./incytr_remediation_plan.md) | Authoritative architectural plan for the kinase ↔ Incytr integration rewrite |
+| [`integrations/5xfad-lucie-manifest.json`](./integrations/5xfad-lucie-manifest.json) | Local inventory of Lucie 5xFAD upstream files |
 
 ## Archive
 
@@ -40,7 +41,7 @@ Read by analytical role, not creation order.
 ## Reading Rule
 
 - **What should we do next?** → [`foundation/`](./foundation/analysis_charter.md)
-- **How do external inputs map into runtime?** → [`integrations/`](./integrations/integrations-structure.md)
+- **How do external inputs map into runtime?** → [`integrations/kinase_incytr_integration.md`](./integrations/kinase_incytr_integration.md) + [`incytr_remediation_plan.md`](./incytr_remediation_plan.md)
 - **Why was a path closed?** → [`foundation/analysis_rationale.md`](./foundation/analysis_rationale.md) + [`../archive/deconvolution/docs/deconvolution_infeasibility.md`](../archive/deconvolution/docs/deconvolution_infeasibility.md)
 - **Historical context** → `archive/`
 
@@ -79,8 +80,11 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 |:---|:---|:---|:---|
 | Config | `config.py` | — | — |
 | 1. Ingest | `data_ingest.py` | `runners/main/run_data_ingest.sh` | `outputs/reports/data_ingest/` |
-| 2. Normalize + MEA + attribute | `kinase_attribution.py` | `runners/main/run_kinase_attribution.sh` | `outputs/reports/kinase_attribution/` |
-| 3. Recovery | `attribution_recovery.py` | `runners/main/run_attribution_recovery.sh` | `outputs/reports/attribution_recovery/` |
+| 2. Normalize | `kinase_normalize.py` (CLI shim) / `kedro run --pipeline=normalize` | `runners/main/run_kinase_attribution.sh` (covers 2–4) | `outputs/reports/kinase_attribution/` |
+| 3. Enrich | `kinase_enrich.py` (CLI shim) / `kedro run --pipeline=enrich` | (above) | `outputs/reports/kinase_attribution/` |
+| 4. Attribute | `kinase_attribute.py` (CLI shim) / `kedro run --pipeline=attribute` | (above) | `outputs/reports/kinase_attribution/` |
+| 5. Recovery | `attribution_recovery.py` (CLI shim) / `kedro run --pipeline=recovery` | `runners/main/run_attribution_recovery.sh` | `outputs/reports/attribution_recovery/` |
+| Optional: mechanism | `kinase_mechanism.py` (CLI shim) / `kedro run --pipeline=mechanism` | — | `outputs/reports/kinase_attribution/` |
 | Plots | `plot_attribution_bubbles.py` | — | `outputs/reports/attribution_recovery/bubble_plots/` |
 | Bundled | — | `runners/main/run_live_pipeline.sh` | all of the above |
 | Dual-track | — | `runners/main/run_dual_analysis.sh` | `*_males_only/`, `*_full_cohort/` |

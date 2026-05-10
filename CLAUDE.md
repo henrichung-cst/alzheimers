@@ -255,10 +255,11 @@ The `docs/foundation/` directory contains authoritative design documents:
 - `analysis_rationale.md` — Why the project pivoted from deconvolution to stoichiometry
 - `statistical_constraints.md` — Hard design limits (identifiability, DOF)
 - `repo_retention_policy.md` — Active-vs-archived boundaries
-- `repo_surface_index.md` — Exhaustive main/supporting/archived classification of every file
 
 Other documentation:
-- `docs/integrations/kinase_incytr_integration.md` — Source of truth for the kinase ↔ Incytr integration (scoring model, runtime modes, configuration, outputs, limitations)
+- `docs/incytr_remediation_plan.md` — Authoritative architectural plan for the kinase ↔ Incytr integration rewrite (math moves into upstream `../incytr`; this repo retains a thin AD shell)
+- `docs/integrations/kinase_incytr_integration.md` — In-tree Phase 1 stub inventory + one-way handoff diagram (thin pointer to the remediation plan)
+- `docs/archive/kinase_incytr_integration_pre_remediation.md` — Legacy shadow-fork architecture (historical reference only)
 - `docs/archive/legacy.md` — Legacy proportional decomposition method (historical reference)
 - `archive/deconvolution/docs/deconvolution_infeasibility.md` — Archived synthetic validation proving direct deconvolution is infeasible on this dataset (closed path, frozen). Source script + figures alongside under `archive/deconvolution/`.
 
