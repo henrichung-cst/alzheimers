@@ -1,3 +1,5 @@
+> **Archived 2026-05-09.** This document covers the legacy shadow-fork integration code at `alz/integration/{wrappers,adapters,sidecar,tests}/` + orchestrator shells, all relocated to `~/Projects/work/incytr_integration_archive/` on 2026-05-08. Forward-looking guidance lives in `docs/incytr_remediation_plan.md`.
+
 # Incytr Invocation Audit
 
 This audit compares the native Incytr-style result schema visible in
