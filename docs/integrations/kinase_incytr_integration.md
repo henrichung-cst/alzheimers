@@ -5,9 +5,8 @@
 
 This document describes what currently lives in-tree under
 `alz/integration/`. The legacy shadow-fork architecture (`wrappers/`,
-`adapters/`, `sidecar/`, `tests/` + orchestrator shells) was relocated
-to `~/Projects/work/incytr_integration_archive/` on 2026-05-08; for the
-historical design, see
+`adapters/`, `sidecar/`, `tests/` + orchestrator shells) is preserved
+under `archive/incytr_integration/`; for the historical design, see
 [`docs/archive/kinase_incytr_integration_pre_remediation.md`](../archive/kinase_incytr_integration_pre_remediation.md).
 
 ## Architecture (target)

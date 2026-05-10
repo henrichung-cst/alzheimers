@@ -114,15 +114,16 @@ Additional supporting runners (ops utilities, no Python counterpart): `runners/s
 
 ### Integration pipeline (`alz/integration/`)
 
-Mid-rewrite as of 2026-05-08. Legacy `wrappers/`, `adapters/`, `sidecar/`, `tests/`, and orchestrator shell scripts have been relocated to `~/Projects/work/incytr_integration_archive/` (see `alz/integration/MOVED.txt`). The remediation plan at [`incytr_remediation_plan.md`](./incytr_remediation_plan.md) defines the target architecture: a thin AD-specific shell that calls the upstream `incytr` R package directly.
+Thin AD-specific client around the upstream `incytr` R package, gated on the production engine landing per [`incytr_remediation_plan.md`](./incytr_remediation_plan.md). The legacy `wrappers/`, `adapters/`, `sidecar/`, `tests/`, and orchestrator shell scripts are preserved under `archive/incytr_integration/`.
 
 In-tree now:
 
 | File | Role |
 |:---|:---|
-| `config_integration.py` | Paths, thresholds, contrast definitions |
-| `factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh` | Phase 1 stubs for the new architecture (incomplete; blocked on production package API in `../incytr`) |
-| `README.md`, `MOVED.txt` | Pointers to the archive and the remediation plan |
+| `config_integration.py` | Filter values, design columns, contrast vectors, paths |
+| `export_factorial_inputs.py` | Reads h5ad, writes the on-disk contract `load.R` consumes |
+| `factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh` | Entry point + AD loader + parquet writer + DuckDB views (gated on production package API in `../incytr`) |
+| `README.md` | File-by-file layout |
 
 ## Outputs
 

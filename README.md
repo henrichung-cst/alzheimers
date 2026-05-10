@@ -63,12 +63,12 @@ alzheimers/
 │   │   ├── main/                   # Main pipeline stage runners
 │   │   ├── supporting/             # Supporting setup runners
 │   │   └── supplementary/          # Reviewer diagnostic runners
-│   ├── integration/                # Incytr integration — mid-rewrite (see docs/incytr_remediation_plan.md)
-│   │   ├── config_integration.py   # Integration-specific configuration (kept)
+│   ├── integration/                # Incytr integration — thin upstream client (see docs/incytr_remediation_plan.md)
+│   │   ├── config_integration.py   # Filter/design/contrast constants
+│   │   ├── export_factorial_inputs.py  # h5ad → on-disk contract for load.R
 │   │   ├── factorial.R, load.R, persist.R, views.sql, run_factorial.sh
-│   │   │                            # Phase 1 stubs for the new architecture
-│   │   ├── README.md, MOVED.txt    # Pointers to ~/Projects/work/incytr_integration_archive/
-│   │   └── intermediates/          # Gitignored legacy outputs (orphaned)
+│   │   │                            # Entry point + AD loader + parquet writer + DuckDB views
+│   │   └── README.md               # File-by-file layout
 │   ├── supplementary/              # Reviewer-response diagnostic analyses
 │   ├── pipelines/                  # Kedro pipelines (live arc + ingest_mapping)
 │   │   ├── ingest_mapping/         # TMT channel-to-animal mapping
@@ -139,7 +139,7 @@ mamba activate alzheimers
 
 The `alzheimers` environment requires Python 3.11 (kinase-library compatibility) and includes `kinase-library`, `anndata`, `gseapy`, `scikit-learn`, `matplotlib`, `seaborn`, `scipy`, `requests`, `natsort`.
 
-The Incytr integration is mid-rewrite (see `docs/incytr_remediation_plan.md`); the legacy source has been moved to `~/Projects/work/incytr_integration_archive/`. The Phase 1 stubs in `alz/integration/` still require an R environment with `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`.
+The Incytr integration is now a thin upstream client (see `docs/incytr_remediation_plan.md`); the legacy source is preserved under `archive/incytr_integration/`. The wrapper still requires an R environment with `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`, and is gated on the production engine landing in `../incytr` per Phase 1.
 
 If you need the study data mounts:
 
@@ -174,7 +174,7 @@ bash alz/runners/supporting/run_snrna_integration.sh  # Song within-cohort snRNA
 
 ### Incytr Integration Pipeline
 
-Mid-rewrite. The legacy 462-pair × 9-contrast runner has been relocated to `~/Projects/work/incytr_integration_archive/run_factorial_all_pairs.sh`; in-tree only the Phase 1 stubs remain. See [`docs/incytr_remediation_plan.md`](docs/incytr_remediation_plan.md) for the target architecture and [`alz/integration/MOVED.txt`](alz/integration/MOVED.txt) for the move manifest.
+Thin upstream client. The legacy 462-pair × 9-contrast runner is preserved under `archive/incytr_integration/run_factorial_all_pairs.sh`; in-tree only the new wrapper remains. See [`docs/incytr_remediation_plan.md`](docs/incytr_remediation_plan.md) for the target architecture and [`alz/integration/README.md`](alz/integration/README.md) for the file-by-file layout.
 
 ### Supplementary Diagnostics
 

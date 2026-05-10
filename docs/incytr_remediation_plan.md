@@ -1,6 +1,6 @@
 # Incytr Pipeline Remediation Plan
 
-> **Heads-up to the implementing engineer (2026-05-08):** the legacy `wrappers/`, `adapters/`, `sidecar/`, and `tests/` trees described below have been **physically relocated** out of the alzheimers repo to `~/Projects/work/incytr_integration_archive/` as part of a separate cleanup sprint. The Phase 1 stubs (`factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh`) and `config_integration.py` remain at `alz/integration/`. Nothing was deleted — `mv` files back if you need them in-tree to finish the rewrite. See `alz/integration/MOVED.txt` for the manifest.
+> **Heads-up to the implementing engineer (2026-05-10):** the legacy `wrappers/`, `adapters/`, `sidecar/`, and `tests/` trees described below are preserved under `archive/incytr_integration/` (relocated 2026-05-08, moved into the repo archive 2026-05-10). The new wrapper (`factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh`, `export_factorial_inputs.py`, `config_integration.py`) is in place at `alz/integration/`. Nothing was deleted — copy files back if you need them in-tree to finish the rewrite.
 
 **Status:** Required, not optional. This is a structural error, not a refactor opportunity.
 **Audience:** Senior engineer assigned to implement.

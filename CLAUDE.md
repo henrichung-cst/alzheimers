@@ -182,15 +182,18 @@ kinase_enrich.py / kinase_attribute.py + snrna_integration.py  ←  alz/integrat
 
 ### Integration Code (Incytr)
 
-`alz/integration/` is mid-rewrite. The legacy `wrappers/`, `adapters/`, `sidecar/`, `tests/`, and orchestrator shell scripts were relocated on 2026-05-08 to `~/Projects/work/incytr_integration_archive/` (see `alz/integration/MOVED.txt`). The remediation plan is at `docs/incytr_remediation_plan.md`; the new architecture replaces the shadow-fork wrapper with a thin AD-specific shell that calls the upstream `incytr` R package directly.
+`alz/integration/` is a thin AD-specific wrapper around the upstream `incytr` R package (`~/Projects/work/incytr/`). All math, scoring, and pathway construction live in the package; this directory only loads AD inputs, runs the engine, persists results to parquet, and defines aggregation views. See `docs/incytr_remediation_plan.md` for the rationale and `alz/integration/README.md` for the file-by-file layout.
 
-What remains in-tree:
+In-tree files:
 
-- `config_integration.py` — paths, thresholds, contrast definitions (kept by the remediation plan)
-- `factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh` — Phase 1 stubs for the new architecture (incomplete; awaiting the production package API in `../incytr`)
-- `intermediates/` — gitignored output dir from the legacy pipeline (orphaned)
+- `export_factorial_inputs.py` — h5ad → on-disk contract (`expression_*.csv/.mtx`, `animal_metadata.csv`)
+- `factorial.R` — entry point; hard-fails if `Incytr::construct_factorial_paths` / `score_factorial_paths` are absent
+- `load.R`, `persist.R`, `views.sql`, `run_factorial.sh` — loader, parquet writer, DuckDB views, shell shim
+- `config_integration.py` — filter values, design columns, contrast vectors, paths
 
-R deps (`Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`) are still required by the Phase 1 stubs.
+Run order: `pixi run install-incytr && pixi run export-factorial-inputs && pixi run incytr-factorial`.
+
+The legacy R wrappers / Python adapters / sidecars / orchestrator shell scripts were retired during the rewrite. They are preserved under `archive/incytr_integration/` (bulk gitignored per repo allowlist; on disk only — copy back if needed). R deps (`Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`) are still required.
 
 ### Runners
 
@@ -275,7 +278,7 @@ Other documentation:
 - **API caching** — delete files under `data/datasets/song/analysis_cache/` to force re-fetch
 - **WMB expression memory** — `wmb_expression.py --proteome` processes 6,308 genes across 13 regions; use `skip_regional=True` and `chunk_size=2000` to avoid OOM (~30GB RAM available)
 - **Do not reopen closed paths** — direct deconvolution, factor model, two-compartment, and transcript-only rescue are all closed (see charter)
-- **Integration tree is mid-rewrite** — legacy R wrappers and Python adapters moved to `~/Projects/work/incytr_integration_archive/` on 2026-05-08; see `alz/integration/MOVED.txt` and `docs/incytr_remediation_plan.md`. The Phase 1 stubs (`factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh`) remain in-tree. R deps (`Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`) are still required. Config lives in `config_integration.py`, not `config.py`
+- **Integration is gated on upstream `incytr`** — `pixi run incytr-factorial` hard-fails before loading data unless `Incytr::construct_factorial_paths` and `Incytr::score_factorial_paths` are exported by the installed package. Until those land per `docs/incytr_remediation_plan.md` Phase 1, the wrapper refuses to start. R deps (`Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`) are still required. Integration config lives in `alz/integration/config_integration.py`, not `alz/config.py`
 - **Unified-viewer payload is inlined into `index.html`** — `build_unified_viewer.py` ships PAYLOAD as `<script type="application/json" id="payload-data">` directly in the HTML, not as a separate fetch. After `pixi run viewer` rebuilds, reload the page with a hard refresh (Ctrl+Shift+R / Cmd+Shift+R) — a soft reload serves the cached HTML and the new data won't appear. Quick check from DevTools: `PAYLOAD.meta.generated_at` should match the latest build timestamp
 
 ## Tooling & Environment

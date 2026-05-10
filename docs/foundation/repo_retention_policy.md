@@ -89,7 +89,7 @@ Generated caches (`alz/__pycache__/`, etc.) are excluded from this index.
 | `alz/runners/supporting/run_atlas_reference.sh` | Atlas/reference setup |
 | `alz/runners/supporting/run_wmb_expression.sh` | WMB expression export |
 | `alz/runners/supporting/run_snrna_integration.sh` | snRNA-seq integration |
-| `alz/integration/**` | Kinase ↔ Incytr integration (Phase 1 stubs only — `factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh`, `config_integration.py`; legacy wrappers/adapters relocated to `~/Projects/work/incytr_integration_archive/` on 2026-05-08; see `docs/integrations/kinase_incytr_integration.md` and `docs/incytr_remediation_plan.md`) |
+| `alz/integration/**` | Kinase ↔ Incytr integration — thin AD client (`factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh`, `export_factorial_inputs.py`, `config_integration.py`); legacy wrappers/adapters preserved under `archive/incytr_integration/`; see `docs/integrations/kinase_incytr_integration.md` and `docs/incytr_remediation_plan.md` |
 
 ## Supplementary
 
