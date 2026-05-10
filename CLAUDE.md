@@ -276,6 +276,7 @@ Other documentation:
 - **WMB expression memory** — `wmb_expression.py --proteome` processes 6,308 genes across 13 regions; use `skip_regional=True` and `chunk_size=2000` to avoid OOM (~30GB RAM available)
 - **Do not reopen closed paths** — direct deconvolution, factor model, two-compartment, and transcript-only rescue are all closed (see charter)
 - **Integration tree is mid-rewrite** — legacy R wrappers and Python adapters moved to `~/Projects/work/incytr_integration_archive/` on 2026-05-08; see `alz/integration/MOVED.txt` and `docs/incytr_remediation_plan.md`. The Phase 1 stubs (`factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh`) remain in-tree. R deps (`Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`) are still required. Config lives in `config_integration.py`, not `config.py`
+- **Unified-viewer payload is inlined into `index.html`** — `build_unified_viewer.py` ships PAYLOAD as `<script type="application/json" id="payload-data">` directly in the HTML, not as a separate fetch. After `pixi run viewer` rebuilds, reload the page with a hard refresh (Ctrl+Shift+R / Cmd+Shift+R) — a soft reload serves the cached HTML and the new data won't appear. Quick check from DevTools: `PAYLOAD.meta.generated_at` should match the latest build timestamp
 
 ## Tooling & Environment
 

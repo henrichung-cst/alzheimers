@@ -69,7 +69,7 @@ def annotate(mea_df: pd.DataFrame) -> pd.DataFrame:
             "Run `python alz/snrna_integration.py --concordance` first."
         )
     snrna = pd.read_csv(config.SONG_CONCORDANCE_FILE)
-    snrna = snrna[["gene_symbol", "cell_type", "pathway", "song_lfc",
+    snrna = snrna[["gene_symbol", "cell_type", "contrast", "song_lfc",
                    "song_pval", "song_fdr"]].copy()
     snrna = snrna.rename(columns={"cell_type": "wmb_class"})
 
@@ -78,12 +78,11 @@ def annotate(mea_df: pd.DataFrame) -> pd.DataFrame:
     df["gene_symbol"] = df["kinase"].map(
         lambda k: k2g.get(k, _to_mouse_symbol(k))
     )
-    df["pathway"] = df["contrast"].map(paths.CONTRAST_TO_PATHWAY)
 
     merged = df.merge(
         snrna,
         how="left",
-        on=["gene_symbol", "wmb_class", "pathway"],
+        on=["gene_symbol", "wmb_class", "contrast"],
         suffixes=("", "_snrna"),
     )
     merged = merged.rename(columns={

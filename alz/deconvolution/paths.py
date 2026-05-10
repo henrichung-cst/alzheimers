@@ -66,9 +66,3 @@ CONTRASTS = {
     "ApTt_6mo": {"App": 1, "Tau": 1, "Int": 1, "App_x_time6": 1, "Tau_x_time6": 1},
 }
 
-# Map contrast name → snRNA `pathway` value in song_concordance.csv.
-CONTRAST_TO_PATHWAY = {
-    "App_2mo": "App", "App_4mo": "App", "App_6mo": "App",
-    "Tau_2mo": "Tau", "Tau_4mo": "Tau", "Tau_6mo": "Tau",
-    "ApTt_2mo": "ApTt", "ApTt_4mo": "ApTt", "ApTt_6mo": "ApTt",
-}

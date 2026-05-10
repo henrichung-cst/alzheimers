@@ -12,8 +12,6 @@ specific decomposition (with the snRNA-seq pseudobulk acting as the
 per-(group, WMB-class, gene) prior). It does **not** reopen the direct
 cell-type deconvolution path closed by
 [`docs/foundation/analysis_charter.md`](../../docs/foundation/analysis_charter.md).
-The full design rationale, audience framing, confidence model, and explicit
-non-goals are in [`docs/song_deconvolution_plan.md`](../../docs/song_deconvolution_plan.md).
 
 The pipeline does **not** modify the live attribution program (34 WMB
 classes) and is **not** wired into `pixi run live` or `pixi run dual`.
@@ -41,10 +39,9 @@ alz/deconvolution/
 ## Inputs
 
 All consumed read-only. The four bulk-median + samplekey files under
-`data/datasets/song/proteomics/source/` were deleted on
-2026-05-07; re-pull via `pixi run ingest-gdrive-shared` and copy from
-`data/raw/external/gdrive_shared/integrations/yuyu01/documentation/incytr/deconvolution/`
-into that directory before running this branch.
+`data/datasets/song/proteomics/source/` were deleted on 2026-05-07;
+re-pull via `pixi run ingest-deconvolution-bulk`, which lands them
+directly in that directory.
 
 | File | Source |
 |---|---|
@@ -70,6 +67,23 @@ the proportional shares are computed against the complete cell-type universe.
 
 ## Outputs
 
+The full output tree (`outputs/reports/deconvolution/`, ~478 MB) was purged on
+2026-05-09 — the branch is closed and the bulk artifacts are regeneratable
+from the recipe below. Two negative-result narratives are preserved at
+[`_results/`](_results/):
+
+- `_results/variance_audit.md` — per-animal vs. group-level OLS calibration ("PASS" verdict)
+- `_results/cohort_concordance_calibration.md` — the 0/43 strata pass cohort_fdr<0.05 wall that effectively closed the branch
+
+The recipe was last regenerated end-to-end on 2026-05-10: 12:22 wall on
+all 24 detected WMB classes (16 surviving the Stage-3 100-site MEA gate),
+33 males, 1/94 cohort-concordant strata at FDR<0.25 — consistent with the
+calibration narrative. Stage-4 schema mismatch (`song_concordance.csv`
+emits per-`contrast` rows, not per-`pathway`) was fixed forward in
+`snrna_concordance.py` during that pass.
+
+Re-running the pipeline regenerates:
+
 ```
 outputs/reports/deconvolution/wmb_decomposition/
 ├── ps_wmb_decomposition.csv          # Ser/Thr: site × (group, wmb_class)
@@ -93,21 +107,21 @@ outputs/reports/deconvolution/per_animal/
 python alz/deconvolution/build_wmb_decomposition.py
 
 # Full per-animal pipeline (24 WMB classes × 9 contrasts × 2 tracks × 1000 perms)
-python -m code.deconvolution.run_per_animal --run
+python -m alz.deconvolution.run_per_animal --run
 
 # Quick smoke test (subset of WMB classes, 200 permutations, ser/thr only)
-python -m code.deconvolution.run_per_animal --run \
+python -m alz.deconvolution.run_per_animal --run \
     --cell-types "30 Astro-Epen" "31 OPC-Oligo" "34 Immune" \
     --tracks st --permutations 200
 
 # Stop after OLS (no MEA)
-python -m code.deconvolution.run_per_animal --ols-only
+python -m alz.deconvolution.run_per_animal --ols-only
 
 # Re-run Stages 4–5 only against existing kinase_enrichment_raw.csv
-python -m code.deconvolution.run_per_animal --relabel-only
+python -m alz.deconvolution.run_per_animal --relabel-only
 
 # Inspect cached outputs
-python -m code.deconvolution.run_per_animal --summary
+python -m alz.deconvolution.run_per_animal --summary
 ```
 
 ## Decomposition formula
