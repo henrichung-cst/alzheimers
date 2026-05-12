@@ -1,5 +1,6 @@
 suppressPackageStartupMessages({
   library(Matrix)
+  library(jsonlite)
 })
 
 sanitize_celltype <- function(x) {
@@ -52,6 +53,56 @@ load_ad_factorial_inputs <- function(input_dir = "alz/integration/intermediates/
   rownames(design) <- animal_meta$animal_id
 
   cell_types <- sort(unique(as.character(meta$labels)))
+
+  # Read contrast -> (ref_cond, alt_cond) map from MANIFEST.json so the upstream
+  # score_factorial_paths resolver pools animals by explicit condition pair
+  # instead of the single-coefficient heuristic (which silently leaves
+  # SigProb_ref/alt as NA for multi-coefficient interaction contrasts).
+  # Entries referencing a condition absent from the metadata (e.g. an
+  # incomplete cohort: ApTt has no 4mo animals) are dropped here so the
+  # engine falls back to the heuristic for those contrasts (NA SigProb).
+  manifest_path <- file.path(input_dir, "MANIFEST.json")
+  cond_pairs <- NULL
+  if (file.exists(manifest_path)) {
+    manifest <- jsonlite::fromJSON(manifest_path, simplifyVector = FALSE)
+    raw_pairs <- manifest$contrast_conditions
+    if (!is.null(raw_pairs)) {
+      available_conds <- unique(as.character(meta$condition))
+      cond_pairs <- list()
+      dropped <- character()
+      for (nm in names(raw_pairs)) {
+        pair <- as.character(unlist(raw_pairs[[nm]]))
+        if (all(pair %in% available_conds)) {
+          cond_pairs[[nm]] <- pair
+        } else {
+          dropped <- c(dropped, nm)
+        }
+      }
+      if (length(dropped) > 0) {
+        message(sprintf(
+          "load.R: dropped cond_pairs entries with absent conditions: %s",
+          paste(dropped, collapse = ", ")
+        ))
+      }
+      if (length(cond_pairs) == 0) cond_pairs <- NULL
+    }
+  }
+
+  # Missing seed-list files leave both NULL so upstream falls back to HEG-only.
+  deg_path <- file.path(input_dir, "deg_lists.json")
+  prg_path <- file.path(input_dir, "prg_list.csv")
+  deg_lists <- if (file.exists(deg_path)) {
+    raw <- jsonlite::fromJSON(deg_path, simplifyVector = FALSE)
+    lapply(raw, function(x) as.character(unlist(x)))
+  } else NULL
+  prg_list <- if (file.exists(prg_path)) {
+    prg_df <- read.csv(prg_path, stringsAsFactors = FALSE)
+    if (!"gene_symbol" %in% colnames(prg_df)) {
+      stop("prg_list.csv must have a 'gene_symbol' column")
+    }
+    prg_df$gene_symbol
+  } else NULL
+
   list(
     expr = mat,
     meta = meta,
@@ -59,7 +110,10 @@ load_ad_factorial_inputs <- function(input_dir = "alz/integration/intermediates/
     design = design,
     senders = cell_types,
     receivers = cell_types,
-    ptm = NULL
+    ptm = NULL,
+    deg_lists = deg_lists,
+    prg_list = prg_list,
+    cond_pairs = cond_pairs
   )
 }
 

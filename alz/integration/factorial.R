@@ -96,8 +96,22 @@ paths <- factorial_engine$construct(
   metadata = inputs$meta,
   senders = selected$senders,
   receivers = selected$receivers,
-  group.by = "labels"
+  group.by = "labels",
+  deg_lists = inputs$deg_lists,
+  prg_list = inputs$prg_list
 )
+
+if (!is.null(inputs$cond_pairs)) {
+  message(sprintf(
+    "Loaded explicit cond_pairs for %d contrast(s) from MANIFEST.json",
+    length(inputs$cond_pairs)
+  ))
+} else {
+  message(
+    "No cond_pairs in MANIFEST.json; SigProb will use single-coefficient ",
+    "heuristic (multi-coef contrasts will get NA SigProb_ref/alt)."
+  )
+}
 
 results <- factorial_engine$score(
   expression = inputs$expr,
@@ -106,7 +120,9 @@ results <- factorial_engine$score(
   contrasts = contrasts,
   design = inputs$design,
   animal_id = "animal_id",
-  condition_col = "condition"
+  condition_col = "condition",
+  format = "long",
+  cond_pairs = inputs$cond_pairs
 )
 
 if (nrow(results) > 0) {

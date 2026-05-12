@@ -10,6 +10,10 @@ SONG_PRIMARY_PHOSPHO_DIR = os.path.join(SONG_PRIMARY_DIR, "phospho")
 SONG_PRIMARY_METADATA_DIR = os.path.join(SONG_PRIMARY_DIR, "metadata")
 
 # Phospho track input files (S/T via IMAC; Y via dedicated pY enrichment).
+SONG_PROTEIN_QUANT_FILE = os.path.join(
+    SONG_PRIMARY_PROTEOMICS_DIR,
+    "song2024_tmttotal_protein_quant_merged_labeled (2).xlsx",
+)
 SONG_IMAC_SITEQUANT_FILE = os.path.join(
     SONG_PRIMARY_PHOSPHO_DIR,
     "song_IMAC_sitequant_merged_labeled (2).xlsx",
