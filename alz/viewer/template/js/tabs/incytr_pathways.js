@@ -34,13 +34,11 @@ function _ipBlock() {
 
 function _ipPairsInScope(block) {
   // Returns [{sender, receiver}] to load. Honors the multiselect filters; if
-  // both are empty, defaults to "no pairs" (user must pick) so we don't hammer
-  // 349 fetches by accident.
+  // both are empty, defaults to ALL present pairs ("show all pathways").
   const f = IncytrFilter.get();
   if (f.pair) return [f.pair];
   const sIn = new Set(f.senderIn || []);
   const rIn = new Set(f.receiverIn || []);
-  if (!sIn.size && !rIn.size) return [];
   const out = [];
   for (const [s, r] of block.slice_index.present) {
     if (sIn.size && !sIn.has(s)) continue;
@@ -121,17 +119,21 @@ async function _ipEnsureShards() {
   _ipRuntime.rows = null;
   _ipRenderTable();
   try {
-    const all = [];
-    for (const p of pairs) {
-      const rows = await SliceCache.loadIncytrShard(p.sender, p.receiver);
-      // Stamp sender/receiver onto each row so multi-pair queries still
-      // identify the originating cell-type pair in the table.
-      for (const r of rows) { r._sender = p.sender; r._receiver = p.receiver; }
-      all.push(...rows);
-    }
+    // Parallel fetch — for "show all" the scope is 349 pairs, so sequential
+    // awaits would be O(seconds). Browser concurrency limits already gate this.
+    const perPair = await Promise.all(pairs.map(p =>
+      SliceCache.loadIncytrShard(p.sender, p.receiver).then(rows => {
+        // Stamp sender/receiver so multi-pair queries still identify the
+        // originating cell-type pair in the table.
+        for (const r of rows) { r._sender = p.sender; r._receiver = p.receiver; }
+        return rows;
+      })
+    ));
     // Resolve race: only commit if the scope hasn't changed mid-fetch.
     const newSig = _ipScopeSig(_ipPairsInScope(block));
     if (newSig !== sig) return;
+    const all = [];
+    for (const arr of perPair) all.push(...arr);
     _ipRuntime.rows = all;
     _ipRuntime.loadedKey = sig;
   } catch (e) {
@@ -194,12 +196,12 @@ function _ipRenderTable() {
 
   const pairs = _ipPairsInScope(block);
   if (!pairs.length) {
-    countEl.textContent = "Select sender(s) or receiver(s) — or click a heatmap cell.";
-    wrap.innerHTML = '<div class="muted" style="padding:16px;">No pair selected.</div>';
+    countEl.textContent = "No (sender, receiver) pairs match the current selection.";
+    wrap.innerHTML = '<div class="muted" style="padding:16px;">Try clearing or widening the sender / receiver filters.</div>';
     return;
   }
   if (_ipRuntime.loading) {
-    countEl.textContent = `Loading ${pairs.length} shard${pairs.length === 1 ? "" : "s"}…`;
+    countEl.textContent = `Loading ${pairs.length} shard${pairs.length === 1 ? "" : "s"} in parallel…`;
     wrap.innerHTML = '<div class="muted" style="padding:16px;">Fetching shards…</div>';
     return;
   }
