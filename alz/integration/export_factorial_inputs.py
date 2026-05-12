@@ -12,7 +12,7 @@ Layout written to OUT_DIR:
   animal_metadata.csv              per-animal design matrix matching kinase_enrich.py OLS
   MANIFEST.json                    provenance, filter, dimensions, vocab, contrasts
   README.md                        consumer-facing description
-  subset_microglia_astrocyte/      same 5-file shape, two cell types only (fast iteration)
+  subset_immune_astro/             same 5-file shape, two WMB classes only (fast iteration)
     expression_matrix.mtx
     expression_genes.csv
     expression_barcodes.csv
@@ -44,8 +44,8 @@ import config as main_config  # noqa: E402
 import config_integration as icfg  # noqa: E402
 import omics_loaders  # noqa: E402
 
-SUBSET_NAME = "subset_microglia_astrocyte"
-SUBSET_LABELS = ("Microglia-PVM", "Astrocyte")
+SUBSET_NAME = "subset_immune_astro"
+SUBSET_LABELS = ("34 Immune", "30 Astro-Epen")
 
 # Source kldata.csv (incytr-schema, mouse-mapped) bundled into the
 # fixture so downstream Integr_kinasedata has its inputs alongside the
@@ -516,7 +516,7 @@ def main() -> None:
     parser.add_argument(
         "--no-subset",
         action="store_true",
-        help="Skip the subset_microglia_astrocyte bundle.",
+        help="Skip the subset_immune_astro bundle.",
     )
     args = parser.parse_args()
 
