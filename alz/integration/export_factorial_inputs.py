@@ -281,8 +281,10 @@ def build_manifest(
         "source": {
             "h5ad_path": h5ad_path,
             "subclass_prob_min": float(main_config.SONG_MIN_SUBCLASS_PROB),
-            "subclass_map_source": "alz.config.SONG_SUBCLASS_MAP",
-            "subclass_map_n_entries": len(main_config.SONG_SUBCLASS_MAP),
+            "wmb_class_map_source": "alz.config.load_song_to_wmb_class_map()",
+            "wmb_class_map_file": main_config.WMB_SUBCLASS_TO_CLASS_FILE,
+            "wmb_class_map_n_entries": len(main_config.load_song_to_wmb_class_map()),
+            "celltype_taxonomy": "WMB 34-class (alz.config.WMB_CLASSES)",
         },
         "filter": {
             "sex": icfg.FACTORIAL_SEX,
@@ -540,19 +542,26 @@ def main() -> None:
     else:
         prob_mask = pd.Series(True, index=adata.obs.index)
 
-    mapped = adata.obs["subclass_name"].map(main_config.SONG_SUBCLASS_MAP)
+    song_to_wmb = main_config.load_song_to_wmb_class_map()
+    mapped = adata.obs["subclass_name"].map(song_to_wmb)
     pre_map = sex_geno_time & prob_mask
     unmapped = int((pre_map & mapped.isna()).sum())
     if unmapped > 0:
-        print(f"  Dropping {unmapped} cells with unmapped subclass names")
+        unmapped_names = sorted(
+            adata.obs.loc[pre_map & mapped.isna(), "subclass_name"].unique().tolist()
+        )
+        print(
+            f"  Dropping {unmapped} cells with unmapped Allen subclass_name "
+            f"(no entry in SONG_TO_WMB_CLASS_MAP): {unmapped_names}"
+        )
 
     keep = pre_map & mapped.notna()
     adata = adata[keep].copy()
-    adata.obs["sea_ad_subclass"] = mapped[keep].values
-    print(f"  After subclass mapping: {adata.n_obs} cells")
+    adata.obs["wmb_class"] = mapped[keep].values
+    print(f"  After WMB-class mapping: {adata.n_obs} cells")
 
     meta = pd.DataFrame(index=adata.obs.index)
-    meta["labels"] = adata.obs["sea_ad_subclass"].values
+    meta["labels"] = adata.obs["wmb_class"].values
     meta["animal_id"] = adata.obs["sample"].values
     meta["genotype"] = adata.obs["mutant"].values
     meta["timepoint"] = adata.obs["age"].values

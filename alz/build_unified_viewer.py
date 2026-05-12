@@ -997,12 +997,6 @@ def _write_decomp_ols_slices(kid: dict, contrast_to_id: dict) -> dict:
     return index
 
 
-# Empty-DEG cell types — kept distinct from "0 significant" in the heatmap.
-# Match the README under data/incytr_factorial_outputs/.
-_INCYTR_EMPTY_DEG_CELLTYPES = (
-    "Chandelier", "L6b", "Lamp5 Lhx6", "Sncg", "Sst Chodl",
-)
-
 _INCYTR_CONTRASTS = (
     "App_2mo", "App_4mo", "App_6mo",
     "Tau_2mo", "Tau_4mo", "Tau_6mo",
@@ -1205,11 +1199,42 @@ def _write_incytr_pathways() -> dict | None:
         "contrasts": list(_INCYTR_CONTRASTS),
         "senders": senders_canonical,
         "receivers": receivers_canonical,
-        "empty_deg_celltypes": list(_INCYTR_EMPTY_DEG_CELLTYPES),
+        "empty_deg_celltypes": _read_empty_deg_celltypes(),
         "heatmap_tiers": heatmap_tiers,
         "default_tier": "paper",
         "slice_index": index,
     }
+
+
+def _read_empty_deg_celltypes() -> list[str]:
+    """Read the list of WMB classes with no DEGs from the upstream MANIFEST.
+
+    `compute_seed_lists.R` writes `deg_cell_type_status` into
+    `<INCYTR_FACTORIAL_OUTPUTS_DIR>/MANIFEST.json`. Cell types whose status
+    indicates an empty DEG set are surfaced in the heatmap as hatched cells
+    (visually distinct from "0 candidates pass the gate"). Returns `[]` if
+    the manifest is absent or doesn't carry the field — the heatmap will
+    just not render the hatched overlay in that case.
+    """
+    manifest_path = os.path.join(INCYTR_FACTORIAL_OUTPUTS_DIR, "MANIFEST.json")
+    if not os.path.exists(manifest_path):
+        return []
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    status = manifest.get("deg_cell_type_status") or {}
+    empty: list[str] = []
+    for ct, info in status.items():
+        if isinstance(info, dict):
+            n = info.get("n_degs") or info.get("n_DEGs") or 0
+            state = (info.get("status") or "").lower()
+            if (isinstance(n, (int, float)) and n == 0) or state in {"empty", "no_degs"}:
+                empty.append(ct)
+        elif isinstance(info, str) and info.lower() in {"empty", "no_degs"}:
+            empty.append(ct)
+    return sorted(empty)
 
 
 def build_payload(data: UnifiedData) -> dict:

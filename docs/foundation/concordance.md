@@ -238,7 +238,7 @@ silently dropped.
 | Pipeline orchestration | `alz/pipelines/attribute/{nodes,pipeline}.py` | Kedro nodes wrap pure helpers |
 | CLI shim | `alz/kinase_attribute.py` | `main()` (delegates to `KedroSession`) |
 | Song pathway-specific LFCs | `alz/snrna_integration.py` | `step_concordance()` |
-| Song subclass mapping | `alz/config.py` | `SONG_SUBCLASS_MAP` |
+| Song Allen-Cell-Type → WMB class mapping | `alz/config.py` | `SONG_TO_WMB_CLASS_MAP` |
 | Top cell-type ranking | `alz/attribution_recovery.py` | `_build_kinase_hypothesis_table()` |
 | High-confidence flag | `alz/attribution_recovery.py` | `_build_kinase_hypothesis_table()` |
 | Viewer score presets | `alz/build_unified_viewer.py` | `SCORE_PRESETS` (Kinase Explorer side panel) |

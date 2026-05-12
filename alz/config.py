@@ -127,14 +127,6 @@ SEAAD_TO_WMB_CLASS_FILE = os.path.join(
     EXTERNAL_DATA_DIR, "sea_ad", "seaad_subclass_to_wmb_class.csv"
 )
 
-SEA_AD_SUBCLASSES = [
-    "Chandelier", "Lamp5", "Lamp5 Lhx6", "Pax6", "Pvalb",
-    "Sncg", "Sst", "Sst Chodl", "Vip",
-    "L2/3 IT", "L4 IT", "L5 ET", "L5 IT", "L5/6 NP",
-    "L6 CT", "L6 IT", "L6 IT Car3", "L6b",
-    "Astrocyte", "Endothelial", "Microglia-PVM", "OPC",
-    "Oligodendrocyte", "VLMC",
-]
 SEA_AD_LFC_MIN = 0.1            # minimum |sea_ad_lfc| for moderate confidence
 
 SEA_AD_PATHWAY_MAP = {
@@ -182,26 +174,6 @@ CLASS_TO_TISSUE_CATEGORY = {
     "32 OEC": "Oligodendrocytes",
     "33 Vascular": "Endothelial cells",
     "34 Immune": "Microglia",
-    "Other": "Other",
-}
-
-SUBCLASS_TO_TISSUE_CATEGORY = {
-    "Chandelier": "Interneurons", "Lamp5": "Interneurons",
-    "Lamp5 Lhx6": "Interneurons", "Pax6": "Interneurons",
-    "Pvalb": "Interneurons", "Sncg": "Interneurons",
-    "Sst": "Interneurons", "Sst Chodl": "Interneurons",
-    "Vip": "Interneurons",
-    "L2/3 IT": "Excitatory neurons", "L4 IT": "Excitatory neurons",
-    "L5 ET": "Excitatory neurons", "L5 IT": "Excitatory neurons",
-    "L5/6 NP": "Excitatory neurons", "L6 CT": "Excitatory neurons",
-    "L6 IT": "Excitatory neurons", "L6 IT Car3": "Excitatory neurons",
-    "L6b": "Excitatory neurons",
-    "Astrocyte": "Astrocytes", "Oligodendrocyte": "Oligodendrocytes",
-    "Microglia-PVM": "Microglia", "OPC": "OPCs",
-    "Endothelial": "Endothelial cells", "VLMC": "Endothelial cells",
-    "Generic_excitatory": "Excitatory neurons",
-    "Generic_inhibitory": "Interneurons",
-    "Medium spiny neurons": "Medium spiny neurons",
     "Other": "Other",
 }
 
@@ -317,31 +289,26 @@ SONG_MIN_CELLS = 10       # minimum cells per animal×subclass for pseudobulk
 SONG_MIN_ANIMALS = 10     # minimum animals per subclass for concordance DE
 SONG_MIN_SUBCLASS_PROB = 0.9  # minimum subclass_prob for nucleus inclusion
 
-SONG_SUBCLASS_MAP = {
-    "Pvalb Gaba": "Pvalb",
-    "Pvalb chandelier Gaba": "Chandelier",
-    "Sst Gaba": "Sst",
-    "Sst Chodl Gaba": "Sst Chodl",
-    "Vip Gaba": "Vip",
-    "Lamp5 Gaba": "Lamp5",
-    "Lamp5 Lhx6 Gaba": "Lamp5 Lhx6",
-    "Sncg Gaba": "Sncg",
-    "L2/3 IT CTX Glut": "L2/3 IT",
-    "L4/5 IT CTX Glut": "L4 IT",
-    "L5 IT CTX Glut": "L5 IT",
-    "L5 ET CTX Glut": "L5 ET",
-    "L5 NP CTX Glut": "L5/6 NP",
-    "L6 CT CTX Glut": "L6 CT",
-    "L6 IT CTX Glut": "L6 IT",
-    "L6b CTX Glut": "L6b",
-    "Oligo NN": "Oligodendrocyte",
-    "OPC NN": "OPC",
-    "Astro-TE NN": "Astrocyte",
-    "Microglia NN": "Microglia-PVM",
-    "Endo NN": "Endothelial",
-    "VLMC NN": "VLMC",
-    "Peri NN": "VLMC",  # pericytes grouped with VLMC (mural/perivascular)
-}
+def load_song_to_wmb_class_map() -> dict[str, str]:
+    """Direct map: Allen Cell Type Mapper raw `subclass_name` → WMB class.
+
+    Built from the Allen-shipped `wmb_subclass_to_class.csv` (338 WMB
+    subclasses → 34 WMB classes), with the leading `\\d+ ` numeric prefix
+    stripped off each subclass so it matches Song h5ad's bare-name labels
+    (e.g. `"CA1-ProS Glut"`, not `"016 CA1-ProS Glut"`).
+
+    The Allen Cell Type Mapper used in Song's pipeline produces full WMB
+    whole-brain subclasses; this map gives near-complete coverage. No SEA-AD
+    intermediate.
+    """
+    import csv
+    import re
+    out: dict[str, str] = {}
+    with open(WMB_SUBCLASS_TO_CLASS_FILE, newline="") as f:
+        for row in csv.DictReader(f):
+            sub = re.sub(r"^\d+\s+", "", row["subclass"]).strip()
+            out[sub] = row["class"].strip()
+    return out
 
 SONG_PATHWAY_MAP = {"App": "App", "Tau": "Tau", "ApTt": "ApTt"}
 
