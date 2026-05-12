@@ -119,6 +119,20 @@
       </details>
     </div>
   </div>
+  <div id="tab-incytrheatmap" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytrheatmap" hidden>
+    <div class="card">
+      <div class="detail-chips" style="flex-wrap:wrap; align-items:center; gap:8px;">
+        <span class="muted" style="margin-right:6px;">Gate tier:</span>
+        <span id="ih-tier-radios" style="display:inline-flex; gap:4px;"></span>
+        <span style="display:inline-block; width:18px;"></span>
+        <span class="muted" style="margin-right:6px;">Contrast:</span>
+        <span id="ih-contrast-radios" style="display:inline-flex; gap:4px; flex-wrap:wrap;"></span>
+      </div>
+      <div class="muted" id="ih-subtitle" style="margin:8px 0;"></div>
+      <div id="ih-plot" role="img" aria-label="Incytr candidate-path heatmap"
+           style="width:100%;"></div>
+    </div>
+  </div>
   <div id="tab-methods" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-methods" hidden>
     <iframe id="methods-frame" src="pipeline_overview.html"
       style="width:100%;height:calc(100vh - 120px);border:1px solid var(--border);

@@ -383,6 +383,13 @@ const TAB_MANIFEST = {
       return true;
     },
   },
+  incytrheatmap: {
+    group: "landscape", label: "Incytr Heatmap",
+    filters: [], requires: [],
+    wire: () => wireIncytrHeatmap(),
+    render: () => renderIncytrHeatmap(),
+    rerenderOn: { filters: false, selection: [] },
+  },
   methods: {
     group: "reference", label: "Methods",
     filters: [], requires: [],
