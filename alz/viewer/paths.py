@@ -28,6 +28,14 @@ DECOMP_OLS_PARQUET = os.path.join(
     "per_animal", "site_level_ols.parquet",
 )
 
+# Incytr-pathway shards (lazy-loaded by the pathway-table tab)
+EDGE_SLICES_INCYTR_PATHWAYS_DIR = os.path.join(
+    UNIFIED_VIEWER_DIR, "edge_slices", "incytr_pathways"
+)
+INCYTR_FACTORIAL_OUTPUTS_DIR = os.path.join(
+    config.REPO_ROOT, "data", "incytr_factorial_outputs"
+)
+
 # ---------------------------------------------------------------------------
 # Audit / measurement-trace (kinase-side)
 # ---------------------------------------------------------------------------

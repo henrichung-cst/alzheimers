@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import glob
 import gzip
 import json
 import os
@@ -62,6 +63,8 @@ from viewer.paths import (  # noqa: E402
     AUDIT_SOURCES_DIR,
     DECOMP_OLS_PARQUET,
     EDGE_SLICES_DECOMP_OLS_DIR,
+    EDGE_SLICES_INCYTR_PATHWAYS_DIR,
+    INCYTR_FACTORIAL_OUTPUTS_DIR,
     MEASUREMENT_TRACE_DIR,
     MEASUREMENT_TRACE_INDEX,
     MEASUREMENT_TRACE_SCHEMA_VERSION,
@@ -575,7 +578,7 @@ def load_all_data() -> UnifiedData:
         columns=["kinase", "NES", "FDR", "contrast", "residue_type"])
 
     unified_attribution = pd.read_csv(
-        icfg.UNIFIED_ATTRIBUTION_CSV,
+        os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "unified_attribution.csv"),
         usecols=[
             "kinase", "gene_symbol", "contrast", "cell_type",
             "NES", "FDR", "combined_score", "combined_confidence",
@@ -994,6 +997,221 @@ def _write_decomp_ols_slices(kid: dict, contrast_to_id: dict) -> dict:
     return index
 
 
+# Empty-DEG cell types — kept distinct from "0 significant" in the heatmap.
+# Match the README under data/incytr_factorial_outputs/.
+_INCYTR_EMPTY_DEG_CELLTYPES = (
+    "Chandelier", "L6b", "Lamp5 Lhx6", "Sncg", "Sst Chodl",
+)
+
+_INCYTR_CONTRASTS = (
+    "App_2mo", "App_4mo", "App_6mo",
+    "Tau_2mo", "Tau_4mo", "Tau_6mo",
+    "ApTt_2mo", "ApTt_4mo", "ApTt_6mo",
+)
+
+# Pre-computed gate tiers for the heatmap. The UI picks one; the shards
+# carry raw metrics so finer client-side filtering remains possible.
+_INCYTR_HEATMAP_TIERS = (
+    ("all",    "all candidate paths",            {}),
+    ("p05",    "raw pvalue < 0.05",
+     {"p": 0.05}),
+    ("paper",  "He 2025 Fig 2D (raw p)",
+     {"p": 0.05, "pds": 0.76, "sp": 0.10}),
+    ("strict", "paper gate at p<0.01",
+     {"p": 0.01, "pds": 0.76, "sp": 0.10}),
+)
+
+
+def _incytr_sanitize(name: str) -> str:
+    """Match the upstream sanitize in alz/integration/load.R:sanitize_celltype."""
+    return name.replace("/", "-").replace(" ", "_")
+
+
+def _write_incytr_pathways() -> dict | None:
+    """Shard the long-form factorial output by (sender, receiver) — unfiltered.
+
+    Reads `data/incytr_factorial_outputs/receiver_cache/receiver=*/data.parquet`
+    directly (1.2M rows, 9 contrasts × 135,206 candidate paths) and emits one
+    parquet per (sender, receiver) pair under `edge_slices/incytr_pathways/`
+    plus the `incytr_pathways` payload block. No build-time significance gate
+    is applied — the shards carry raw metrics so the UI can threshold live.
+
+    `heatmap_tiers` in the payload pre-computes counts at four tiers
+    (all / p05 / paper / strict) so the heatmap stays useful without
+    shipping every row to the browser at load time.
+
+    Long-form preserved: one row per (Path, contrast). The table tab filters
+    to a single contrast for display.
+    """
+    import duckdb  # local to keep top-of-file imports lean
+
+    cache_glob = os.path.join(
+        INCYTR_FACTORIAL_OUTPUTS_DIR,
+        "receiver_cache", "receiver=*", "data.parquet",
+    )
+    if not glob.glob(cache_glob):
+        print(f"  (warn) receiver_cache empty under "
+              f"{INCYTR_FACTORIAL_OUTPUTS_DIR}; skipping incytr_pathways",
+              flush=True)
+        return None
+
+    pm_path = os.path.join(INCYTR_FACTORIAL_OUTPUTS_DIR, "pair_metadata.parquet")
+    if not os.path.exists(pm_path):
+        print(f"  (warn) {pm_path} missing; cannot resolve cell-type names",
+              flush=True)
+        return None
+    pm = pd.read_parquet(pm_path, columns=["sender", "receiver"])
+    canonical_celltypes = sorted(set(pm["sender"]) | set(pm["receiver"]))
+    sanitized_to_display = {_incytr_sanitize(n): n for n in canonical_celltypes}
+
+    con = duckdb.connect()
+    con.execute("PRAGMA threads=8; PRAGMA memory_limit='12GB';")
+    con.execute("SET temp_directory='/home/hchung/.cache/duckdb';")
+    con.execute(f"""
+        CREATE TEMP TABLE src AS
+        SELECT
+          sender, receiver, Path, Ligand, Receptor, EM, Target,
+          "Ligand.label", "Receptor.label", "EM.label", "Target.label",
+          contrast,
+          CAST(pvalue   AS DOUBLE) AS pvalue,
+          CAST(PDS      AS DOUBLE) AS PDS,
+          CAST(log2FC   AS DOUBLE) AS log2FC,
+          GREATEST(COALESCE(SigProb_ref, 0.0), COALESCE(SigProb_alt, 0.0))
+            AS sigprob_max
+        FROM read_parquet('{cache_glob}', hive_partitioning = true)
+    """)
+    n_src = con.execute("SELECT COUNT(*) FROM src").fetchone()[0]
+    print(f"  incytr_pathways: loaded receiver_cache ({n_src:,} rows)", flush=True)
+
+    # Tier-count grids: senders × receivers × contrasts (canonical 22, 22, 9).
+    senders_canonical = sorted(canonical_celltypes)
+    receivers_canonical = sorted(canonical_celltypes)
+    sender_to_idx = {s: i for i, s in enumerate(senders_canonical)}
+    receiver_to_idx = {r: i for i, r in enumerate(receivers_canonical)}
+    contrast_to_idx = {c: i for i, c in enumerate(_INCYTR_CONTRASTS)}
+    n_s, n_r, n_c = len(senders_canonical), len(receivers_canonical), len(_INCYTR_CONTRASTS)
+
+    heatmap_tiers: dict[str, dict] = {}
+    for tier_name, tier_label, gate in _INCYTR_HEATMAP_TIERS:
+        clauses = ["pvalue IS NOT NULL"]
+        if "p" in gate:
+            clauses.append(f"pvalue < {gate['p']}")
+        if "pds" in gate:
+            clauses.append(f"ABS(PDS) > {gate['pds']}")
+        if "sp" in gate:
+            clauses.append(f"sigprob_max > {gate['sp']}")
+        where = " AND ".join(clauses)
+        rows = con.execute(f"""
+            SELECT sender, receiver, contrast, COUNT(*) AS n
+            FROM src
+            WHERE {where}
+            GROUP BY sender, receiver, contrast
+        """).fetchall()
+        grid = np.zeros((n_s, n_r, n_c), dtype=np.uint32)
+        skipped_pairs: set[tuple[str, str]] = set()
+        for s_raw, r_raw, c, n in rows:
+            r_disp = sanitized_to_display.get(r_raw, r_raw)
+            if s_raw not in sender_to_idx or r_disp not in receiver_to_idx:
+                skipped_pairs.add((s_raw, r_raw))
+                continue
+            if c not in contrast_to_idx:
+                continue
+            grid[sender_to_idx[s_raw], receiver_to_idx[r_disp], contrast_to_idx[c]] = int(n)
+        heatmap_tiers[tier_name] = {
+            "label": tier_label,
+            "gate": gate,
+            "counts": grid.flatten().tolist(),
+            "total": int(grid.sum()),
+        }
+        if skipped_pairs:
+            print(f"    (warn) tier {tier_name}: skipped unknown pairs "
+                  f"{sorted(skipped_pairs)[:5]}{'...' if len(skipped_pairs) > 5 else ''}",
+                  flush=True)
+        print(f"    tier {tier_name:<7} ({tier_label}): "
+              f"{heatmap_tiers[tier_name]['total']:>9,} rows", flush=True)
+
+    # Reset / re-create the shard directory.
+    os.makedirs(EDGE_SLICES_INCYTR_PATHWAYS_DIR, exist_ok=True)
+    for f in os.listdir(EDGE_SLICES_INCYTR_PATHWAYS_DIR):
+        if f.endswith(".parquet") or f == "index.json":
+            os.remove(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, f))
+
+    # Materialize all rows (~1.2M) once, then groupby+write per pair.
+    df = con.execute("""
+        SELECT sender, receiver, Path, Ligand, Receptor, EM, Target,
+               "Ligand.label", "Receptor.label", "EM.label", "Target.label",
+               contrast, pvalue, PDS, log2FC, sigprob_max
+        FROM src
+    """).fetchdf()
+    con.close()
+
+    # Receivers arrive sanitized (hive partition); senders raw.
+    df["receiver"] = df["receiver"].map(lambda r: sanitized_to_display.get(r, r))
+    for col in ("pvalue", "PDS", "log2FC", "sigprob_max"):
+        df[col] = df[col].astype("float32")
+
+    shard_cols = [
+        "Path", "Ligand", "Receptor", "EM", "Target",
+        "Ligand.label", "Receptor.label", "EM.label", "Target.label",
+        "contrast", "pvalue", "PDS", "log2FC", "sigprob_max",
+    ]
+    present_pairs: list[list[str]] = []
+    pair_row_counts: dict[str, int] = {}
+    total_rows = 0
+    max_shard_bytes = 0
+    max_shard_name = ""
+    for (s, r), g in df.groupby(["sender", "receiver"], sort=True):
+        sub = g[shard_cols].sort_values(
+            ["contrast", "pvalue"], kind="mergesort", na_position="last",
+        )
+        fname = f"{_incytr_sanitize(s)}__{_incytr_sanitize(r)}.parquet"
+        path = os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, fname)
+        pq.write_table(
+            pa.Table.from_pandas(sub, preserve_index=False),
+            path, compression="zstd",
+        )
+        present_pairs.append([s, r])
+        pair_row_counts[fname] = len(sub)
+        total_rows += len(sub)
+        sz = os.path.getsize(path)
+        if sz > max_shard_bytes:
+            max_shard_bytes = sz
+            max_shard_name = fname
+
+    index = {
+        "schema_version": SCHEMA_VERSION,
+        "filename_template": "{sender}__{receiver}.parquet",
+        "sanitize_rule": "replace('/', '-'); replace(' ', '_')",
+        "present": sorted(present_pairs),
+        "n_total_rows": total_rows,
+        "pair_row_counts": pair_row_counts,
+    }
+    with open(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, "index.json"), "w") as f:
+        json.dump(index, f)
+
+    total_bytes = sum(
+        os.path.getsize(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, fn))
+        for fn in os.listdir(EDGE_SLICES_INCYTR_PATHWAYS_DIR)
+        if fn.endswith(".parquet")
+    )
+    print(f"  incytr_pathways: wrote {len(present_pairs)} shards "
+          f"({total_rows:,} rows; {total_bytes/1e6:.1f} MB total; "
+          f"max {max_shard_bytes/1e6:.2f} MB → {max_shard_name})",
+          flush=True)
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "source": "receiver_cache/ (unfiltered)",
+        "contrasts": list(_INCYTR_CONTRASTS),
+        "senders": senders_canonical,
+        "receivers": receivers_canonical,
+        "empty_deg_celltypes": list(_INCYTR_EMPTY_DEG_CELLTYPES),
+        "heatmap_tiers": heatmap_tiers,
+        "default_tier": "paper",
+        "slice_index": index,
+    }
+
+
 def build_payload(data: UnifiedData) -> dict:
     """Assemble the full JSON payload (no edges — that's the sidecar)."""
     from kinase_library.modules import data as kl_data
@@ -1017,6 +1235,10 @@ def build_payload(data: UnifiedData) -> dict:
     decomp_ols_slice_index = _write_decomp_ols_slices(
         _kid_for_slices, _contrast_to_id_for_slices,
     )
+
+    # Incytr pathway shards: one parquet per (sender, receiver), backing the
+    # significant-pathway heatmap + table tabs.
+    incytr_pathways_block = _write_incytr_pathways()
 
     meta = {
         "schema_version": SCHEMA_VERSION,
@@ -1127,7 +1349,10 @@ def build_payload(data: UnifiedData) -> dict:
             "present_decomp_ols_kinase_ids": decomp_ols_slice_index.get(
                 "present_kinase_ids", []
             ),
+            "incytr_pathways_url": "edge_slices/incytr_pathways/",
+            "incytr_pathways_index": "edge_slices/incytr_pathways/index.json",
         },
+        "incytr_pathways": incytr_pathways_block,
         "meta": meta,
     }
     return _sanitize(payload)
