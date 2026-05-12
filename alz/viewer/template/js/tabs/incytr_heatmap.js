@@ -190,11 +190,11 @@ function _ihRenderPlot() {
     const p = ev.points[0];
     const sender = p.x, receiver = p.y;
     if (empty.has(sender) || empty.has(receiver)) return;
-    // Phase 3 will pick this up and render the per-pair shard. For now we
-    // stash the request on the store; the future incytr_pathways tab reads it.
+    // Stash the request on the store, then switch to the pathways tab — its
+    // render hook consumes pendingIncytrFilter and loads the per-pair shard.
     Store.dispatch({type:"SET_VIEW", key:"pendingIncytrFilter",
       value:{ sender, receiver, contrast: _ihState.contrast, tier: _ihState.tier }});
-    console.info("incytr-heatmap click →", { sender, receiver, contrast: _ihState.contrast, tier: _ihState.tier });
+    Store.dispatch({type:"SET_VIEW", key:"activeTab", value:"incytrpathways"});
   });
 
   if (sub) {

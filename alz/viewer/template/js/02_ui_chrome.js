@@ -390,6 +390,13 @@ const TAB_MANIFEST = {
     render: () => renderIncytrHeatmap(),
     rerenderOn: { filters: false, selection: [] },
   },
+  incytrpathways: {
+    group: "drilldown", label: "Incytr Pathways",
+    filters: [], requires: [],
+    wire: () => wireIncytrPathways(),
+    render: () => renderIncytrPathways(),
+    rerenderOn: { filters: false, selection: [] },
+  },
   methods: {
     group: "reference", label: "Methods",
     filters: [], requires: [],

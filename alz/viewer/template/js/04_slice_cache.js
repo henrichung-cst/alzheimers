@@ -72,9 +72,37 @@ const SliceCache = (function(){
     return rows;
   }
 
-  return { loadBackboneBucket, backboneEdges, loadDecompOls,
+  // Incytr pathway shards: one parquet per (sender, receiver) pair under
+  // edge_slices/incytr_pathways/<sanitized_sender>__<sanitized_receiver>.parquet.
+  // Sanitize rule matches alz/integration/load.R:sanitize_celltype — replace
+  // "/" with "-" and " " with "_". Sender raw, receiver display name (the
+  // payload-side senders/receivers arrays already carry canonical display).
+  const iCache = new Map();              // "sender||receiver" -> rows[]
+  const iPresent = new Set(
+    ((PAYLOAD.incytr_pathways && PAYLOAD.incytr_pathways.slice_index
+      && PAYLOAD.incytr_pathways.slice_index.present) || [])
+      .map(([s, r]) => s + "||" + r)
+  );
+  function _incytrSanitize(name) {
+    return String(name).replace(/\//g, "-").replace(/ /g, "_");
+  }
+  async function loadIncytrShard(sender, receiver) {
+    const key = sender + "||" + receiver;
+    if (!iPresent.has(key)) return [];
+    if (iCache.has(key)) {
+      const v = iCache.get(key); _lruTouch(iCache, key, v); return v;
+    }
+    const base = ESR.incytr_pathways_url || "edge_slices/incytr_pathways/";
+    const url = `${base}${_incytrSanitize(sender)}__${_incytrSanitize(receiver)}.parquet`;
+    const rows = await _fetchParquet(url);
+    _lruTouch(iCache, key, rows);
+    return rows;
+  }
+
+  return { loadBackboneBucket, backboneEdges, loadDecompOls, loadIncytrShard,
            get backboneCacheSize(){ return bCache.size; },
-           get decompOlsCacheSize(){ return dCache.size; } };
+           get decompOlsCacheSize(){ return dCache.size; },
+           get incytrCacheSize(){ return iCache.size; } };
 })();
 window.SliceCache = SliceCache;
 

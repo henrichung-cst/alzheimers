@@ -124,8 +124,8 @@ Wired into `build_payload(data)` next to the existing `_write_decomp_ols_slices(
 
 0. ~~Upstream SigProb fix~~ — landed (run 20260512). All 9 contrasts populated except structurally-absent `ApTt_4mo`.
 1. **Data plane** — `_write_incytr_pathways` rewritten to source from `receiver_cache/`, tiered heatmap counts in payload, full-candidate shards. **DONE**.
-2. **Heatmap tab** — render + tier picker + contrast picker. No drill-in yet.
-3. **Table tab + drill-in** — virtualized table, filter chips, metric sliders, heatmap-click handler.
+2. **Heatmap tab** — render + tier picker + contrast picker. **DONE**.
+3. **Table tab + drill-in** — `tabs/incytr_pathways.js` virtualized table over single-pair shards. Filter chips (sender, receiver, contrast, 4 label cols × {DEG, prG, any}), tier preset + 3 sliders (`pvalue<`, `|PDS|≥`, `sigprob_max≥`), "show all 9 contrasts" toggle, sortable headers, row cap 1000 with "showing N of M". Heatmap click switches tabs + seeds filters. Shard fetched via `SliceCache.loadIncytrShard`. **DONE**.
 
 Each phase ends with `pixi run viewer` + hard refresh.
 

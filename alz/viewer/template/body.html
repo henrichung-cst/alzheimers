@@ -133,6 +133,43 @@
            style="width:100%;"></div>
     </div>
   </div>
+  <div id="tab-incytrpathways" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytrpathways" hidden>
+    <div class="card">
+      <div style="display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center;">
+        <span class="muted">Sender:</span>
+        <span id="ip-sender-chips" style="display:inline-flex; gap:4px; flex-wrap:wrap; max-width:60vw;"></span>
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; margin-top:6px;">
+        <span class="muted">Receiver:</span>
+        <span id="ip-receiver-chips" style="display:inline-flex; gap:4px; flex-wrap:wrap; max-width:60vw;"></span>
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; margin-top:6px;">
+        <span class="muted">Contrast:</span>
+        <span id="ip-contrast-chips" style="display:inline-flex; gap:4px; flex-wrap:wrap;"></span>
+        <label style="margin-left:12px;">
+          <input type="checkbox" id="ip-all-contrasts" /> show all 9 contrasts
+        </label>
+      </div>
+      <div id="ip-label-chips" style="display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin-top:8px;"></div>
+      <div id="ip-slider-row" style="display:flex; flex-wrap:wrap; gap:10px 18px; align-items:center; margin-top:10px;">
+        <span class="muted">Preset:</span>
+        <select id="ip-slider-preset">
+          <option value="all">all</option>
+          <option value="p05">p&lt;0.05</option>
+          <option value="paper" selected>paper</option>
+          <option value="strict">strict</option>
+        </select>
+        <label>pvalue &lt; <input type="number" id="ip-slider-p" data-ip-slider="p"
+          step="0.005" min="0" max="1" style="width:80px;" /> <span class="muted" id="ip-slider-p-val"></span></label>
+        <label>|PDS| ≥ <input type="number" id="ip-slider-pds" data-ip-slider="pds"
+          step="0.05" min="0" style="width:80px;" /> <span class="muted" id="ip-slider-pds-val"></span></label>
+        <label>sigprob_max ≥ <input type="number" id="ip-slider-sp" data-ip-slider="sp"
+          step="0.05" min="0" max="1" style="width:80px;" /> <span class="muted" id="ip-slider-sp-val"></span></label>
+      </div>
+      <div class="muted" id="ip-subtitle" style="margin:10px 0;"></div>
+      <div id="ip-table-wrap"></div>
+    </div>
+  </div>
   <div id="tab-methods" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-methods" hidden>
     <iframe id="methods-frame" src="pipeline_overview.html"
       style="width:100%;height:calc(100vh - 120px);border:1px solid var(--border);
