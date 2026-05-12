@@ -52,78 +52,19 @@ function wireKinaseTable() {
     celltype:   allCells,
   };
 
-  // Render a multiselect into its placeholder span. Idempotent.
   function _renderMultiselect(key) {
     const host = document.getElementById("ke-ms-" + key);
     if (!host) return;
-    const label = host.dataset.label || key;
-    const opts = MS_OPTS[key] || [];
-    const cur = (KinaseFilter.get(key) || []).slice();
-    const curSet = new Set(cur);
-    const summary = cur.length === 0 ? "Any"
-      : cur.length <= 2 ? cur.join(", ")
-      : `${cur.length} selected`;
-    const optsHtml = opts.map(v => {
-      const checked = curSet.has(v) ? " checked" : "";
-      return `<label class="ms-opt"><input type="checkbox" data-val="${_escapeHtml(v)}"${checked}/>${_escapeHtml(v)}</label>`;
-    }).join("");
-    host.innerHTML =
-      `<span style="margin-right:4px;">${_escapeHtml(label)}</span>` +
-      `<span class="ms-wrap">` +
-        `<button type="button" class="ms-button" data-active="${cur.length ? 1 : 0}" ` +
-          `aria-haspopup="true" aria-expanded="false">${_escapeHtml(summary)}</button>` +
-        `<div class="ms-panel" role="listbox" aria-multiselectable="true">` +
-          `<div class="ms-action" data-action="clear">Clear</div>` +
-          `<div class="ms-divider"></div>` +
-          optsHtml +
-        `</div>` +
-      `</span>`;
-    const wrap = host.querySelector(".ms-wrap");
-    const btn  = wrap.querySelector(".ms-button");
-    const panel = wrap.querySelector(".ms-panel");
-    btn.addEventListener("click", ev => {
-      ev.stopPropagation();
-      const open = panel.classList.toggle("open");
-      btn.setAttribute("aria-expanded", open ? "true" : "false");
-      // Close other open panels.
-      document.querySelectorAll(".ms-panel.open").forEach(p => {
-        if (p !== panel) {
-          p.classList.remove("open");
-          const b = p.parentElement && p.parentElement.querySelector(".ms-button");
-          if (b) b.setAttribute("aria-expanded", "false");
-        }
-      });
-    });
-    panel.addEventListener("click", ev => ev.stopPropagation());
-    panel.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-      cb.addEventListener("change", () => {
-        const next = (KinaseFilter.get(key) || []).slice();
-        const v = cb.dataset.val;
-        const i = next.indexOf(v);
-        if (cb.checked && i < 0) next.push(v);
-        else if (!cb.checked && i >= 0) next.splice(i, 1);
+    mountMultiselect(host, {
+      label:    host.dataset.label || key,
+      options:  MS_OPTS[key] || [],
+      current:  KinaseFilter.get(key) || [],
+      onChange: (next) => {
         KinaseFilter.set({[key]: next});
         _renderMultiselect(key);
         renderKinaseExplorer();
-      });
+      },
     });
-    const clearBtn = panel.querySelector('[data-action="clear"]');
-    if (clearBtn) clearBtn.addEventListener("click", () => {
-      KinaseFilter.set({[key]: []});
-      _renderMultiselect(key);
-      renderKinaseExplorer();
-    });
-  }
-  // Close panels on outside click (one-time wiring).
-  if (!window._msOutsideWired) {
-    document.addEventListener("click", () => {
-      document.querySelectorAll(".ms-panel.open").forEach(p => {
-        p.classList.remove("open");
-        const b = p.parentElement && p.parentElement.querySelector(".ms-button");
-        if (b) b.setAttribute("aria-expanded", "false");
-      });
-    });
-    window._msOutsideWired = true;
   }
 
   ["disease","timepoint","celltype"].forEach(_renderMultiselect);

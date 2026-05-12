@@ -1,27 +1,24 @@
 // ---------------------------------------------------------------------------
 // Incytr Heatmap tab — 22×22 sender×receiver candidate-path counts under a
-// chosen significance tier (all / p05 / paper / strict) and contrast.
+// chosen significance tier and contrast. Filter UI mirrors the Kinase tab:
+// ordinal-threshold <select> for tier; dual <select>s (Disease × Timepoint)
+// for contrast; Reset button + live count line.
 //
-// Reads PAYLOAD.incytr_pathways:
-//   senders, receivers, contrasts           (label arrays)
-//   empty_deg_celltypes                     (no-data cell types, hatched)
-//   heatmap_tiers[tier].counts              (Uint32, length S*R*C, sender-major)
-//   heatmap_tiers[tier].gate                (gate dict, e.g. {p:0.05, pds:0.76})
-//   heatmap_tiers[tier].label, .total
-//   default_tier                            (initial tier selection)
-//
-// Click → switches to the Pathway Table tab (Phase 3) with sender, receiver,
-// and contrast filters pre-set. For now we stash the requested filter on the
-// store and log; the table tab handler will read it when it lands.
+// State lives in IncytrFilter (shared with the Pathway table tab) so picks
+// flow across tabs. Click on a heatmap cell → seeds the table tab's
+// senderIn / receiverIn / disease / timepoint filters and switches tabs.
 // ---------------------------------------------------------------------------
 
-const _ihState = {
-  tier:     null,   // initialized from PAYLOAD.incytr_pathways.default_tier
-  contrast: null,   // initialized to first contrast
-};
+const _IH_DISEASES = ["App", "Tau", "ApTt"];
+const _IH_TIMEPOINTS = ["2mo", "4mo", "6mo"];
 
 function _ihBlock() {
   return (typeof PAYLOAD !== "undefined" && PAYLOAD.incytr_pathways) || null;
+}
+
+function _ihContrastFromState() {
+  const f = IncytrFilter.get();
+  return `${f.hmDisease}_${f.hmTimepoint}`;
 }
 
 function _ihCountAt(tier, sIdx, rIdx, cIdx) {
@@ -36,66 +33,73 @@ function _ihCountAt(tier, sIdx, rIdx, cIdx) {
 function _ihTierGateLabel(gate) {
   if (!gate) return "";
   const parts = [];
-  if (gate.p   != null) parts.push("pvalue<"   + gate.p);
+  if (gate.p   != null) parts.push("p<"   + gate.p);
   if (gate.pds != null) parts.push("|PDS|>"    + gate.pds);
-  if (gate.sp  != null) parts.push("sigprob>"  + gate.sp);
+  if (gate.sp  != null) parts.push("sp>"  + gate.sp);
   return parts.length ? parts.join(" ∧ ") : "no gate";
 }
 
-function _ihBuildControls() {
+function _ihTierOptionLabel(tier, meta) {
+  const total = (meta.total || 0).toLocaleString();
+  return `${tier} — ${_ihTierGateLabel(meta.gate)} (${total})`;
+}
+
+function _ihSyncControls() {
   const block = _ihBlock();
   if (!block) return;
-  const tiersWrap = document.getElementById("ih-tier-radios");
-  const contWrap  = document.getElementById("ih-contrast-radios");
-  if (!tiersWrap || !contWrap) return;
+  const f = IncytrFilter.get();
 
-  const tierOrder = ["all", "p05", "paper", "strict"];
-  const tiersPresent = tierOrder.filter(t => block.heatmap_tiers[t]);
-  if (_ihState.tier == null) {
-    _ihState.tier = (block.default_tier && block.heatmap_tiers[block.default_tier])
-      ? block.default_tier
-      : tiersPresent[0];
+  const tierSel = document.getElementById("ih-tier");
+  if (tierSel) {
+    const order = ["all", "p05", "paper", "strict"]
+      .filter(t => block.heatmap_tiers[t]);
+    tierSel.innerHTML = order.map(t =>
+      `<option value="${_escapeHtml(t)}">${_escapeHtml(_ihTierOptionLabel(t, block.heatmap_tiers[t]))}</option>`
+    ).join("");
+    tierSel.value = (f.hmTier && block.heatmap_tiers[f.hmTier]) ? f.hmTier : order[0];
   }
-  tiersWrap.innerHTML = tiersPresent.map(t => {
-    const meta = block.heatmap_tiers[t];
-    const on = (t === _ihState.tier);
-    const total = (meta.total || 0).toLocaleString();
-    const title = `${_escapeHtml(meta.label || t)} — ${_ihTierGateLabel(meta.gate)} · ${total} rows`;
-    return `<button class="chip${on ? " active" : ""}" data-ih-tier="${t}" title="${title}">`
-      + `${_escapeHtml(t)} <span class="muted" style="margin-left:4px;">(${total})</span>`
-      + `</button>`;
-  }).join("");
-
-  if (_ihState.contrast == null) _ihState.contrast = block.contrasts[0];
-  contWrap.innerHTML = block.contrasts.map(c => {
-    const on = (c === _ihState.contrast);
-    return `<button class="chip${on ? " active" : ""}" data-ih-contrast="${c}">`
-      + _escapeHtml(c) + `</button>`;
-  }).join("");
+  const dSel = document.getElementById("ih-disease");
+  if (dSel) {
+    dSel.innerHTML = _IH_DISEASES.map(d =>
+      `<option value="${_escapeHtml(d)}">${_escapeHtml(d)}</option>`
+    ).join("");
+    dSel.value = f.hmDisease;
+  }
+  const tSel = document.getElementById("ih-timepoint");
+  if (tSel) {
+    tSel.innerHTML = _IH_TIMEPOINTS.map(t =>
+      `<option value="${_escapeHtml(t)}">${_escapeHtml(t)}</option>`
+    ).join("");
+    tSel.value = f.hmTimepoint;
+  }
 }
 
 function wireIncytrHeatmap() {
-  const tiersWrap = document.getElementById("ih-tier-radios");
-  const contWrap  = document.getElementById("ih-contrast-radios");
-  if (tiersWrap) tiersWrap.addEventListener("click", ev => {
-    const btn = ev.target.closest("[data-ih-tier]");
-    if (!btn) return;
-    _ihState.tier = btn.dataset.ihTier;
-    _ihBuildControls();
+  const tierSel = document.getElementById("ih-tier");
+  if (tierSel) tierSel.addEventListener("change", () => {
+    IncytrFilter.set({ hmTier: tierSel.value });
+    _ihSyncControls();
     _ihRenderPlot();
   });
-  if (contWrap) contWrap.addEventListener("click", ev => {
-    const btn = ev.target.closest("[data-ih-contrast]");
-    if (!btn) return;
-    _ihState.contrast = btn.dataset.ihContrast;
-    _ihBuildControls();
+  const dSel = document.getElementById("ih-disease");
+  if (dSel) dSel.addEventListener("change", () => {
+    IncytrFilter.set({ hmDisease: dSel.value });
+    _ihRenderPlot();
+  });
+  const tSel = document.getElementById("ih-timepoint");
+  if (tSel) tSel.addEventListener("change", () => {
+    IncytrFilter.set({ hmTimepoint: tSel.value });
+    _ihRenderPlot();
+  });
+  const resetBtn = document.getElementById("ih-reset");
+  if (resetBtn) resetBtn.addEventListener("click", () => {
+    IncytrFilter.set({ hmTier: "paper", hmDisease: "App", hmTimepoint: "2mo" });
+    _ihSyncControls();
     _ihRenderPlot();
   });
 }
 
 function _ihColorscale() {
-  // Sequential white → deep indigo. Zero is anchored to white so empty cells
-  // and below-gate cells render as background.
   return [
     [0.00, "#ffffff"],
     [0.05, "#f0f4ff"],
@@ -106,38 +110,43 @@ function _ihColorscale() {
   ];
 }
 
+function _ihStructurallyAbsent(contrast) {
+  return contrast === "ApTt_4mo";
+}
+
 function _ihRenderPlot() {
   const block = _ihBlock();
   const el = document.getElementById("ih-plot");
-  const sub = document.getElementById("ih-subtitle");
+  const countEl = document.getElementById("ih-count");
   if (!block || !el) return;
-  const tier = _ihState.tier;
+  const f = IncytrFilter.get();
+  const tier = f.hmTier;
   const tierMeta = block.heatmap_tiers[tier];
-  const contrast = _ihState.contrast;
+  const contrast = _ihContrastFromState();
+  const absent = _ihStructurallyAbsent(contrast);
   const cIdx = block.contrasts.indexOf(contrast);
   const senders = block.senders, receivers = block.receivers;
   const nS = senders.length, nR = receivers.length;
   const empty = new Set(block.empty_deg_celltypes || []);
 
-  // Z matrix: counts where the cell can carry data, NaN where empty-DEG. NaN
-  // gates pure white via showscale: cells that are 0-but-present still render
-  // as the colorscale's zero (also white) — distinguished only by tooltip and
-  // by the hatched overlay below.
   const Z = [];
   const text = [];
   let maxN = 0;
+  let visibleN = 0;
   for (let r = 0; r < nR; r++) {
     const row = [];
     const tRow = [];
     for (let s = 0; s < nS; s++) {
       const isEmpty = empty.has(senders[s]) || empty.has(receivers[r]);
-      if (isEmpty) {
+      if (isEmpty || absent || cIdx < 0) {
         row.push(null);
-        tRow.push("no candidate paths (empty-DEG cell type)");
+        if (absent) tRow.push("ApTt × 4mo is structurally absent upstream");
+        else        tRow.push("no candidate paths (empty-DEG cell type)");
       } else {
         const n = _ihCountAt(tier, s, r, cIdx);
         row.push(n);
         if (n > maxN) maxN = n;
+        visibleN += n;
         tRow.push(`${n.toLocaleString()} rows pass gate`);
       }
     }
@@ -154,14 +163,11 @@ function _ihRenderPlot() {
     colorbar: { title: "n rows", thickness: 12, len: 0.7 },
     xgap: 1, ygap: 1,
   }];
-
-  // Hatched overlay for empty-DEG cells — a second scatter trace with a
-  // distinctive marker so the user sees "no data" instead of "0 below gate."
   const hx = [], hy = [], htxt = [];
   for (let r = 0; r < nR; r++) for (let s = 0; s < nS; s++) {
-    if (empty.has(senders[s]) || empty.has(receivers[r])) {
+    if (absent || empty.has(senders[s]) || empty.has(receivers[r])) {
       hx.push(senders[s]); hy.push(receivers[r]);
-      htxt.push("no candidate paths (empty-DEG cell type)");
+      htxt.push(absent ? "structurally absent" : "no candidate paths");
     }
   }
   if (hx.length) {
@@ -172,7 +178,6 @@ function _ihRenderPlot() {
       showlegend: false,
     });
   }
-
   const layout = {
     margin: { l: 110, r: 30, t: 20, b: 90 },
     height: Math.max(520, 22 * Math.max(nS, nR) + 160),
@@ -189,19 +194,24 @@ function _ihRenderPlot() {
     if (!ev.points || !ev.points.length) return;
     const p = ev.points[0];
     const sender = p.x, receiver = p.y;
-    if (empty.has(sender) || empty.has(receiver)) return;
-    // Stash the request on the store, then switch to the pathways tab — its
-    // render hook consumes pendingIncytrFilter and loads the per-pair shard.
-    Store.dispatch({type:"SET_VIEW", key:"pendingIncytrFilter",
-      value:{ sender, receiver, contrast: _ihState.contrast, tier: _ihState.tier }});
+    if (empty.has(sender) || empty.has(receiver) || absent) return;
+    // Seed the table tab via shared filter state, then switch tabs.
+    IncytrFilter.set({
+      pair:       { sender, receiver },
+      senderIn:   [sender],
+      receiverIn: [receiver],
+      disease:    [f.hmDisease],
+      timepoint:  [f.hmTimepoint],
+    });
+    IncytrFilter.applyTier(tier);
     Store.dispatch({type:"SET_VIEW", key:"activeTab", value:"incytrpathways"});
   });
 
-  if (sub) {
-    const gate = _ihTierGateLabel(tierMeta && tierMeta.gate);
-    const total = (tierMeta && tierMeta.total || 0).toLocaleString();
-    sub.textContent = `Tier "${tier}" (${gate}) · contrast ${contrast} · `
-      + `${total} rows pass gate across all pairs. Click a cell to drill into the table tab (Phase 3).`;
+  if (countEl) {
+    const totalAtTier = (tierMeta && tierMeta.total || 0).toLocaleString();
+    countEl.textContent = absent
+      ? `${contrast} structurally absent · 0 rows · tier total ${totalAtTier}.`
+      : `${contrast} · ${visibleN.toLocaleString()} rows at tier ${tier} (${_ihTierGateLabel(tierMeta && tierMeta.gate)}) · tier total ${totalAtTier}.`;
   }
 }
 
@@ -214,6 +224,6 @@ function renderIncytrHeatmap() {
       + 'producing <code>data/incytr_factorial_outputs/receiver_cache/</code>.</div>';
     return;
   }
-  _ihBuildControls();
+  _ihSyncControls();
   _ihRenderPlot();
 }
