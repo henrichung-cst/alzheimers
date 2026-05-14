@@ -40,10 +40,18 @@ import config  # noqa: E402
 
 REPO = Path(config.REPO_ROOT)
 BULK_DIR = REPO / "outputs/reports/kinase_attribution"
-RAW_PHOSPHO_FILE = BULK_DIR / "raw_phospho_normalized.csv"
 TOTAL_PROTEOME_FILE = BULK_DIR / "total_proteome_normalized.csv"
 SAMPLE_MAPPING_FILE = REPO / "outputs/reports/data_ingest/sample_mapping.csv"
 CELL_COUNTS_FILE = REPO / "outputs/reports/snrna_integration/pseudobulk_cell_counts.csv"
+
+
+def _phospho_paths(track: str) -> tuple[Path, Path]:
+    """Return (raw_phospho_normalized.csv, phospho_per_cluster.parquet) for track."""
+    if track == "st":
+        return BULK_DIR / "raw_phospho_normalized.csv", Path("phospho_per_cluster.parquet")
+    if track == "py":
+        return BULK_DIR / "raw_phospho_normalized_pY.csv", Path("phospho_per_cluster_pY.parquet")
+    raise ValueError(f"Unknown phospho track: {track!r} (expected 'st' or 'py')")
 
 
 def _spine_dir(spine: str) -> Path:
@@ -136,7 +144,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--spine", default="levy19",
                     help="cluster-spine subdirectory under outputs/reports/decomposition/")
+    ap.add_argument("--track", default="both", choices=["st", "py", "both"],
+                    help="phospho track(s) to project: st (IMAC pS/pT), py, or both")
     args = ap.parse_args()
+    tracks = ["st", "py"] if args.track == "both" else [args.track]
 
     out_dir = _spine_dir(args.spine)
     if not out_dir.exists():
@@ -157,32 +168,47 @@ def main():
     mp = _load_sample_mapping()
     col_to_animal = dict(zip(mp["column_name"], mp["animal_id"]))
 
-    # --- Phospho ---
-    print(f"  Bulk phospho: {RAW_PHOSPHO_FILE}")
-    if not RAW_PHOSPHO_FILE.exists():
-        raise FileNotFoundError(RAW_PHOSPHO_FILE)
-    phospho = pd.read_csv(RAW_PHOSPHO_FILE)
-    meta_cols_ph = ["site_id", "gene_symbol", "motif"]
-    val_cols_ph = [c for c in phospho.columns if c not in meta_cols_ph]
-    phospho = phospho[["site_id", "gene_symbol"] + val_cols_ph]
-    phospho_long = _bulk_to_long(
-        phospho, val_cols_ph, ["site_id", "gene_symbol"], col_to_animal, "bulk_value",
-    )
-    n_sites_total = phospho_long["site_id"].nunique()
+    # --- Phospho (per track) ---
     snrna_genes = set(proportions["gene"].unique())
-    parent_in_snrna = phospho_long["gene_symbol"].isin(snrna_genes)
-    dropped_sites = phospho_long.loc[~parent_in_snrna, "site_id"].nunique()
-    print(f"    Bulk phospho rows: {len(phospho_long):,}; "
-          f"sites total={n_sites_total:,}; "
-          f"sites dropped (parent gene absent from snRNA)={dropped_sites:,}")
-    phospho_long = phospho_long.loc[parent_in_snrna].reset_index(drop=True)
+    phospho_stats: dict[str, dict] = {}
+    for track in tracks:
+        in_path, out_name = _phospho_paths(track)
+        print(f"  [{track}] Bulk phospho: {in_path}")
+        if not in_path.exists():
+            if track == "py":
+                print(f"    [{track}] missing — skipping pY track (Stage 1 did not emit it)")
+                phospho_stats[track] = {"status": "missing", "input": str(in_path)}
+                continue
+            raise FileNotFoundError(in_path)
+        phospho = pd.read_csv(in_path)
+        meta_cols_ph = ["site_id", "gene_symbol", "motif"]
+        val_cols_ph = [c for c in phospho.columns if c not in meta_cols_ph]
+        phospho = phospho[["site_id", "gene_symbol"] + val_cols_ph]
+        phospho_long = _bulk_to_long(
+            phospho, val_cols_ph, ["site_id", "gene_symbol"], col_to_animal, "bulk_value",
+        )
+        n_sites_total = phospho_long["site_id"].nunique()
+        parent_in_snrna = phospho_long["gene_symbol"].isin(snrna_genes)
+        dropped_sites = phospho_long.loc[~parent_in_snrna, "site_id"].nunique()
+        print(f"    [{track}] Bulk phospho rows: {len(phospho_long):,}; "
+              f"sites total={n_sites_total:,}; "
+              f"sites dropped (parent gene absent from snRNA)={dropped_sites:,}")
+        phospho_long = phospho_long.loc[parent_in_snrna].reset_index(drop=True)
 
-    print("  Projecting phospho × proportions ...")
-    phospho_dec = _project(phospho_long, proportions, "gene_symbol", "bulk_value")
-    phospho_out = out_dir / "phospho_per_cluster.parquet"
-    phospho_dec[["site_id", "gene_symbol", "animal_id", "cluster", "value", "log2_value"]]\
-        .to_parquet(phospho_out, index=False)
-    print(f"    Wrote {phospho_out} ({len(phospho_dec):,} rows)")
+        print(f"  [{track}] Projecting phospho × proportions ...")
+        phospho_dec = _project(phospho_long, proportions, "gene_symbol", "bulk_value")
+        phospho_out = out_dir / out_name
+        phospho_dec[["site_id", "gene_symbol", "animal_id", "cluster", "value", "log2_value"]]\
+            .to_parquet(phospho_out, index=False)
+        print(f"    [{track}] Wrote {phospho_out} ({len(phospho_dec):,} rows)")
+        phospho_stats[track] = {
+            "status": "ok",
+            "input": str(in_path),
+            "output": str(phospho_out),
+            "n_sites_input": int(n_sites_total),
+            "n_sites_dropped_parent_absent": int(dropped_sites),
+            "n_rows_output": int(len(phospho_dec)),
+        }
 
     # --- Total proteome ---
     print(f"  Bulk protein: {TOTAL_PROTEOME_FILE}")
@@ -242,11 +268,7 @@ def main():
         "spine": args.spine,
         "n_clusters": int(proportions["cluster"].nunique()),
         "n_animals": int(proportions["animal_id"].nunique()),
-        "phospho": {
-            "n_sites_input": int(n_sites_total),
-            "n_sites_dropped_parent_absent": int(dropped_sites),
-            "n_rows_output": int(len(phospho_dec)),
-        },
+        "phospho": phospho_stats,
         "protein": {
             "n_genes_input": int(n_genes_total),
             "n_genes_dropped_absent_from_snrna": int(dropped_genes),
