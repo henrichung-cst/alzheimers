@@ -12,7 +12,7 @@ Layout written to OUT_DIR:
   animal_metadata.csv              per-animal design matrix matching kinase_enrich.py OLS
   MANIFEST.json                    provenance, filter, dimensions, vocab, contrasts
   README.md                        consumer-facing description
-  subset_immune_astro/             same 5-file shape, two WMB classes only (fast iteration)
+  subset_astro_microglia/          same 5-file shape, two Levy-19 clusters (fast iteration)
     expression_matrix.mtx
     expression_genes.csv
     expression_barcodes.csv
@@ -42,10 +42,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config as main_config  # noqa: E402
 import config_integration as icfg  # noqa: E402
-import omics_loaders  # noqa: E402
 
-SUBSET_NAME = "subset_immune_astro"
-SUBSET_LABELS = ("34 Immune", "30 Astro-Epen")
+# Two Levy-19 clusters used for the fast iteration subset bundle. Picked for
+# wide coverage and non-neuronal class diversity so upstream Incytr profiling
+# work hits both glial and excitatory paths. Re-confirm post-export if cell
+# counts shift.
+SUBSET_NAME = "subset_astro_microglia"
+SUBSET_LABELS = ("Astrocytes", "Microglia")
 
 # Source kldata.csv (incytr-schema, mouse-mapped) bundled into the
 # fixture so downstream Integr_kinasedata has its inputs alongside the
@@ -84,18 +87,130 @@ def git_sha() -> str | None:
         return None
 
 
-def write_omics_bundle(
+def _long_to_per_cluster_wide(
+    long: pd.DataFrame, value_col: str, gene_key: str,
+) -> dict[str, pd.DataFrame]:
+    """Pivot Stage 6 long parquet to {cluster: gene × animal wide matrix}.
+
+    For phospho input, ``gene_key`` is collapsed by sum(min_count=1) to match
+    the legacy site→gene aggregator before pivoting; protein input is already
+    keyed at gene level.
+    """
+    if "site_id" in long.columns:
+        long = (
+            long.groupby([gene_key, "cluster", "animal_id"], as_index=False)[value_col]
+            .sum(min_count=1)
+        )
+    out: dict[str, pd.DataFrame] = {}
+    for cluster, sub in long.groupby("cluster"):
+        wide = sub.pivot_table(
+            index=gene_key, columns="animal_id", values=value_col, aggfunc="first",
+        )
+        wide = wide.sort_index().sort_index(axis=1)
+        out[cluster] = wide
+    return out
+
+
+def _sanitize_cluster(name: str) -> str:
+    return name.replace(" ", "_").replace("/", "-")
+
+
+def write_per_cluster_bundle(
     out_dir: str,
-    rekeyed_omics: dict[str, pd.DataFrame],
-) -> dict[str, str]:
-    """Write pr/ps/py matrices as CSV (genes × animals). Returns paths."""
-    written: dict[str, str] = {}
-    for layer, df in rekeyed_omics.items():
-        path = os.path.join(out_dir, f"{layer}_matrix.csv")
-        df.to_csv(path, index_label="gene")
-        written[layer] = path
-        print(f"    wrote {path}  ({df.shape[0]} genes x {df.shape[1]} animals)")
-    return written
+    kept_animal_ids: list[str],
+) -> dict[str, dict]:
+    """Write per-cluster pr/ps parquet bundles under per_cluster/{layer}/.
+
+    Sources Stage 6 outputs at
+    ``outputs/reports/decomposition/{spine}/{protein,phospho}_per_cluster.parquet``.
+    Restricts animal columns to ``kept_animal_ids`` so design rownames align.
+    The py layer is written when a track-suffixed Stage 6 parquet
+    (``phospho_per_cluster_pY.parquet``) is present; absent otherwise (Stage 6
+    pY extension is Step 13 work).
+
+    Returns a per-layer summary dict for the manifest.
+    """
+    summary: dict[str, dict] = {}
+    layer_specs = [
+        ("pr", icfg.PROTEIN_PER_CLUSTER_FILE, "gene_symbol"),
+        ("ps", icfg.PHOSPHO_PER_CLUSTER_FILE, "gene_symbol"),
+        (
+            "py",
+            os.path.join(icfg.DECOMPOSITION_DIR, "phospho_per_cluster_pY.parquet"),
+            "gene_symbol",
+        ),
+    ]
+    kept_set = set(kept_animal_ids)
+    for layer, src, gene_key in layer_specs:
+        if not os.path.exists(src):
+            print(f"    [{layer}] skipped: {src} not found")
+            summary[layer] = {"source": src, "status": "missing"}
+            continue
+        long = pd.read_parquet(src)
+        wide_by_cluster = _long_to_per_cluster_wide(long, "value", gene_key)
+        layer_dir = os.path.join(out_dir, "per_cluster", layer)
+        os.makedirs(layer_dir, exist_ok=True)
+        clusters_written = 0
+        n_genes_total = 0
+        for cluster, wide in wide_by_cluster.items():
+            cols = [c for c in wide.columns if c in kept_set]
+            sub = wide.reindex(columns=kept_animal_ids)
+            sub = sub.loc[sub.notna().any(axis=1)]
+            if sub.empty:
+                continue
+            fname = f"{_sanitize_cluster(cluster)}.parquet"
+            sub.reset_index().to_parquet(
+                os.path.join(layer_dir, fname), index=False,
+            )
+            clusters_written += 1
+            n_genes_total = max(n_genes_total, sub.shape[0])
+        print(
+            f"    [{layer}] per_cluster/{layer}/: {clusters_written} clusters, "
+            f"≤{n_genes_total} genes per cluster"
+        )
+        summary[layer] = {
+            "source": os.path.relpath(src, REPO_ROOT),
+            "n_clusters": clusters_written,
+            "max_n_genes": int(n_genes_total),
+        }
+    return summary
+
+
+def write_seedlist_pr_matrix(
+    out_dir: str,
+    kept_animal_ids: list[str],
+) -> str | None:
+    """Write a flat bulk pr_matrix.csv (genes × animals) for compute_seed_lists.R.
+
+    Seed-list DEP estimation (limma on bulk proteomics) is upstream of the
+    per-cluster decomposition; it should stay flat. Source is the same
+    ``total_proteome_normalized.csv`` that Stage 1 emits; columns are TMT
+    ``column_name`` values that we map to transcript-side animal_ids via
+    ``sample_mapping.csv``.
+    """
+    src = os.path.join(
+        REPO_ROOT, "outputs/reports/kinase_attribution/total_proteome_normalized.csv"
+    )
+    smap_path = os.path.join(REPO_ROOT, "outputs/reports/data_ingest/sample_mapping.csv")
+    if not (os.path.exists(src) and os.path.exists(smap_path)):
+        print(f"    [seed-list pr_matrix.csv] skipped (missing {src} or {smap_path})")
+        return None
+    tp = pd.read_csv(src)
+    smap = pd.read_csv(smap_path)
+    col_to_animal = dict(zip(smap["column_name"], smap["animal_id"]))
+    meta_cols = [c for c in ("gene_symbol", "protein_id") if c in tp.columns]
+    val_cols = [c for c in tp.columns if c not in meta_cols and c in col_to_animal]
+    flat = tp[["gene_symbol"] + val_cols].dropna(subset=["gene_symbol"]).copy()
+    flat = flat.rename(columns={c: col_to_animal[c] for c in val_cols})
+    # one row per gene (first occurrence; total proteome ≈ unique)
+    flat = flat.drop_duplicates(subset=["gene_symbol"], keep="first")
+    flat = flat.set_index("gene_symbol")
+    flat = flat.reindex(columns=kept_animal_ids)
+    path = os.path.join(out_dir, "pr_matrix.csv")
+    flat.to_csv(path, index_label="gene")
+    print(f"    wrote {path}  ({flat.shape[0]} genes x {flat.shape[1]} animals; "
+          f"seed-list limma input)")
+    return path
 
 
 def write_pseudobulk_counts(
@@ -190,24 +305,6 @@ def write_kldata(out_dir: str) -> str:
     return dst
 
 
-def assert_omics_alignment(
-    rekeyed_omics: dict[str, pd.DataFrame],
-    expected_animal_ids: list[str],
-) -> None:
-    """Pre-write asserts: every layer aligned to the intersect animal set."""
-    for layer, df in rekeyed_omics.items():
-        if list(df.columns) != expected_animal_ids:
-            raise SystemExit(
-                f"{layer}_matrix columns do not match expected animal order: "
-                f"got {list(df.columns)}, expected {expected_animal_ids}"
-            )
-        all_nan_cols = [c for c in df.columns if df[c].isna().all()]
-        if all_nan_cols:
-            raise SystemExit(
-                f"{layer}_matrix has all-NaN columns: {all_nan_cols}"
-            )
-
-
 def assert_factorial_estimability(animal_meta: pd.DataFrame) -> None:
     """Pre-write asserts: rank-full + all 9 contrasts c'(X'X)^-1 nonzero."""
     X = animal_meta[icfg.DESIGN_COLUMNS].values.astype(float)
@@ -281,10 +378,17 @@ def build_manifest(
         "source": {
             "h5ad_path": h5ad_path,
             "subclass_prob_min": float(main_config.SONG_MIN_SUBCLASS_PROB),
-            "wmb_class_map_source": "alz.config.load_song_to_wmb_class_map()",
-            "wmb_class_map_file": main_config.WMB_SUBCLASS_TO_CLASS_FILE,
-            "wmb_class_map_n_entries": len(main_config.load_song_to_wmb_class_map()),
-            "celltype_taxonomy": "WMB 34-class (alz.config.WMB_CLASSES)",
+            "cluster_spine": icfg.CLUSTER_SPINE,
+            "cluster_spine_file": os.path.relpath(
+                icfg.CLUSTER_SPINE_FILE, REPO_ROOT,
+            ),
+            "barcode_to_cluster_file": os.path.relpath(
+                icfg.BARCODE_TO_CLUSTER_FILE, REPO_ROOT,
+            ),
+            "celltype_taxonomy": (
+                f"Levy-19 strict spine (alz/integration/build_cluster_spine.py); "
+                f"in_spine == True in {icfg.CLUSTER_SPINE_FILE}"
+            ),
         },
         "filter": {
             "sex": icfg.FACTORIAL_SEX,
@@ -332,20 +436,29 @@ def build_manifest(
             "Use animal_id as design rownames; column order matches "
             "DESIGN_COLUMNS in MANIFEST."
         ),
+        "per_cluster/pr/<cluster>.parquet": (
+            "Per-cluster bulk proteomics (forward-projected onto Stage 5 "
+            "per-cell-rate proportions, linear space). Columns: gene_symbol "
+            "(row index) + animal_ids matching animal_metadata.csv. One "
+            "parquet file per Levy-19 cluster; load.R assembles "
+            "list(data_wide = list(cluster -> matrix)) for upstream "
+            "resolve_wide list-dispatch."
+        ),
+        "per_cluster/ps/<cluster>.parquet": (
+            "Per-cluster pSer/pThr phosphoproteomics (Stage 6 projection "
+            "of bulk raw_phospho_normalized.csv). Sites collapsed to gene "
+            "level by sum(min_count=1) before pivoting. Same column "
+            "convention as per_cluster/pr/."
+        ),
+        "per_cluster/py/<cluster>.parquet": (
+            "Per-cluster pTyr phosphoproteomics. Present only when Stage 6 "
+            "has been run for the pY track (phospho_per_cluster_pY.parquet)."
+        ),
         "pr_matrix.csv": (
-            "Bulk proteomics: genes x animals; first column 'gene', other "
-            "columns are animal_ids matching animal_metadata.csv rows. "
-            "Duplicate gene rows collapsed by mean across protein isoforms."
-        ),
-        "ps_matrix.csv": (
-            "Bulk pSer/pThr phosphoproteomics: genes x animals; sites "
-            "collapsed to gene level by sum across (gene, animal). "
-            "Same column convention as pr_matrix.csv."
-        ),
-        "py_matrix.csv": (
-            "Bulk pTyr phosphoproteomics: genes x animals; sites collapsed "
-            "to gene level by sum across (gene, animal). Same column "
-            "convention as pr_matrix.csv."
+            "Flat bulk proteomics (genes × animals) — sidecar for "
+            "compute_seed_lists.R only. Sourced from total_proteome_normalized.csv "
+            "with TMT column_name → transcript-side animal_id mapping via "
+            "sample_mapping.csv. Not consumed by the factorial path."
         ),
         "kldata.csv": (
             "Kinase library substrate map (incytr schema: gene, site_pos, "
@@ -419,10 +532,14 @@ def write_readme(out_dir: str) -> None:
         "cells), `expression_genes.csv`, `expression_barcodes.csv`, "
         "`expression_metadata.csv` (per-cell), `animal_metadata.csv` "
         "(per-animal design).\n\n"
-        "**Bulk omics inputs (multi-omic factorial bridge):** "
-        "`pr_matrix.csv` (proteomics), `ps_matrix.csv` (pSer/pThr; sites "
-        "summed to gene), `py_matrix.csv` (pTyr; sites summed to gene), "
-        "`kldata.csv` (kinase library, incytr schema).\n\n"
+        "**Per-cluster omics inputs (multi-omic factorial bridge, "
+        "Levy-19 spine):** `per_cluster/pr/<cluster>.parquet` (forward-"
+        "projected bulk proteomics), `per_cluster/ps/<cluster>.parquet` "
+        "(pSer/pThr; sites summed to gene), "
+        "`per_cluster/py/<cluster>.parquet` (pTyr; present when Stage 6 "
+        "was run for the pY track), `kldata.csv` (kinase library, incytr "
+        "schema). `pr_matrix.csv` is a flat bulk sidecar for "
+        "`compute_seed_lists.R` only.\n\n"
         "**Seed-list DE inputs:** `pseudobulk_counts.mtx` (genes × "
         "(animal × cell type) raw integer UMIs from "
         "`adata.layers['counts']`), `pseudobulk_pseudosamples.csv`, "
@@ -441,7 +558,8 @@ def write_readme(out_dir: str) -> None:
         "coverage in any layer are excluded from the fixture (see "
         "`MANIFEST.multiomic_coverage`).\n\n"
         f"`{SUBSET_NAME}/` — same shape restricted to "
-        f"{', '.join(SUBSET_LABELS)} for fast upstream iteration.\n\n"
+        f"{', '.join(SUBSET_LABELS)} (Levy-19 spine) for fast upstream "
+        f"iteration.\n\n"
         "See `MANIFEST.json` for full provenance, filter values, dimensions, "
         "label vocabulary, design columns, contrast vectors, multi-omic "
         "coverage notes, and the consumer contract for "
@@ -542,26 +660,51 @@ def main() -> None:
     else:
         prob_mask = pd.Series(True, index=adata.obs.index)
 
-    song_to_wmb = main_config.load_song_to_wmb_class_map()
-    mapped = adata.obs["subclass_name"].map(song_to_wmb)
-    pre_map = sex_geno_time & prob_mask
-    unmapped = int((pre_map & mapped.isna()).sum())
-    if unmapped > 0:
-        unmapped_names = sorted(
-            adata.obs.loc[pre_map & mapped.isna(), "subclass_name"].unique().tolist()
+    # Levy-19 cluster spine: per-cluster pivot replaces WMB-34 labels.
+    # barcode_to_cluster.csv stores seurat_cluster_id; the Cluster ID → New_ID
+    # key resolves to the human-readable cluster_name used downstream.
+    bc_path = icfg.BARCODE_TO_CLUSTER_FILE
+    key_path = os.path.join(
+        REPO_ROOT, "data/incytr/v2_46clusters/provenance/kr_cluster_id_key.csv"
+    )
+    if not (os.path.exists(bc_path) and os.path.exists(key_path)):
+        raise SystemExit(
+            f"Missing Levy cluster assignments: {bc_path} or {key_path}. "
+            "Run alz/integration/extract_cluster_assignments.R first."
         )
-        print(
-            f"  Dropping {unmapped} cells with unmapped Allen subclass_name "
-            f"(no entry in SONG_TO_WMB_CLASS_MAP): {unmapped_names}"
-        )
+    bc_df = pd.read_csv(bc_path)
+    key_df = pd.read_csv(key_path)
+    name_for_id = dict(zip(key_df["Cluster ID"].astype(int), key_df["New_ID"].astype(str)))
+    bc_df["cluster_name"] = bc_df["seurat_cluster_id"].map(name_for_id)
+    if bc_df["cluster_name"].isna().any():
+        raise SystemExit("seurat_cluster_id missing from kr_cluster_id_key.csv")
+    barcode_to_name = dict(zip(bc_df["barcode"].astype(str), bc_df["cluster_name"]))
 
-    keep = pre_map & mapped.notna()
+    spine_names = icfg.load_cluster_spine()
+    spine_set = set(spine_names)
+    print(f"  Levy-{len(spine_names)} cluster spine: {spine_names}")
+
+    pre_map = sex_geno_time & prob_mask
+    bc_labels = adata.obs_names.astype(str).map(barcode_to_name)
+    unmapped = int((pre_map & bc_labels.isna()).sum())
+    if unmapped > 0:
+        print(f"  Dropping {unmapped} cells without a barcode→cluster assignment")
+
+    in_spine = bc_labels.isin(spine_set)
+    off_spine = int((pre_map & bc_labels.notna() & ~in_spine).sum())
+    if off_spine > 0:
+        print(f"  Dropping {off_spine} cells in off-spine clusters (27/46 rejected)")
+
+    keep = pre_map & bc_labels.notna() & in_spine
     adata = adata[keep].copy()
-    adata.obs["wmb_class"] = mapped[keep].values
-    print(f"  After WMB-class mapping: {adata.n_obs} cells")
+    cluster_labels = pd.Series(
+        adata.obs_names.astype(str).map(barcode_to_name).values,
+        index=adata.obs.index,
+    )
+    print(f"  After Levy-{len(spine_names)} spine filter: {adata.n_obs} cells")
 
     meta = pd.DataFrame(index=adata.obs.index)
-    meta["labels"] = adata.obs["wmb_class"].values
+    meta["labels"] = cluster_labels.values
     meta["animal_id"] = adata.obs["sample"].values
     meta["genotype"] = adata.obs["mutant"].values
     meta["timepoint"] = adata.obs["age"].values
@@ -597,43 +740,28 @@ def main() -> None:
     if rank < len(icfg.DESIGN_COLUMNS):
         raise SystemExit("Design matrix is rank-deficient; refusing to write outputs.")
 
-    print("\n  Loading bulk omics (pr, ps, py)...")
-    omics_raw = omics_loaders.load_omics_matrices()
-    for layer, df in omics_raw.items():
-        print(f"    {layer}: {df.shape[0]} genes x {df.shape[1]} animals (pre-intersect)")
-
-    transcript_map = omics_loaders.transcript_animal_canon_map(animal_meta)
-    rekeyed_omics, kept_ids, dropped_ids = omics_loaders.intersect_and_rekey(
-        omics_raw, transcript_map
-    )
-    print(
-        f"\n  4-layer intersect: kept {len(kept_ids)} animals, "
-        f"dropped {len(dropped_ids)} transcript animals ({dropped_ids})"
-    )
-
-    intersect_mask = animal_meta["animal_id"].isin(kept_ids)
-    animal_meta_intersect = animal_meta.loc[intersect_mask].reset_index(drop=True)
-    dropped_animals = animal_meta.loc[~intersect_mask, "animal_id"].tolist()
-
+    # Per-cluster omics: source is Stage 6 (alz/decomposition/build_celltype_decomposition.py)
+    # which projects bulk phospho + protein onto Stage 5 per-cell-rate proportions.
+    # The transcript animal vocabulary is authoritative; Stage 6 already keys
+    # on transcript-side animal_id, so we keep the full transcript set and let
+    # per-cluster parquet columns drop animals absent from the decomposition.
+    kept_ids = animal_meta["animal_id"].tolist()
+    animal_meta_intersect = animal_meta.copy().reset_index(drop=True)
     assert_factorial_estimability(animal_meta_intersect)
-    assert_omics_alignment(rekeyed_omics, kept_ids)
     print(
         f"  Asserts: rank-full {len(icfg.DESIGN_COLUMNS)}, "
-        f"all {len(icfg.FACTORIAL_CONTRASTS)} contrasts estimable, "
-        f"all 3 omics layers aligned to {len(kept_ids)} animals."
+        f"all {len(icfg.FACTORIAL_CONTRASTS)} contrasts estimable across "
+        f"{len(kept_ids)} transcript animals."
     )
 
-    cell_intersect_mask = meta["animal_id"].isin(kept_ids)
-    adata_intersect = adata[cell_intersect_mask.values].copy()
-    meta_intersect = meta.loc[cell_intersect_mask].copy()
-    print(
-        f"  Transcript intersect: {adata_intersect.n_obs} cells "
-        f"(dropped {adata.n_obs - adata_intersect.n_obs} cells from {dropped_animals})"
-    )
+    adata_intersect = adata
+    meta_intersect = meta
 
     print(f"\n  Full bundle -> {args.out_dir}")
     write_bundle(args.out_dir, adata_intersect, meta_intersect, animal_meta_intersect)
-    write_omics_bundle(args.out_dir, rekeyed_omics)
+    print("\n  Per-cluster parquet bundles (Stage 6 source):")
+    per_cluster_summary = write_per_cluster_bundle(args.out_dir, kept_ids)
+    write_seedlist_pr_matrix(args.out_dir, kept_ids)
     write_kldata(args.out_dir)
 
     print("\n  Pseudobulk raw counts (pre-intersect, all male transcript animals)...")
@@ -652,28 +780,19 @@ def main() -> None:
         h5ad_path=args.h5ad,
     )
     manifest["multiomic_coverage"] = {
-        "n_animals_full_4layer": int(len(kept_ids)),
-        "dropped_animals": dropped_animals,
-        "dropped_reason": "missing from proteomics/phospho coverage (Song dataset)",
+        "n_animals_transcript": int(len(kept_ids)),
+        "per_cluster_summary": per_cluster_summary,
         "site_to_gene_collapse": "sum",
-        "id_canonicalization": (
-            "strip leading zeros after letter prefix (transcript D092 ↔ "
-            "proteomics D92); canonical form is the unpadded letter+number."
-        ),
-        "aptt_4mo_caveat": (
-            "After dropping E137 the ApTt x 4mo cell becomes n=0. "
-            "The ApTt_4mo contrast remains mathematically estimable via "
-            "the additive interaction model but is model-extrapolated, "
-            "with inflated SE relative to ApTt_2mo / ApTt_6mo. See "
-            "docs/incytr_proposals/factorial_multiomic_coverage_report.md "
-            "(incytr repo) for details."
+        "id_keying": (
+            "transcript-side animal_id is authoritative. Stage 6 "
+            "(alz/decomposition/build_celltype_decomposition.py) projects "
+            "bulk values onto Stage 5 proportions keyed on the same animal_id "
+            "vocabulary, so no canonicalization step runs here."
         ),
         "kldata_source": KLDATA_SOURCE_REL,
-        "future_workstream": (
-            "Integrating proteomics/phospho coverage from animals without "
-            "matched transcriptomics is a future model variant (per-layer "
-            "designs, NA-tolerant OLS, or hierarchical model with "
-            "transcript-imputed nodes). Out of scope here."
+        "py_layer_status": (
+            "Per-cluster pY parquet is written only when Stage 6 has been "
+            "run with --track py; extension is Step 13 work."
         ),
     }
     write_manifest(args.out_dir, manifest)

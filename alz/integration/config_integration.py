@@ -79,6 +79,38 @@ FACTORIAL_CONTRAST_CONDITIONS = {
 assert set(FACTORIAL_CONTRAST_CONDITIONS) == set(FACTORIAL_CONTRASTS)
 
 # ---------------------------------------------------------------------------
+# Cluster spine (per-cluster decomposition pivot, Step 8 of the pivot plan)
+# ---------------------------------------------------------------------------
+# The transcript-side label vocabulary for Incytr senders/receivers. The Levy
+# 46-cluster taxonomy was reduced to 19 strict-spine clusters in
+# alz/integration/build_cluster_spine.py (rank-10 design × ≥1 animal with ≥20
+# nuclei). The single source of truth is data/incytr/v2_46clusters/
+# cluster_spine.csv (in_spine == True); load_cluster_spine() below.
+CLUSTER_SPINE = "levy19"
+CLUSTER_SPINE_FILE = os.path.join(
+    REPO_ROOT, "data", "incytr", "v2_46clusters", "cluster_spine.csv"
+)
+BARCODE_TO_CLUSTER_FILE = os.path.join(
+    REPO_ROOT, "data", "incytr", "v2_46clusters", "barcode_to_cluster.csv"
+)
+
+# Per-cluster decomposition outputs (Stage 6) consumed by export_factorial_inputs.
+DECOMPOSITION_DIR = os.path.join(
+    REPO_ROOT, "outputs", "reports", "decomposition", CLUSTER_SPINE
+)
+PHOSPHO_PER_CLUSTER_FILE = os.path.join(DECOMPOSITION_DIR, "phospho_per_cluster.parquet")
+PROTEIN_PER_CLUSTER_FILE = os.path.join(DECOMPOSITION_DIR, "protein_per_cluster.parquet")
+
+
+def load_cluster_spine() -> list[str]:
+    """Return the ordered list of in-spine cluster names (Levy-19)."""
+    import pandas as pd
+
+    df = pd.read_csv(CLUSTER_SPINE_FILE)
+    return df.loc[df["in_spine"] == True, "cluster_name"].tolist()  # noqa: E712
+
+
+# ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 H5AD_PATH = main_config.SONG_H5AD_FILE

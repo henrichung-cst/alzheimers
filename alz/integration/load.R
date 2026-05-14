@@ -1,6 +1,7 @@
 suppressPackageStartupMessages({
   library(Matrix)
   library(jsonlite)
+  library(arrow)
 })
 
 sanitize_celltype <- function(x) {
@@ -103,6 +104,39 @@ load_ad_factorial_inputs <- function(input_dir = "alz/integration/intermediates/
     prg_df$gene_symbol
   } else NULL
 
+  # Per-cluster omics bundles (proteomics, phosphoserine, phosphotyrosine).
+  # Stage 6 (alz/decomposition/build_celltype_decomposition.py) projects
+  # bulk values onto Stage 5 per-cell-rate proportions; export_factorial_inputs.py
+  # pivots that long parquet into per_cluster/{pr,ps,py}/{cluster}.parquet
+  # (gene x animal). Upstream Incytr's resolve_wide dispatches on is.list, so
+  # each layer is returned as list(data_wide = list(cluster -> matrix)).
+  load_per_cluster_layer <- function(layer) {
+    layer_dir <- file.path(input_dir, "per_cluster", layer)
+    if (!dir.exists(layer_dir)) return(NULL)
+    files <- list.files(layer_dir, pattern = "\\.parquet$", full.names = TRUE)
+    if (length(files) == 0L) return(NULL)
+    mats <- lapply(files, function(f) {
+      df <- as.data.frame(arrow::read_parquet(f))
+      gene_col <- df[[1L]]
+      mat <- as.matrix(df[, -1L, drop = FALSE])
+      rownames(mat) <- gene_col
+      mat
+    })
+    names(mats) <- sub("\\.parquet$", "", basename(files))
+    list(data_wide = mats)
+  }
+  pr_mat <- load_per_cluster_layer("pr")
+  ps_mat <- load_per_cluster_layer("ps")
+  py_mat <- load_per_cluster_layer("py")
+
+  # Kinase library (long-format substrate table). Optional — when present,
+  # K-PDS / Ack / KGG / Rme1 contributions are computed by
+  # Integr_kinasedata inside the multi-omic pipeline.
+  kl_path <- file.path(input_dir, "kldata.csv")
+  kldata <- if (file.exists(kl_path)) {
+    read.csv(kl_path, stringsAsFactors = FALSE)
+  } else NULL
+
   list(
     expr = mat,
     meta = meta,
@@ -113,7 +147,11 @@ load_ad_factorial_inputs <- function(input_dir = "alz/integration/intermediates/
     ptm = NULL,
     deg_lists = deg_lists,
     prg_list = prg_list,
-    cond_pairs = cond_pairs
+    cond_pairs = cond_pairs,
+    pr_mat = pr_mat,
+    ps_mat = ps_mat,
+    py_mat = py_mat,
+    kldata = kldata
   )
 }
 
@@ -145,10 +183,12 @@ apply_pair_filter <- function(senders, receivers, pair_filter = Sys.getenv("PAIR
   sender_filter <- trimws(parts[[1]])
   receiver_filter <- trimws(parts[[2]])
   if (!identical(sender_filter, "*")) {
-    senders <- intersect(senders, sender_filter)
+    sender_set <- trimws(strsplit(sender_filter, ",", fixed = TRUE)[[1]])
+    senders <- intersect(senders, sender_set)
   }
   if (!identical(receiver_filter, "*")) {
-    receivers <- intersect(receivers, receiver_filter)
+    receiver_set <- trimws(strsplit(receiver_filter, ",", fixed = TRUE)[[1]])
+    receivers <- intersect(receivers, receiver_set)
   }
   if (length(senders) == 0 || length(receivers) == 0) {
     stop("PAIR_FILTER selected no sender/receiver pairs: ", pair_filter)
