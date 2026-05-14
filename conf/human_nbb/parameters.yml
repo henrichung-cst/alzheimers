@@ -1,0 +1,29 @@
+# Human NBB (Mukesh) cohort overlay. Activate via `KEDRO_ENV=human_nbb`.
+#
+# This overlay covers the species-agnostic config swaps (paths, no sex
+# filter). The per-donor MEA orchestration — N runs, each AD donor vs
+# mean(CTRL) — is owned by `alz/runners/main/run_human_nbb_perdonor.sh`
+# and `alz/ingest_mukesh_perdonor.py`, NOT by the Kedro `enrich`
+# pipeline. The factorial OLS design baked into kinase_enrich.py
+# (genotype x timepoint) does not apply to the NBB cross-sectional
+# design; do not point the standard live runner at this env.
+
+# Cohort: mixed-sex, single timepoint, AD vs CTRL.
+analysis_mode: full_cohort  # disables males_only sex filter
+
+# Sample-level outlier exclusion is disabled at the ingest layer (see
+# docs/audits/mukesh_ingest_policies.yml -> sample_outlier_exclusion).
+# This path still resolves so any code reading the file gets per-sample
+# robust-z diagnostics.
+sample_exclusions_path: outputs/reports/data_ingest_human/sample_exclusions.csv
+
+# Per-track names (parquet-suffix convention shared with Song).
+track_st: st
+track_py: py
+
+# Cell-type attribution sources are mouse-derived; the human NBB
+# pipeline does not perform cell-type attribution in this phase.
+sea_ad_paths: {}
+wmb_expression_path: ""
+song_specificity_path: ""
+song_concordance_path: ""

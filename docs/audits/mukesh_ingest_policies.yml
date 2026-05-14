@@ -1,0 +1,103 @@
+# Mukesh / NBB Human AD ingest — Phase C edge-case policies.
+#
+# Gating file for `alz/ingest_mukesh.py --reshape`. The script refuses to
+# run unless `policies_reviewed: true` and every category below has an
+# explicit policy. Prevalence numbers are from the Phase B audit run on
+# 2026-05-13 (see outputs/reports/data_ingest_human/synthesis_audit_summary.txt).
+
+policies_reviewed: true
+reviewed_by: henri
+reviewed_at: 2026-05-13
+
+# Sample-level outlier exclusion. NBB cohort runs per-donor MEA (each AD
+# donor vs mean(CTRL)), so every AD donor must reach Stage 2 as its own
+# contrast — dropping any sample would silently shrink N. Robust-z
+# diagnostics are still computed and persisted to sample_exclusions.csv
+# with `outlier_flag` for review; `excluded` stays False for all rows.
+sample_outlier_exclusion: false
+
+edge_cases:
+
+  canonical_match_count_zero:
+    # IMAC: 1,261 markers (2.38%). pY: 12 markers (0.67%).
+    # Peptide not found in canonical Swiss-Prot sequence; falls through
+    # to first non-canonical isoform (by descending length) that contains
+    # the peptide exactly once.
+    policy: fallback_to_isoform
+    rationale: >
+      Peptide is unambiguously isoform-specific (contained in exactly one
+      isoform). Labeling by that isoform's accession is the correct
+      biological attribution. Motif extraction uses the matched isoform's
+      sequence directly.
+
+  canonical_match_count_multi:
+    # IMAC: 206 markers (0.39%). pY: 0.
+    # Peptide occurs at multiple positions in the canonical sequence —
+    # usually internal repeat domains.
+    policy: first_match
+    rationale: >
+      Motif (±7 window) is identical at every match position because the
+      peptide sequence and its flanking are part of an internal repeat.
+      Picking the first match preserves quantification signal; the
+      position label is ambiguous but the kinase MEA does not consume
+      position. Prevalence is small (<0.4%); a stricter drop policy
+      would discard usable measurements for no biological gain.
+
+  peptide_not_in_any:
+    # IMAC: 7 markers (0.01%). pY: 0.
+    # Peptide not in canonical and not in any catalogued isoform. Likely
+    # signal-peptide cleavage, contamination, or a gene-symbol mismatch
+    # against UniProt.
+    policy: drop
+    rationale: >
+      No valid parent sequence → no motif, no site ID. Below noise floor
+      (7 markers across 53k); dropping is safer than guessing.
+
+  residue_mismatch:
+    # IMAC: 0. pY: 0. Defensive policy in case future data triggers it.
+    policy: drop
+    rationale: >
+      A computed residue that disagrees with the Spectronaut marker
+      residue indicates a parser bug or a sequence mismatch. Drop and
+      investigate before re-running; do not silently emit corrupt sites.
+
+  spectronaut_disagreement_imac:
+    # IMAC: 3,086 markers (5.8%). Concentrated in MAPT (244), MAP2 (233),
+    # ABLIM1 (124), ATP1A3 (116), PLEC (115), and other multi-isoform
+    # neuronal/structural proteins. MAPT deltas are constant within
+    # domain (Δ=58 = 2N4R vs 0N3R N-terminal exon offset; Δ=406 =
+    # repeat-region offset), confirming Mukesh's reference FASTA used
+    # non-canonical isoforms as primary entries (see the file's
+    # `allTauIsoform` tag).
+    policy: keep_canonical_numbering
+    rationale: >
+      Numbering disagreement, not biology. `residue_matches=true` for
+      every disagreeing row — same physical S/T/Y, different integer
+      label. Canonical (UniProt Swiss-Prot) numbering chosen so site
+      IDs join across datasets (Song, PhosphoSitePlus, future cohorts).
+      Trade-off accepted in plan §Design rationale: site IDs will not
+      match Mukesh's source-table integers for these ~5.8% of markers.
+
+  canonical_unresolved:
+    # IMAC: 29 rows (~5 markers per row → ~30 markers worst case).
+    # pY: 2 rows. Genes that UniProt could not resolve to a Swiss-Prot
+    # human entry (GATD3B, PRPF4B per Phase A `unresolved_genes.csv`).
+    policy: drop
+    rationale: >
+      No canonical sequence → cannot compute absolute position or motif.
+      Prevalence is small (31 rows total across both tracks). Dropping
+      with a sidecar entry preserves auditability; re-running Phase A
+      with a corrected gene symbol or alias would recover them.
+
+# Quantity column choice per track (deferred from plan §Open questions;
+# resolved after looking at the input files in this run):
+quantity_columns:
+  protein_report: "PG.Quantity"
+  imac_phospho:   "PEP.Quantity"
+  py_phospho:     "EG.TotalQuantity"
+  rationale: >
+    IMAC export ships `PEP.Quantity` per sample; pY export ships
+    `EG.TotalQuantity (Settings)` per sample. Each is the canonical
+    quant column for its file's export profile. Both are log2-transformed
+    in Phase C. No cross-track quant comparison is performed; the two
+    tracks remain separate Stage-2 inputs as in Song.
