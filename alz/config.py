@@ -109,6 +109,8 @@ def _load_analysis_mode() -> str:
 
 ANALYSIS_MODE = _load_analysis_mode()  # "males_only" or "full_cohort"
 
+# WMB-34 class list. Retained for atlas helpers (wmb_expression.py) that
+# still emit WMB-class-level expression. Analysis spine is CLUSTER_SPINE below.
 WMB_CLASSES = [
     "01 IT-ET Glut", "02 NP-CT-L6b Glut", "03 OB-CR Glut", "04 DG-IMN Glut",
     "05 OB-IMN GABA", "06 CTX-CGE GABA", "07 CTX-MGE GABA", "08 CNU-MGE GABA",
@@ -123,9 +125,52 @@ WMB_CLASSES = [
 WMB_CLASS_MANIFEST_FILE = os.path.join(
     EXTERNAL_DATA_DIR, "allen_abc", "wmb_class_manifest.csv"
 )
+# Deprecated: replaced by CLUSTER_TO_SEAAD_SUPERTYPE_FILE in the spine pivot.
+# Kept until kinase_attribute.py is rewired in step 7.
 SEAAD_TO_WMB_CLASS_FILE = os.path.join(
     EXTERNAL_DATA_DIR, "sea_ad", "seaad_subclass_to_wmb_class.csv"
 )
+
+# Levy 19-cluster strict spine artifacts (snRNA pivot 2026-05).
+CLUSTER_SPINE_DIR = os.path.join(REPO_ROOT, "data", "incytr", "v2_46clusters")
+CLUSTER_SPINE_FILE = os.path.join(CLUSTER_SPINE_DIR, "cluster_spine.csv")
+BARCODE_TO_CLUSTER_FILE = os.path.join(CLUSTER_SPINE_DIR, "barcode_to_cluster.csv")
+CELL_METADATA_FILE = os.path.join(CLUSTER_SPINE_DIR, "cell_metadata.csv")
+KR_CLUSTER_ID_KEY_FILE = os.path.join(
+    CLUSTER_SPINE_DIR, "provenance", "kr_cluster_id_key.csv"
+)
+CLUSTER_TO_WMB_CLASS_FILE = os.path.join(CLUSTER_SPINE_DIR, "cluster_to_wmb_class.csv")
+CLUSTER_TO_SEAAD_SUPERTYPE_FILE = os.path.join(
+    EXTERNAL_DATA_DIR, "sea_ad", "cluster_to_seaad_supertype.csv"
+)
+
+
+def _load_cluster_spine() -> list[str]:
+    import csv
+    out: list[str] = []
+    with open(CLUSTER_SPINE_FILE, newline="") as f:
+        for row in csv.DictReader(f):
+            if row["in_spine"].strip().lower() == "true":
+                out.append(row["cluster_name"])
+    return sorted(out)
+
+
+CLUSTER_SPINE = _load_cluster_spine()  # 19 named, full-rank subclasses
+
+# Coarse-level (cell-level) labels as carried by Seurat `obj@meta.data`.
+# Does NOT nest deterministically under CLUSTER_SPINE (per-cell labels, not
+# rollups). Exposed for forward flexibility — analyses default to the 19-
+# subclass spine; coarse can be opted-in by reading `cluster_coarse` from
+# barcode_to_cluster.csv.
+CLUSTER_COARSE_LEVELS = [
+    "Astrocytes", "Endothelial cells", "Excitatory neurons", "High MT",
+    "Interneurons", "Medium spiny neurons", "Microglia", "Oligodendrocytes",
+    "OPCs", "Other",
+]
+# Subset of CLUSTER_COARSE_LEVELS with QC/junk classes ("High MT", "Other")
+# removed — useful for biological-only views.
+CLUSTER_COARSE_BIOLOGICAL = [c for c in CLUSTER_COARSE_LEVELS
+                             if c not in ("High MT", "Other")]
 
 SEA_AD_LFC_MIN = 0.1            # minimum |sea_ad_lfc| for moderate confidence
 
@@ -134,10 +179,10 @@ SEA_AD_PATHWAY_MAP = {
     "Tau":  "late",    # tau-driven → late/high-CPS human donors
     "ApTt": "full",    # combined pathology → full CPS range
 }
-N_CELL_TYPES = len(WMB_CLASSES)         # 34 — WMB-class spine
-SPECIFICITY_HIGH = 2.0 / N_CELL_TYPES   # ~0.059: ≥2× more specific than uniform across 34 classes
-SPECIFICITY_LOW = 1.0 / N_CELL_TYPES    # ~0.029: ≥1× uniform across 34 classes
-COMBINED_SCORE_SPECIFICITY_BASE = 0.5   # baseline weight on concordance even at zero specificity
+N_CELL_TYPES = len(CLUSTER_SPINE)        # 19 — Levy strict spine
+SPECIFICITY_HIGH = 2.0 / N_CELL_TYPES    # ~0.105: ≥2× more specific than uniform across 19 clusters
+SPECIFICITY_LOW = 1.0 / N_CELL_TYPES     # ~0.053: ≥1× uniform across 19 clusters
+COMBINED_SCORE_SPECIFICITY_BASE = 0.5    # baseline weight on concordance even at zero specificity
 
 CLASS_TO_TISSUE_CATEGORY = {
     "01 IT-ET Glut": "Excitatory neurons",
@@ -285,29 +330,65 @@ SONG_CONCORDANCE_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "song_concord
 SONG_LFC_MIN = 0.1       # minimum |song_lfc| for concordance (same as SEA_AD_LFC_MIN)
 SONG_CONCORDANCE_WEIGHT = 3.0
 SEA_AD_CONCORDANCE_WEIGHT = 1.0
-SONG_MIN_CELLS = 10       # minimum cells per animal×subclass for pseudobulk
-SONG_MIN_ANIMALS = 10     # minimum animals per subclass for concordance DE
-SONG_MIN_SUBCLASS_PROB = 0.9  # minimum subclass_prob for nucleus inclusion
+SONG_MIN_CELLS = 20       # minimum cells per animal×cluster for pseudobulk (Levy 19-spine gate)
+SONG_MIN_ANIMALS = 10     # minimum animals per cluster for concordance DE
 
-def load_song_to_wmb_class_map() -> dict[str, str]:
-    """Direct map: Allen Cell Type Mapper raw `subclass_name` → WMB class.
 
-    Built from the Allen-shipped `wmb_subclass_to_class.csv` (338 WMB
-    subclasses → 34 WMB classes), with the leading `\\d+ ` numeric prefix
-    stripped off each subclass so it matches Song h5ad's bare-name labels
-    (e.g. `"CA1-ProS Glut"`, not `"016 CA1-ProS Glut"`).
+def load_barcode_labels(granularity: str = "subclass") -> dict[str, str]:
+    """Per-cell label map at the requested granularity.
 
-    The Allen Cell Type Mapper used in Song's pipeline produces full WMB
-    whole-brain subclasses; this map gives near-complete coverage. No SEA-AD
-    intermediate.
+    granularity:
+      - "subclass" (default): 46 Levy names (the basis for CLUSTER_SPINE)
+      - "coarse":   10 Cluster_coarse levels (per-cell, not a rollup)
+      - "fine":     40 Cluster_fine levels (legacy, retained for traceability)
+
+    Callers filter to a spine / level subset themselves.
     """
     import csv
-    import re
+    col = {
+        "subclass": "cluster_subclass",
+        "coarse": "cluster_coarse",
+        "fine": "cluster_fine",
+    }.get(granularity)
+    if col is None:
+        raise ValueError(f"unknown granularity: {granularity!r}")
     out: dict[str, str] = {}
-    with open(WMB_SUBCLASS_TO_CLASS_FILE, newline="") as f:
+    with open(BARCODE_TO_CLUSTER_FILE, newline="") as f:
         for row in csv.DictReader(f):
-            sub = re.sub(r"^\d+\s+", "", row["subclass"]).strip()
-            out[sub] = row["class"].strip()
+            out[row["barcode"]] = row[col]
+    return out
+
+
+def load_barcode_to_cluster_map() -> dict[str, str]:
+    """Backwards-compatible alias for `load_barcode_labels('subclass')`."""
+    return load_barcode_labels("subclass")
+
+
+def load_cluster_to_wmb_class_map() -> dict[str, str]:
+    """Spine-cluster → WMB-class (1:1, hand-curated). 19 entries."""
+    import csv
+    out: dict[str, str] = {}
+    with open(CLUSTER_TO_WMB_CLASS_FILE, newline="") as f:
+        for row in csv.DictReader(f):
+            out[row["cluster_name"]] = row["wmb_class_label"].strip()
+    return out
+
+
+def load_cluster_to_seaad_supertype_map() -> dict[str, list[tuple[str, float]]]:
+    """Spine-cluster → list of (SEA-AD supertype, weight). 19 entries.
+
+    `n/a` rows return an empty list so callers can drop those clusters from
+    SEA-AD evidence cleanly. Weights within a mapped cluster sum to 1.0.
+    """
+    import csv
+    out: dict[str, list[tuple[str, float]]] = {}
+    with open(CLUSTER_TO_SEAAD_SUPERTYPE_FILE, newline="") as f:
+        for row in csv.DictReader(f):
+            cluster = row["cluster_name"]
+            supertype = row["seaad_supertype"]
+            entries = out.setdefault(cluster, [])
+            if supertype != "n/a":
+                entries.append((supertype, float(row["weight"])))
     return out
 
 SONG_PATHWAY_MAP = {"App": "App", "Tau": "Tau", "ApTt": "ApTt"}

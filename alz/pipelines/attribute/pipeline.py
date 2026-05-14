@@ -22,8 +22,7 @@ def create_pipeline(**kwargs) -> Pipeline:
         ),
         node(
             func=sea_ad_concordance,
-            inputs=["mea_combined", "seaad_to_wmb_class",
-                    "params:sea_ad_paths"],
+            inputs=["mea_combined", "params:sea_ad_paths"],
             outputs=["sea_ad_concordance_df", "sea_ad_supertype_lfc"],
             name="sea_ad_concordance",
         ),

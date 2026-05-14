@@ -5,9 +5,10 @@ Computes pseudobulk expression, within-cohort expression specificity, and
 within-cohort transcriptomic concordance from paired snRNA-seq data
 (170_gex_celltypes_00.h5ad, 63,695 nuclei × 30,567 genes, 28 animals).
 
-Uses Allen Cell Type Mapper class_name annotations to label nuclei against
-the 34 WMB classes. Song's dissection covers ~21 of 34 forebrain classes
-with sufficient nuclei (≥50); the rest are flagged in active_classes.csv.
+Cells are labeled by per-barcode join to the Levy 46-cluster taxonomy
+(`barcode_to_cluster.csv`) and filtered to `config.CLUSTER_SPINE` — the
+19 strict-spine subclasses that pass the SONG_MIN_CELLS gate and have
+full-rank factorial design coverage across all 9 contrasts.
 
 Inputs:
   data/datasets/song/transcriptomics/170_gex_celltypes_00.h5ad
@@ -58,19 +59,6 @@ GENOTYPE_FACTORIAL = {
 }
 
 
-def _build_class_name_to_label() -> dict:
-    """Map Song's class_name (no prefix, e.g. 'IT-ET Glut') to the prefixed
-    WMB class label used as the canonical cell_type identifier (e.g.
-    '01 IT-ET Glut'). Reads wmb_class_manifest.csv."""
-    if not os.path.exists(config.WMB_CLASS_MANIFEST_FILE):
-        raise FileNotFoundError(
-            f"WMB class manifest not found at {config.WMB_CLASS_MANIFEST_FILE}. "
-            "Generate via Phase 1a (see docs/foundation/concordance.md)."
-        )
-    m = pd.read_csv(config.WMB_CLASS_MANIFEST_FILE)
-    return dict(zip(m["class_name"], m["class_label"]))
-
-
 # ---------------------------------------------------------------------------
 # S1: Pseudobulk computation
 # ---------------------------------------------------------------------------
@@ -79,13 +67,15 @@ def _build_class_name_to_label() -> dict:
 def step_pseudobulk() -> None:
     """Compute pseudobulk expression from 170_gex_celltypes_00.h5ad.
 
-    For each (animal, WMB class) pair, sums raw counts across nuclei passing
-    class-prob and mappability filters, then applies CPM + log2 normalization.
+    For each (animal, spine cluster) pair, sums raw counts across nuclei
+    whose barcode maps to a `config.CLUSTER_SPINE` subclass, then applies
+    CPM + log2 normalization. Cells outside the 19-cluster spine (rejected
+    or unnamed clusters) are dropped before aggregation.
     """
     import anndata as ad
 
     print("=" * 72)
-    print("S1  Pseudobulk computation from paired snRNA-seq (WMB class)")
+    print("S1  Pseudobulk computation from paired snRNA-seq (Levy 19-spine)")
     print("=" * 72)
 
     h5ad_path = config.SONG_H5AD_FILE
@@ -93,42 +83,44 @@ def step_pseudobulk() -> None:
         print(f"  ERROR: h5ad file not found: {h5ad_path}")
         sys.exit(1)
 
-    class_name_to_label = _build_class_name_to_label()
-    print(f"  WMB class manifest: {len(class_name_to_label)} classes")
+    barcode_to_cluster = config.load_barcode_to_cluster_map()
+    spine = set(config.CLUSTER_SPINE)
+    print(f"  Barcode→cluster map: {len(barcode_to_cluster):,} cells "
+          f"(spine: {len(spine)} clusters)")
 
     print(f"  Loading {h5ad_path} ...")
     adata = ad.read_h5ad(h5ad_path)
     print(f"  Loaded: {adata.shape[0]:,} nuclei × {adata.shape[1]:,} genes")
 
-    # Filter by class-prob confidence and mappability into WMB taxonomy
-    mask_prob = adata.obs["class_prob"] >= config.SONG_MIN_SUBCLASS_PROB
-    mask_mapped = adata.obs["class_name"].isin(class_name_to_label.keys())
-    mask = mask_prob & mask_mapped
-    n_pass = mask.sum()
-    print(f"  After filtering (class_prob >= {config.SONG_MIN_SUBCLASS_PROB}, "
-          f"mapped class): {n_pass:,} nuclei "
-          f"({n_pass / len(mask) * 100:.1f}%)")
+    cluster_labels = adata.obs.index.to_series().map(barcode_to_cluster)
+    n_joined = cluster_labels.notna().sum()
+    mask = cluster_labels.isin(spine).values
+    n_pass = int(mask.sum())
+    print(f"  Barcode join: {n_joined:,}/{adata.shape[0]:,} cells "
+          f"({n_joined / adata.shape[0] * 100:.1f}%) carry a cluster label")
+    print(f"  After spine filter: {n_pass:,} nuclei "
+          f"({n_pass / adata.shape[0] * 100:.1f}%)")
 
     # Extract sparse matrix and metadata (avoid full dense copy)
-    X = adata.X[mask.values]  # sparse CSR slice — no dense materialization
+    X = adata.X[mask]  # sparse CSR slice — no dense materialization
     obs = adata.obs[mask].copy()
-    obs["wmb_class"] = obs["class_name"].map(class_name_to_label)
+    obs["cluster_name"] = cluster_labels[mask].values
     genes = adata.var_names.tolist()
     n_genes = len(genes)
     del adata  # free memory
 
-    # Aggregate per (animal, WMB class)
-    print("  Aggregating pseudobulk per (animal, class) ...")
-    groups = obs.groupby(["sample", "wmb_class"], observed=True)
+    # Aggregate per (animal, cluster)
+    print("  Aggregating pseudobulk per (animal, cluster) ...")
+    groups = obs.groupby(["sample", "cluster_name"], observed=True)
 
     cell_counts_rows = []
     pb_meta = []       # (sample, cell_type) per passing group
     pb_data = []       # pre-allocated log2(CPM+1) arrays
 
-    for (sample, wmb_class), grp_idx in groups.groups.items():
+    for (sample, cluster_name), grp_idx in groups.groups.items():
         n_cells = len(grp_idx)
         cell_counts_rows.append({
-            "sample": sample, "cell_type": wmb_class, "n_cells": n_cells,
+            "sample": sample, "cell_type": cluster_name, "n_cells": n_cells,
         })
 
         if n_cells < config.SONG_MIN_CELLS:
@@ -146,7 +138,7 @@ def step_pseudobulk() -> None:
         else:
             log2_cpm = np.zeros(n_genes)
 
-        pb_meta.append({"sample": sample, "cell_type": wmb_class})
+        pb_meta.append({"sample": sample, "cell_type": cluster_name})
         pb_data.append(log2_cpm)
 
     # Build output DataFrames
@@ -170,8 +162,12 @@ def step_pseudobulk() -> None:
     n_samples = pseudobulk["sample"].nunique()
     n_classes = pseudobulk["cell_type"].nunique()
     print(f"  Pseudobulk: {len(pseudobulk)} rows "
-          f"({n_samples} animals × {n_classes} WMB classes, "
+          f"({n_samples} animals × {n_classes} spine clusters, "
           f"min {config.SONG_MIN_CELLS} cells gate) → {PSEUDOBULK_FILE}")
+    missing_spine = sorted(spine - set(pseudobulk["cell_type"].unique()))
+    if missing_spine:
+        print(f"  WARNING: {len(missing_spine)} spine clusters missing from "
+              f"pseudobulk after gate: {missing_spine}")
 
     # Summary stats
     gated = cell_counts[cell_counts["n_cells"] >= config.SONG_MIN_CELLS]
@@ -191,11 +187,12 @@ def step_pseudobulk() -> None:
 
 
 def step_specificity() -> None:
-    """Compute within-cohort expression specificity per gene per subclass.
+    """Compute within-cohort expression specificity per gene per cluster.
 
     Pools all animals (males + females) to maximize power for a static
     property. Mirrors the WMB specificity formula:
-        specificity = mean_in_subclass / sum(means_across_all_subclasses)
+        specificity = mean_in_cluster / sum(means_across_all_clusters)
+    Clusters are the 19 spine subclasses (config.CLUSTER_SPINE).
     """
     print("=" * 72)
     print("S2  Within-cohort expression specificity")
@@ -211,7 +208,7 @@ def step_specificity() -> None:
 
     gene_cols = [c for c in pb.columns if c not in ("sample", "cell_type")]
     cell_types = sorted(pb["cell_type"].unique())
-    print(f"  WMB classes: {len(cell_types)}, genes: {len(gene_cols)}")
+    print(f"  Spine clusters: {len(cell_types)}, genes: {len(gene_cols)}")
 
     # Mean expression per subclass (pool across all animals)
     mean_by_ct = pb.groupby("cell_type")[gene_cols].mean()  # (n_subclass, n_genes)
@@ -234,7 +231,7 @@ def step_specificity() -> None:
     print(f"  Output: {len(df)} (gene × subclass) pairs → {SPECIFICITY_FILE}")
 
     # Summary: top specific genes per class
-    print(f"\n  Top 3 most specific genes per WMB class:")
+    print(f"\n  Top 3 most specific genes per spine cluster:")
     for ct in sorted(df["cell_type"].unique()):
         ct_df = df[df["cell_type"] == ct].nlargest(3, "specificity_score")
         genes_str = ", ".join(

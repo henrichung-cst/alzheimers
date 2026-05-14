@@ -42,11 +42,14 @@ def combine_mea_tracks(st_mea: pd.DataFrame, py_mea: pd.DataFrame,
 
 
 def sea_ad_concordance(sig: pd.DataFrame,
-                       seaad_to_wmb_class: pd.DataFrame,
                        sea_ad_paths: dict):
-    """Compute SEA-AD concordance + supertype audit. Returns
-    ``(sea_ad_df, sea_ad_supertype_lfc)``."""
-    return _compute_sea_ad_concordance(sig, seaad_to_wmb_class, sea_ad_paths)
+    """Compute SEA-AD concordance + supertype audit via direct cluster →
+    supertype crosswalk (`config.load_cluster_to_seaad_supertype_map`).
+
+    Returns ``(sea_ad_df, sea_ad_supertype_lfc)``.
+    """
+    cluster_to_seaad = config.load_cluster_to_seaad_supertype_map()
+    return _compute_sea_ad_concordance(sig, cluster_to_seaad, sea_ad_paths)
 
 
 def assemble_unified(sig: pd.DataFrame,

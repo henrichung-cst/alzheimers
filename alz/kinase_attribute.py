@@ -1,10 +1,15 @@
 """Stage 3 of kinase attribution: unified cell-type attribution.
 
-Combines MEA results (S/T + pY tracks) with three evidence sources:
+Analysis spine is the Levy 19-cluster strict spine (`config.CLUSTER_SPINE`),
+not WMB-34. Evidence sources merge via single-hop crosswalks:
   - SEA-AD per-supertype effect sizes (pathway-matched: App→early CPS,
-    Tau→late CPS, ApTt→full CPS), aggregated to WMB classes
-  - WMB expression specificity (Allen WMB 10Xv3, 34 classes)
-  - Song within-cohort transcriptomic concordance + specificity
+    Tau→late CPS, ApTt→full CPS), joined direct cluster → SEA-AD supertype(s)
+    via `cluster_to_seaad_supertype.csv` (many-to-many; weighted mean LFC).
+  - WMB expression specificity, joined cluster → parent WMB class via
+    `cluster_to_wmb_class.csv` (1:1, lineage-level; clusters sharing a parent
+    inherit identical WMB scores).
+  - Song within-cohort transcriptomic concordance + specificity, keyed
+    directly on cluster_name (identity join).
 
 Inputs:
   outputs/reports/kinase_attribution/mea_stoichiometry{,_pY}.csv
@@ -12,11 +17,12 @@ Inputs:
   outputs/reports/wmb_expression/wmb_kinase_expression.csv
   outputs/reports/snrna_integration/song_{specificity,concordance}.csv (optional)
   data/datasets/song/analysis_cache/kinase_to_gene_mapping.csv
-  config.SEAAD_TO_WMB_CLASS_FILE
+  config.CLUSTER_TO_WMB_CLASS_FILE
+  config.CLUSTER_TO_SEAAD_SUPERTYPE_FILE
 
 Outputs (under outputs/reports/kinase_attribution/):
   unified_attribution.csv         — confidence != "none" rows (sorted)
-  unified_attribution_full.csv    — full sig × WMB-class grid
+  unified_attribution_full.csv    — full sig × cluster grid (n_kinases × 9 × 19)
   sea_ad_supertype_lfc.csv        — per-(gene, stratum, supertype) audit
   attribution_summary.json
 """
@@ -136,14 +142,24 @@ def _map_kinases_to_genes(sig, k2g_df):
     return sig
 
 
-def _compute_sea_ad_concordance(sig, seaad_to_class_df, sea_ad_paths):
-    """Compute per-(kinase, contrast, cell_type) SEA-AD LFCs + supertype audit.
+def _compute_sea_ad_concordance(sig, cluster_to_seaad, sea_ad_paths):
+    """Compute per-(kinase, contrast, cluster) SEA-AD LFCs + supertype audit.
 
-    Loads h5ads inside the function (anndata is not a built-in Kedro dataset and
-    the files are optional in degraded environments). Returns
-    ``(sea_ad_df, supertype_df)``. On ImportError or missing h5ads, prints a
-    warning and returns empty DataFrames so attribution can still degrade
-    gracefully (Song/WMB-only tiers).
+    Direct cluster → SEA-AD supertype merge (no WMB hop). `cluster_to_seaad`
+    maps each spine cluster_name to a list of (supertype, weight) tuples;
+    weights within a cluster sum to 1.0. Clusters mapped to `n/a` (empty
+    list) get no SEA-AD evidence row.
+
+    Many-to-many collapse: per (kinase, contrast, cluster), LFC is the
+    weighted mean of supertype LFCs. Audit columns:
+      - `sea_ad_n_supertypes` — number of finite supertype LFCs collapsed
+      - `sea_ad_direction_agreement` — share of supertype LFCs with the same
+        sign as the weighted mean (1.0 = all agree; 0.5 = perfectly mixed)
+
+    Loads h5ads inside the function (anndata is not a built-in Kedro dataset).
+    Returns ``(sea_ad_df, supertype_df)``. On ImportError or missing h5ads,
+    prints a warning and returns empty DataFrames so attribution can still
+    degrade gracefully (Song/WMB-only tiers).
     """
     sea_ad_rows = []
     supertype_rows = []
@@ -176,38 +192,57 @@ def _compute_sea_ad_concordance(sig, seaad_to_class_df, sea_ad_paths):
         sea_ad_genes_upper = {g.upper(): g for g in ref_adata.obs_names}
         supertypes = list(ref_adata.var_names)
         st_to_subclass = dict(zip(ref_adata.var_names, ref_adata.var["Subclass"]))
+        st_to_idx = {st: i for i, st in enumerate(supertypes)}
         gene_to_idx = {g: i for i, g in enumerate(ref_adata.obs_names)}
 
-        seaad_to_class = dict(
-            zip(seaad_to_class_df["seaad_subclass"],
-                seaad_to_class_df["wmb_class_label"])
-        )
-        st_to_wmb_class = {
-            st: seaad_to_class.get(sc) for st, sc in st_to_subclass.items()
-        }
-        n_st_mapped = sum(1 for v in st_to_wmb_class.values() if v is not None)
-        print(f"  SEA-AD supertypes mapped to WMB class: "
-              f"{n_st_mapped}/{len(supertypes)}")
+        # Drop supertype refs that don't exist in the h5ad (defensive — bridge
+        # is curated against SEA-AD var_names but log any drift).
+        cluster_to_seaad_clean = {}
+        missing_supertypes = set()
+        for cluster, entries in cluster_to_seaad.items():
+            kept = [(st, w) for st, w in entries if st in st_to_idx]
+            for st, _w in entries:
+                if st not in st_to_idx:
+                    missing_supertypes.add(st)
+            cluster_to_seaad_clean[cluster] = kept
+        n_mapped = sum(1 for v in cluster_to_seaad_clean.values() if v)
+        print(f"  SEA-AD bridge: {n_mapped}/{len(cluster_to_seaad_clean)} "
+              f"clusters mapped (>=1 supertype)")
+        if missing_supertypes:
+            print(f"  WARNING: {len(missing_supertypes)} bridge supertypes "
+                  f"not in SEA-AD h5ad: "
+                  f"{sorted(missing_supertypes)[:5]}...")
 
-        def _class_lfcs(adata, gene_idx):
+        def _cluster_lfcs(adata, gene_idx):
+            """Weighted-mean LFC per cluster + direction-agreement audit."""
             effects = adata.X[gene_idx, :]
             if hasattr(effects, "toarray"):
                 effects = effects.toarray().flatten()
             else:
                 effects = np.asarray(effects).flatten()
-            cls_vals, cls_counts = {}, {}
-            for i, st in enumerate(supertypes):
-                wmb_class = st_to_wmb_class.get(st)
-                if wmb_class is None:
+            out = {}
+            for cluster, entries in cluster_to_seaad_clean.items():
+                if not entries:
                     continue
-                val = effects[i]
-                if np.isfinite(val):
-                    cls_vals.setdefault(wmb_class, []).append(val)
-                    cls_counts[wmb_class] = cls_counts.get(wmb_class, 0) + 1
-            return (
-                {c: float(np.median(v)) for c, v in cls_vals.items()},
-                cls_counts,
-            )
+                vals, weights = [], []
+                for st, w in entries:
+                    val = effects[st_to_idx[st]]
+                    if np.isfinite(val):
+                        vals.append(float(val))
+                        weights.append(float(w))
+                if not vals:
+                    continue
+                arr = np.asarray(vals)
+                wts = np.asarray(weights)
+                wts = wts / wts.sum() if wts.sum() > 0 else np.full_like(wts, 1.0 / len(wts))
+                wmean = float((arr * wts).sum())
+                if wmean == 0.0:
+                    agree = 1.0
+                else:
+                    same_sign = (np.sign(arr) == np.sign(wmean))
+                    agree = float(wts[same_sign].sum())
+                out[cluster] = (wmean, len(vals), agree)
+            return out
 
         _lfc_cache = {}
 
@@ -227,9 +262,9 @@ def _compute_sea_ad_concordance(sig, seaad_to_class_df, sea_ad_paths):
 
             cache_key = (stratum, gene_idx)
             if cache_key not in _lfc_cache:
-                _lfc_cache[cache_key] = _class_lfcs(
+                _lfc_cache[cache_key] = _cluster_lfcs(
                     adata_by_stratum[stratum], gene_idx)
-            cls_lfcs, cls_counts = _lfc_cache[cache_key]
+            cluster_lfcs = _lfc_cache[cache_key]
 
             if cache_key not in _supertype_emitted:
                 _supertype_emitted.add(cache_key)
@@ -252,8 +287,8 @@ def _compute_sea_ad_concordance(sig, seaad_to_class_df, sea_ad_paths):
 
             residue_type = row.get("residue_type", "ST")
             track_name = row.get("track", "st")
-            for wmb_class, median_lfc in cls_lfcs.items():
-                concordance = np.sign(nes) * median_lfc
+            for cluster, (wmean_lfc, n_st, agree) in cluster_lfcs.items():
+                concordance = np.sign(nes) * wmean_lfc
                 sea_ad_rows.append({
                     "kinase": kinase,
                     "gene_symbol": gene,
@@ -262,15 +297,16 @@ def _compute_sea_ad_concordance(sig, seaad_to_class_df, sea_ad_paths):
                     "FDR": fdr,
                     "residue_type": residue_type,
                     "track": track_name,
-                    "cell_type": wmb_class,
-                    "sea_ad_lfc": median_lfc,
-                    "sea_ad_n_supertypes": cls_counts[wmb_class],
+                    "cell_type": cluster,
+                    "sea_ad_lfc": wmean_lfc,
+                    "sea_ad_n_supertypes": n_st,
+                    "sea_ad_direction_agreement": agree,
                     "sea_ad_stratum": stratum,
                     "concordance_score": concordance,
                 })
 
         print(f"  SEA-AD concordance: {len(sea_ad_rows)} "
-              f"(kinase, contrast, cell_type) rows")
+              f"(kinase, contrast, cluster) rows")
 
     except (ImportError, FileNotFoundError) as e:
         print("  " + "!" * 70)
@@ -285,7 +321,12 @@ def _compute_sea_ad_concordance(sig, seaad_to_class_df, sea_ad_paths):
 
 
 def _prepare_wmb_specificity(wmb_df):
-    """Reduce WMB expression export to top-(gene, cell_type) rows for merging."""
+    """Reduce WMB expression export to top-(gene, wmb_class) rows for merging.
+
+    The WMB CSV is keyed on `cell_type` = WMB class (retained subset, ~9
+    classes). Spine clusters look up their parent class via the
+    `cluster_to_wmb_class` crosswalk in `_assemble_unified`.
+    """
     if wmb_df is None or len(wmb_df) == 0:
         return None
     wmb = wmb_df.copy()
@@ -296,12 +337,13 @@ def _prepare_wmb_specificity(wmb_df):
                     "mean_log2_expression", "fraction_cells_expressing",
                     "binary_expressed"]]
                   .rename(columns={
+                      "cell_type": "wmb_class",
                       "specificity_score": "wmb_specificity",
                       "mean_log2_expression": "wmb_mean_log2_expression",
                       "fraction_cells_expressing": "wmb_fraction_cells_expressing",
                       "binary_expressed": "wmb_binary_expressed",
                   }))
-    print(f"  WMB specificity: {len(wmb_top)} (gene, cell_type) pairs loaded")
+    print(f"  WMB specificity: {len(wmb_top)} (gene, wmb_class) pairs loaded")
     return wmb_top
 
 
@@ -346,7 +388,7 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
     is the sorted, filtered slice that downstream consumers use.
     """
     print(f"  Building unified base: {len(sig)} sig rows × "
-          f"{len(config.WMB_CLASSES)} WMB classes")
+          f"{len(config.CLUSTER_SPINE)} spine clusters")
     sig_base = sig[["kinase", "gene_symbol", "contrast", "NES", "FDR"]].copy()
     sig_base["_gene_upper"] = sig_base["gene_symbol"].fillna("").astype(str).str.upper()
     sig_base["mea_significant"] = (np.isfinite(sig_base["FDR"])
@@ -354,26 +396,40 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
     sig_base["residue_type"] = sig.get("residue_type", "ST")
     sig_base["track"] = sig.get("track", "st")
 
-    cell_type_df = pd.DataFrame({"cell_type": list(config.WMB_CLASSES)})
+    cell_type_df = pd.DataFrame({"cell_type": list(config.CLUSTER_SPINE)})
     unified = sig_base.merge(cell_type_df, how="cross")
 
+    # Attach the parent WMB class for each cluster via 1:1 crosswalk; used to
+    # join WMB expression specificity at lineage level (clusters sharing a
+    # parent inherit identical WMB scores).
+    cluster_to_wmb = config.load_cluster_to_wmb_class_map()
+    unified["wmb_class"] = unified["cell_type"].map(cluster_to_wmb)
+    missing_wmb_parent = sorted(unified.loc[unified["wmb_class"].isna(), "cell_type"].unique())
+    if missing_wmb_parent:
+        print(f"  WARNING: {len(missing_wmb_parent)} spine clusters have no "
+              f"WMB parent in cluster_to_wmb_class.csv: {missing_wmb_parent}")
+
     if sea_ad_df is not None and len(sea_ad_df) > 0:
-        sea_ad_join = sea_ad_df[[
+        sea_ad_cols = [
             "kinase", "contrast", "cell_type",
             "sea_ad_lfc", "sea_ad_n_supertypes", "sea_ad_stratum",
             "concordance_score",
-        ]]
+        ]
+        if "sea_ad_direction_agreement" in sea_ad_df.columns:
+            sea_ad_cols.append("sea_ad_direction_agreement")
         unified = unified.merge(
-            sea_ad_join, on=["kinase", "contrast", "cell_type"], how="left"
+            sea_ad_df[sea_ad_cols], on=["kinase", "contrast", "cell_type"], how="left"
         )
     else:
         unified["sea_ad_lfc"] = np.nan
         unified["sea_ad_n_supertypes"] = np.nan
+        unified["sea_ad_direction_agreement"] = np.nan
         unified["sea_ad_stratum"] = np.nan
         unified["concordance_score"] = np.nan
 
     if wmb_top is not None:
-        unified = unified.merge(wmb_top, on=["_gene_upper", "cell_type"], how="left")
+        # Lineage-level WMB join: (_gene_upper, wmb_class) → specificity.
+        unified = unified.merge(wmb_top, on=["_gene_upper", "wmb_class"], how="left")
     else:
         unified["wmb_specificity"] = np.nan
         unified["wmb_mean_log2_expression"] = np.nan
@@ -433,6 +489,13 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
 
     unified = unified.drop(columns=["_gene_upper"], errors="ignore")
 
+    expected = len(sig) * len(config.CLUSTER_SPINE)
+    if len(unified) != expected:
+        raise AssertionError(
+            f"unified row count {len(unified)} != expected "
+            f"{expected} (n_sig {len(sig)} × n_clusters "
+            f"{len(config.CLUSTER_SPINE)}) — silent drop in merge")
+
     attributed = unified[unified["combined_confidence"] != "none"].copy()
     attributed = attributed.sort_values("combined_score", ascending=False)
 
@@ -446,7 +509,7 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
         for conf, cnt in attributed[
                 "combined_confidence"].value_counts().items():
             print(f"    {conf}: {cnt}")
-        print(f"\n  By cell type (WMB class):")
+        print(f"\n  By cell type (spine cluster):")
         for ct, cnt in attributed[
                 "cell_type"].value_counts().items():
             print(f"    {ct}: {cnt}")

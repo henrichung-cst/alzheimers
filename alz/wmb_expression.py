@@ -56,10 +56,13 @@ from atlas_reference import (
 OUTPUT_DIR = config.WMB_EXPRESSION_OUTPUT_DIR
 WMB_EXPR_FILE = config.WMB_EXPRESSION_FILE
 
-# Cell-type vocabulary: WMB classes (34, from wmb_meta["class"] column).
-# We group cells by their published WMB class label directly — no keyword
-# matching, no silent dropping. The "Other" sentinel only appears for cells
-# with NaN class metadata (rare/never).
+# Cell-type vocabulary: only the WMB classes that any spine cluster maps to
+# (lineage-level lookup; the 19 spine clusters fan into ~9 WMB classes via
+# cluster_to_wmb_class.csv). Cells whose class is outside that set are
+# accumulated into "Other" and dropped from the output. The full 34-class
+# enumeration in config.WMB_CLASSES is retained as an atlas helper but is
+# no longer the analysis spine.
+RETAINED_WMB_CLASSES = sorted(set(config.load_cluster_to_wmb_class_map().values()))
 
 # ---------------------------------------------------------------------------
 # Auto-decompress / recompress for compressed subset files
@@ -261,7 +264,7 @@ def _stream_wmb_expression(
 
     n_genes = len(gene_indices)
 
-    ct_list = list(config.WMB_CLASSES) + ["Other"]
+    ct_list = list(RETAINED_WMB_CLASSES) + ["Other"]
 
     # Load WMB cell metadata directly from cached CSV — avoids hard dependency
     # on abc_atlas_access (the cache wrapper merely returns this CSV).
@@ -295,7 +298,8 @@ def _stream_wmb_expression(
                   f"({_max_col - _min_col + 1} cols for {n_genes} genes)")
 
     print(f"  Target {label}: {n_genes}")
-    print(f"  Cell type set: {len(config.WMB_CLASSES)} WMB classes (+ Other)")
+    print(f"  Cell type set: {len(RETAINED_WMB_CLASSES)} retained WMB classes "
+          f"(of {len(config.WMB_CLASSES)} total) + Other")
 
     # Per-class accumulators (primary)
     accum: Dict[str, Dict] = {}
@@ -542,7 +546,7 @@ def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
         # Compute global whole-brain means at WMB class level
         print("\n  Computing whole-brain aggregates ...")
         rows = []
-        ct_universe = list(config.WMB_CLASSES) + ["Other"]
+        ct_universe = list(RETAINED_WMB_CLASSES) + ["Other"]
         for ct in ct_universe:
             if ct not in accum:
                 continue
@@ -568,10 +572,10 @@ def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
 
         df = pd.DataFrame(rows)
 
-        # Specificity = share-of-total across the 34 WMB classes (excludes "Other"
-        # so a gene's specificity reflects its concentration among named classes;
-        # "Other" rows still exist for visibility but don't dilute the score).
-        named_mask = df["cell_type"].isin(config.WMB_CLASSES)
+        # Specificity = share-of-total across the retained WMB classes (the
+        # subset that any spine cluster maps to). "Other" rows still exist for
+        # visibility but don't dilute the score.
+        named_mask = df["cell_type"].isin(RETAINED_WMB_CLASSES)
         for gene in kinase_genes:
             gene_mask = (df["gene_symbol"] == gene) & named_mask
             gene_df = df.loc[gene_mask]
@@ -581,7 +585,7 @@ def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
                 df.loc[gene_mask, "specificity_score"] = spec.values
             else:
                 df.loc[gene_mask, "specificity_score"] = 0.0
-        # "Other" rows: specificity not defined under the 34-class denominator
+        # "Other" rows: specificity not defined under the retained-class denominator
         df.loc[~named_mask, "specificity_score"] = 0.0
 
         df.to_csv(WMB_EXPR_FILE, index=False)
@@ -690,7 +694,7 @@ def compute_wmb_proteome_expression(force: bool = False) -> pd.DataFrame:
         # Build output DataFrame at WMB class level
         print("\n  Computing whole-brain aggregates ...")
         rows = []
-        ct_universe = list(config.WMB_CLASSES) + ["Other"]
+        ct_universe = list(RETAINED_WMB_CLASSES) + ["Other"]
         for ct in ct_universe:
             if ct not in accum:
                 continue
@@ -717,7 +721,7 @@ def compute_wmb_proteome_expression(force: bool = False) -> pd.DataFrame:
         df = pd.DataFrame(rows)
 
         # Specificity over named WMB classes only (Other excluded from denominator)
-        named_mask = df["cell_type"].isin(config.WMB_CLASSES)
+        named_mask = df["cell_type"].isin(RETAINED_WMB_CLASSES)
         for gene in matched_genes:
             gene_mask = (df["gene_symbol_mouse"] == gene) & named_mask
             gene_df = df.loc[gene_mask]
