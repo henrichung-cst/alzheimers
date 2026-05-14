@@ -28,6 +28,11 @@ DECOMP_OLS_PARQUET = os.path.join(
     "per_animal", "site_level_ols.parquet",
 )
 
+# Song concordance shards — lazy-loaded per gene.
+EDGE_SLICES_SONG_CONCORDANCE_DIR = os.path.join(
+    UNIFIED_VIEWER_DIR, "edge_slices", "song_concordance"
+)
+
 # Incytr-pathway shards (lazy-loaded by the pathway-table tab)
 EDGE_SLICES_INCYTR_PATHWAYS_DIR = os.path.join(
     UNIFIED_VIEWER_DIR, "edge_slices", "incytr_pathways"

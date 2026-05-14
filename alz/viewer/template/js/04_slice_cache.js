@@ -72,6 +72,24 @@ const SliceCache = (function(){
     return rows;
   }
 
+  // Song concordance shards: one parquet per uppercased gene symbol.
+  const sCache = new Map();              // GENE_UPPER -> rows[]
+  const sPresent = new Set(
+    (ESR.present_song_concordance_genes || []).map(g => String(g).toUpperCase())
+  );
+  async function loadSongConcordance(geneSymbol){
+    const g = String(geneSymbol || "").toUpperCase();
+    if (!g || !sPresent.has(g)) return [];
+    if (sCache.has(g)) {
+      const v = sCache.get(g); _lruTouch(sCache, g, v); return v;
+    }
+    if (!ESR.song_concordance_url) return [];
+    const url = `${ESR.song_concordance_url}${encodeURIComponent(g)}.parquet`;
+    const rows = await _fetchParquet(url);
+    _lruTouch(sCache, g, rows);
+    return rows;
+  }
+
   // Incytr pathway shards: one parquet per (sender, receiver) pair under
   // edge_slices/incytr_pathways/<sanitized_sender>__<sanitized_receiver>.parquet.
   // Sanitize rule matches alz/integration/load.R:sanitize_celltype — replace
@@ -100,9 +118,11 @@ const SliceCache = (function(){
   }
 
   return { loadBackboneBucket, backboneEdges, loadDecompOls, loadIncytrShard,
+           loadSongConcordance,
            get backboneCacheSize(){ return bCache.size; },
            get decompOlsCacheSize(){ return dCache.size; },
-           get incytrCacheSize(){ return iCache.size; } };
+           get incytrCacheSize(){ return iCache.size; },
+           get songConcordanceCacheSize(){ return sCache.size; } };
 })();
 window.SliceCache = SliceCache;
 

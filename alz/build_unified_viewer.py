@@ -64,6 +64,7 @@ from viewer.paths import (  # noqa: E402
     DECOMP_OLS_PARQUET,
     EDGE_SLICES_DECOMP_OLS_DIR,
     EDGE_SLICES_INCYTR_PATHWAYS_DIR,
+    EDGE_SLICES_SONG_CONCORDANCE_DIR,
     INCYTR_FACTORIAL_INPUTS_DIR,
     INCYTR_FACTORIAL_OUTPUTS_DIR,
     MEASUREMENT_TRACE_DIR,
@@ -139,8 +140,7 @@ def _audit_specs() -> list[tuple[str, str, str]]:
          os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "unified_attribution_full.csv")),
         ("wmb_kinase_expression", "WMB kinase expression",
          config.WMB_EXPRESSION_FILE),
-        ("song_concordance", "Song within-cohort concordance",
-         config.SONG_CONCORDANCE_FILE),
+        # song_concordance lives in edge_slices/song_concordance/ (per-gene shards).
         ("sea_ad_supertype_lfc", "SEA-AD supertype LFCs",
          os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "sea_ad_supertype_lfc.csv")),
         ("kinase_activity_matrix", "Kinase activity matrix",
@@ -149,9 +149,9 @@ def _audit_specs() -> list[tuple[str, str, str]]:
          os.path.join(config.ATTRIBUTION_RECOVERY_OUTPUT_DIR, "celltype_evidence_table.csv")),
         ("kinase_hypothesis_table", "Kinase hypothesis table",
          os.path.join(config.ATTRIBUTION_RECOVERY_OUTPUT_DIR, "kinase_hypothesis_table.csv")),
-        ("kinase_decomposition", "Kinase decomposition (WMB)",
-         os.path.join(config.REPO_ROOT, "outputs", "reports", "deconvolution",
-                      "per_animal", "kinase_enrichment_wmb.csv")),
+        ("kinase_decomposition", "Kinase decomposition (Levy-19)",
+         os.path.join(config.REPO_ROOT, "outputs", "reports", "decomposition",
+                      "levy19", "mea_per_cluster.parquet")),
     ])
     return specs
 
@@ -601,14 +601,22 @@ def load_all_data() -> UnifiedData:
         _ua_full_path, usecols=_ua_full_cols,
     ) if os.path.exists(_ua_full_path) else pd.DataFrame(columns=_ua_full_cols)
 
+    # `cluster` is renamed to `wmb_class` so downstream agreement_index /
+    # decomposition_index code paths don't need updating; values are Levy-19.
     _decomp_path = os.path.join(
-        config.REPO_ROOT, "outputs", "reports", "deconvolution",
-        "per_animal", "kinase_enrichment_wmb.csv",
+        config.REPO_ROOT, "outputs", "reports", "decomposition",
+        "levy19", "mea_per_cluster.parquet",
     )
-    _decomp_cols = ["kinase", "wmb_class", "contrast", "NES", "FDR"]
-    decomposition = pd.read_csv(
-        _decomp_path, usecols=_decomp_cols,
-    ) if os.path.exists(_decomp_path) else pd.DataFrame(columns=_decomp_cols)
+    _decomp_out_cols = ["kinase", "wmb_class", "contrast", "NES", "FDR"]
+    if os.path.exists(_decomp_path):
+        _decomp_read_cols = ["kinase", "cluster", "contrast", "NES", "FDR", "track"]
+        decomposition = pq.read_table(
+            _decomp_path, columns=_decomp_read_cols,
+        ).to_pandas()
+        decomposition = decomposition[decomposition["track"] == "st"].drop(columns=["track"])
+        decomposition = decomposition.rename(columns={"cluster": "wmb_class"})
+    else:
+        decomposition = pd.DataFrame(columns=_decomp_out_cols)
 
     # Vocabulary spine: derived from the live pipeline. kinase IDs follow
     # activity-matrix order; contrasts follow the MEA output; cell-type IDs
@@ -716,6 +724,326 @@ def _build_kinases_slice(data: UnifiedData) -> dict:
             cols[f"NES_{c}"].append(_get(ka_row, f"{c}_NES"))
             cols[f"FDR_{c}"].append(_get(ka_row, f"{c}_FDR"))
     return cols
+
+
+HUMAN_PERDONOR_DIR = os.path.join(
+    config.REPO_ROOT, "outputs", "reports",
+    "kinase_attribution_human", "perdonor",
+)
+HUMAN_TRACK_SUFFIXES = [("", "ST"), ("_pY", "Y")]
+
+
+def _human_track_load(suffix: str, residue: str) -> dict | None:
+    """Load all per-donor CSVs for one track. Returns None if missing.
+
+    Both the stoichiometry and raw-phospho MEA outputs are loaded when
+    present. Raw-phospho is the sensitivity check (analogous to mouse
+    ``kinase_mechanism.py``); when only stoichiometry is available the
+    raw entries are empty DataFrames and the viewer hides the comparison.
+    """
+    rec_path = os.path.join(HUMAN_PERDONOR_DIR, f"recurrence{suffix}.csv")
+    nes_path = os.path.join(HUMAN_PERDONOR_DIR, f"kinase_donor_nes{suffix}.csv")
+    fdr_path = os.path.join(HUMAN_PERDONOR_DIR, f"kinase_donor_fdr{suffix}.csv")
+    mea_path = os.path.join(HUMAN_PERDONOR_DIR, f"mea_perdonor{suffix}.csv")
+    shift_path = os.path.join(HUMAN_PERDONOR_DIR, f"mea_global_shift{suffix}.csv")
+    winsor_path = os.path.join(HUMAN_PERDONOR_DIR, f"winsorized_sites{suffix}.csv")
+    # Raw-phospho counterparts (optional; populated when ingest_mukesh_perdonor.py
+    # has been re-run with the raw-track export enabled).
+    raw_mea_path = os.path.join(HUMAN_PERDONOR_DIR, f"mea_perdonor_raw{suffix}.csv")
+    raw_nes_path = os.path.join(HUMAN_PERDONOR_DIR, f"kinase_donor_nes_raw{suffix}.csv")
+    raw_fdr_path = os.path.join(HUMAN_PERDONOR_DIR, f"kinase_donor_fdr_raw{suffix}.csv")
+    # Site-level matrices live one directory up from perdonor/
+    parent = os.path.dirname(HUMAN_PERDONOR_DIR)
+    stoich_path = os.path.join(parent, f"stoichiometry_matrix{suffix}.csv")
+    raw_path = os.path.join(parent, f"raw_phospho_normalized{suffix}.csv")
+    for p in (rec_path, nes_path, fdr_path):
+        if not os.path.exists(p):
+            return None
+    rec = pd.read_csv(rec_path)
+    nes = pd.read_csv(nes_path).set_index("kinase")
+    fdr = pd.read_csv(fdr_path).set_index("kinase")
+    mea = pd.read_csv(mea_path) if os.path.exists(mea_path) else pd.DataFrame()
+    shift = pd.read_csv(shift_path) if os.path.exists(shift_path) else pd.DataFrame()
+    winsor = pd.read_csv(winsor_path) if os.path.exists(winsor_path) else pd.DataFrame()
+    stoich = pd.read_csv(stoich_path) if os.path.exists(stoich_path) else pd.DataFrame()
+    raw = pd.read_csv(raw_path) if os.path.exists(raw_path) else pd.DataFrame()
+    raw_mea = pd.read_csv(raw_mea_path) if os.path.exists(raw_mea_path) else pd.DataFrame()
+    raw_nes = pd.read_csv(raw_nes_path).set_index("kinase") if os.path.exists(raw_nes_path) else pd.DataFrame()
+    raw_fdr = pd.read_csv(raw_fdr_path).set_index("kinase") if os.path.exists(raw_fdr_path) else pd.DataFrame()
+    return {
+        "residue": residue, "rec": rec, "nes": nes, "fdr": fdr,
+        "mea": mea, "shift": shift, "winsor": winsor,
+        "stoich": stoich, "raw": raw,
+        "raw_mea": raw_mea, "raw_nes": raw_nes, "raw_fdr": raw_fdr,
+    }
+
+
+def build_human_slice() -> dict | None:
+    """Per-donor human (NBB / Mukesh) kinase slice.
+
+    Returns None when the perdonor outputs are absent — caller omits the
+    PAYLOAD.human block so the mouse-only artifact stays byte-equivalent.
+    """
+    if not os.path.isdir(HUMAN_PERDONOR_DIR):
+        return None
+    tracks: list[dict] = []
+    for suffix, residue in HUMAN_TRACK_SUFFIXES:
+        t = _human_track_load(suffix, residue)
+        if t is not None:
+            tracks.append(t)
+    if not tracks:
+        return None
+
+    # Donor axis: union across tracks, stable order (track-first wins).
+    donors: list[str] = []
+    seen: set[str] = set()
+    for t in tracks:
+        for d in list(t["nes"].columns):
+            if d not in seen:
+                seen.add(d)
+                donors.append(str(d))
+    contrasts = [f"{d}_vs_CTRLmean" for d in donors]
+
+    # Gene-symbol map from the cached mapping CSV; fall back to identity.
+    gene_map: dict[str, str] = {}
+    gene_csv = os.path.join(
+        config.REPO_ROOT, "data", "datasets", "song", "analysis_cache",
+        "kinase_to_gene_mapping.csv",
+    )
+    if os.path.exists(gene_csv):
+        gm = pd.read_csv(gene_csv)
+        for k, g in zip(gm["kinase_abbreviation"], gm["gene_symbol"]):
+            if pd.notna(g):
+                gene_map[str(k)] = str(g)
+
+    # Optional: SEA-AD per-kinase agreement (one cohort-level LFC per kinase,
+    # collapsed across SEA-AD supertypes; no cell-type bridge because the
+    # human AD samples have no per-cell-type resolution).
+    seaad_csv = os.path.join(
+        config.REPO_ROOT, "outputs", "reports", "kinase_attribution_human",
+        "seaad_agreement.csv",
+    )
+    seaad_lookup: dict[tuple[str, str], dict] = {}
+    if os.path.exists(seaad_csv):
+        sdf = pd.read_csv(seaad_csv)
+        for _, srow in sdf.iterrows():
+            key = (str(srow["kinase"]), str(srow["residue_type"]))
+            seaad_lookup[key] = {
+                "lfc": (float(srow["sea_ad_lfc_median"])
+                        if pd.notna(srow["sea_ad_lfc_median"]) else None),
+                "n": int(srow["n_supertypes_finite"]) if pd.notna(srow["n_supertypes_finite"]) else 0,
+                "agreement": (float(srow["sea_ad_direction_agreement"])
+                              if pd.notna(srow["sea_ad_direction_agreement"]) else None),
+            }
+
+    # Build (kinase, residue) rows. Same kinase can appear once per track.
+    cols: dict[str, list] = {
+        "id": [], "name": [], "gene_symbol": [], "residue_type": [],
+        "n_donors_sig": [], "n_donors_up": [], "n_donors_down": [],
+        "n_donors_tested": [],
+        "median_nes": [], "median_nes_sig_only": [],
+        "sea_ad_lfc": [], "sea_ad_n_supertypes": [], "sea_ad_direction_agreement": [],
+    }
+    for d in donors:
+        cols[f"NES_{d}_vs_CTRLmean"] = []
+        cols[f"FDR_{d}_vs_CTRLmean"] = []
+
+    perdonor_rows: list[tuple] = []  # (kid, donor, NES, FDR, lead, ES, subs_fraction, p_value, raw_NES, raw_FDR, raw_p)
+    next_id = 0
+    for t in tracks:
+        residue = t["residue"]
+        rec = t["rec"].set_index("kinase")
+        nes = t["nes"]
+        fdr = t["fdr"]
+        mea = t["mea"]
+        raw_mea = t.get("raw_mea", pd.DataFrame())
+        raw_lookup: dict[tuple[str, str], tuple[float, float, float]] = {}
+        if not raw_mea.empty:
+            for _, rrow in raw_mea.iterrows():
+                k = str(rrow.get("kinase", ""))
+                contrast = str(rrow.get("contrast", ""))
+                donor = contrast.replace("_vs_CTRLmean", "")
+                raw_lookup[(k, donor)] = (
+                    float(rrow.get("NES")) if pd.notna(rrow.get("NES")) else float("nan"),
+                    float(rrow.get("FDR")) if pd.notna(rrow.get("FDR")) else float("nan"),
+                    float(rrow.get("p-value")) if pd.notna(rrow.get("p-value")) else float("nan"),
+                )
+        mea_lookup: dict[tuple[str, str], tuple[float, float, str, float, str, float]] = {}
+        if not mea.empty:
+            for _, row in mea.iterrows():
+                k = str(row.get("kinase", ""))
+                contrast = str(row.get("contrast", ""))
+                donor = contrast.replace("_vs_CTRLmean", "")
+                lead = str(row.get("Leading substrates", ""))
+                mea_lookup[(k, donor)] = (
+                    float(row.get("NES")) if pd.notna(row.get("NES")) else float("nan"),
+                    float(row.get("FDR")) if pd.notna(row.get("FDR")) else float("nan"),
+                    lead,
+                    float(row.get("ES")) if pd.notna(row.get("ES")) else float("nan"),
+                    str(row.get("Subs fraction", "")),
+                    float(row.get("p-value")) if pd.notna(row.get("p-value")) else float("nan"),
+                )
+
+        for k in nes.index.astype(str):
+            kid = next_id
+            next_id += 1
+            cols["id"].append(kid)
+            cols["name"].append(k)
+            cols["gene_symbol"].append(gene_map.get(k, k))
+            cols["residue_type"].append(residue)
+            rrow = rec.loc[k] if k in rec.index else None
+
+            def _gr(c, default=0):
+                if rrow is None or c not in rrow.index:
+                    return default
+                v = rrow[c]
+                return default if pd.isna(v) else v
+
+            cols["n_donors_sig"].append(int(_gr("n_donors_sig", 0)))
+            cols["n_donors_up"].append(int(_gr("n_donors_up", 0)))
+            cols["n_donors_down"].append(int(_gr("n_donors_down", 0)))
+            cols["n_donors_tested"].append(int(_gr("n_donors_tested", 0)))
+            cols["median_nes"].append(_gr("median_nes", float("nan")))
+            cols["median_nes_sig_only"].append(_gr("median_nes_sig_only", float("nan")))
+            sea = seaad_lookup.get((k, residue))
+            cols["sea_ad_lfc"].append(round(sea["lfc"], 4) if (sea and sea["lfc"] is not None) else None)
+            cols["sea_ad_n_supertypes"].append(sea["n"] if sea else 0)
+            cols["sea_ad_direction_agreement"].append(
+                round(sea["agreement"], 3) if (sea and sea["agreement"] is not None) else None
+            )
+
+            for d in donors:
+                if d in nes.columns:
+                    v_nes = nes.loc[k, d] if k in nes.index else float("nan")
+                    v_fdr = fdr.loc[k, d] if k in fdr.index else float("nan")
+                else:
+                    v_nes = float("nan")
+                    v_fdr = float("nan")
+                cols[f"NES_{d}_vs_CTRLmean"].append(float(v_nes) if pd.notna(v_nes) else float("nan"))
+                cols[f"FDR_{d}_vs_CTRLmean"].append(float(v_fdr) if pd.notna(v_fdr) else float("nan"))
+                if (k, d) in mea_lookup:
+                    n_, f_, lead, es_, subs_, p_ = mea_lookup[(k, d)]
+                    rn_, rf_, rp_ = raw_lookup.get((k, d), (float("nan"), float("nan"), float("nan")))
+                    perdonor_rows.append((kid, d, n_, f_, lead, es_, subs_, p_, rn_, rf_, rp_))
+
+    # Per-donor leading-substrate index (long, sparse).
+    perdonor_index = {
+        "kinase_id":   [r[0] for r in perdonor_rows],
+        "donor":       [r[1] for r in perdonor_rows],
+        "NES":         [round(r[2], 4) if pd.notna(r[2]) else None for r in perdonor_rows],
+        "FDR":         [round(r[3], 4) if pd.notna(r[3]) else None for r in perdonor_rows],
+        "leading_substrates": [r[4] for r in perdonor_rows],
+        "ES":          [round(r[5], 4) if pd.notna(r[5]) else None for r in perdonor_rows],
+        "subs_fraction": [r[6] for r in perdonor_rows],
+        "p_value":     [round(r[7], 6) if pd.notna(r[7]) else None for r in perdonor_rows],
+        "raw_NES":     [round(r[8], 4) if pd.notna(r[8]) else None for r in perdonor_rows],
+        "raw_FDR":     [round(r[9], 4) if pd.notna(r[9]) else None for r in perdonor_rows],
+        "raw_p_value": [round(r[10], 6) if pd.notna(r[10]) else None for r in perdonor_rows],
+    }
+
+    # Global-shift diagnostics (track-tagged).
+    shift_rows: list[dict] = []
+    for t in tracks:
+        if t["shift"].empty:
+            continue
+        for _, row in t["shift"].iterrows():
+            contrast = str(row.get("contrast", ""))
+            donor = contrast.replace("_vs_CTRLmean", "")
+            shift_rows.append({
+                "contrast": contrast,
+                "donor": donor,
+                "residue_type": t["residue"],
+                "median_shift": float(row.get("median_shift")) if pd.notna(row.get("median_shift")) else None,
+                "mean_before": float(row.get("mean_before")) if pd.notna(row.get("mean_before")) else None,
+                "pct_pos_before": float(row.get("pct_pos_before")) if pd.notna(row.get("pct_pos_before")) else None,
+                "pct_pos_after": float(row.get("pct_pos_after")) if pd.notna(row.get("pct_pos_after")) else None,
+            })
+
+    # Winsorization receipts: per-(donor, track) clipped sites.
+    winsor_cols: dict[str, list] = {
+        "donor": [], "residue_type": [], "site_id": [], "gene_symbol": [],
+        "original_lfc": [], "clipped_lfc": [], "lower_bound": [], "upper_bound": [],
+    }
+    for t in tracks:
+        if t["winsor"].empty:
+            continue
+        for _, row in t["winsor"].iterrows():
+            contrast = str(row.get("contrast", ""))
+            donor = contrast.replace("_vs_CTRLmean", "")
+            winsor_cols["donor"].append(donor)
+            winsor_cols["residue_type"].append(t["residue"])
+            winsor_cols["site_id"].append(str(row.get("site_id", "")))
+            winsor_cols["gene_symbol"].append(str(row.get("gene_symbol", "")))
+            for k in ("original_lfc", "clipped_lfc", "lower_bound", "upper_bound"):
+                v = row.get(k)
+                winsor_cols[k].append(round(float(v), 4) if pd.notna(v) else None)
+
+    # Site-level measurement-trace matrices (per-site stoichiometry + raw phospho).
+    # Donor axis = union of donor + CTRL columns across tracks.
+    sites_cols: dict[str, list] = {
+        "site_id": [], "motif": [], "gene_symbol": [], "site_position": [],
+        "residue_type": [],
+    }
+    donors_all: list[str] = []
+    seen_all: set[str] = set()
+    META_COLS = {"site_id", "protein_id", "gene_symbol", "site_position", "motif"}
+    for t in tracks:
+        for df in (t["stoich"], t["raw"]):
+            if df is None or df.empty:
+                continue
+            for c in df.columns:
+                if c in META_COLS:
+                    continue
+                if c not in seen_all:
+                    seen_all.add(c)
+                    donors_all.append(str(c))
+    case_donors = [d for d in donors_all if not str(d).upper().startswith("CTRL")]
+    ctrl_donors = [d for d in donors_all if str(d).upper().startswith("CTRL")]
+
+    stoich_by_site: list[list[float | None]] = []
+    raw_by_site: list[list[float | None]] = []
+    for t in tracks:
+        residue = t["residue"]
+        sdf = t["stoich"]
+        rdf = t["raw"]
+        if sdf is None or sdf.empty:
+            continue
+        # Index raw by site_id for quick join (raw may differ in coverage).
+        raw_idx = rdf.set_index("site_id") if (rdf is not None and not rdf.empty) else None
+        for _, srow in sdf.iterrows():
+            sid = str(srow.get("site_id", ""))
+            sites_cols["site_id"].append(sid)
+            sites_cols["motif"].append(str(srow.get("motif", "")))
+            sites_cols["gene_symbol"].append(str(srow.get("gene_symbol", "")))
+            sites_cols["site_position"].append(str(srow.get("site_position", "")))
+            sites_cols["residue_type"].append(residue)
+            srow_vals: list[float | None] = []
+            rrow_vals: list[float | None] = []
+            for d in donors_all:
+                v = srow.get(d) if d in srow.index else None
+                srow_vals.append(round(float(v), 4) if (v is not None and pd.notna(v)) else None)
+                if raw_idx is not None and sid in raw_idx.index and d in raw_idx.columns:
+                    rv = raw_idx.loc[sid, d]
+                    rrow_vals.append(round(float(rv), 4) if pd.notna(rv) else None)
+                else:
+                    rrow_vals.append(None)
+            stoich_by_site.append(srow_vals)
+            raw_by_site.append(rrow_vals)
+
+    return {
+        "kinases": cols,
+        "donors": donors,
+        "contrasts": contrasts,
+        "perdonor_index": perdonor_index,
+        "global_shift": shift_rows,
+        "winsor": winsor_cols,
+        "sites": sites_cols,
+        "donors_all": donors_all,
+        "case_donors": case_donors,
+        "ctrl_donors": ctrl_donors,
+        "stoich_by_site": stoich_by_site,
+        "raw_phospho_by_site": raw_by_site,
+    }
 
 
 def _build_celltypes_slice(data: UnifiedData) -> dict:
@@ -998,6 +1326,74 @@ def _write_decomp_ols_slices(kid: dict, contrast_to_id: dict) -> dict:
     return index
 
 
+def _write_song_concordance_slices(genes_of_interest: set[str]) -> dict:
+    """Per-gene shards of `song_concordance.csv`.
+
+    The full file is ~210 MB; the Attribution drawer only ever filters to a
+    single gene, so the JS fetches one shard on demand instead.
+    """
+    src = config.SONG_CONCORDANCE_FILE
+    if not os.path.exists(src):
+        print(f"  (warn) song_concordance source missing: {src}; skipping",
+              flush=True)
+        return {"slice_count": 0, "present_genes": [],
+                "filename_template": "{gene}.parquet"}
+
+    shutil.rmtree(EDGE_SLICES_SONG_CONCORDANCE_DIR, ignore_errors=True)
+    os.makedirs(EDGE_SLICES_SONG_CONCORDANCE_DIR, exist_ok=True)
+
+    print(f"  song_concordance: loading {src} "
+          f"({os.path.getsize(src) / 1e6:.1f} MB)", flush=True)
+    cols = ["gene_symbol", "cell_type", "contrast",
+            "song_lfc", "song_se", "song_pval", "song_fdr", "n_animals"]
+    df = pd.read_csv(src, usecols=lambda c: c in cols)
+    df["gene_upper"] = df["gene_symbol"].astype(str).str.upper()
+    gset = {str(g).upper() for g in genes_of_interest if g}
+    if gset:
+        df = df[df["gene_upper"].isin(gset)]
+    print(f"  song_concordance: {len(df):,} rows after gene filter "
+          f"({df['gene_upper'].nunique()} genes)", flush=True)
+
+    float_cols = [c for c in ("song_lfc", "song_se", "song_pval", "song_fdr")
+                  if c in df.columns]
+    has_n_animals = "n_animals" in df.columns
+    # Skip names that would need URL escaping on the client.
+    def _safe(g: str) -> bool:
+        return bool(g) and all(c.isalnum() or c in ("-", "_") for c in g)
+
+    present = []
+    total_rows = 0
+    template = "{gene}.parquet"
+    for gene_upper, g in df.groupby("gene_upper", sort=False):
+        if not _safe(gene_upper):
+            continue
+        out = g.drop(columns=["gene_upper"])
+        for c in float_cols:
+            out[c] = out[c].astype("float32")
+        if has_n_animals:
+            out["n_animals"] = out["n_animals"].fillna(0).astype("int16")
+        path = os.path.join(EDGE_SLICES_SONG_CONCORDANCE_DIR,
+                            template.format(gene=gene_upper))
+        pq.write_table(pa.Table.from_pandas(out, preserve_index=False), path,
+                       compression="zstd")
+        present.append(gene_upper)
+        total_rows += len(out)
+
+    present.sort()
+    index = {
+        "schema_version": SCHEMA_VERSION,
+        "slice_count": len(present),
+        "present_genes": present,
+        "filename_template": template,
+        "n_total_rows": total_rows,
+    }
+    with open(os.path.join(EDGE_SLICES_SONG_CONCORDANCE_DIR, "index.json"), "w") as f:
+        json.dump(index, f)
+    print(f"  song_concordance: wrote {len(present)} shards "
+          f"({total_rows:,} total rows)", flush=True)
+    return index
+
+
 _INCYTR_CONTRASTS = (
     "App_2mo", "App_4mo", "App_6mo",
     "Tau_2mo", "Tau_4mo", "Tau_6mo",
@@ -1089,6 +1485,25 @@ def _write_incytr_pathways() -> dict | None:
     receivers_canonical = sorted(set(pm["receiver"].tolist()))
     sanitized_to_display = {_incytr_sanitize(n): n for n in receivers_canonical}
 
+    # Detect which optional columns the upstream parquet actually carries.
+    # Per-node `.label` columns were dropped in the incytr_cleanup rerun;
+    # we SELECT them only when present and synthesize NULLs otherwise so the
+    # shard schema (and JS contract) stays stable across runs.
+    sample_schema = pq.read_schema(sorted(glob.glob(cache_glob))[0])
+    src_cols = {f.name for f in sample_schema}
+    available_label_pairs = [
+        (src, dst) for src, dst in zip(_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS)
+        if src in src_cols
+    ]
+    missing_label_dsts = [
+        dst for src, dst in zip(_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS)
+        if src not in src_cols
+    ]
+    if missing_label_dsts:
+        print(f"  (warn) incytr_pathways: source parquet missing label columns "
+              f"{[s for s, _ in zip(_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS) if s not in src_cols]}; "
+              f"emitting NULL for {missing_label_dsts}", flush=True)
+
     con = duckdb.connect()
     con.execute("PRAGMA threads=8; PRAGMA memory_limit='12GB';")
     con.execute("SET temp_directory='/home/hchung/.cache/duckdb';")
@@ -1098,10 +1513,10 @@ def _write_incytr_pathways() -> dict | None:
     extra_fc_select = ",\n          ".join(
         f"CAST({c} AS DOUBLE) AS {c}" for c in _INCYTR_FC_COLS
     )
-    label_select = ",\n          ".join(
-        f'CAST("{src}" AS VARCHAR) AS {dst}'
-        for src, dst in zip(_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS)
-    )
+    label_clauses = [
+        f'CAST("{src}" AS VARCHAR) AS {dst}' for src, dst in available_label_pairs
+    ] + [f"CAST(NULL AS VARCHAR) AS {dst}" for dst in missing_label_dsts]
+    label_select = ",\n          ".join(label_clauses) if label_clauses else "CAST(NULL AS VARCHAR) AS _no_labels"
     con.execute(f"""
         CREATE TEMP TABLE src AS
         SELECT
@@ -1112,7 +1527,7 @@ def _write_incytr_pathways() -> dict | None:
           {extra_score_select},
           {extra_fc_select},
           {label_select}
-        FROM read_parquet('{cache_glob}', hive_partitioning = true)
+        FROM read_parquet('{cache_glob}', hive_partitioning = true, union_by_name = true)
     """)
     n_src = con.execute("SELECT COUNT(*) FROM src").fetchone()[0]
     print(f"  incytr_pathways: loaded receiver_cache ({n_src:,} rows)", flush=True)
@@ -1408,6 +1823,10 @@ def build_payload(data: UnifiedData) -> dict:
         _kid_for_slices, _contrast_to_id_for_slices,
     )
 
+    _kinase_genes = set(data.kinase_activity["gene_symbol"].dropna().astype(str))
+    _kinase_genes |= set(data.edge_metadata["kinases"])
+    song_concordance_slice_index = _write_song_concordance_slices(_kinase_genes)
+
     # Incytr pathway shards: one parquet per (sender, receiver), backing the
     # significant-pathway heatmap + table tabs.
     incytr_pathways_block = _write_incytr_pathways()
@@ -1504,6 +1923,11 @@ def build_payload(data: UnifiedData) -> dict:
         kid, contrast_to_id, config.MEA_FDR_THRESH,
     )
 
+    human_slice = build_human_slice()
+    if human_slice is not None:
+        print(f"  human slice: {len(human_slice['kinases']['id']):,} kinase rows "
+              f"× {len(human_slice['donors'])} donors", flush=True)
+
     payload = {
         "kinases": kinases_slice,
         "celltypes": celltypes_slice,
@@ -1523,10 +1947,17 @@ def build_payload(data: UnifiedData) -> dict:
             ),
             "incytr_pathways_url": "edge_slices/incytr_pathways/",
             "incytr_pathways_index": "edge_slices/incytr_pathways/index.json",
+            "song_concordance_url": "edge_slices/song_concordance/",
+            "song_concordance_index": "edge_slices/song_concordance/index.json",
+            "present_song_concordance_genes": song_concordance_slice_index.get(
+                "present_genes", []
+            ),
         },
         "incytr_pathways": incytr_pathways_block,
         "meta": meta,
     }
+    if human_slice is not None:
+        payload["human"] = human_slice
     return _sanitize(payload)
 
 

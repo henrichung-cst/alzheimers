@@ -570,9 +570,9 @@ const ATTR_VERDICT_COLS = [
   {key:"cross_rank",                   label:"Conf",        type:"num", group:"attr",
    title:"Combined confidence tier. Starts from the attribution-only tier (high / moderate / low / none). Upgraded to 'very high' when the decomposition layer significantly agrees (Decomp FDR < 0.25 with sign matching bulk MEA). Sort uses cross_rank: tier first, decomposition step as tie-breaker."},
   {key:"wmb_specificity",              label:"WMB enrich",  type:"num", group:"attr",
-   title:"WMB enrichment: cell type's share of total log2 expression across 34 WMB classes (uniform = 1/34 ≈ 0.029). Higher = more concentrated in this cell type."},
+   title:"WMB enrichment: share of total log2 expression across 34 WMB classes (uniform = 1/34 ≈ 0.029). Computed at WMB-class granularity, then attached to each Levy-19 cluster via the levy19→WMB crosswalk — Levy-19 clusters that map to the same WMB class share this value."},
   {key:"wmb_tier",                     label:"WMB tier",    type:"num", group:"attr",
-   title:"WMB specificity expressed as a multiple of uniform (1/34 ≈ 0.029): ≥10× / ≥5× / ≥2× / ≥1×. Empty = below 1× uniform."},
+   title:"WMB specificity as a multiple of uniform (1/34 ≈ 0.029): ≥10× / ≥5× / ≥2× / ≥1×. Empty = below 1× uniform. Inherited from the WMB class this Levy-19 cluster maps to."},
   {key:"wmb_mean_log2_expression",     label:"log2 expr",   type:"num", group:"attr",
    title:"WMB mean log2 expression in this cell type (Allen Whole Mouse Brain 10Xv3, pooled across 13 regions). Absolute level — low values flag the score as potentially noise-driven."},
   {key:"wmb_fraction_cells_expressing",label:"% cells",     type:"num", group:"attr",
@@ -771,7 +771,7 @@ function _renderAttributionVerdict(hostId, ctx) {
       `<thead>${superHead}<tr>${headCells}</tr></thead><tbody>${tbody}</tbody>` +
     `</table>` +
     (hiddenCount > 0
-      ? `<div class="attr-verdict-toggle"><label><input type="checkbox" id="${showAllId}"${showAll ? " checked" : ""}> Show all 34 WMB classes <span class="muted">(${hiddenCount} hidden — low/none confidence)</span></label></div>`
+      ? `<div class="attr-verdict-toggle"><label><input type="checkbox" id="${showAllId}"${showAll ? " checked" : ""}> Show all Levy-19 clusters <span class="muted">(${hiddenCount} hidden — low/none confidence)</span></label></div>`
       : (showAll && rows.length > 0
         ? `<div class="attr-verdict-toggle"><label><input type="checkbox" id="${showAllId}" checked> Showing all cell types</label></div>`
         : "")) +
@@ -788,7 +788,7 @@ function _renderAttributionVerdict(hostId, ctx) {
       `<p><strong>Confidence tier</strong> grades <em>which sources agree</em>, not how strong any one signal is:</p>` +
       `<ul>` +
         `<li><strong><span class="attr-conf attr-conf-very-high">very high</span></strong> — a <em>high</em> attribution row that is also corroborated by the decomposition layer: Decomp FDR < 0.25 with the same sign as the bulk MEA NES. Both evidence streams reinforce one another.</li>` +
-        `<li><strong><span class="badge hi">high</span></strong> — all three of these hold: <em>(a)</em> within-cohort Song supports the direction, <em>(b)</em> the gene is clearly cell-type-specific in WMB (specificity ≥ 2× uniform, i.e. ≈ 0.059 for 34 WMB classes), and <em>(c)</em> at least one reference shows real movement (|Song LFC| or |SEA-AD LFC| > 0.1).</li>` +
+        `<li><strong><span class="badge hi">high</span></strong> — all three of these hold: <em>(a)</em> within-cohort Song supports the direction, <em>(b)</em> the gene is clearly cell-type-specific in WMB (specificity ≥ 2× uniform on the 34-WMB-class reference scale, i.e. ≈ 0.059; inherited by the Levy-19 cluster from its mapped WMB class), and <em>(c)</em> at least one reference shows real movement (|Song LFC| or |SEA-AD LFC| > 0.1).</li>` +
         `<li><strong><span class="badge mid">moderate</span></strong> — meaningful evidence but missing one strict gate. Two ways to land here: Song-supported but WMB specificity falls below the high threshold, <em>or</em> only SEA-AD reached concordance (no Song). SEA-AD-only is <strong>always</strong> capped at moderate — we won't promote a cross-species call to high.</li>` +
         `<li><strong><span class="badge lo">low</span></strong> — concordance is positive but the gene isn't expression-specific in WMB and no reference LFC clears the magnitude bar.</li>` +
         `<li><strong>none</strong> — concordance ≤ 0 (signs disagree). Row is excluded from <code>unified_attribution.csv</code> entirely.</li>` +
@@ -844,7 +844,7 @@ function _renderAttributionDrawer(hostId, ctx, cellType) {
         `<div id="attr-song-table"></div></section>` +
     `</div>` +
     `<section class="attr-section attr-section-wide"><h5>Per-cell substrate-site OLS <span class="muted">(deconvolution/per_animal/site_level_ols.parquet)</span></h5>` +
-      `<p class="muted attr-caption">Per-(site, contrast, cell type) β / SE / p from the CTM-native pseudo-deconvolution OLS, restricted to ${_escapeHtml(ctx.name || "")}'s substrate set in ${_escapeHtml(cellType)}. Shows what is driving the Decomp NES in the row above. Bulk β is the same site's stoichiometry β before share-reweighting; |Δβ| measures how much the per-cell estimate diverges from bulk.</p>` +
+      `<p class="muted attr-caption">Per-(site, contrast, cell type) β / SE / p from the CTM-native pseudo-deconvolution OLS, restricted to ${_escapeHtml(ctx.name || "")}'s substrate set in ${_escapeHtml(cellType)}. Shows what is driving the Decomp NES in the row above. Bulk β is the same site's stoichiometry β before share-reweighting; |Δβ| measures how much the per-cell estimate diverges from bulk. <strong>Note:</strong> not yet available for Levy-19 clusters (shards still keyed on WMB-34).</p>` +
       `<div id="attr-decomp-ols-table" class="audit-scroll"></div></section>`;
   _renderWMBDotPlot("attr-wmb-dotplot", ctx, cellType);
   _renderSEAADHeatmap("attr-seaad-heatmap", ctx, cellType);
@@ -1041,48 +1041,70 @@ function _renderSEAADHeatmap(hostId, ctx, targetCellType) {
 function _renderSongOLSPanel(hostId, ctx, targetCellType) {
   const host = document.getElementById(hostId);
   if (!host) return;
-  // Schema migrated from 3-pathway to 9-contrast. Fall back to legacy pathway
-  // key if the contrast column isn't present on the loaded rows.
-  const _useContrast = (ctx.songCdRows || []).some(r => r.contrast != null);
-  const targetKey = _useContrast ? ctx.contrast : _attrPathwayFromContrast(ctx.contrast);
-  const keyCol = _useContrast ? "contrast" : "pathway";
-  const rows = (ctx.songCdRows || []).filter(r => r.cell_type === targetCellType);
-  if (rows.length === 0) {
-    host.innerHTML = `<div class="muted">No Song concordance rows for ${_escapeHtml(ctx.gene || '')} × ${_escapeHtml(targetCellType)}.</div>`;
+  if (!SliceCache || typeof SliceCache.loadSongConcordance !== "function") {
+    host.innerHTML = `<div class="muted">Song concordance shards unavailable in this build.</div>`;
     return;
   }
-  const num = (v, d=3) => (v == null || !isFinite(Number(v))) ? "—" : Number(v).toFixed(d);
-  const sciNum = (v) => (v == null || !isFinite(Number(v))) ? "—" : Number(v).toExponential(2);
-  const tbody = rows.map(r => {
-    const isTarget = r[keyCol] === targetKey;
-    return `<tr${isTarget ? ' class="attr-song-selected"' : ''}>` +
-      `<td>${_escapeHtml(r[keyCol])}${isTarget ? ' <span class="attr-badge attr-badge-info">selected</span>' : ''}</td>` +
-      `<td class="attr-num" style="background:${_attrLfcColor(Number(r.song_lfc))}">${num(r.song_lfc, 3)}</td>` +
-      `<td class="attr-num">${num(r.song_se, 3)}</td>` +
-      `<td class="attr-num">${sciNum(r.song_pval)}</td>` +
-      `<td class="attr-num">${num(r.song_fdr, 3)}</td>` +
-      `<td class="attr-num">${num(r.n_animals, 0)}</td>` +
-      `</tr>`;
-  }).join("");
-  const headerLabel = _useContrast ? "Contrast" : "Pathway";
-  const lfcTitle = _useContrast
-    ? "Factorial OLS coefficient at this contrast (10-param design with timepoint interactions). Pseudobulk log2(CPM+1), males only."
-    : "Factorial OLS coefficient: App = β_App; Tau = β_Tau; ApTt = β_App + β_Tau + β_Int. Pseudobulk log2(CPM+1), males only, pooled across timepoints.";
-  const pvalTitle = _useContrast
-    ? "Two-sided p-value for the OLS contrast t-statistic with df_resid = n_animals − 10."
-    : "Two-sided p-value for the OLS coefficient with df_resid = n_animals − 4.";
-  const fdrTitle = `Benjamini–Hochberg FDR computed within (cell type, ${_useContrast ? "contrast" : "pathway"}).`;
-  host.innerHTML =
-    `<table class="attr-song-table">` +
-      `<thead><tr>` +
-        `<th>${headerLabel}</th>` +
-        `<th title="${lfcTitle}">β (log2 LFC)</th>` +
-        `<th title="Standard error of β.">SE</th>` +
-        `<th title="${pvalTitle}">p-value</th>` +
-        `<th title="${fdrTitle}">FDR</th>` +
-        `<th title="Animals contributing to the OLS fit for this cell type.">n animals</th>` +
-      `</tr></thead><tbody>${tbody}</tbody>` +
-    `</table>`;
+  const gene = ctx.gene || "";
+  const reqGene = gene;
+  const reqContrast = ctx.contrast;
+  const reqCell = targetCellType;
+  host.innerHTML = `<div class="muted">Loading Song shard…</div>`;
+  SliceCache.loadSongConcordance(gene).then(allRows => {
+    // Bail if the user moved on while we were fetching.
+    if (ctx.gene !== reqGene || ctx.contrast !== reqContrast) return;
+    const stillThis = document.getElementById(hostId);
+    if (!stillThis || stillThis !== host) return;
+    if (!Array.isArray(allRows) || allRows.length === 0) {
+      host.innerHTML = `<div class="muted">No Song concordance shard for ${_escapeHtml(gene)}.</div>`;
+      return;
+    }
+    // Schema migrated from 3-pathway to 9-contrast. Fall back to legacy pathway
+    // key if the contrast column isn't present on the loaded rows.
+    const _useContrast = allRows.some(r => r.contrast != null);
+    const targetKey = _useContrast ? reqContrast : _attrPathwayFromContrast(reqContrast);
+    const keyCol = _useContrast ? "contrast" : "pathway";
+    const rows = allRows.filter(r => r.cell_type === reqCell);
+    if (rows.length === 0) {
+      host.innerHTML = `<div class="muted">No Song concordance rows for ${_escapeHtml(gene)} × ${_escapeHtml(reqCell)}.</div>`;
+      return;
+    }
+    const num = (v, d=3) => (v == null || !isFinite(Number(v))) ? "—" : Number(v).toFixed(d);
+    const sciNum = (v) => (v == null || !isFinite(Number(v))) ? "—" : Number(v).toExponential(2);
+    const tbody = rows.map(r => {
+      const isTarget = r[keyCol] === targetKey;
+      return `<tr${isTarget ? ' class="attr-song-selected"' : ''}>` +
+        `<td>${_escapeHtml(r[keyCol])}${isTarget ? ' <span class="attr-badge attr-badge-info">selected</span>' : ''}</td>` +
+        `<td class="attr-num" style="background:${_attrLfcColor(Number(r.song_lfc))}">${num(r.song_lfc, 3)}</td>` +
+        `<td class="attr-num">${num(r.song_se, 3)}</td>` +
+        `<td class="attr-num">${sciNum(r.song_pval)}</td>` +
+        `<td class="attr-num">${num(r.song_fdr, 3)}</td>` +
+        `<td class="attr-num">${num(r.n_animals, 0)}</td>` +
+        `</tr>`;
+    }).join("");
+    const headerLabel = _useContrast ? "Contrast" : "Pathway";
+    const lfcTitle = _useContrast
+      ? "Factorial OLS coefficient at this contrast (10-param design with timepoint interactions). Pseudobulk log2(CPM+1), males only."
+      : "Factorial OLS coefficient: App = β_App; Tau = β_Tau; ApTt = β_App + β_Tau + β_Int. Pseudobulk log2(CPM+1), males only, pooled across timepoints.";
+    const pvalTitle = _useContrast
+      ? "Two-sided p-value for the OLS contrast t-statistic with df_resid = n_animals − 10."
+      : "Two-sided p-value for the OLS coefficient with df_resid = n_animals − 4.";
+    const fdrTitle = `Benjamini–Hochberg FDR computed within (cell type, ${_useContrast ? "contrast" : "pathway"}).`;
+    host.innerHTML =
+      `<table class="attr-song-table">` +
+        `<thead><tr>` +
+          `<th>${headerLabel}</th>` +
+          `<th title="${lfcTitle}">β (log2 LFC)</th>` +
+          `<th title="Standard error of β.">SE</th>` +
+          `<th title="${pvalTitle}">p-value</th>` +
+          `<th title="${fdrTitle}">FDR</th>` +
+          `<th title="Animals contributing to the OLS fit for this cell type.">n animals</th>` +
+        `</tr></thead><tbody>${tbody}</tbody>` +
+      `</table>`;
+  }).catch(err => {
+    console.error("song concordance shard fetch failed", err);
+    host.innerHTML = `<div class="muted">Failed to load Song shard: ${_escapeHtml(String(err && err.message || err))}</div>`;
+  });
 }
 
 function _setAuditSelectors(ctx) {
@@ -1123,7 +1145,7 @@ async function _loadKinaseAuditContext(kinase_id, seq) {
 
   const [stoichRows, rawRows, olsRows, rawMatrix, stoichMatrix, uaRows,
          normRows, sampleRows, winsorRows, globalRows, subsRows,
-         wmbAllRows, songCdAllRows, seaSuperAllRows] = await Promise.all([
+         wmbAllRows, seaSuperAllRows] = await Promise.all([
     AuditDataStore.load(tk("mea_stoichiometry")),
     AuditDataStore.load(tk("mea_raw_phospho")).catch(() => []),
     AuditDataStore.load(tk("site_level_ols")),
@@ -1136,7 +1158,6 @@ async function _loadKinaseAuditContext(kinase_id, seq) {
     AuditDataStore.load(tk("mea_global_shift")),
     AuditDataStore.load(tk("mea_substrate_sets")).catch(() => []),
     AuditDataStore.load("wmb_kinase_expression").catch(() => []),
-    AuditDataStore.load("song_concordance").catch(() => []),
     AuditDataStore.load("sea_ad_supertype_lfc").catch(() => []),
   ]);
   if (seq !== _kinaseAuditSeq || Store.state.selection.kinase !== kinase_id) return null;
@@ -1157,8 +1178,6 @@ async function _loadKinaseAuditContext(kinase_id, seq) {
   const attrRows = uaRows.filter(r => r.kinase === name || r.gene_symbol === K.gene_symbol[ki]);
   const geneUpper = String(K.gene_symbol[ki] || "").toUpperCase();
   const wmbRows = (wmbAllRows || []).filter(r =>
-    String(r.gene_symbol || "").toUpperCase() === geneUpper);
-  const songCdRows = (songCdAllRows || []).filter(r =>
     String(r.gene_symbol || "").toUpperCase() === geneUpper);
   const seaSuperRows = (seaSuperAllRows || []).filter(r =>
     String(r.gene_symbol || "").toUpperCase() === geneUpper);
@@ -1185,7 +1204,7 @@ async function _loadKinaseAuditContext(kinase_id, seq) {
     kinase_id, ki, name, gene:K.gene_symbol[ki], contrast,
     residueType,
     meaStoich, meaRaw, leadRow, siteIds, siteRows, attrRows, olsRows,
-    wmbRows, songCdRows, seaSuperRows,
+    wmbRows, seaSuperRows,
     substrateMotifs, substrateSiteIds, substrateSiteRows, subsRows,
     rawMatrix, stoichMatrix, normRows, sampleRows, winsorRows, globalRows,
   };
