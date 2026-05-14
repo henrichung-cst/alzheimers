@@ -18,6 +18,7 @@ def _normalize_template() -> Pipeline:
             inputs=["sample_mapping", "total_proteome_xlsx",
                     "phospho_sitequant_xlsx", "params:track"],
             outputs=["stoichiometry_matrix", "raw_phospho_normalized",
+                     "total_proteome_normalized",
                      "stoichiometry_qc", "normalization_summary"],
             name="normalize_track",
         ),

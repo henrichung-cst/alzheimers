@@ -450,6 +450,13 @@ def step_normalize(track, mapping, tp, sq):
     raw_phospho_df.insert(1, "gene_symbol", sq["gene_symbol"].values)
     raw_phospho_df.insert(2, "motif", sq["motif"].values)
 
+    total_proteome_df = tp_norm.copy()
+    total_proteome_df.insert(0, "gene_symbol", tp_gene.values)
+    if "Protein Id" in tp.columns:
+        total_proteome_df.insert(1, "protein_id", tp["Protein Id"].values)
+    elif "protein_id" in tp.columns:
+        total_proteome_df.insert(1, "protein_id", tp["protein_id"].values)
+
     # --- 1.4 Quality check ---
     print("\n--- 1.4 Stoichiometry QC spot-checks ---")
     qc_rows = []
@@ -503,7 +510,7 @@ def step_normalize(track, mapping, tp, sq):
         "pca_before": pca_before,
         "pca_after": pca_after,
     }
-    return stoich_df, raw_phospho_df, qc_df, norm_summary
+    return stoich_df, raw_phospho_df, total_proteome_df, qc_df, norm_summary
 
 
 # ===========================================================================

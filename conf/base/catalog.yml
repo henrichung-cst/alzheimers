@@ -77,6 +77,14 @@ py.raw_phospho_normalized:
   type: pandas.CSVDataset
   filepath: outputs/reports/kinase_attribution/raw_phospho_normalized_pY.csv
   save_args: {index: false}
+st.total_proteome_normalized:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/total_proteome_normalized.csv
+  save_args: {index: false}
+py.total_proteome_normalized:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/kinase_attribution/total_proteome_normalized_pY.csv
+  save_args: {index: false}
 
 st.site_level_ols:
   type: pandas.CSVDataset
@@ -129,9 +137,6 @@ py.mea_substrate_sets:
 kinase_to_gene_mapping:
   type: pandas.CSVDataset
   filepath: data/datasets/song/analysis_cache/kinase_to_gene_mapping.csv
-seaad_to_wmb_class:
-  type: pandas.CSVDataset
-  filepath: data/external/sea_ad/seaad_subclass_to_wmb_class.csv
 
 unified_attribution:
   type: pandas.CSVDataset

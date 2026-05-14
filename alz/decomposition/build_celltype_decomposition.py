@@ -1,374 +1,263 @@
-"""CTM-native proportional decomposition on the WMB-class spine.
+"""Stage 6 — proportional decomposition of bulk phospho + protein onto the
+per-cluster proportions from Stage 5.
 
-Aggregates raw counts directly from the Song h5ad on Allen Cell Type Mapper
-``class_name``, applies the proportional formula per group, and writes
-per-track CSVs with ``{group}_{wmb_class}`` value columns.
+Forward projection (linear space):
 
-Formula (per gene, per group, per WMB class)::
+    P_c(gene, A)    = f_c(gene, A) × bulk_protein(gene, A)
+    Phos_c(site, A) = f_c(parent_gene(site), A) × bulk_phospho(site, A)
 
-    deconv[gene, group, w] =
-        bulk_median[gene, group]
-      · (rna[gene, group, w] / Σ_w' rna[gene, group, w'])
-      · size_factor[group, w]
+`f_c` here is the per-cell-rate weight produced by `alz/snrna_proportions.py`
+(`(expr_c / Σ expr) × (N_total / N_c)`), so the decomposition is **not**
+mass-preserving in the literal Σ_c P_c sense. The verifiable mass identity is
 
-with ``size_factor[group, w] = Σ_w' n_cells[group, w'] / n_cells[group, w]``.
+    Σ_c [ P_c × (N_c / N_total) ] = bulk_value
 
-Edge cases:
-- Genes with zero raw count in any (group, w) cell: replace with
-  ``min_nonzero / 10000`` before the share normalization, so shares default
-  to uniform rather than NaN.
-- Bulk values that are NaN propagate to NaN in the output.
-- Genes absent from the snRNA pseudobulk are skipped (no cell-type prior).
+(because `f_c × N_c / N_total = share_c`, and Σ_c share_c = 1 per (gene, A)).
 
-Outputs go to ``outputs/reports/deconvolution/wmb_decomposition/``.
+Sites whose parent gene is absent from the snRNA pseudobulk are dropped and
+reported in the audit JSON — there is no cell-type prior to project them onto.
+
+Outputs (under `outputs/reports/decomposition/{spine}/`):
+  - `protein_per_cluster.parquet` : long-form (gene_symbol, animal_id,
+    cluster, value, log2_value)
+  - `phospho_per_cluster.parquet` : long-form (site_id, gene_symbol,
+    animal_id, cluster, value, log2_value)
+  - `decomposition_audit.json`    : coverage + identity-check stats
 """
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import sys
-from typing import Iterable
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-# Repo root is two dirs above this file
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 
-WMB_MANIFEST_FILE = config.WMB_CLASS_MANIFEST_FILE
-H5AD_FILE = config.SONG_H5AD_FILE
-
-# Inputs were removed from disk on 2026-05-07; re-pull via `pixi run
-# ingest-gdrive-shared` and copy into BULK_DIR before running this branch.
-BULK_DIR = os.path.join(
-    config.REPO_ROOT, "data", "datasets", "song", "proteomics", "source",
-)
-SAMPLE_KEY_FILE = os.path.join(BULK_DIR, "yuyu_samplekey.csv")
-PS_BULK_FILE = os.path.join(BULK_DIR, "imac_median.csv")
-PY_BULK_FILE = os.path.join(BULK_DIR, "py_median.csv")
-PR_BULK_FILE = os.path.join(BULK_DIR, "pr_median.csv")
-
-OUTPUT_DIR = os.path.join(
-    config.REPO_ROOT, "outputs", "reports", "deconvolution", "wmb_decomposition",
-)
-PS_OUT_FILE = os.path.join(OUTPUT_DIR, "ps_wmb_decomposition.csv")
-PY_OUT_FILE = os.path.join(OUTPUT_DIR, "py_wmb_decomposition.csv")
-PR_OUT_FILE = os.path.join(OUTPUT_DIR, "pr_wmb_decomposition.csv")
-SIZE_OUT_FILE = os.path.join(OUTPUT_DIR, "wmb_class_size.csv")
-AUDIT_FILE = os.path.join(OUTPUT_DIR, "decomposition_audit.json")
-
-PS_META_COLS = [
-    "site_id", "protein_id", "gene_symbol", "prot_description",
-    "site_position", "motif",
-]
-PY_META_COLS = [
-    "protein_id", "gene_symbol", "prot_description", "site_position",
-    "motif", "gene_id",
-]
-PR_META_COLS = [
-    "protein_id", "gene_symbol", "geneID",
-]
+REPO = Path(config.REPO_ROOT)
+BULK_DIR = REPO / "outputs/reports/kinase_attribution"
+RAW_PHOSPHO_FILE = BULK_DIR / "raw_phospho_normalized.csv"
+TOTAL_PROTEOME_FILE = BULK_DIR / "total_proteome_normalized.csv"
+SAMPLE_MAPPING_FILE = REPO / "outputs/reports/data_ingest/sample_mapping.csv"
+CELL_COUNTS_FILE = REPO / "outputs/reports/snrna_integration/pseudobulk_cell_counts.csv"
 
 
-def _build_class_name_to_label() -> dict:
-    m = pd.read_csv(WMB_MANIFEST_FILE)
-    return dict(zip(m["class_name"], m["class_label"]))
+def _spine_dir(spine: str) -> Path:
+    return REPO / "outputs/reports/decomposition" / spine
 
 
-def _read_bulk(path: str, gene_col: str, meta_cols: list[str]
-               ) -> tuple[pd.DataFrame, list[str], pd.DataFrame]:
-    """Return (meta_df, ms_id_columns, value_df) for a Yuyu bulk median CSV.
+def _load_sample_mapping() -> pd.DataFrame:
+    mp = pd.read_csv(SAMPLE_MAPPING_FILE)
+    if not {"column_name", "animal_id"}.issubset(mp.columns):
+        raise KeyError(f"{SAMPLE_MAPPING_FILE}: missing column_name / animal_id")
+    return mp[["column_name", "animal_id"]]
 
-    The first column is an unnamed row index; drop it. Group columns are the
-    24 MS_ID-style names like ``M_2mo_WT`` … ``F_6mo_T22/APP``.
-    """
-    df = pd.read_csv(path)
-    df = df.loc[:, ~df.columns.str.match(r"^Unnamed:")]
 
-    if gene_col not in df.columns:
-        raise KeyError(f"{path}: missing column {gene_col!r}; "
-                       f"saw {list(df.columns)[:8]}")
+def _bulk_to_long(
+    df: pd.DataFrame, value_cols: list[str], id_cols: list[str],
+    col_to_animal: dict[str, str], value_name: str,
+) -> pd.DataFrame:
+    """Wide bulk → long (id_cols..., animal_id, value)."""
+    long = df.melt(
+        id_vars=id_cols,
+        value_vars=value_cols,
+        var_name="column_name",
+        value_name=value_name,
+    )
+    long["animal_id"] = long["column_name"].map(col_to_animal)
+    if long["animal_id"].isna().any():
+        miss = sorted(long.loc[long["animal_id"].isna(), "column_name"].unique())
+        raise KeyError(f"Sample mapping missing for columns: {miss[:5]} ...")
+    long = long.drop(columns=["column_name"]).dropna(subset=[value_name])
+    return long
 
-    rename = {gene_col: "gene_symbol"} if gene_col != "gene_symbol" else {}
-    df = df.rename(columns=rename)
 
-    keep_meta = [c if rename.get(c, c) != "gene_symbol" else "gene_symbol"
-                 for c in meta_cols]
-    ms_cols = [c for c in df.columns if c not in keep_meta]
-    if len(ms_cols) != 24:
-        raise ValueError(
-            f"{path}: expected 24 group columns, got {len(ms_cols)}: {ms_cols}"
+def _project(
+    bulk_long: pd.DataFrame, proportions: pd.DataFrame, gene_key: str,
+    value_col: str,
+) -> pd.DataFrame:
+    """Merge bulk × proportions on (gene, animal_id); multiply."""
+    merged = bulk_long.merge(
+        proportions, left_on=[gene_key, "animal_id"], right_on=["gene", "animal_id"],
+        how="inner",
+    )
+    if "gene" in merged.columns and gene_key != "gene":
+        merged = merged.drop(columns=["gene"])
+    merged["value"] = merged[value_col].astype(np.float64) * merged["f_percell"].astype(np.float64)
+    merged = merged.drop(columns=[value_col, "f_percell"])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        merged["log2_value"] = np.where(
+            merged["value"] > 0, np.log2(merged["value"]), np.nan
         )
-
-    meta = df[keep_meta].copy()
-    values = df[ms_cols].apply(pd.to_numeric, errors="coerce")
-    return meta, ms_cols, values
+    return merged
 
 
-def _load_sample_key() -> dict:
-    """Return MS_ID → SCRNA group (e.g. 'M_2mo_APP' → 'ma_2mo_AppP')."""
-    sk = pd.read_csv(SAMPLE_KEY_FILE)
-    return dict(zip(sk["MS_ID"], sk["Group"]))
+def _identity_audit(
+    decomp: pd.DataFrame, bulk_long: pd.DataFrame, gene_key: str,
+    n_cells_long: pd.DataFrame,
+) -> dict:
+    """Σ_c [P_c × (N_c / N_total)] should equal bulk_value per (gene, animal).
 
-
-def aggregate_h5ad_by_group_class(genes_needed: Iterable[str]
-                                  ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-    """Aggregate raw counts per (group, wmb_class, gene) from the Song h5ad.
-
-    Returns:
-        counts: DataFrame (group × wmb_class) MultiIndex rows, gene columns,
-                raw count sums.
-        n_cells: DataFrame (group × wmb_class) MultiIndex rows, single 'n_cells'
-                 column.
-        groups: ordered list of unique group labels (e.g. 'ma_2mo_WTyp').
+    `n_cells_long` is per-(animal_id, cluster, n_cells); we collapse to
+    per-cluster fractions per snRNA-observed animal. Identity is checked only
+    where the proportion source is `observed` to avoid imputed-fraction noise.
     """
-    import anndata as ad
+    weights = n_cells_long.copy()
+    totals = weights.groupby("animal_id")["n_cells"].transform("sum")
+    weights["w"] = weights["n_cells"] / totals
+    weights = weights[["animal_id", "cluster", "w"]]
 
-    print(f"  Loading h5ad: {H5AD_FILE}")
-    adata = ad.read_h5ad(H5AD_FILE)
-    print(f"    {adata.shape[0]:,} nuclei × {adata.shape[1]:,} genes")
-
-    cn_to_label = _build_class_name_to_label()
-    mask_prob = adata.obs["class_prob"] >= config.SONG_MIN_SUBCLASS_PROB
-    mask_mapped = adata.obs["class_name"].isin(cn_to_label.keys())
-    mask = (mask_prob & mask_mapped).values
-    obs = adata.obs[mask].copy()
-    obs["wmb_class"] = obs["class_name"].map(cn_to_label)
-    obs["group"] = obs["sample"].str.split("_", n=1).str[1]
-
-    all_genes = adata.var_names.to_numpy()
-    requested = pd.Index(list(genes_needed)).unique()
-    gene_keep_mask = np.isin(all_genes, requested)
-    if gene_keep_mask.sum() == 0:
-        raise RuntimeError("No requested genes found in h5ad var_names.")
-    keep_genes = all_genes[gene_keep_mask]
-    print(f"    Keeping {len(keep_genes):,} of {len(all_genes):,} genes "
-          f"that appear in bulk")
-
-    X = adata.X[mask][:, gene_keep_mask].tocsr()
-    del adata
-
-    pairs = (
-        obs.groupby(["group", "wmb_class"], observed=True)
-        .indices  # dict {(group, class): np.array(row_idx)}
+    j = decomp.merge(weights, on=["animal_id", "cluster"], how="inner")
+    j["weighted"] = j["value"] * j["w"]
+    re_bulk = (
+        j.groupby([gene_key, "animal_id"], as_index=False)["weighted"]
+        .sum()
+        .rename(columns={"weighted": "reconstructed"})
     )
-
-    rows_meta = []
-    rows_counts = []
-    n_cells_rows = []
-    for (group, wclass), idx in pairs.items():
-        raw_sum = np.asarray(X[idx].sum(axis=0)).flatten()
-        rows_meta.append((group, wclass))
-        rows_counts.append(raw_sum)
-        n_cells_rows.append({"group": group, "wmb_class": wclass,
-                             "n_cells": int(len(idx))})
-
-    counts = pd.DataFrame(np.vstack(rows_counts), columns=keep_genes)
-    counts.index = pd.MultiIndex.from_tuples(rows_meta, names=["group", "wmb_class"])
-    n_cells = pd.DataFrame(n_cells_rows).set_index(["group", "wmb_class"])
-
-    groups = sorted(obs["group"].unique().tolist())
-    print(f"    Aggregated: {len(counts)} (group, wmb_class) pairs, "
-          f"{len(groups)} groups")
-    return counts, n_cells, groups
-
-
-def _decompose_track(meta: pd.DataFrame, ms_cols: list[str],
-                     bulk_values: pd.DataFrame, ms_to_group: dict,
-                     counts: pd.DataFrame, n_cells: pd.DataFrame,
-                     groups: list[str]) -> pd.DataFrame:
-    """Apply Yuyu's formula per (gene, group, class). Returns wide DataFrame
-    with meta columns + ``{group}_{wmb_class}`` value columns.
-
-    Rows whose ``gene_symbol`` is not in ``counts.columns`` are dropped — we
-    cannot redistribute a parent without a cell-type prior. Genes with all-zero
-    counts in a group fall back to a small floor (Yuyu's behavior).
-    """
-    snrna_genes = set(counts.columns)
-    keep = meta["gene_symbol"].isin(snrna_genes)
-    n_dropped = (~keep).sum()
-    if n_dropped:
-        print(f"    Dropping {n_dropped:,} of {len(meta):,} bulk rows "
-              f"(gene not in snRNA pseudobulk)")
-    meta = meta.loc[keep].reset_index(drop=True)
-    bulk_values = bulk_values.loc[keep].reset_index(drop=True)
-
-    wmb_classes = sorted({c for _, c in counts.index})
-    n_sites = len(meta)
-    n_groups = len(groups)
-    n_classes = len(wmb_classes)
-
-    # Pre-pivot snRNA counts into a (group × wmb_class × gene) tensor aligned to
-    # the bulk rows' gene order; absent (group, wmb_class) cells get zeros.
-    bulk_genes = meta["gene_symbol"].to_numpy()
-    gene_to_idx = {g: i for i, g in enumerate(counts.columns)}
-    gene_idx = np.array([gene_to_idx[g] for g in bulk_genes])
-    counts_aligned = counts.to_numpy(dtype=float)[:, gene_idx]  # (n_pairs, n_sites)
-    pair_idx = {pair: i for i, pair in enumerate(counts.index)}
-
-    # rna_tensor[g, w, s]
-    rna_tensor = np.zeros((n_groups, n_classes, n_sites), dtype=float)
-    n_cells_arr = np.zeros((n_groups, n_classes), dtype=float)
-    for gi, group in enumerate(groups):
-        for wi, wclass in enumerate(wmb_classes):
-            i = pair_idx.get((group, wclass))
-            if i is None:
-                continue
-            rna_tensor[gi, wi, :] = counts_aligned[i]
-            n_cells_arr[gi, wi] = n_cells.loc[(group, wclass), "n_cells"]
-
-    # Floor: per (group, gene), if the across-class total is zero, replace with
-    # a tiny per-class floor so shares are uniform (matches Yuyu's behavior).
-    totals = rna_tensor.sum(axis=1)  # (n_groups, n_sites)
-    nonzero = rna_tensor[rna_tensor > 0]
-    floor = (nonzero.min() / 10000.0) if nonzero.size else 1e-12
-    zero_total = (totals == 0)  # (n_groups, n_sites)
-    if zero_total.any():
-        broadcast_mask = np.broadcast_to(
-            zero_total[:, np.newaxis, :], rna_tensor.shape
-        )
-        rna_tensor = np.where(broadcast_mask, floor, rna_tensor)
-        totals = rna_tensor.sum(axis=1)
-
-    # Avoid div-by-zero per (group, site)
-    safe_totals = np.where(totals > 0, totals, np.nan)
-    shares = rna_tensor / safe_totals[:, np.newaxis, :]  # (g, w, s)
-
-    # size_factor[group, w] = Σ_w' n_cells / n_cells[group, w]
-    cells_total = n_cells_arr.sum(axis=1, keepdims=True)
-    size_factor = np.where(
-        n_cells_arr > 0,
-        cells_total / np.where(n_cells_arr > 0, n_cells_arr, 1.0),
-        0.0,
+    cmp = re_bulk.merge(
+        bulk_long.rename(columns={bulk_long.columns[-1]: "bulk"}),
+        on=[gene_key, "animal_id"], how="inner",
     )
-
-    out = meta.copy()
-    group_to_gi = {g: i for i, g in enumerate(groups)}
-    for ms_id in ms_cols:
-        group = ms_to_group.get(ms_id)
-        if group is None:
-            raise KeyError(f"MS_ID {ms_id!r} missing from yuyu_samplekey.csv")
-        gi = group_to_gi.get(group)
-        if gi is None:
-            print(f"    WARN: group {group!r} (from {ms_id!r}) absent from "
-                  f"snRNA aggregation; skipping that column")
-            continue
-        bulk_col = bulk_values[ms_id].to_numpy(dtype=float)  # (n_sites,)
-        for wi, wclass in enumerate(wmb_classes):
-            share_row = shares[gi, wi, :]
-            sf = size_factor[gi, wi]
-            out[f"{group}_{wclass}"] = bulk_col * share_row * sf
-
-    return out
-
-
-def write_size_table(n_cells: pd.DataFrame, groups: list[str],
-                     wmb_classes: list[str]) -> None:
-    """Replacement for `yuyu_clustersize.csv`: WMB classes × groups counts."""
-    df = (
-        n_cells.reset_index()
-        .pivot(index="wmb_class", columns="group", values="n_cells")
-        .reindex(index=wmb_classes, columns=groups)
-        .fillna(0)
-        .astype(int)
-    )
-    df.index.name = "wmb_class"
-    df.to_csv(SIZE_OUT_FILE)
-    print(f"  Wrote size table: {df.shape} → {SIZE_OUT_FILE}")
+    cmp["abs_err"] = (cmp["reconstructed"] - cmp["bulk"]).abs()
+    cmp["rel_err"] = cmp["abs_err"] / cmp["bulk"].abs().clip(lower=1e-12)
+    return {
+        "n_compared": int(len(cmp)),
+        "max_rel_err": float(cmp["rel_err"].max()) if len(cmp) else None,
+        "median_rel_err": float(cmp["rel_err"].median()) if len(cmp) else None,
+        "frac_rel_err_below_1e-3": float((cmp["rel_err"] < 1e-3).mean()) if len(cmp) else None,
+    }
 
 
 def main():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--spine", default="levy19",
+                    help="cluster-spine subdirectory under outputs/reports/decomposition/")
+    args = ap.parse_args()
 
-    # Discover the gene universe needed by any bulk track
-    print("Reading bulk medians ...")
-    ps_meta, ps_cols, ps_vals = _read_bulk(PS_BULK_FILE, "gene_symbol", PS_META_COLS)
-    py_meta, py_cols, py_vals = _read_bulk(PY_BULK_FILE, "gene_symbol", PY_META_COLS)
-    pr_meta, pr_cols, pr_vals = _read_bulk(PR_BULK_FILE, "Gene Symbol", PR_META_COLS)
-    # pr_median.csv has a few cust|... rows where Gene Symbol is "0.0";
-    # drop those — they aren't real gene symbols and have no snRNA prior.
-    pr_keep = pr_meta["gene_symbol"].astype(str).str.match(r"^[A-Za-z][\w\-\.]*$")
-    pr_meta = pr_meta.loc[pr_keep].reset_index(drop=True)
-    pr_vals = pr_vals.loc[pr_keep].reset_index(drop=True)
+    out_dir = _spine_dir(args.spine)
+    if not out_dir.exists():
+        raise FileNotFoundError(f"Spine directory not found: {out_dir} "
+                                f"(run alz/snrna_proportions.py first)")
+    prop_path = out_dir / "proportions.parquet"
+    if not prop_path.exists():
+        raise FileNotFoundError(f"{prop_path} missing")
 
-    if ps_cols != py_cols or ps_cols != pr_cols:
-        raise ValueError("MS_ID columns disagree across bulk tracks")
-    ms_cols = ps_cols
+    print(f"Stage 6 — decomposition on spine: {args.spine}")
+    print(f"  Proportions: {prop_path}")
+    proportions = pd.read_parquet(prop_path)
+    print(f"    {len(proportions):,} (animal, cluster, gene) rows; "
+          f"{proportions['cluster'].nunique()} clusters; "
+          f"{proportions['animal_id'].nunique()} animals")
 
-    ms_to_group = _load_sample_key()
-    missing = [c for c in ms_cols if c not in ms_to_group]
-    if missing:
-        raise KeyError(f"yuyu_samplekey.csv missing MS_IDs: {missing}")
+    print(f"  Sample mapping: {SAMPLE_MAPPING_FILE}")
+    mp = _load_sample_mapping()
+    col_to_animal = dict(zip(mp["column_name"], mp["animal_id"]))
 
-    all_genes = pd.Index(
-        list(ps_meta["gene_symbol"]) + list(py_meta["gene_symbol"]) + list(pr_meta["gene_symbol"])
-    ).dropna().unique()
+    # --- Phospho ---
+    print(f"  Bulk phospho: {RAW_PHOSPHO_FILE}")
+    if not RAW_PHOSPHO_FILE.exists():
+        raise FileNotFoundError(RAW_PHOSPHO_FILE)
+    phospho = pd.read_csv(RAW_PHOSPHO_FILE)
+    meta_cols_ph = ["site_id", "gene_symbol", "motif"]
+    val_cols_ph = [c for c in phospho.columns if c not in meta_cols_ph]
+    phospho = phospho[["site_id", "gene_symbol"] + val_cols_ph]
+    phospho_long = _bulk_to_long(
+        phospho, val_cols_ph, ["site_id", "gene_symbol"], col_to_animal, "bulk_value",
+    )
+    n_sites_total = phospho_long["site_id"].nunique()
+    snrna_genes = set(proportions["gene"].unique())
+    parent_in_snrna = phospho_long["gene_symbol"].isin(snrna_genes)
+    dropped_sites = phospho_long.loc[~parent_in_snrna, "site_id"].nunique()
+    print(f"    Bulk phospho rows: {len(phospho_long):,}; "
+          f"sites total={n_sites_total:,}; "
+          f"sites dropped (parent gene absent from snRNA)={dropped_sites:,}")
+    phospho_long = phospho_long.loc[parent_in_snrna].reset_index(drop=True)
 
-    counts, n_cells, groups = aggregate_h5ad_by_group_class(all_genes)
-    wmb_classes = sorted({c for _, c in counts.index})
+    print("  Projecting phospho × proportions ...")
+    phospho_dec = _project(phospho_long, proportions, "gene_symbol", "bulk_value")
+    phospho_out = out_dir / "phospho_per_cluster.parquet"
+    phospho_dec[["site_id", "gene_symbol", "animal_id", "cluster", "value", "log2_value"]]\
+        .to_parquet(phospho_out, index=False)
+    print(f"    Wrote {phospho_out} ({len(phospho_dec):,} rows)")
 
-    print(f"\nDecomposing ser/thr (imac_median) → {PS_OUT_FILE}")
-    ps_out = _decompose_track(ps_meta, ms_cols, ps_vals, ms_to_group,
-                              counts, n_cells, groups)
-    ps_out.to_csv(PS_OUT_FILE, index=False)
-    print(f"  {ps_out.shape}")
+    # --- Total proteome ---
+    print(f"  Bulk protein: {TOTAL_PROTEOME_FILE}")
+    if not TOTAL_PROTEOME_FILE.exists():
+        raise FileNotFoundError(
+            f"{TOTAL_PROTEOME_FILE} missing — re-run kinase_normalize.py "
+            f"(Stage 1 now emits total_proteome_normalized.csv)."
+        )
+    protein = pd.read_csv(TOTAL_PROTEOME_FILE)
+    meta_cols_pr = [c for c in ("gene_symbol", "protein_id") if c in protein.columns]
+    val_cols_pr = [c for c in protein.columns if c not in meta_cols_pr]
+    protein = protein.dropna(subset=["gene_symbol"]).copy()
+    protein["gene_symbol"] = protein["gene_symbol"].astype(str)
+    protein = protein[protein["gene_symbol"].str.match(r"^[A-Za-z][\w\-\.]*$")]
+    # one row per gene (first occurrence; total proteome ≈ unique)
+    protein = protein.drop_duplicates(subset=["gene_symbol"], keep="first")
+    protein_long = _bulk_to_long(
+        protein, val_cols_pr, ["gene_symbol"], col_to_animal, "bulk_value",
+    )
+    n_genes_total = protein_long["gene_symbol"].nunique()
+    parent_in_snrna_pr = protein_long["gene_symbol"].isin(snrna_genes)
+    dropped_genes = protein_long.loc[~parent_in_snrna_pr, "gene_symbol"].nunique()
+    print(f"    Bulk protein rows: {len(protein_long):,}; "
+          f"genes total={n_genes_total:,}; "
+          f"genes dropped (absent from snRNA)={dropped_genes:,}")
+    protein_long = protein_long.loc[parent_in_snrna_pr].reset_index(drop=True)
 
-    print(f"\nDecomposing tyr (py_median) → {PY_OUT_FILE}")
-    py_out = _decompose_track(py_meta, ms_cols, py_vals, ms_to_group,
-                              counts, n_cells, groups)
-    py_out.to_csv(PY_OUT_FILE, index=False)
-    print(f"  {py_out.shape}")
+    print("  Projecting protein × proportions ...")
+    protein_dec = _project(protein_long, proportions, "gene_symbol", "bulk_value")
+    protein_out = out_dir / "protein_per_cluster.parquet"
+    protein_dec[["gene_symbol", "animal_id", "cluster", "value", "log2_value"]]\
+        .to_parquet(protein_out, index=False)
+    print(f"    Wrote {protein_out} ({len(protein_dec):,} rows)")
 
-    print(f"\nDecomposing total proteome (pr_median) → {PR_OUT_FILE}")
-    pr_out = _decompose_track(pr_meta, ms_cols, pr_vals, ms_to_group,
-                              counts, n_cells, groups)
-    pr_out.to_csv(PR_OUT_FILE, index=False)
-    print(f"  {pr_out.shape}")
+    # --- Identity audit (observed-only, protein layer) ---
+    print("  Identity audit (protein, snRNA-observed animals only) ...")
+    counts = pd.read_csv(CELL_COUNTS_FILE)
+    rename = {"sample": "snrna_sample_id"}
+    counts = counts.rename(columns=rename)
+    mp_full = pd.read_csv(SAMPLE_MAPPING_FILE)
+    mp_full = mp_full.loc[mp_full["has_snrna_seq"] == True,  # noqa: E712
+                          ["animal_id", "snrna_sample_id"]]
+    n_cells_long = counts.merge(mp_full, on="snrna_sample_id", how="inner")
+    n_cells_long = n_cells_long.rename(columns={"cell_type": "cluster"})
+    n_cells_long = n_cells_long[["animal_id", "cluster", "n_cells"]]
+    n_cells_long = n_cells_long[
+        n_cells_long["cluster"].isin(proportions["cluster"].unique())
+    ]
+    obs_animals = set(n_cells_long["animal_id"].unique())
+    protein_obs = protein_dec.loc[protein_dec["animal_id"].isin(obs_animals)]
+    bulk_obs = protein_long.loc[protein_long["animal_id"].isin(obs_animals),
+                                ["gene_symbol", "animal_id", "bulk_value"]]
+    audit = _identity_audit(protein_obs, bulk_obs, "gene_symbol", n_cells_long)
+    print(f"    {audit}")
 
-    write_size_table(n_cells, groups, wmb_classes)
-
-    # Mass-conservation invariant: after the size-factor step, Yuyu's formula
-    # is *not* directly mass-conserving — mass conservation is restored in
-    # `compute_site_fractions` (which re-normalizes by per-(sample, site) sum
-    # of attributed = decomp * proportion[class, sample]). Verify the
-    # equivalent invariant here: Σ_w (decomp[w] * (n_cells[w] / Σ n_cells)) ≈
-    # bulk_median  (since size_factor[w] * proportion[w] = 1).
-    print("\nMass-conservation audit on ST track (post-proportion):")
-    val_cols = [c for c in ps_out.columns if c not in PS_META_COLS]
-    sample_to_cols: dict[str, list[tuple[str, str]]] = {}
-    for c in val_cols:
-        parts = c.split("_", 3)
-        if len(parts) < 4:
-            continue
-        sample = "_".join(parts[:3])
-        sample_to_cols.setdefault(sample, []).append((c, parts[3]))
-    n_cells_long = n_cells.reset_index()
-    diffs = []
-    bulk_finite_mask = ps_meta["gene_symbol"].isin(counts.columns).to_numpy()
-    for ms_id, group in ms_to_group.items():
-        pairs = sample_to_cols.get(group, [])
-        if not pairs:
-            continue
-        nc_g = n_cells_long[n_cells_long["group"] == group].set_index("wmb_class")["n_cells"]
-        nc_total = nc_g.sum()
-        if nc_total == 0:
-            continue
-        attributed = np.zeros(len(ps_out))
-        for col_name, wclass in pairs:
-            prop = nc_g.get(wclass, 0) / nc_total
-            attributed = attributed + ps_out[col_name].fillna(0).to_numpy() * prop
-        bulk_arr = ps_vals[ms_id].to_numpy(dtype=float)[bulk_finite_mask]
-        diffs.extend(np.abs(attributed - np.where(np.isnan(bulk_arr), 0, bulk_arr)))
-    diffs = np.asarray(diffs, dtype=float)
-    diffs = diffs[np.isfinite(diffs)]
-    if diffs.size:
-        print(f"  Per-(group, site) |Σ_w decomp·prop - bulk|: "
-              f"max={diffs.max():.3g}  mean={diffs.mean():.3g}  "
-              f"frac<1e-3={float((diffs < 1e-3).mean()):.3f}")
-    print(f"\n  WMB classes covered: {len(wmb_classes)} / 34")
-    missing_classes = [c for c in config.WMB_CLASSES if c not in wmb_classes]
-    if missing_classes:
-        print(f"  Absent (biological sampling gap): {missing_classes}")
+    audit_full = {
+        "spine": args.spine,
+        "n_clusters": int(proportions["cluster"].nunique()),
+        "n_animals": int(proportions["animal_id"].nunique()),
+        "phospho": {
+            "n_sites_input": int(n_sites_total),
+            "n_sites_dropped_parent_absent": int(dropped_sites),
+            "n_rows_output": int(len(phospho_dec)),
+        },
+        "protein": {
+            "n_genes_input": int(n_genes_total),
+            "n_genes_dropped_absent_from_snrna": int(dropped_genes),
+            "n_rows_output": int(len(protein_dec)),
+        },
+        "mass_identity_protein_observed": audit,
+    }
+    audit_path = out_dir / "decomposition_audit.json"
+    with open(audit_path, "w") as fh:
+        json.dump(audit_full, fh, indent=2)
+    print(f"  Wrote {audit_path}")
 
 
 if __name__ == "__main__":
