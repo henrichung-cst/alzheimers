@@ -19,8 +19,9 @@ These paths are closed and should not drive new code. See [`analysis_rationale.m
 
 | Path | Status |
 |:---|:---|
-| Direct cell-type deconvolution from the 24-group design | Closed — not identifiable |
-| Proportional decomposition with snRNA-seq prior (`alz/deconvolution/`) | Branch-only, not in live path; CTM-native on WMB-class spine; uses the snRNA pseudobulk as a per-(group, WMB class, gene) prior rather than inferring cell-type effects from `A_obs + bulk` alone |
+| Direct (statistical) cell-type deconvolution from the 24-group design | Closed — not identifiable |
+| Per-cluster stoichiometry | Closed — algebraically collapses to bulk under same-proportion-for-both numerator and denominator |
+| Proportional decomposition with snRNA-seq prior (`alz/decomposition/`) | **Active branch (Levy-19 spine)** — forward projection only (`P_c = f_c × bulk`), not statistical recovery; consumed by per-cluster MEA (Stage 7) and the Incytr factorial wrapper (Stage 8). See [`../incytr_deconvolution_pivot.md`](../incytr_deconvolution_pivot.md) |
 | Joint kinase-activity factor model | Closed — composition bottleneck |
 | Two-compartment neuronal/glial simplification | Closed — failed validation |
 | Transcript-only rescue | Closed — no defensible attribution |

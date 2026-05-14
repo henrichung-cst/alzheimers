@@ -193,6 +193,24 @@ In-tree files:
 
 Run order: `pixi run install-incytr && pixi run export-factorial-inputs && pixi run incytr-factorial`.
 
+### Per-cluster proportional decomposition (Levy-19 spine)
+
+Branch path active alongside the bulk live pipeline. Forward projection only — `P_c = f_c × bulk` — **not** statistical deconvolution (closed). See `docs/incytr_deconvolution_pivot.md`.
+
+Stages:
+1. `alz/snrna_proportions.py --spine levy19` — per-(animal, cluster, gene) weights `f_c = (expr_c / Σ expr) × (N_total / N_c)`
+2. `alz/decomposition/build_celltype_decomposition.py --spine levy19 --track both` — projects bulk phospho (IMAC + pY) and protein onto the 19-cluster spine
+3. `alz/decomposition/enrich_celltype.py --spine levy19 --track {st,py}` — per-cluster factorial OLS + MEA (9 contrasts)
+4. `alz/integration/export_factorial_inputs.py` + `pixi run incytr-factorial` — per-cluster Incytr scoring (`per_cluster/{pr,ps,py}/<cluster>.parquet`; upstream `Incytr::resolve_wide` list-dispatches)
+
+End-to-end runner: `bash alz/runners/main/run_pivot_smoke.sh [--skip-normalize] [--skip-incytr]`.
+
+Verification harness (`alz/decomposition/verify_decomposition.py --spine levy19 --all`) writes `outputs/reports/decomposition/levy19/verification.json` and checks four contracts:
+- Mass identity `Σ_c [P_c × (N_c / N_total)] ≈ bulk` (per-cell-rate, **not** `Σ_c P_c = bulk`)
+- Spine coverage (all 19 clusters present, no silent drops)
+- Per-cluster vs bulk MEA agreement under `f_c`-weighting (Spearman ρ ≥ 0.7 per contrast)
+- Incytr produces 19² = 361 sender × receiver pairs
+
 The legacy R wrappers / Python adapters / sidecars / orchestrator shell scripts were retired during the rewrite. They are preserved under `archive/incytr_integration/` (bulk gitignored per repo allowlist; on disk only — copy back if needed). R deps (`Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`) are still required.
 
 ### Runners
@@ -277,7 +295,9 @@ Other documentation:
 - **SEA-AD data required** — Unified attribution needs SEA-AD effect sizes under `config.SEA_AD_DIR`
 - **API caching** — delete files under `data/datasets/song/analysis_cache/` to force re-fetch
 - **WMB expression memory** — `wmb_expression.py --proteome` processes 6,308 genes across 13 regions; use `skip_regional=True` and `chunk_size=2000` to avoid OOM (~30GB RAM available)
-- **Do not reopen closed paths** — direct deconvolution, factor model, two-compartment, and transcript-only rescue are all closed (see charter)
+- **Do not reopen closed paths** — direct (statistical) deconvolution, per-cluster stoichiometry, factor model, two-compartment, and transcript-only rescue are all closed (see charter). Proportional decomposition on Levy-19 is **active** as a forward projection only
+- **Per-cluster mass identity is per-cell-rate** — verification check is `Σ_c [P_c × (N_c / N_total)] ≈ bulk`, NOT `Σ_c P_c = bulk` (the `f_c` weights are per-cell rates × N_total/N_c, so literal summation overshoots)
+- **Stage 6 pY track gating** — `build_celltype_decomposition.py --track py` (or `both`) requires `raw_phospho_normalized_pY.csv` from Stage 1. Smoke runner tolerates missing pY; if you need it, re-run `pixi run normalize` first
 - **Integration is gated on upstream `incytr`** — `pixi run incytr-factorial` hard-fails before loading data unless `Incytr::construct_factorial_paths` and `Incytr::score_factorial_paths` are exported by the installed package. Until those land per `docs/incytr_remediation_plan.md` Phase 1, the wrapper refuses to start. R deps (`Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`) are still required. Integration config lives in `alz/integration/config_integration.py`, not `alz/config.py`
 - **Unified-viewer payload is inlined into `index.html`** — `build_unified_viewer.py` ships PAYLOAD as `<script type="application/json" id="payload-data">` directly in the HTML, not as a separate fetch. After `pixi run viewer` rebuilds, reload the page with a hard refresh (Ctrl+Shift+R / Cmd+Shift+R) — a soft reload serves the cached HTML and the new data won't appear. Quick check from DevTools: `PAYLOAD.meta.generated_at` should match the latest build timestamp
 
