@@ -91,6 +91,11 @@ message(sprintf(
   length(selected$receivers)
 ))
 
+message("DEBUG selected senders: ", paste(selected$senders, collapse = ", "))
+message("DEBUG selected receivers: ", paste(selected$receivers, collapse = ", "))
+message("DEBUG deg_lists names: ", if (is.null(inputs$deg_lists)) "NULL" else paste(names(inputs$deg_lists), collapse = ", "))
+message("DEBUG prg_list length: ", if (is.null(inputs$prg_list)) "NULL" else length(inputs$prg_list))
+
 paths <- factorial_engine$construct(
   expression = inputs$expr,
   metadata = inputs$meta,
@@ -100,6 +105,8 @@ paths <- factorial_engine$construct(
   deg_lists = inputs$deg_lists,
   prg_list = inputs$prg_list
 )
+message(sprintf("DEBUG paths constructed: nrow=%d  ncol=%d", nrow(paths), ncol(paths)))
+if (nrow(paths) > 0) message("DEBUG paths cols: ", paste(colnames(paths), collapse = ", "))
 
 if (!is.null(inputs$cond_pairs)) {
   message(sprintf(
@@ -113,7 +120,29 @@ if (!is.null(inputs$cond_pairs)) {
   )
 }
 
-results <- factorial_engine$score(
+# Multi-omic mode (default since 2026-05): the Incytr engine returns one
+# parquet per (sender, receiver) pair with populated PPDS / PhPDS_ps /
+# PhPDS_py / multimodel_score / PDS columns. Required inputs (omics,
+# output_dir) are passed through; the engine writes per-pair parquets to
+# the staging directory and returns a summary frame with `path`, `status`,
+# and `n_paths`. The wrapper then re-shards into the existing
+# receiver_cache layout that downstream consumers expect.
+omics <- list(
+  pr = list(data_wide = inputs$pr_mat),
+  ps = list(data_wide = inputs$ps_mat),
+  py = list(data_wide = inputs$py_mat)
+)
+
+pair_staging <- file.path(args$out_dir, ".staging", "pair_parquets")
+dir.create(pair_staging, recursive = TRUE, showWarnings = FALSE)
+
+n_perm_env <- Sys.getenv("INCYTR_N_PERM", "0")
+n_perm <- as.integer(n_perm_env)
+if (is.na(n_perm) || n_perm < 0) {
+  stop("INCYTR_N_PERM must be a non-negative integer; got '", n_perm_env, "'")
+}
+
+results_summary <- factorial_engine$score(
   expression = inputs$expr,
   metadata = inputs$meta,
   paths = paths,
@@ -121,28 +150,51 @@ results <- factorial_engine$score(
   design = inputs$design,
   animal_id = "animal_id",
   condition_col = "condition",
-  format = "long",
-  cond_pairs = inputs$cond_pairs
+  cond_pairs = inputs$cond_pairs,
+  omics = omics,
+  kldata = inputs$kldata,
+  output_dir = pair_staging,
+  n_perm = n_perm
 )
+message("DEBUG results_summary:")
+print(results_summary)
 
-if (nrow(results) > 0) {
-  for (receiver in sort(unique(results$receiver))) {
-    receiver_results <- results[results$receiver == receiver, , drop = FALSE]
-    write_receiver_parquet(
-      normalize_receiver_results(receiver_results, receiver),
-      receiver,
-      out_dir = args$out_dir
-    )
+ok_rows <- results_summary[
+  results_summary$status %in% c("ok", "checkpointed"), ,
+  drop = FALSE
+]
+
+if (nrow(ok_rows) > 0) {
+  # Stream pair-at-a-time and write Hive-partitioned part-files. Building a
+  # full per-receiver long frame in memory (rbind of 18+ pair dfs) hit the
+  # 16 GB ulimit on the 100-pair sweep; per-pair peak is ~150 MB.
+  condition_names <- as.character(unique(inputs$meta[["condition"]]))
+  for (i in seq_len(nrow(ok_rows))) {
+    fp <- ok_rows$path[[i]]
+    receiver <- ok_rows$receiver[[i]]
+    sender <- ok_rows$sender[[i]]
+    recv_dir <- file.path(args$out_dir, "receiver_cache",
+                          paste0("receiver=", sanitize_celltype(receiver)))
+    ensure_dir(recv_dir)
+    out_file <- file.path(recv_dir,
+                          paste0("part-", sanitize_celltype(sender), ".parquet"))
+    wide <- as.data.frame(arrow::read_parquet(fp))
+    long <- Incytr::factorial_results_long(wide,
+                                            contrast_names = names(contrasts),
+                                            condition_names = condition_names)
+    rm(wide); gc(verbose = FALSE)
+    arrow::write_parquet(normalize_receiver_results(long, receiver), out_file)
+    rm(long); gc(verbose = FALSE)
   }
 
-  metadata_rows <- aggregate(
-    results$Path,
-    by = list(sender = results$sender, receiver = results$receiver),
-    FUN = function(x) length(unique(x))
+  metadata_rows <- data.frame(
+    sender = ok_rows$sender,
+    receiver = ok_rows$receiver,
+    n_post = ok_rows$n_paths,
+    n_pre = ok_rows$n_paths,
+    status = ok_rows$status,
+    stringsAsFactors = FALSE
   )
-  names(metadata_rows)[names(metadata_rows) == "x"] <- "n_post"
-  metadata_rows$n_pre <- metadata_rows$n_post
-  metadata_rows$status <- "ok"
   write_pair_metadata_parquet(metadata_rows, out_dir = args$out_dir)
 }
 write_views_sql(args$out_dir)

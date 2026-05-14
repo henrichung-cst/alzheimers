@@ -1,6 +1,6 @@
 CREATE OR REPLACE VIEW receiver_cache AS
 SELECT *
-FROM read_parquet('receiver_cache/receiver=*/data.parquet', hive_partitioning = true);
+FROM read_parquet('receiver_cache/receiver=*/*.parquet', hive_partitioning = true);
 
 CREATE OR REPLACE VIEW pair_metadata AS
 SELECT *

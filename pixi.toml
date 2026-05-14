@@ -74,6 +74,7 @@ r-duckdb = ">=1.5.2,<2"
 r-dbi = ">=1.3.0,<2"
 r-arrow = ">=18.0.0,<19"
 duckdb = ">=1.5.2,<2"
+r-readr = ">=2.2.0,<3"
 
 [pypi-dependencies]
 kinase-library = "*"
