@@ -33,7 +33,10 @@ EDGE_SLICES_INCYTR_PATHWAYS_DIR = os.path.join(
     UNIFIED_VIEWER_DIR, "edge_slices", "incytr_pathways"
 )
 INCYTR_FACTORIAL_OUTPUTS_DIR = os.path.join(
-    config.REPO_ROOT, "data", "incytr_factorial_outputs"
+    config.REPO_ROOT, "outputs", "reports", "incytr_factorial"
+)
+INCYTR_FACTORIAL_INPUTS_DIR = os.path.join(
+    config.REPO_ROOT, "data", "incytr_factorial_inputs"
 )
 
 # ---------------------------------------------------------------------------

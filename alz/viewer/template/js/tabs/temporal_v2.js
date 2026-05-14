@@ -61,7 +61,75 @@ function _tv2DefaultSeries(layer) {
     fdrDecomp: 0.25,
     agree: true,
     attrTier: "",   // "" any | "low" | "moderate" | "high" | "very_high"
+    pvalue: 0.05,   // only used when layer === "pathway"
+    absPds: 0.01,   // only used when layer === "pathway"; default = "real composite effect"
   };
+}
+
+function _tv2PathwayBlock() {
+  return (typeof PAYLOAD !== "undefined"
+          && PAYLOAD.incytr_pathways
+          && PAYLOAD.incytr_pathways.pathway_counts) || null;
+}
+
+function _tv2SnapPathwayPvalue(p) {
+  // Snaps user pvalue down to the nearest precomputed threshold (or up to the
+  // smallest if user value is below grid). Returns {value, index} or null.
+  const block = _tv2PathwayBlock();
+  if (!block) return null;
+  const thr = block.thresholds;
+  if (!thr || !thr.length) return null;
+  let idx = -1;
+  for (let i = 0; i < thr.length; i++) {
+    if (thr[i] <= p) idx = i;
+  }
+  if (idx < 0) idx = 0;
+  return { value: thr[idx], index: idx };
+}
+
+function _tv2SnapPathwayAbsPds(ap) {
+  // Snaps user |PDS| DOWN to the nearest precomputed threshold. The grid is
+  // a ≥-gate: threshold 0 → keep everything, 0.5 → only the strongest paths.
+  // 4D payloads carry abs_pds_thresholds; older 3D payloads (no |PDS| axis)
+  // return null and the count lookup falls back to "no effect-size filter".
+  const block = _tv2PathwayBlock();
+  if (!block || !block.abs_pds_thresholds || !block.abs_pds_thresholds.length) {
+    return null;
+  }
+  const thr = block.abs_pds_thresholds;
+  const v = (ap == null || !isFinite(ap)) ? 0 : ap;
+  let idx = 0;
+  for (let i = 0; i < thr.length; i++) {
+    if (thr[i] <= v) idx = i;
+  }
+  return { value: thr[idx], index: idx };
+}
+
+function _tv2PathwayCountAt(cIdx, signBucket, pThrIdx, apThrIdx) {
+  // Returns count at (contrast, sign, pvalue-threshold, |PDS|-threshold).
+  // Back-compat: 3D payloads (no |PDS| axis) ignore apThrIdx — equivalent
+  // to apThrIdx=0 (|PDS|>=0, no filter).
+  const block = _tv2PathwayBlock();
+  if (!block) return 0;
+  const shape = block.shape;
+  if (shape.length === 3) {
+    const [nC, nS, nT] = shape;
+    if (cIdx < 0 || cIdx >= nC || signBucket < 0 || signBucket >= nS
+        || pThrIdx < 0 || pThrIdx >= nT) return 0;
+    return block.counts[cIdx * nS * nT + signBucket * nT + pThrIdx];
+  }
+  const [nC, nS, nT, nAP] = shape;
+  const ap = (apThrIdx == null) ? 0 : apThrIdx;
+  if (cIdx < 0 || cIdx >= nC || signBucket < 0 || signBucket >= nS
+      || pThrIdx < 0 || pThrIdx >= nT || ap < 0 || ap >= nAP) return 0;
+  return block.counts[cIdx * nS * nT * nAP
+                    + signBucket * nT * nAP
+                    + pThrIdx * nAP
+                    + ap];
+}
+
+function _tv2YUnit(series) {
+  return series.layer === "pathway" ? "n pathways" : "n kinases";
 }
 
 function _tv2InitState() {
@@ -124,6 +192,9 @@ function _tv2Eval(series, kid, contrastIdx) {
 }
 function _tv2Counts(series) {
   // Returns counts[g][t] = { up, down, total, upIds, downIds, totalIds } of unique kinases.
+  // Pathway layer: same shape, but units are n_pathways and Ids are empty
+  // (pathways have no kinase-ID payload; clicks route to the Incytr tab).
+  if (series.layer === "pathway") return _tv2PathwayCounts(series);
   _tv2EnsureAttrIndex();
   const K = PAYLOAD.kinases;
   const DG = META.diseaseGroups;
@@ -158,11 +229,65 @@ function _tv2Counts(series) {
   return counts;
 }
 
+function _tv2PathwayCounts(series) {
+  // Pathway counts per (g, t) using the precomputed (contrast, sign,
+  // pvalue-threshold, |PDS|-threshold) grid. up/down come from sign(PDS) —
+  // the composite Pathway Disturbance Score, which aggregates the factorial
+  // OLS β across all available omics layers. Rows with PDS == 0 or
+  // PDS IS NULL go to "total" but neither up nor down.
+  const DG = META.diseaseGroups;
+  const TPS = META.timepoints;
+  const counts = {};
+  for (const g of DG) {
+    counts[g] = {};
+    for (const t of TPS) {
+      counts[g][t] = { up: 0, down: 0, total: 0,
+                       upIds: [], downIds: [], totalIds: [] };
+    }
+  }
+  const block = _tv2PathwayBlock();
+  if (!block) return counts;
+  const snap = _tv2SnapPathwayPvalue(
+    series.pvalue != null && isFinite(series.pvalue) ? series.pvalue : 0.05);
+  if (!snap) return counts;
+  const pThrIdx = snap.index;
+  const apSnap = _tv2SnapPathwayAbsPds(series.absPds);
+  const apThrIdx = apSnap ? apSnap.index : 0;
+  const block_contrasts = block.contrasts;
+  const cIdxOf = new Map();
+  for (let i = 0; i < block_contrasts.length; i++) cIdxOf.set(block_contrasts[i], i);
+  for (const g of DG) {
+    for (const t of TPS) {
+      const cIdx = cIdxOf.get(g + "_" + t);
+      if (cIdx == null) continue;
+      const down = _tv2PathwayCountAt(cIdx, 0, pThrIdx, apThrIdx);
+      const zero = _tv2PathwayCountAt(cIdx, 1, pThrIdx, apThrIdx);
+      const up   = _tv2PathwayCountAt(cIdx, 2, pThrIdx, apThrIdx);
+      const cell = counts[g][t];
+      if (series.sign === "up")        cell.total = up;
+      else if (series.sign === "down") cell.total = down;
+      else                              cell.total = up + zero + down;
+      cell.up = up;
+      cell.down = down;
+    }
+  }
+  return counts;
+}
+
 function _tv2SeriesLabel(series) {
   const layerLabels = { bulk: "Bulk", decomp: "Decomp",
                          intersect: "Bulk ∩ Decomp", contested: "Bulk vs Decomp (contested)",
-                         diff: "Bulk \\ Decomp" };
+                         diff: "Bulk \\ Decomp",
+                         pathway: "Pathway (Incytr)" };
   const parts = [layerLabels[series.layer] || series.layer];
+  if (series.layer === "pathway") {
+    const snap = _tv2SnapPathwayPvalue(series.pvalue);
+    parts.push(`pvalue<${snap ? snap.value : series.pvalue}`);
+    const apSnap = _tv2SnapPathwayAbsPds(series.absPds);
+    if (apSnap && apSnap.value > 0) parts.push(`|PDS|≥${apSnap.value}`);
+    if (series.sign !== "signed") parts.push(series.sign);
+    return parts.join(" · ");
+  }
   if (series.layer !== "bulk") {
     parts.push(series.cells === "ALL" ? "any cell type" : series.cells);
   }
@@ -187,6 +312,7 @@ function _tv2RenderSeriesRow(series, idx) {
     ['intersect', 'bulk ∩ decomp (corroborated)'],
     ['contested', 'bulk ∩ decomp (contested)'],
     ['diff', 'bulk \\ decomp (bulk-only)'],
+    ['pathway', 'pathway (Incytr)'],
   ].map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
   const signOpts = [
     ['signed', 'signed (up/down)'], ['up', 'up only'],
@@ -196,10 +322,14 @@ function _tv2RenderSeriesRow(series, idx) {
     ['', 'Any'], ['very_high', 'very high (only)'], ['high', 'high+'],
     ['moderate', 'moderate+'], ['low', 'low+'],
   ].map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
-  const cellsDisabled = (series.layer === "bulk");
+  const isPathway = (series.layer === "pathway");
+  const cellsDisabled = (series.layer === "bulk") || isPathway;
   const agreeDisabled = (series.layer !== "intersect");
-  const showBulkFdr = (series.layer !== "decomp");
-  const showDecompFdr = (series.layer !== "bulk");
+  const showBulkFdr = !isPathway && (series.layer !== "decomp");
+  const showDecompFdr = !isPathway && (series.layer !== "bulk");
+  const showPathwayPvalue = isPathway;
+  const showAttr = !isPathway;
+  const showAgree = !isPathway;
   const disParts = [];
   if (cellsDisabled) disParts.push("cells");
   if (agreeDisabled) disParts.push("agree");
@@ -211,8 +341,10 @@ function _tv2RenderSeriesRow(series, idx) {
     <label>Sign <select class="tv2-sign">${signOpts}</select></label>
     ${showBulkFdr ? `<label>Bulk FDR<input class="tv2-fdr-bulk" type="number" min="0" max="1" step="0.01" style="width:54px;"></label>` : ''}
     ${showDecompFdr ? `<label>Decomp FDR<input class="tv2-fdr-decomp" type="number" min="0" max="1" step="0.01" style="width:54px;"></label>` : ''}
-    <label title="Require ≥1 attribution row in scope reaching this confidence tier (very_high = high+decomp agree, high = WMB+concordance, etc.).">Attr <select class="tv2-attr">${attrOpts}</select></label>
-    <label class="tv2-agree" title="When on, decomp row must match bulk NES sign to count as corroboration."><input class="tv2-agree-cb" type="checkbox"> sign agree</label>
+    ${showPathwayPvalue ? `<label title="Incytr pathway pvalue (Wald t-test from factorial OLS on per-animal SigProb). Snaps down to the nearest precomputed threshold: 0.001 / 0.005 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0.">pvalue<input class="tv2-pvalue" type="number" min="0" max="1" step="0.005" style="width:64px;"></label>` : ''}
+    ${showPathwayPvalue ? `<label title="Minimum |PDS| — magnitude of the composite Pathway Disturbance Score (multimodel β across all omics layers). ≥0.01 = real composite signal; ≥0.1 = strong. Snaps down to the precomputed grid: 0 / 0.001 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0.">|PDS|≥<input class="tv2-abs-pds" type="number" min="0" step="0.01" style="width:64px;"></label>` : ''}
+    ${showAttr ? `<label title="Require ≥1 attribution row in scope reaching this confidence tier (very_high = high+decomp agree, high = WMB+concordance, etc.).">Attr <select class="tv2-attr">${attrOpts}</select></label>` : ''}
+    ${showAgree ? `<label class="tv2-agree" title="When on, decomp row must match bulk NES sign to count as corroboration."><input class="tv2-agree-cb" type="checkbox"> sign agree</label>` : ''}
     <button class="tv2-rm" title="Remove this series">×</button>
   </div>`;
 }
@@ -224,6 +356,8 @@ function _tv2WireSeriesRow(rowEl, idx) {
   const signSel = rowEl.querySelector(".tv2-sign");
   const fdrB = rowEl.querySelector(".tv2-fdr-bulk");
   const fdrD = rowEl.querySelector(".tv2-fdr-decomp");
+  const pvalueEl = rowEl.querySelector(".tv2-pvalue");
+  const absPdsEl = rowEl.querySelector(".tv2-abs-pds");
   const agreeCb = rowEl.querySelector(".tv2-agree-cb");
   const attrSel = rowEl.querySelector(".tv2-attr");
   const rmBtn = rowEl.querySelector(".tv2-rm");
@@ -232,11 +366,13 @@ function _tv2WireSeriesRow(rowEl, idx) {
   signSel.value = s.sign;
   if (fdrB) fdrB.value = s.fdrBulk;
   if (fdrD) fdrD.value = s.fdrDecomp;
-  agreeCb.checked = !!s.agree;
+  if (pvalueEl) pvalueEl.value = s.pvalue;
+  if (absPdsEl) absPdsEl.value = (s.absPds == null ? "" : s.absPds);
+  if (agreeCb) agreeCb.checked = !!s.agree;
   if (attrSel) attrSel.value = s.attrTier || "";
   layerSel.addEventListener("change", () => {
     s.layer = layerSel.value;
-    if (s.layer === "bulk") s.cells = "ALL";
+    if (s.layer === "bulk" || s.layer === "pathway") s.cells = "ALL";
     _tv2RenderUI(); renderTemporalV2();
   });
   cellsSel.addEventListener("change", () => { s.cells = cellsSel.value; renderTemporalV2(); });
@@ -251,7 +387,21 @@ function _tv2WireSeriesRow(rowEl, idx) {
       s.fdrDecomp = v; renderTemporalV2();
     } else { fdrD.value = s.fdrDecomp; }
   });
-  agreeCb.addEventListener("change", () => { s.agree = agreeCb.checked; renderTemporalV2(); });
+  if (pvalueEl) pvalueEl.addEventListener("change", () => {
+    const v = parseFloat(pvalueEl.value);
+    if (isFinite(v) && v > 0 && v <= 1) {
+      s.pvalue = v;
+      renderTemporalV2();
+    } else { pvalueEl.value = s.pvalue; }
+  });
+  if (absPdsEl) absPdsEl.addEventListener("change", () => {
+    const raw = absPdsEl.value === "" ? 0 : parseFloat(absPdsEl.value);
+    if (isFinite(raw) && raw >= 0) {
+      s.absPds = raw;
+      renderTemporalV2();
+    } else { absPdsEl.value = (s.absPds == null ? "" : s.absPds); }
+  });
+  if (agreeCb) agreeCb.addEventListener("change", () => { s.agree = agreeCb.checked; renderTemporalV2(); });
   if (attrSel) attrSel.addEventListener("change", () => {
     s.attrTier = attrSel.value; renderTemporalV2();
   });
@@ -345,6 +495,9 @@ function renderTemporalV2() {
     const sfx = (s === 0) ? "" : String(s + 1);
     const xAxis = "x" + sfx, yAxis = "y" + sfx;
     const showLegend = (s === 0);
+    const clickHint = (ser.layer === "pathway")
+      ? "click to open in Incytr Pathways tab"
+      : "click to open in Kinase tab";
     for (const g of DG) {
       const color = (META.diseaseColors || {})[g] || "#555";
       if (ser.sign === "signed") {
@@ -356,7 +509,7 @@ function renderTemporalV2() {
           xaxis: xAxis, yaxis: yAxis, showlegend: showLegend,
           customdata: TPS.map(t => [counts[g][t].up, counts[g][t].upIds]),
           meta: { s, g, sign: "up" },
-          hovertemplate: `[S${s+1}] ${g} up @ %{x}: %{customdata[0]} · click to open in Kinase tab<extra></extra>`,
+          hovertemplate: `[S${s+1}] ${g} up @ %{x}: %{customdata[0]} · ${clickHint}<extra></extra>`,
         });
         traces.push({
           type: "bar", name: g + " down",
@@ -366,7 +519,7 @@ function renderTemporalV2() {
           xaxis: xAxis, yaxis: yAxis, showlegend: showLegend,
           customdata: TPS.map(t => [counts[g][t].down, counts[g][t].downIds]),
           meta: { s, g, sign: "down" },
-          hovertemplate: `[S${s+1}] ${g} down @ %{x}: %{customdata[0]} · click to open in Kinase tab<extra></extra>`,
+          hovertemplate: `[S${s+1}] ${g} down @ %{x}: %{customdata[0]} · ${clickHint}<extra></extra>`,
         });
       } else {
         traces.push({
@@ -377,7 +530,7 @@ function renderTemporalV2() {
           xaxis: xAxis, yaxis: yAxis, showlegend: showLegend,
           customdata: TPS.map(t => [counts[g][t].total, counts[g][t].totalIds]),
           meta: { s, g, sign: "total" },
-          hovertemplate: `[S${s+1}] ${g} @ %{x}: %{customdata[0]} · click to open in Kinase tab<extra></extra>`,
+          hovertemplate: `[S${s+1}] ${g} @ %{x}: %{customdata[0]} · ${clickHint}<extra></extra>`,
         });
       }
     }
@@ -386,7 +539,7 @@ function renderTemporalV2() {
       anchor: "y" + sfx,
     };
     layout["yaxis" + sfx] = {
-      title: "n kinases",
+      title: _tv2YUnit(ser),
       zeroline: true,
       anchor: "x" + sfx,
     };
@@ -411,9 +564,13 @@ function renderTemporalV2() {
     const p = ev.points[0];
     const cd = p.customdata;
     const meta = (p.data && p.data.meta) || {};
+    const ser = (_tv2State.series || [])[meta.s] || {};
+    if (ser.layer === "pathway") {
+      _openIncytrPathwaysFromBar(ser, meta.g, p.x);
+      return;
+    }
     if (!cd || !Array.isArray(cd) || !cd[1] || !cd[1].length) return;
     const ids = cd[1];
-    const ser = (_tv2State.series || [])[meta.s] || {};
     const label = `Temporal v2 · ${_tv2SeriesLabel(ser)} · ${meta.g}_${p.x}` +
                   (meta.sign === "total" ? "" : ` · ${meta.sign}`);
     _openKinaseDeepDiveWithWhitelist(ids, label, {
@@ -422,10 +579,26 @@ function renderTemporalV2() {
     });
   });
   if (sub) {
-    sub.textContent = `${series.length} series · y = unique kinases per (genotype, timepoint) · `
+    sub.textContent = `${series.length} series · y depends on layer (kinase / pathway) · `
       + `signed series split up at +y, down at −y · scales independent across rows · `
-      + `click any bar to open the Kinase deep dive filtered to that kinase set.`;
+      + `click kinase bars → Kinase deep dive · click pathway bars → Incytr Pathways tab.`;
   }
+}
+
+function _openIncytrPathwaysFromBar(series, genotype, timepoint) {
+  if (typeof IncytrFilter === "undefined") return;
+  const snap = _tv2SnapPathwayPvalue(series.pvalue);
+  const apSnap = _tv2SnapPathwayAbsPds(series.absPds);
+  IncytrFilter.set({
+    pair:       null,
+    senderIn:   [],
+    receiverIn: [],
+    disease:    genotype  ? [genotype]  : [],
+    timepoint:  timepoint ? [timepoint] : [],
+    sliderP:    snap ? snap.value : null,
+    sliderPds:  apSnap && apSnap.value > 0 ? apSnap.value : null,
+  });
+  Store.dispatch({type:"SET_VIEW", key:"activeTab", value:"incytrpathways"});
 }
 
 function _openKinaseDeepDiveWithWhitelist(kinaseIds, sourceLabel, ctx) {

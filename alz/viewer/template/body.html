@@ -122,15 +122,17 @@
   <div id="tab-incytrheatmap" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytrheatmap" hidden>
     <div class="card">
       <div class="ke-toolbar ke-toolbar-multi">
-        <label class="ke-filter-label">Tier
-          <select id="ih-tier" aria-label="Significance tier"
-                  title="Ordinal-threshold gate. Counts in parentheses are total rows across all (sender, receiver, contrast) that pass."></select>
-        </label>
         <label class="ke-filter-label">Disease
           <select id="ih-disease" aria-label="Disease"></select>
         </label>
         <label class="ke-filter-label">Timepoint
           <select id="ih-timepoint" aria-label="Timepoint"></select>
+        </label>
+        <label class="ke-filter-label" title="Keep paths with pvalue &lt; threshold. Snapped to the precomputed grid (0.001 / 0.005 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0).">pvalue &lt;
+          <input id="ih-pvalue" type="number" step="0.005" min="0.001" max="1" style="width:64px;"/>
+        </label>
+        <label class="ke-filter-label" title="Keep paths with |PDS| ≥ threshold (composite multimodel effect-size magnitude). Snapped to the precomputed grid (0 / 0.001 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0). 0 = no gate.">|PDS| ≥
+          <input id="ih-abs-pds" type="number" step="0.01" min="0" max="2" style="width:64px;"/>
         </label>
         <button id="ih-reset" class="ke-filter-reset" title="Reset heatmap filters">Reset</button>
         <span class="muted" id="ih-count"></span>
@@ -150,45 +152,24 @@
               title="Filter rows by disease contrast prefix. Empty = any."></span>
         <span id="ip-ms-time"     class="ke-filter-label"
               title="Filter rows by timepoint contrast suffix. Empty = any."></span>
-        <label class="ke-filter-label" title="Ligand DEG/prG label">L.lbl
-          <select id="ip-lbl-Ligand-label">
-            <option value="">Any</option><option value="DEG">DEG</option><option value="prG">prG</option>
-          </select>
-        </label>
-        <label class="ke-filter-label" title="Receptor DEG/prG label">R.lbl
-          <select id="ip-lbl-Receptor-label">
-            <option value="">Any</option><option value="DEG">DEG</option><option value="prG">prG</option>
-          </select>
-        </label>
-        <label class="ke-filter-label" title="EM (effector module) DEG/prG label">EM.lbl
-          <select id="ip-lbl-EM-label">
-            <option value="">Any</option><option value="DEG">DEG</option><option value="prG">prG</option>
-          </select>
-        </label>
-        <label class="ke-filter-label" title="Target DEG/prG label">T.lbl
-          <select id="ip-lbl-Target-label">
-            <option value="">Any</option><option value="DEG">DEG</option><option value="prG">prG</option>
-          </select>
-        </label>
-        <label class="ke-filter-label" title="Tier preset — sets the 3 sliders below to a canonical gate.">Tier
-          <select id="ip-tier">
-            <option value="all">all</option>
-            <option value="p05">p&lt;0.05</option>
-            <option value="paper">paper</option>
-            <option value="strict">strict</option>
-          </select>
-        </label>
         <label class="ke-filter-label" title="Keep rows with pvalue &lt; threshold. Blank = no constraint.">pvalue &lt;
           <input id="ip-slider-p" type="number" step="0.005" min="0" max="1" style="width:64px;"/>
         </label>
         <label class="ke-filter-label" title="Keep rows with |PDS| &gt;= threshold. Blank = no constraint.">|PDS| ≥
           <input id="ip-slider-pds" type="number" step="0.05" min="0" style="width:64px;"/>
         </label>
-        <label class="ke-filter-label" title="Keep rows with sigprob_max &gt;= threshold. Blank = no constraint.">sigprob ≥
-          <input id="ip-slider-sp" type="number" step="0.05" min="0" max="1" style="width:64px;"/>
-        </label>
         <button id="ip-reset" class="ke-filter-reset" title="Reset all pathway filters">Reset</button>
         <span class="muted" id="ip-count"></span>
+      </div>
+      <div class="muted" style="margin:4px 0 8px 0;font-size:11px;"
+           title="Each node carries a {DEG, prG} badge marking the seed list that admitted the gene.">
+        Evidence-source badges:
+        <span style="display:inline-block;padding:0 4px;font-size:10px;font-family:ui-monospace,monospace;
+                     border-radius:2px;background:#e8eefc;color:#1f4ea3;">DEG</span>
+        = single-cell differentially-expressed gene ·
+        <span style="display:inline-block;padding:0 4px;font-size:10px;font-family:ui-monospace,monospace;
+                     border-radius:2px;background:#e7f4ec;color:#1f7a3a;">prG</span>
+        = proteomics-significant gene
       </div>
       <div id="ip-table-wrap"></div>
     </div>

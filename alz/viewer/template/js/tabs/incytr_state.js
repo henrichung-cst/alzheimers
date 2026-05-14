@@ -2,39 +2,29 @@
 // IncytrFilter — shared filter state for the Incytr Heatmap + Pathways tabs.
 // Mirrors the KinaseFilter contract: localStorage-backed, get(k) / set(patch)
 // / reset() / subscribe(fn). Persistence key: incytrFilter.v1.
-//
-// Tier defaults mirror _INCYTR_HEATMAP_TIERS in alz/build_unified_viewer.py.
 // ---------------------------------------------------------------------------
-
-window.INCYTR_TIER_DEFAULTS = {
-  all:    { p: null, pds: null, sp: null },
-  p05:    { p: 0.05, pds: null, sp: null },
-  paper:  { p: 0.05, pds: 0.76, sp: 0.10 },
-  strict: { p: 0.01, pds: 0.76, sp: 0.10 },
-};
 
 window.IncytrFilter = (function() {
   const _KEY = "incytrFilter.v1";
   const _defaults = {
-    // Heatmap projection — single contrast picker, two ordinal selects.
-    hmTier:         "paper",
+    // Heatmap projection — single contrast picker, two ordinal selects, and
+    // pvalue + |PDS| gates (snapped to the heatmap_counts.thresholds /
+    // .abs_pds_thresholds grids).
     hmDisease:      "App",
     hmTimepoint:    "2mo",
+    hmPvalue:       0.05,
+    hmAbsPds:       0.01,
 
-    // Pathway table — multiselect filters (empty = any).
+    // Pathway table — multiselect filters (empty = any). sliderPds is the
+    // |PDS| effect-size floor; the legacy sliderSp (sigprob) was retired
+    // 2026-05-12 in favor of effect-size filtering.
     pair:           null,          // {sender, receiver} or null
     disease:        [],            // [] = any
     timepoint:      [],            // [] = any
     senderIn:       [],            // [] = any
     receiverIn:     [],            // [] = any
-    ligandLabel:    "",            // "" = any | "DEG" | "prG"
-    receptorLabel:  "",
-    emLabel:        "",
-    targetLabel:    "",
-    tier:           "paper",       // preset that seeds the sliders
-    sliderP:        0.05,
-    sliderPds:      0.76,
-    sliderSp:       0.10,
+    sliderP:        null,
+    sliderPds:      null,
     sortKey:        "pvalue",
     sortDir:        1,
   };
@@ -75,16 +65,6 @@ window.IncytrFilter = (function() {
         }
       }
       if (changed) { _save(); for (const fn of _subs) fn(); }
-    },
-    applyTier: function(tier) {
-      const d = INCYTR_TIER_DEFAULTS[tier];
-      if (!d) return;
-      this.set({
-        tier: tier,
-        sliderP:   d.p,
-        sliderPds: d.pds,
-        sliderSp:  d.sp,
-      });
     },
     reset: function() {
       _state = JSON.parse(JSON.stringify(_defaults));

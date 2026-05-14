@@ -64,6 +64,7 @@ from viewer.paths import (  # noqa: E402
     DECOMP_OLS_PARQUET,
     EDGE_SLICES_DECOMP_OLS_DIR,
     EDGE_SLICES_INCYTR_PATHWAYS_DIR,
+    INCYTR_FACTORIAL_INPUTS_DIR,
     INCYTR_FACTORIAL_OUTPUTS_DIR,
     MEASUREMENT_TRACE_DIR,
     MEASUREMENT_TRACE_INDEX,
@@ -1003,18 +1004,47 @@ _INCYTR_CONTRASTS = (
     "ApTt_2mo", "ApTt_4mo", "ApTt_6mo",
 )
 
-# Pre-computed gate tiers for the heatmap. The UI picks one; the shards
-# carry raw metrics so finer client-side filtering remains possible.
-_INCYTR_HEATMAP_TIERS = (
-    ("all",    "all candidate paths",            {}),
-    ("p05",    "raw pvalue < 0.05",
-     {"p": 0.05}),
-    ("paper",  "He 2025 Fig 2D (raw p)",
-     {"p": 0.05, "pds": 0.76, "sp": 0.10}),
-    ("strict", "paper gate at p<0.01",
-     {"p": 0.01, "pds": 0.76, "sp": 0.10}),
+# Fixed pvalue grid for the Temporal v2 pathway layer. User-entered pvalue is
+# snapped down to the nearest threshold; counts are pre-aggregated per
+# (contrast, sign(PDS), pvalue_threshold, abs_pds_threshold) to keep the
+# payload tiny (9 × 3 × 8 × 8 × 4B ≈ 7 KB).
+_INCYTR_PATHWAY_PVALUES = (0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
+# |PDS| ≥ threshold (so 0 = no effect-size gate). PDS is the composite
+# multimodel Pathway Disturbance Score — OLS-derived, consistent with the
+# rest of the viewer. 0.01 is the "real signal" floor; 0.5 is "very strong".
+# Replaced the legacy sigprob_max filter (outlier-driven mean ratio) on
+# 2026-05-12.
+_INCYTR_PATHWAY_ABS_PDS = (0.0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
+
+# Pathway scoring stack — surfaced as table columns in the pathway tab.
+# PDS is already in the shard; these are net-new. log2FC and sigprob_max
+# were retired 2026-05-12 (mean-driven, inconsistent with the OLS pipeline).
+_INCYTR_SCORE_COLS = ("TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "multimodel_score")
+
+# Per-node log2 fold-change columns. Only the four genuine log2FC metrics are
+# shipped — the Hill-shrunk aFC variants emitted by Incytr are NOT log2 fold-
+# changes (β × adjustment in (0,1]) and were dropped from the viewer payload
+# to avoid mixed-units confusion. 4 nodes × 4 metrics = 16 columns.
+_INCYTR_FC_NODES = ("Ligand", "Receptor", "EM", "Target")
+_INCYTR_FC_METRICS = (
+    "sclog2FC",
+    "pr_log2FC",
+    "ps_log2FC",
+    "py_log2FC",
+)
+_INCYTR_FC_COLS = tuple(
+    f"{node}_{metric}" for node in _INCYTR_FC_NODES for metric in _INCYTR_FC_METRICS
 )
 
+# Per-node evidence-source labels — each of Ligand / Receptor / EM / Target is
+# tagged with the seed list that admitted it: "DEG" (single-cell DEG) or "prG"
+# (proteomics-significant gene). Source columns are dotted in the upstream
+# parquet (`<Node>.label`); we alias them to `<Node>_label` on the way out so
+# downstream JS can use plain dot-access.
+_INCYTR_LABEL_NODES = _INCYTR_FC_NODES
+_INCYTR_LABEL_VOCAB = ("DEG", "prG")
+_INCYTR_LABEL_SRC = tuple(f"{n}.label" for n in _INCYTR_LABEL_NODES)
+_INCYTR_LABEL_COLS = tuple(f"{n}_label" for n in _INCYTR_LABEL_NODES)
 
 def _incytr_sanitize(name: str) -> str:
     """Match the upstream sanitize in alz/integration/load.R:sanitize_celltype."""
@@ -1024,24 +1054,24 @@ def _incytr_sanitize(name: str) -> str:
 def _write_incytr_pathways() -> dict | None:
     """Shard the long-form factorial output by (sender, receiver) — unfiltered.
 
-    Reads `data/incytr_factorial_outputs/receiver_cache/receiver=*/data.parquet`
-    directly (1.2M rows, 9 contrasts × 135,206 candidate paths) and emits one
-    parquet per (sender, receiver) pair under `edge_slices/incytr_pathways/`
-    plus the `incytr_pathways` payload block. No build-time significance gate
-    is applied — the shards carry raw metrics so the UI can threshold live.
+    Reads `outputs/reports/incytr_factorial/receiver_cache/receiver=*/*.parquet`
+    (WMB-labelled run, 4.76M rows, 164 cols, 9 contrasts × 528,790 paths) and
+    emits one parquet per (sender, receiver) pair under
+    `edge_slices/incytr_pathways/` plus the `incytr_pathways` payload block.
+    No build-time significance gate is applied — the shards carry raw metrics
+    so the UI can threshold live.
 
-    `heatmap_tiers` in the payload pre-computes counts at four tiers
-    (all / p05 / paper / strict) so the heatmap stays useful without
-    shipping every row to the browser at load time.
-
-    Long-form preserved: one row per (Path, contrast). The table tab filters
-    to a single contrast for display.
+    `heatmap_counts` is a sender × receiver × contrast × pvalue × |PDS| grid
+    (no significance gate at build time — client picks the threshold pair).
+    Filter axes are pvalue (Wald t on the factorial OLS β for SigProb) and
+    |PDS| (composite multimodel effect-size magnitude). The legacy
+    `sigprob_max` mean-ratio filter was retired 2026-05-12.
     """
     import duckdb  # local to keep top-of-file imports lean
 
     cache_glob = os.path.join(
         INCYTR_FACTORIAL_OUTPUTS_DIR,
-        "receiver_cache", "receiver=*", "data.parquet",
+        "receiver_cache", "receiver=*", "*.parquet",
     )
     if not glob.glob(cache_glob):
         print(f"  (warn) receiver_cache empty under "
@@ -1055,74 +1085,171 @@ def _write_incytr_pathways() -> dict | None:
               flush=True)
         return None
     pm = pd.read_parquet(pm_path, columns=["sender", "receiver"])
-    canonical_celltypes = sorted(set(pm["sender"]) | set(pm["receiver"]))
-    sanitized_to_display = {_incytr_sanitize(n): n for n in canonical_celltypes}
+    senders_canonical = sorted(set(pm["sender"].tolist()))
+    receivers_canonical = sorted(set(pm["receiver"].tolist()))
+    sanitized_to_display = {_incytr_sanitize(n): n for n in receivers_canonical}
 
     con = duckdb.connect()
     con.execute("PRAGMA threads=8; PRAGMA memory_limit='12GB';")
     con.execute("SET temp_directory='/home/hchung/.cache/duckdb';")
+    extra_score_select = ",\n          ".join(
+        f"CAST({c} AS DOUBLE) AS {c}" for c in _INCYTR_SCORE_COLS
+    )
+    extra_fc_select = ",\n          ".join(
+        f"CAST({c} AS DOUBLE) AS {c}" for c in _INCYTR_FC_COLS
+    )
+    label_select = ",\n          ".join(
+        f'CAST("{src}" AS VARCHAR) AS {dst}'
+        for src, dst in zip(_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS)
+    )
     con.execute(f"""
         CREATE TEMP TABLE src AS
         SELECT
           sender, receiver, Path, Ligand, Receptor, EM, Target,
-          "Ligand.label", "Receptor.label", "EM.label", "Target.label",
           contrast,
           CAST(pvalue   AS DOUBLE) AS pvalue,
           CAST(PDS      AS DOUBLE) AS PDS,
-          CAST(log2FC   AS DOUBLE) AS log2FC,
-          GREATEST(COALESCE(SigProb_ref, 0.0), COALESCE(SigProb_alt, 0.0))
-            AS sigprob_max
+          {extra_score_select},
+          {extra_fc_select},
+          {label_select}
         FROM read_parquet('{cache_glob}', hive_partitioning = true)
     """)
     n_src = con.execute("SELECT COUNT(*) FROM src").fetchone()[0]
     print(f"  incytr_pathways: loaded receiver_cache ({n_src:,} rows)", flush=True)
-
-    # Tier-count grids: senders × receivers × contrasts (canonical 22, 22, 9).
-    senders_canonical = sorted(canonical_celltypes)
-    receivers_canonical = sorted(canonical_celltypes)
     sender_to_idx = {s: i for i, s in enumerate(senders_canonical)}
     receiver_to_idx = {r: i for i, r in enumerate(receivers_canonical)}
     contrast_to_idx = {c: i for i, c in enumerate(_INCYTR_CONTRASTS)}
     n_s, n_r, n_c = len(senders_canonical), len(receivers_canonical), len(_INCYTR_CONTRASTS)
 
-    heatmap_tiers: dict[str, dict] = {}
-    for tier_name, tier_label, gate in _INCYTR_HEATMAP_TIERS:
-        clauses = ["pvalue IS NOT NULL"]
-        if "p" in gate:
-            clauses.append(f"pvalue < {gate['p']}")
-        if "pds" in gate:
-            clauses.append(f"ABS(PDS) > {gate['pds']}")
-        if "sp" in gate:
-            clauses.append(f"sigprob_max > {gate['sp']}")
-        where = " AND ".join(clauses)
-        rows = con.execute(f"""
-            SELECT sender, receiver, contrast, COUNT(*) AS n
-            FROM src
-            WHERE {where}
-            GROUP BY sender, receiver, contrast
-        """).fetchall()
-        grid = np.zeros((n_s, n_r, n_c), dtype=np.uint32)
-        skipped_pairs: set[tuple[str, str]] = set()
-        for s_raw, r_raw, c, n in rows:
-            r_disp = sanitized_to_display.get(r_raw, r_raw)
-            if s_raw not in sender_to_idx or r_disp not in receiver_to_idx:
-                skipped_pairs.add((s_raw, r_raw))
-                continue
-            if c not in contrast_to_idx:
-                continue
-            grid[sender_to_idx[s_raw], receiver_to_idx[r_disp], contrast_to_idx[c]] = int(n)
-        heatmap_tiers[tier_name] = {
-            "label": tier_label,
-            "gate": gate,
-            "counts": grid.flatten().tolist(),
-            "total": int(grid.sum()),
-        }
-        if skipped_pairs:
-            print(f"    (warn) tier {tier_name}: skipped unknown pairs "
-                  f"{sorted(skipped_pairs)[:5]}{'...' if len(skipped_pairs) > 5 else ''}",
-                  flush=True)
-        print(f"    tier {tier_name:<7} ({tier_label}): "
-              f"{heatmap_tiers[tier_name]['total']:>9,} rows", flush=True)
+    # Heatmap counts: (sender × receiver × contrast × pvalue × |PDS|). Every
+    # path is replicated across all 9 contrasts in the long-form schema, so
+    # *unfiltered* counts are identical across contrasts — only pvalue / |PDS|
+    # gating makes the per-contrast view differ. We pre-compute the same
+    # 8 pvalue × 8 |PDS| cutoff grid used by the pathway-count cube so the
+    # heatmap can re-threshold client-side without re-fetching shards.
+    # NULL PDS rows count as |PDS|=0 (kept by the 0 threshold, dropped by all
+    # others) — same convention as the sign bucket fall-through.
+    n_thr_hm = len(_INCYTR_PATHWAY_PVALUES)
+    n_ap_hm = len(_INCYTR_PATHWAY_ABS_PDS)
+    hm_thr_clauses_list = []
+    for ip, tp in enumerate(_INCYTR_PATHWAY_PVALUES):
+        for iap, tap in enumerate(_INCYTR_PATHWAY_ABS_PDS):
+            hm_thr_clauses_list.append(
+                f"COUNT(*) FILTER (WHERE pvalue < {tp} "
+                f"AND COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
+            )
+    hm_thr_clauses = ", ".join(hm_thr_clauses_list)
+    hm_rows = con.execute(f"""
+        SELECT sender, receiver, contrast, {hm_thr_clauses}
+        FROM src
+        WHERE pvalue IS NOT NULL
+        GROUP BY sender, receiver, contrast
+    """).fetchall()
+    grid = np.zeros((n_s, n_r, n_c, n_thr_hm, n_ap_hm), dtype=np.uint32)
+    skipped_pairs: set[tuple[str, str]] = set()
+    for row in hm_rows:
+        s_raw, r_raw, c = row[0], row[1], row[2]
+        r_disp = sanitized_to_display.get(r_raw, r_raw)
+        if s_raw not in sender_to_idx or r_disp not in receiver_to_idx:
+            skipped_pairs.add((s_raw, r_raw))
+            continue
+        if c not in contrast_to_idx:
+            continue
+        s_i = sender_to_idx[s_raw]
+        r_i = receiver_to_idx[r_disp]
+        c_i = contrast_to_idx[c]
+        offset = 3
+        for ip in range(n_thr_hm):
+            for iap in range(n_ap_hm):
+                grid[s_i, r_i, c_i, ip, iap] = int(row[offset])
+                offset += 1
+    # total_by_threshold becomes 2D [n_pvalues × n_abs_pds] so the client can
+    # show "X paths across all contrasts at this (pvalue, |PDS|) pair".
+    totals = np.zeros((n_thr_hm, n_ap_hm), dtype=np.uint64)
+    for ip in range(n_thr_hm):
+        for iap in range(n_ap_hm):
+            totals[ip, iap] = int(grid[:, :, :, ip, iap].sum())
+    heatmap_counts = {
+        "thresholds": list(_INCYTR_PATHWAY_PVALUES),
+        "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
+        "shape": [n_s, n_r, n_c, n_thr_hm, n_ap_hm],
+        "counts": grid.flatten().tolist(),
+        "total_by_threshold": totals.tolist(),
+    }
+    if skipped_pairs:
+        print(f"    (warn) heatmap_counts: skipped unknown pairs "
+              f"{sorted(skipped_pairs)[:5]}{'...' if len(skipped_pairs) > 5 else ''}",
+              flush=True)
+    # Diagnostic: report total at the default (pvalue<0.05, |PDS|>=0) and at
+    # the typical filter (pvalue<0.05, |PDS|>=0.01).
+    ap_zero_idx = _INCYTR_PATHWAY_ABS_PDS.index(0.0)
+    ap_001_idx = _INCYTR_PATHWAY_ABS_PDS.index(0.01)
+    p_005_idx = _INCYTR_PATHWAY_PVALUES.index(0.05)
+    print(f"    heatmap_counts: total at pvalue<0.05 & |PDS|>=0  = "
+          f"{int(totals[p_005_idx, ap_zero_idx]):>9,}; "
+          f"at pvalue<0.05 & |PDS|>=0.01 = {int(totals[p_005_idx, ap_001_idx]):>9,}", flush=True)
+
+    # Pathway counts indexed by (contrast, sign(PDS), pvalue_threshold,
+    # abs_pds_threshold) for the Temporal v2 pathway layer. Sign source is
+    # the composite Pathway Disturbance Score (multimodel β across all omics
+    # layers). Sign bucket: 0=down, 1=zero/NA, 2=up. NULL PDS falls through
+    # to bucket 1 ("zero/NA"). |PDS| bucket: counts include rows with
+    # |PDS| >= threshold (so threshold=0 keeps all rows; NULL PDS treated
+    # as |PDS|=0 via COALESCE).
+    n_thr = len(_INCYTR_PATHWAY_PVALUES)
+    n_ap = len(_INCYTR_PATHWAY_ABS_PDS)
+    thr_clauses = []
+    for ip, tp in enumerate(_INCYTR_PATHWAY_PVALUES):
+        for iap, tap in enumerate(_INCYTR_PATHWAY_ABS_PDS):
+            thr_clauses.append(
+                f"COUNT(*) FILTER (WHERE pvalue < {tp} "
+                f"AND COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
+            )
+    pathway_rows = con.execute(f"""
+        SELECT contrast,
+               CASE WHEN PDS > 0 THEN 2
+                    WHEN PDS < 0 THEN 0
+                    ELSE 1 END AS s,
+               {", ".join(thr_clauses)}
+        FROM src
+        WHERE pvalue IS NOT NULL
+        GROUP BY contrast, s
+    """).fetchall()
+    pathway_arr = np.zeros((n_c, 3, n_thr, n_ap), dtype=np.uint32)
+    for row in pathway_rows:
+        contrast, s_idx = row[0], int(row[1])
+        if contrast not in contrast_to_idx:
+            continue
+        c_idx = contrast_to_idx[contrast]
+        # Cells laid out as (p_threshold × abs_pds_threshold) in row-major order.
+        for ip in range(n_thr):
+            for iap in range(n_ap):
+                pathway_arr[c_idx, s_idx, ip, iap] = int(row[2 + ip * n_ap + iap])
+    pathway_counts = {
+        "thresholds": list(_INCYTR_PATHWAY_PVALUES),
+        "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
+        "contrasts": list(_INCYTR_CONTRASTS),
+        "counts": pathway_arr.flatten().tolist(),
+        "shape": [n_c, 3, n_thr, n_ap],
+        "sign_source": "PDS",
+    }
+    # Diagnostic prints: total at pvalue<1.0, |PDS|>=0 (all rows) and a
+    # meaningful gate (pvalue<0.05, |PDS|>=0.01). Also report the share of
+    # paths landing in the "zero/NA" sign bucket (PDS = 0 or PDS IS NULL).
+    p05_idx = _INCYTR_PATHWAY_PVALUES.index(0.05)
+    ap01_idx = _INCYTR_PATHWAY_ABS_PDS.index(0.01)
+    pds_na_pct = con.execute(
+        "SELECT 100.0 * COUNT(*) FILTER (WHERE PDS IS NULL) / NULLIF(COUNT(*), 0) FROM src"
+    ).fetchone()[0] or 0.0
+    pds_zero_pct = con.execute(
+        "SELECT 100.0 * COUNT(*) FILTER (WHERE PDS = 0) / NULLIF(COUNT(*), 0) FROM src"
+    ).fetchone()[0] or 0.0
+    print(f"    pathway_counts: {int(pathway_arr[:, :, -1, 0].sum()):>9,} rows "
+          f"at pvalue<1.0 (all signs, no |PDS| gate); "
+          f"{int(pathway_arr[:, :, p05_idx, ap01_idx].sum()):>6,} "
+          f"at pvalue<0.05 & |PDS|>=0.01 · sign source = PDS "
+          f"(NULL: {pds_na_pct:.1f}%, =0: {pds_zero_pct:.1f}% — these land in "
+          f"the 'neither' bucket)", flush=True)
 
     # Reset / re-create the shard directory.
     os.makedirs(EDGE_SLICES_INCYTR_PATHWAYS_DIR, exist_ok=True)
@@ -1130,24 +1257,38 @@ def _write_incytr_pathways() -> dict | None:
         if f.endswith(".parquet") or f == "index.json":
             os.remove(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, f))
 
-    # Materialize all rows (~1.2M) once, then groupby+write per pair.
-    df = con.execute("""
+    # Materialize all rows once, then groupby+write per pair. The per-node
+    # seed-list labels (`<Node>.label` upstream → `<Node>_label` in the shard,
+    # vocab = {"DEG","prG"}) returned with the seed-list rerun and surface in
+    # the table as evidence-source badges next to each gene name.
+    extra_cols = list(_INCYTR_SCORE_COLS) + list(_INCYTR_FC_COLS)
+    extra_select = ", ".join(extra_cols)
+    label_cols = list(_INCYTR_LABEL_COLS)
+    label_select = ", ".join(label_cols)
+    df = con.execute(f"""
         SELECT sender, receiver, Path, Ligand, Receptor, EM, Target,
-               "Ligand.label", "Receptor.label", "EM.label", "Target.label",
-               contrast, pvalue, PDS, log2FC, sigprob_max
+               contrast, pvalue, PDS,
+               {extra_select},
+               {label_select}
         FROM src
     """).fetchdf()
     con.close()
 
     # Receivers arrive sanitized (hive partition); senders raw.
     df["receiver"] = df["receiver"].map(lambda r: sanitized_to_display.get(r, r))
-    for col in ("pvalue", "PDS", "log2FC", "sigprob_max"):
+    float_cols = ["pvalue", "PDS"] + extra_cols
+    for col in float_cols:
         df[col] = df[col].astype("float32")
+    # Labels are categoricals with a tiny fixed vocab — shrink to category for
+    # ~1/4 the parquet bytes vs raw strings.
+    for col in label_cols:
+        df[col] = df[col].astype("category")
 
     shard_cols = [
         "Path", "Ligand", "Receptor", "EM", "Target",
-        "Ligand.label", "Receptor.label", "EM.label", "Target.label",
-        "contrast", "pvalue", "PDS", "log2FC", "sigprob_max",
+        "contrast", "pvalue", "PDS",
+        *extra_cols,
+        *label_cols,
     ]
     present_pairs: list[list[str]] = []
     pair_row_counts: dict[str, int] = {}
@@ -1200,9 +1341,15 @@ def _write_incytr_pathways() -> dict | None:
         "senders": senders_canonical,
         "receivers": receivers_canonical,
         "empty_deg_celltypes": _read_empty_deg_celltypes(),
-        "heatmap_tiers": heatmap_tiers,
-        "default_tier": "paper",
+        "heatmap_counts": heatmap_counts,
+        "pathway_counts": pathway_counts,
         "slice_index": index,
+        "score_columns": list(_INCYTR_SCORE_COLS),
+        "fc_nodes": list(_INCYTR_FC_NODES),
+        "fc_metrics": list(_INCYTR_FC_METRICS),
+        "label_columns": list(_INCYTR_LABEL_COLS),
+        "label_nodes": list(_INCYTR_LABEL_NODES),
+        "label_vocab": list(_INCYTR_LABEL_VOCAB),
     }
 
 
