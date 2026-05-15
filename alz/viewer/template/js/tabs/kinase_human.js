@@ -18,6 +18,7 @@ const _KHState = {
   seaad: "",           // "" | "agree" | "disagree" | "na"
   adDir: "",           // "" | "all_up" | "all_down" | "mixed" | "none"
   ctrlDir: "",         // "" | "all_up" | "all_down" | "mixed" | "none"
+  dirMode: "sig",      // "sig" = significant donors only · "tested" = any donor with a finite NES
   showCtrl: true,      // render side-by-side CTRL column group
   sortCol: "n_donors_sig",
   sortAsc: false,
@@ -25,13 +26,32 @@ const _KHState = {
   auditDonor: null,      // donor selected for donor-scoped sub-tabs
 };
 
-// Direction pattern over (n_up_sig, n_down_sig). "none" = no sig donors.
+// Direction pattern over (n_up, n_down). "none" = no donors in scope.
 function _khDirPattern(nUp, nDown) {
   const u = nUp || 0, d = nDown || 0;
   if (u === 0 && d === 0) return "none";
   if (u > 0 && d === 0) return "all_up";
   if (d > 0 && u === 0) return "all_down";
   return "mixed";
+}
+
+// Count (up, down) over a NES vector, optionally gated by FDR.
+// mode = "sig": only donors with fdr < fdrThresh contribute.
+// mode = "tested": every donor with a finite NES contributes (sign of NES).
+function _khCountUpDown(nesVec, fdrVec, mode, fdrThresh) {
+  let u = 0, d = 0;
+  const n = nesVec.length;
+  for (let i = 0; i < n; i++) {
+    const v = nesVec[i];
+    if (v == null || !isFinite(v)) continue;
+    if (mode === "sig") {
+      const f = fdrVec ? fdrVec[i] : null;
+      if (f == null || !(f < fdrThresh)) continue;
+    }
+    if (v > 0) u += 1;
+    else if (v < 0) d += 1;
+  }
+  return [u, d];
 }
 
 const _KH_AUDIT_TABS = [
@@ -189,14 +209,22 @@ function _khFilter(rows) {
   const seaad = _KHState.seaad;
   const adDir = _KHState.adDir;
   const ctrlDir = _KHState.ctrlDir;
+  const mode = _KHState.dirMode;
+  const fdrThresh = Store.state.filters.fdr;
   return rows.filter(r => {
     if (track && r.residue_type !== track) return false;
     if (r.n_donors_sig < minSig) return false;
     if (q && !(String(r.name).toLowerCase().includes(q)
             || String(r.gene_symbol).toLowerCase().includes(q))) return false;
     if (seaad && _khSeaAdAgreement(r) !== seaad) return false;
-    if (adDir && _khDirPattern(r.n_donors_up, r.n_donors_down) !== adDir) return false;
-    if (ctrlDir && _khDirPattern(r.n_ctrl_sig_up, r.n_ctrl_sig_down) !== ctrlDir) return false;
+    if (adDir) {
+      const [u, d] = _khCountUpDown(r._nes, r._fdr, mode, fdrThresh);
+      if (_khDirPattern(u, d) !== adDir) return false;
+    }
+    if (ctrlDir) {
+      const [u, d] = _khCountUpDown(r._nesCtrl, r._fdrCtrl, mode, fdrThresh);
+      if (_khDirPattern(u, d) !== ctrlDir) return false;
+    }
     return true;
   });
 }
@@ -900,6 +928,10 @@ function wireKinaseHuman() {
   if (adDir) adDir.addEventListener("change", e => {
     _KHState.adDir = e.target.value; renderKinaseHuman();
   });
+  const dirMode = document.getElementById("kh-filter-dir-mode");
+  if (dirMode) dirMode.addEventListener("change", e => {
+    _KHState.dirMode = e.target.value; renderKinaseHuman();
+  });
   const ctrlDir = document.getElementById("kh-filter-ctrl-dir");
   if (ctrlDir) {
     const ctrlCount = (_KH.ctrl_donors || []).length;
@@ -933,13 +965,14 @@ function wireKinaseHuman() {
   if (reset) reset.addEventListener("click", () => {
     _KHState.search = ""; _KHState.donors.clear();
     _KHState.nsigMin = 0; _KHState.track = ""; _KHState.seaad = "";
-    _KHState.adDir = ""; _KHState.ctrlDir = "";
+    _KHState.adDir = ""; _KHState.ctrlDir = ""; _KHState.dirMode = "sig";
     if (search) search.value = "";
     if (nsig) nsig.value = 0;
     if (track) track.value = "";
     if (seaad) seaad.value = "";
     if (adDir) adDir.value = "";
     if (ctrlDir) ctrlDir.value = "";
+    if (dirMode) dirMode.value = "sig";
     document.querySelectorAll(".kh-donor-chip").forEach(b => b.classList.remove("active"));
     renderKinaseHuman();
   });

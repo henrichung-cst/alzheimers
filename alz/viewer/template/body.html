@@ -113,7 +113,13 @@
               <option value="na">N/A</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Filter by direction-consistency across significant AD donors at the active FDR. All up = every sig AD donor has NES > 0. All down = every sig AD donor has NES < 0. Mixed = both directions present. None = no sig AD donors.">AD dir
+          <label class="ke-filter-label" title="Donor scope for the AD-dir and CTRL-dir filters. Sig only: just donors with FDR &lt; the active threshold. Any tested: every donor with a finite NES, regardless of significance. 'All up' under 'Any tested' is strictly stronger than under 'Sig only'.">Dir mode
+            <select id="kh-filter-dir-mode" aria-label="Direction filter mode">
+              <option value="sig">Sig only</option>
+              <option value="tested">Any tested</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Filter by direction-consistency across AD donors (scope set by Dir mode). All up = every in-scope AD donor has NES > 0. All down = every in-scope AD donor has NES < 0. Mixed = both directions present. None = no in-scope AD donors.">AD dir
             <select id="kh-filter-ad-dir" aria-label="AD direction pattern">
               <option value="">Any</option>
               <option value="all_up">All up</option>
@@ -122,7 +128,7 @@
               <option value="none">None sig</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Filter by direction-consistency across significant CTRL donors at the active FDR. Same semantic as AD dir but over the CTRL donor block.">CTRL dir
+          <label class="ke-filter-label" title="Filter by direction-consistency across CTRL donors (scope set by Dir mode). Same semantic as AD dir but over the CTRL donor block.">CTRL dir
             <select id="kh-filter-ctrl-dir" aria-label="CTRL direction pattern">
               <option value="">Any</option>
               <option value="all_up">All up</option>
