@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import glob
+import json
 import os
 import shutil
 import subprocess
@@ -203,7 +204,7 @@ def _build_gene_index():
     """
     import anndata as ad
 
-    first_key = config.WMB_ALL_REGION_KEYS[0]
+    first_key = config.wmb_region_keys()[0]
 
     # Prefer subset file for index building
     subset_path = _get_subset_path(first_key)
@@ -241,6 +242,30 @@ def _build_gene_index():
 # ---------------------------------------------------------------------------
 # WMB Expression Computation
 # ---------------------------------------------------------------------------
+
+
+def _scope_sidecar_path(csv_path: str) -> str:
+    return csv_path.replace(".csv", ".scope.json")
+
+
+def _cached_scope_matches(csv_path: str) -> bool:
+    path = _scope_sidecar_path(csv_path)
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path) as f:
+            return json.load(f).get("scope") == config.WMB_REGION_SCOPE
+    except (OSError, ValueError):
+        return False
+
+
+def _write_scope_sidecar(csv_path: str) -> None:
+    with open(_scope_sidecar_path(csv_path), "w") as f:
+        json.dump(
+            {"scope": config.WMB_REGION_SCOPE, "regions": config.wmb_region_keys()},
+            f,
+            indent=2,
+        )
 
 
 def _stream_wmb_expression(
@@ -283,7 +308,10 @@ def _stream_wmb_expression(
         wmb_meta_by_label = wmb_meta.set_index("cell_label")
 
     # Detect whether subset files are available
-    _first_subset = _get_subset_path(config.WMB_ALL_REGION_KEYS[0])
+    region_keys = config.wmb_region_keys()
+    print(f"  WMB region scope: {config.WMB_REGION_SCOPE} "
+          f"({len(region_keys)} region files)")
+    _first_subset = _get_subset_path(region_keys[0])
     using_subsets = _first_subset is not None
     if using_subsets:
         print("  Using pre-extracted gene-subset h5ad files (fast path)")
@@ -315,7 +343,7 @@ def _stream_wmb_expression(
 
     regional_rows = []
 
-    for ri, file_key in enumerate(config.WMB_ALL_REGION_KEYS, 1):
+    for ri, file_key in enumerate(region_keys, 1):
         region = file_key.split("/")[0].replace("WMB-10Xv3-", "")
 
         # Prefer subset file, fall back to full file
@@ -329,12 +357,12 @@ def _stream_wmb_expression(
                 reason = ("truncated" if os.path.exists(region_path)
                           else "missing (.zst only)" if os.path.exists(zst)
                           else "missing")
-                print(f"\n  [{ri}/{len(config.WMB_ALL_REGION_KEYS)}] "
+                print(f"\n  [{ri}/{len(region_keys)}] "
                       f"Region: {region} — SKIPPED ({reason}; "
                       f"decompress or run extract_wmb_gene_subset.py)")
                 continue
 
-        print(f"\n  [{ri}/{len(config.WMB_ALL_REGION_KEYS)}] Region: {region}"
+        print(f"\n  [{ri}/{len(region_keys)}] Region: {region}"
               f"{' (subset)' if subset_path else ''}")
         adata = ad.read_h5ad(str(region_path), backed="r")
         print(f"    Shape: {adata.shape}")
@@ -519,14 +547,17 @@ def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
     print("WMB Whole-Brain Kinase Expression Matrix (13 regions)")
     print("=" * 60)
 
-    # Cache staleness check: compare output mtime against kinase mapping cache
     if not force and os.path.exists(WMB_EXPR_FILE):
         mapping_cache = config.MAPPING_CACHE_FILE
-        if (not os.path.exists(mapping_cache)
-                or os.path.getmtime(WMB_EXPR_FILE) > os.path.getmtime(mapping_cache)):
-            print("  Cached kinase expression is up-to-date, skipping recomputation")
+        scope_match = _cached_scope_matches(WMB_EXPR_FILE)
+        mapping_fresh = (not os.path.exists(mapping_cache)
+                         or os.path.getmtime(WMB_EXPR_FILE) > os.path.getmtime(mapping_cache))
+        if mapping_fresh and scope_match:
+            print(f"  Cached kinase expression matches scope={config.WMB_REGION_SCOPE}, skipping")
             print(f"  (use --force to recompute)")
             return pd.read_csv(WMB_EXPR_FILE)
+        if not scope_match:
+            print(f"  Scope mismatch (cache vs requested {config.WMB_REGION_SCOPE}) — recomputing")
 
     with _ensure_subsets_decompressed():
         atlas_genes, gene_to_idx, gene_fmt = _build_gene_index()
@@ -591,6 +622,8 @@ def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
         df.to_csv(WMB_EXPR_FILE, index=False)
         print(f"\n  Saved {len(df)} rows to {WMB_EXPR_FILE}")
 
+        _write_scope_sidecar(WMB_EXPR_FILE)
+
         # Audit sidecar: per-WMB-subclass expression
         sub_rows = []
         for sub_label, sa in subclass_accum.items():
@@ -649,15 +682,18 @@ def compute_wmb_proteome_expression(force: bool = False) -> pd.DataFrame:
     print("WMB Whole-Brain Proteome Expression Matrix (13 regions)")
     print("=" * 60)
 
-    # Cache staleness check: skip if output is newer than input gene list
     gene_list_path = config.PROTEOME_GENE_LIST_FILE
     out_path = config.WMB_PROTEOME_EXPRESSION_FILE
     if not force and os.path.exists(out_path):
-        if (not os.path.exists(gene_list_path)
-                or os.path.getmtime(out_path) > os.path.getmtime(gene_list_path)):
-            print("  Cached proteome expression is up-to-date, skipping recomputation")
+        scope_match = _cached_scope_matches(out_path)
+        list_fresh = (not os.path.exists(gene_list_path)
+                      or os.path.getmtime(out_path) > os.path.getmtime(gene_list_path))
+        if list_fresh and scope_match:
+            print(f"  Cached proteome expression matches scope={config.WMB_REGION_SCOPE}, skipping")
             print(f"  (use --force to recompute)")
             return pd.read_csv(out_path)
+        if not scope_match:
+            print(f"  Scope mismatch (cache vs requested {config.WMB_REGION_SCOPE}) — recomputing")
 
     if not os.path.exists(gene_list_path):
         raise FileNotFoundError(
@@ -736,6 +772,8 @@ def compute_wmb_proteome_expression(force: bool = False) -> pd.DataFrame:
         out_path = config.WMB_PROTEOME_EXPRESSION_FILE
         df.to_csv(out_path, index=False)
         print(f"\n  Saved {len(df)} rows to {out_path}")
+
+        _write_scope_sidecar(out_path)
 
     # Summary: top-5 most specific genes per cell type
     for ct in ct_universe:

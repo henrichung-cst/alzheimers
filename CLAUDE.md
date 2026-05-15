@@ -291,6 +291,7 @@ Other documentation:
 - **Limited automated tests** — live pipeline has no unit tests; verify with `python alz/kinase_summary.py`
 - **Song proteomics files must be mounted** — data_ingest.py reads Excel workbooks from `data/datasets/song/primary/proteomics/`
 - **WMB prerequisite** — `run_live_pipeline.sh` gates on `wmb_kinase_expression.csv` and `wmb_proteome_expression.csv`; run `run_wmb_expression.sh` first
+- **WMB region scope** — `WMB_REGION_SCOPE` env var (default `whole_brain`) selects the regions streamed by `wmb_expression.py`. `whole_brain` uses all 13 regions, which is correct for the specificity score (its denominator is the brain-wide reference). `cortex_hpf` (Isocortex-1/2 + HPF + CTXsp) exists as a sensitivity-check toggle — see `docs/kinase_mapping_rerun_plan.md` "cortex_hpf swap" addendum for why it is not the default. Output filename is the same across scopes; the active scope is stamped to `wmb_kinase_expression.scope.json` and a scope mismatch will force a recompute
 - **Atlas cache compressed** — raw h5ad files under `data/external/allen_abc/` are zstd-compressed to save space (~115 GB → ~26 GB). Decompress with `bash alz/runners/supporting/decompress_atlas_cache.sh` before re-running `wmb_expression.py`. See `data/external/allen_abc/MANIFEST.json` for provenance
 - **SEA-AD data required** — Unified attribution needs SEA-AD effect sizes under `config.SEA_AD_DIR`
 - **API caching** — delete files under `data/datasets/song/analysis_cache/` to force re-fetch

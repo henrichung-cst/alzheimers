@@ -298,6 +298,35 @@ WMB_ALL_REGION_KEYS = [
     "WMB-10Xv3-TH/log2",
 ]
 
+# Cortex + hippocampal-formation subset of WMB-10Xv3. Same Allen taxonomy as the
+# standalone "Mouse Whole Cortex and Hippocampus 10x" dataset — those cells are
+# the cortical slice of WMB-10Xv3 under a different release name, so restricting
+# the region stream is equivalent to swapping in that dataset.
+WMB_CORTEX_REGION_KEYS = [
+    "WMB-10Xv3-CTXsp/log2",
+    "WMB-10Xv3-HPF/log2",
+    "WMB-10Xv3-Isocortex-1/log2",
+    "WMB-10Xv3-Isocortex-2/log2",
+]
+
+# Region scope is env-switchable. Default is whole_brain because the
+# specificity score is a ratio whose denominator is the brain-wide reference:
+# restricting the cell pool to cortex+HPF shrinks both numerator and denominator
+# and only damages classes whose cells mostly live outside the cortical mask
+# (e.g. 09 CNU-LGE GABA, which one Levy-19 cluster — Striatal-MSN — legitimately
+# targets). cortex_hpf remains available as a sensitivity-check toggle.
+WMB_REGION_SCOPE = os.environ.get("WMB_REGION_SCOPE", "whole_brain").lower()
+if WMB_REGION_SCOPE not in {"cortex_hpf", "whole_brain"}:
+    raise ValueError(
+        f"WMB_REGION_SCOPE must be 'cortex_hpf' or 'whole_brain', got {WMB_REGION_SCOPE!r}"
+    )
+
+
+def wmb_region_keys() -> list:
+    """Return the active WMB region-key list per WMB_REGION_SCOPE."""
+    return (WMB_CORTEX_REGION_KEYS if WMB_REGION_SCOPE == "cortex_hpf"
+            else WMB_ALL_REGION_KEYS)
+
 WMB_SUBSET_DIR = os.path.join(
     ALLEN_ABC_CACHE_DIR, "expression_matrices", "WMB-10Xv3-subset"
 )
