@@ -88,11 +88,22 @@ function boot() {
     const kinaseSelChanged   = next.selection.kinase    !== prev.selection.kinase;
     const celltypeSelChanged = next.selection.celltype  !== prev.selection.celltype;
     const backboneSelChanged = next.selection.backbone  !== prev.selection.backbone;
+    const kinaseHumanSelChanged = next.selection.kinaseHuman !== prev.selection.kinaseHuman;
+    const modeChanged        = next.view.mode           !== prev.view.mode;
     const tabChanged         = next.view.activeTab      !== prev.view.activeTab;
     const viewChanged        = next.view                !== prev.view;
 
     if (!filtersChanged && !kinaseSelChanged && !celltypeSelChanged
-        && !backboneSelChanged && !tabChanged && !viewChanged) return;
+        && !backboneSelChanged && !kinaseHumanSelChanged
+        && !modeChanged && !tabChanged && !viewChanged) return;
+
+    if (modeChanged) {
+      // Clear cross-mode selections so a mouse kinase doesn't haunt the human panel.
+      Store.dispatch({type:"SET_SELECTION", key:"kinase", value:null});
+      Store.dispatch({type:"SET_SELECTION", key:"kinaseHuman", value:null});
+      syncTabsFromStore();
+      return;
+    }
 
     if (filtersChanged || kinaseSelChanged || celltypeSelChanged) syncHeaderFromStore();
 
@@ -110,6 +121,7 @@ function boot() {
     if (m) {
       const handled = m.onChange && m.onChange({
         tabChanged, kinaseSelChanged, kid: next.selection.kinase,
+        kinaseHumanSelChanged, khid: next.selection.kinaseHuman,
       });
       if (!handled) {
         const re = m.rerenderOn || {};

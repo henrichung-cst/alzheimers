@@ -15,7 +15,7 @@ const _IP_ROW_CAP = 1000;
 
 // Score and per-node FC columns are advertised on the payload block but kept
 // in module-local fallbacks so the JS stays usable against an older payload.
-const _IP_SCORE_COLS_FALLBACK = ["TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "multimodel_score"];
+const _IP_SCORE_COLS_FALLBACK = ["TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "SiK_score"];
 const _IP_FC_NODES_FALLBACK = ["Ligand", "Receptor", "EM", "Target"];
 const _IP_FC_METRICS_FALLBACK = [
   "sclog2FC",
@@ -65,7 +65,7 @@ const _IP_SCORE_TIPS = {
   "PPDS":             "Proteomic PDS — aggregated from factorial OLS β across the 4 nodes on bulk proteomics.",
   "PhPDS_ps":         "Phosphoserine PDS — aggregated from factorial OLS β on pS site intensities.",
   "PhPDS_py":         "Phosphotyrosine PDS — aggregated from factorial OLS β on pY site intensities.",
-  "multimodel_score": "Composite evidence score combining TPDS / PPDS / PhPDS_ps / PhPDS_py via Incytr's multimodel weighting. Driven by the factorial OLS β values, not by the path-level group-mean ratio.",
+  "SiK_score":        "Signaling-kinase composite — aggregates per-condition SiK_<X>_of_<Y> kinase-substrate evidence into a single per-path score (treatment condition only; WT side dropped during reshape). Pair-mode reshape only; NULL when source is the legacy factorial cache.",
 };
 function _ipNodeCell(name, label) {
   const safeName = _escapeHtml(name == null ? "" : name);

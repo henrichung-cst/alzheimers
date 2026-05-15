@@ -47,6 +47,7 @@ const _HASH_DEFAULTS = {
   t: "kinase",
   fdr: 0.25,
   k: null, b: null, ct: null,
+  m: "mouse", kh: null,
 };
 let _hashApplying = false;
 
@@ -56,6 +57,7 @@ function _serializeHash() {
     t: v.activeTab,
     fdr: f.fdr,
     k: s.kinase, b: s.backbone, ct: s.celltype,
+    m: v.mode, kh: s.kinaseHuman,
   };
   const parts = [];
   for (const k in cur) {
@@ -91,6 +93,8 @@ function applyHash() {
     if (map.k != null) Store.dispatch({type:"SET_SELECTION", key:"kinase", value:parseInt(map.k,10)});
     if (map.b != null) Store.dispatch({type:"SET_SELECTION", key:"backbone", value:parseInt(map.b,10)});
     if (map.ct != null) Store.dispatch({type:"SET_SELECTION", key:"celltype", value:parseInt(map.ct,10)});
+    if (map.kh != null) Store.dispatch({type:"SET_SELECTION", key:"kinaseHuman", value:parseInt(map.kh,10)});
+    if (map.m != null && HAS_HUMAN) Store.dispatch({type:"SET_VIEW", key:"mode", value:map.m});
     if (map.t != null) Store.dispatch({type:"SET_VIEW", key:"activeTab", value:map.t});
   } finally {
     _hashApplying = false;

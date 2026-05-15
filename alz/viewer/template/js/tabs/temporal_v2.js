@@ -61,7 +61,7 @@ function _tv2DefaultSeries(layer) {
     fdrDecomp: 0.25,
     agree: true,
     attrTier: "",   // "" any | "low" | "moderate" | "high" | "very_high"
-    pvalue: 0.05,   // only used when layer === "pathway"
+    pvalue: null,   // only used when layer === "pathway"; null = no pvalue gate
     absPds: 0.01,   // only used when layer === "pathway"; default = "real composite effect"
   };
 }
@@ -73,18 +73,20 @@ function _tv2PathwayBlock() {
 }
 
 function _tv2SnapPathwayPvalue(p) {
-  // Snaps user pvalue down to the nearest precomputed threshold (or up to the
-  // smallest if user value is below grid). Returns {value, index} or null.
+  // Snaps user pvalue down to the nearest precomputed threshold. Null /
+  // non-finite opens the gate (largest threshold in grid) — pvalue is opt-in
+  // because per-animal SigProb Wald-t is unreliable in this cohort, so
+  // |PDS| is the recommended primary filter.
   const block = _tv2PathwayBlock();
-  if (!block) return null;
+  if (!block || !block.thresholds || !block.thresholds.length) return null;
   const thr = block.thresholds;
-  if (!thr || !thr.length) return null;
-  let idx = -1;
-  for (let i = 0; i < thr.length; i++) {
-    if (thr[i] <= p) idx = i;
+  if (p == null || !isFinite(p)) {
+    return { value: null, index: thr.length - 1, open: true };
   }
+  let idx = -1;
+  for (let i = 0; i < thr.length; i++) if (thr[i] <= p) idx = i;
   if (idx < 0) idx = 0;
-  return { value: thr[idx], index: idx };
+  return { value: thr[idx], index: idx, open: false };
 }
 
 function _tv2SnapPathwayAbsPds(ap) {
@@ -247,8 +249,7 @@ function _tv2PathwayCounts(series) {
   }
   const block = _tv2PathwayBlock();
   if (!block) return counts;
-  const snap = _tv2SnapPathwayPvalue(
-    series.pvalue != null && isFinite(series.pvalue) ? series.pvalue : 0.05);
+  const snap = _tv2SnapPathwayPvalue(series.pvalue);
   if (!snap) return counts;
   const pThrIdx = snap.index;
   const apSnap = _tv2SnapPathwayAbsPds(series.absPds);
@@ -282,7 +283,7 @@ function _tv2SeriesLabel(series) {
   const parts = [layerLabels[series.layer] || series.layer];
   if (series.layer === "pathway") {
     const snap = _tv2SnapPathwayPvalue(series.pvalue);
-    parts.push(`pvalue<${snap ? snap.value : series.pvalue}`);
+    if (snap && !snap.open) parts.push(`pvalue<${snap.value}`);
     const apSnap = _tv2SnapPathwayAbsPds(series.absPds);
     if (apSnap && apSnap.value > 0) parts.push(`|PDS|≥${apSnap.value}`);
     if (series.sign !== "signed") parts.push(series.sign);
@@ -341,7 +342,7 @@ function _tv2RenderSeriesRow(series, idx) {
     <label>Sign <select class="tv2-sign">${signOpts}</select></label>
     ${showBulkFdr ? `<label>Bulk FDR<input class="tv2-fdr-bulk" type="number" min="0" max="1" step="0.01" style="width:54px;"></label>` : ''}
     ${showDecompFdr ? `<label>Decomp FDR<input class="tv2-fdr-decomp" type="number" min="0" max="1" step="0.01" style="width:54px;"></label>` : ''}
-    ${showPathwayPvalue ? `<label title="Incytr pathway pvalue (Wald t-test from factorial OLS on per-animal SigProb). Snaps down to the nearest precomputed threshold: 0.001 / 0.005 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0.">pvalue<input class="tv2-pvalue" type="number" min="0" max="1" step="0.005" style="width:64px;"></label>` : ''}
+    ${showPathwayPvalue ? `<label title="Incytr pathway pvalue (Wald t-test from factorial OLS on per-animal SigProb). Blank = no pvalue gate (default). Snaps down to: 0.001 / 0.005 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0.">pvalue<input class="tv2-pvalue" type="number" min="0" max="1" step="0.005" style="width:64px;"></label>` : ''}
     ${showPathwayPvalue ? `<label title="Minimum |PDS| — magnitude of the composite Pathway Disturbance Score (multimodel β across all omics layers). ≥0.01 = real composite signal; ≥0.1 = strong. Snaps down to the precomputed grid: 0 / 0.001 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0.">|PDS|≥<input class="tv2-abs-pds" type="number" min="0" step="0.01" style="width:64px;"></label>` : ''}
     ${showAttr ? `<label title="Require ≥1 attribution row in scope reaching this confidence tier (very_high = high+decomp agree, high = WMB+concordance, etc.).">Attr <select class="tv2-attr">${attrOpts}</select></label>` : ''}
     ${showAgree ? `<label class="tv2-agree" title="When on, decomp row must match bulk NES sign to count as corroboration."><input class="tv2-agree-cb" type="checkbox"> sign agree</label>` : ''}
@@ -366,7 +367,7 @@ function _tv2WireSeriesRow(rowEl, idx) {
   signSel.value = s.sign;
   if (fdrB) fdrB.value = s.fdrBulk;
   if (fdrD) fdrD.value = s.fdrDecomp;
-  if (pvalueEl) pvalueEl.value = s.pvalue;
+  if (pvalueEl) pvalueEl.value = (s.pvalue == null ? "" : s.pvalue);
   if (absPdsEl) absPdsEl.value = (s.absPds == null ? "" : s.absPds);
   if (agreeCb) agreeCb.checked = !!s.agree;
   if (attrSel) attrSel.value = s.attrTier || "";
@@ -388,11 +389,12 @@ function _tv2WireSeriesRow(rowEl, idx) {
     } else { fdrD.value = s.fdrDecomp; }
   });
   if (pvalueEl) pvalueEl.addEventListener("change", () => {
+    if (pvalueEl.value === "") { s.pvalue = null; renderTemporalV2(); return; }
     const v = parseFloat(pvalueEl.value);
     if (isFinite(v) && v > 0 && v <= 1) {
       s.pvalue = v;
       renderTemporalV2();
-    } else { pvalueEl.value = s.pvalue; }
+    } else { pvalueEl.value = (s.pvalue == null ? "" : s.pvalue); }
   });
   if (absPdsEl) absPdsEl.addEventListener("change", () => {
     const raw = absPdsEl.value === "" ? 0 : parseFloat(absPdsEl.value);
@@ -595,7 +597,7 @@ function _openIncytrPathwaysFromBar(series, genotype, timepoint) {
     receiverIn: [],
     disease:    genotype  ? [genotype]  : [],
     timepoint:  timepoint ? [timepoint] : [],
-    sliderP:    snap ? snap.value : null,
+    sliderP:    (snap && !snap.open) ? snap.value : null,
     sliderPds:  apSnap && apSnap.value > 0 ? apSnap.value : null,
   });
   Store.dispatch({type:"SET_VIEW", key:"activeTab", value:"incytrpathways"});

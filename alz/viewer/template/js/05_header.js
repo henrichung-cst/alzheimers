@@ -60,9 +60,10 @@ function syncHeaderFromStore() {
 function _buildTabBar() {
   const nav = document.getElementById("tab-bar");
   if (!nav) return;
+  const visible = _activeModeTabs();
   const byGroup = new Map();
-  for (const id of Object.keys(TAB_MANIFEST)) {
-    const m = TAB_MANIFEST[id];
+  for (const id of Object.keys(visible)) {
+    const m = visible[id];
     if (!byGroup.has(m.group)) byGroup.set(m.group, []);
     byGroup.get(m.group).push([id, m]);
   }
@@ -86,10 +87,11 @@ function _buildTabBar() {
   nav.innerHTML = parts.join("");
 }
 
-function wireTabs() {
-  _buildTabBar();
+function _wireTabHandlers() {
   const tabs = Array.from(document.querySelectorAll("nav#tab-bar button"));
   tabs.forEach((btn, idx) => {
+    if (btn._wired) return;
+    btn._wired = true;
     btn.addEventListener("click", () => {
       Store.dispatch({type:"SET_VIEW", key:"activeTab", value:btn.dataset.tab});
     });
@@ -97,19 +99,66 @@ function wireTabs() {
       const key = ev.key;
       if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(key)) return;
       ev.preventDefault();
-      let nextIdx = idx;
-      if (key === "ArrowRight") nextIdx = (idx + 1) % tabs.length;
-      else if (key === "ArrowLeft") nextIdx = (idx - 1 + tabs.length) % tabs.length;
+      const live = Array.from(document.querySelectorAll("nav#tab-bar button"));
+      const myIdx = live.indexOf(btn);
+      let nextIdx = myIdx;
+      if (key === "ArrowRight") nextIdx = (myIdx + 1) % live.length;
+      else if (key === "ArrowLeft") nextIdx = (myIdx - 1 + live.length) % live.length;
       else if (key === "Home") nextIdx = 0;
-      else if (key === "End") nextIdx = tabs.length - 1;
-      tabs[nextIdx].focus();
-      Store.dispatch({type:"SET_VIEW", key:"activeTab", value:tabs[nextIdx].dataset.tab});
+      else if (key === "End") nextIdx = live.length - 1;
+      live[nextIdx].focus();
+      Store.dispatch({type:"SET_VIEW", key:"activeTab", value:live[nextIdx].dataset.tab});
     });
   });
 }
 
+function wireTabs() {
+  _buildTabBar();
+  _wireTabHandlers();
+  // Mode toggle wiring (visible only when PAYLOAD.human exists).
+  const wrap = document.getElementById("mode-toggle");
+  if (wrap && HAS_HUMAN) {
+    wrap.querySelectorAll("button.mode-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const m = btn.dataset.mode;
+        if (m === Store.state.view.mode) return;
+        Store.dispatch({type:"SET_VIEW", key:"mode", value:m});
+      });
+    });
+  }
+}
+
+function _syncModeToggle() {
+  const wrap = document.getElementById("mode-toggle");
+  if (!wrap) return;
+  if (!HAS_HUMAN) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  const mode = Store.state.view.mode || "mouse";
+  wrap.querySelectorAll("button.mode-btn").forEach(btn => {
+    const on = btn.dataset.mode === mode;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+}
+
+function _defaultTabForMode(mode) {
+  return mode === "human" ? "kinasehuman" : "kinase";
+}
+
 function syncTabsFromStore() {
-  const active = Store.state.view.activeTab;
+  // Mode-gate: rebuild tab bar if the current set of visible tabs doesn't
+  // match the current mode (covers SET_MODE transitions).
+  _buildTabBar();
+  _wireTabHandlers();
+  _syncModeToggle();
+  // If the active tab is not visible in the current mode, snap to the mode's default.
+  const visible = _activeModeTabs();
+  let active = Store.state.view.activeTab;
+  if (!visible[active]) {
+    active = _defaultTabForMode(Store.state.view.mode || "mouse");
+    Store.dispatch({type:"SET_VIEW", key:"activeTab", value:active});
+    return;  // store change will retrigger syncTabsFromStore
+  }
   document.querySelectorAll("nav#tab-bar button").forEach(btn => {
     const on = btn.dataset.tab === active;
     btn.classList.toggle("active", on);

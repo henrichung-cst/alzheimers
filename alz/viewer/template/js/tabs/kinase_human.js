@@ -1,0 +1,835 @@
+// Human (Mukesh / NBB) per-donor kinase explorer.
+//
+// Mirrors the mouse kinase tab in look/feel but runs against PAYLOAD.human:
+//   - rows are (kinase, residue_type) pairs from per-donor MEA
+//   - contrast axis is N donor-vs-CTRLmean strings, not 9 disease×timepoint
+//   - filters: search, donor multiselect, n_donors_sig minimum, residue track
+//   - detail panel scopes per-cohort: per-donor NES bar, recurrence,
+//     leading substrates, global-shift diagnostics
+
+const _KH_HAS = typeof PAYLOAD !== "undefined" && !!PAYLOAD.human;
+const _KH = _KH_HAS ? PAYLOAD.human : null;
+
+const _KHState = {
+  search: "",
+  donors: new Set(),   // empty = all
+  nsigMin: 0,
+  track: "",
+  seaad: "",           // "" | "agree" | "disagree" | "na"
+  sortCol: "n_donors_sig",
+  sortAsc: false,
+  auditTab: "score",     // trace | prep | score
+  auditDonor: null,      // donor selected for donor-scoped sub-tabs
+};
+
+const _KH_AUDIT_TABS = [
+  {id: "trace", label: "Measurement Trace"},
+  {id: "prep",  label: "MEA Preparation"},
+  {id: "score", label: "MEA Score"},
+];
+
+// Lazy site-by-motif index for trace lookups: motif -> [site_indices...]
+let _khSiteByMotif = null;
+function _khEnsureSiteIndex() {
+  if (_khSiteByMotif || !_KH || !_KH.sites) return;
+  _khSiteByMotif = new Map();
+  const M = _KH.sites.motif || [];
+  for (let i = 0; i < M.length; i++) {
+    const m = _normMotif(M[i]);
+    if (!m) continue;
+    if (!_khSiteByMotif.has(m)) _khSiteByMotif.set(m, []);
+    _khSiteByMotif.get(m).push(i);
+  }
+}
+
+function _khPerdonorFor(khid, donor) {
+  const PI = _KH && _KH.perdonor_index;
+  if (!PI) return null;
+  for (let i = 0; i < PI.kinase_id.length; i++) {
+    if (PI.kinase_id[i] === khid && PI.donor[i] === donor) {
+      return {
+        NES: PI.NES[i], FDR: PI.FDR[i],
+        ES: PI.ES ? PI.ES[i] : null,
+        p_value: PI.p_value ? PI.p_value[i] : null,
+        subs_fraction: PI.subs_fraction ? PI.subs_fraction[i] : "",
+        leading: PI.leading_substrates[i] || "",
+        substrate_motifs: PI.substrate_motifs ? (PI.substrate_motifs[i] || "") : "",
+        raw_NES: PI.raw_NES ? PI.raw_NES[i] : null,
+        raw_FDR: PI.raw_FDR ? PI.raw_FDR[i] : null,
+        raw_p_value: PI.raw_p_value ? PI.raw_p_value[i] : null,
+      };
+    }
+  }
+  return null;
+}
+
+function _khCtrlMean(siteIdx, kind) {
+  // kind: "stoich" or "raw"
+  const ctrl = _KH.ctrl_donors || [];
+  const all = _KH.donors_all || [];
+  const arr = kind === "raw" ? _KH.raw_phospho_by_site : _KH.stoich_by_site;
+  if (!arr || !arr[siteIdx]) return null;
+  const row = arr[siteIdx];
+  let sum = 0, n = 0;
+  for (const d of ctrl) {
+    const di = all.indexOf(d);
+    if (di < 0) continue;
+    const v = row[di];
+    if (v != null && isFinite(v)) { sum += v; n += 1; }
+  }
+  return n > 0 ? sum / n : null;
+}
+
+function _khValAt(siteIdx, donor, kind) {
+  const all = _KH.donors_all || [];
+  const di = all.indexOf(donor);
+  if (di < 0) return null;
+  const arr = kind === "raw" ? _KH.raw_phospho_by_site : _KH.stoich_by_site;
+  if (!arr || !arr[siteIdx]) return null;
+  const v = arr[siteIdx][di];
+  return (v == null || !isFinite(v)) ? null : v;
+}
+
+function _khFmt(v, digits) {
+  if (v == null || !isFinite(v)) return "—";
+  return Number(v).toFixed(digits == null ? 3 : digits);
+}
+
+function _khRows() {
+  const K = _KH.kinases;
+  const donors = _KH.donors;
+  const n = K.id.length;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const nesVec = donors.map(d => {
+      const v = K["NES_" + d + "_vs_CTRLmean"];
+      return v ? v[i] : null;
+    });
+    const fdrVec = donors.map(d => {
+      const v = K["FDR_" + d + "_vs_CTRLmean"];
+      return v ? v[i] : null;
+    });
+    out.push({
+      id: K.id[i],
+      name: K.name[i],
+      gene_symbol: K.gene_symbol[i],
+      residue_type: K.residue_type[i],
+      n_donors_sig: K.n_donors_sig[i],
+      n_donors_up: K.n_donors_up[i],
+      n_donors_down: K.n_donors_down[i],
+      n_donors_tested: K.n_donors_tested[i],
+      median_nes: K.median_nes[i],
+      median_nes_sig_only: K.median_nes_sig_only[i],
+      sea_ad_lfc: K.sea_ad_lfc ? K.sea_ad_lfc[i] : null,
+      sea_ad_n: K.sea_ad_n_supertypes ? K.sea_ad_n_supertypes[i] : 0,
+      sea_ad_direction_agreement: K.sea_ad_direction_agreement ? K.sea_ad_direction_agreement[i] : null,
+      _nes: nesVec,
+      _fdr: fdrVec,
+    });
+  }
+  return out;
+}
+
+let _khRowCache = null;
+function _khAllRows() {
+  if (!_khRowCache) _khRowCache = _khRows();
+  return _khRowCache;
+}
+
+// Cohort-level SEA-AD agreement: compares median_nes_sig_only sign to sea_ad_lfc sign.
+// Returns "agree" | "disagree" | "na".
+function _khSeaAdAgreement(r) {
+  const nes = r.median_nes_sig_only;
+  const lfc = r.sea_ad_lfc;
+  if (nes == null || !isFinite(nes) || nes === 0) return "na";
+  if (lfc == null || !isFinite(lfc) || lfc === 0) return "na";
+  return (Math.sign(nes) === Math.sign(lfc)) ? "agree" : "disagree";
+}
+
+function _khFilter(rows) {
+  const q = _KHState.search.trim().toLowerCase();
+  const minSig = _KHState.nsigMin;
+  const track = _KHState.track;
+  const seaad = _KHState.seaad;
+  return rows.filter(r => {
+    if (track && r.residue_type !== track) return false;
+    if (r.n_donors_sig < minSig) return false;
+    if (q && !(String(r.name).toLowerCase().includes(q)
+            || String(r.gene_symbol).toLowerCase().includes(q))) return false;
+    if (seaad && _khSeaAdAgreement(r) !== seaad) return false;
+    return true;
+  });
+}
+
+function _khSort(rows) {
+  const col = _KHState.sortCol;
+  const asc = _KHState.sortAsc;
+  const rev = asc ? 1 : -1;
+  const cmp = (a, b) => {
+    let va, vb;
+    if (col === "nes_profile") {
+      va = Math.max(...a._nes.map(v => v == null ? -Infinity : Math.abs(v)));
+      vb = Math.max(...b._nes.map(v => v == null ? -Infinity : Math.abs(v)));
+    } else if (col === "median_nes_sig_only") {
+      va = a.median_nes_sig_only == null ? -Infinity : Math.abs(a.median_nes_sig_only);
+      vb = b.median_nes_sig_only == null ? -Infinity : Math.abs(b.median_nes_sig_only);
+    } else if (col === "sea_ad_lfc") {
+      va = (a.sea_ad_lfc == null || !isFinite(a.sea_ad_lfc)) ? -Infinity : Math.abs(a.sea_ad_lfc);
+      vb = (b.sea_ad_lfc == null || !isFinite(b.sea_ad_lfc)) ? -Infinity : Math.abs(b.sea_ad_lfc);
+    } else { va = a[col]; vb = b[col]; }
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    if (typeof va === "string") return asc ? va.localeCompare(vb) : vb.localeCompare(va);
+    return rev * (vb - va);
+  };
+  const out = rows.slice();
+  out.sort(cmp);
+  // Tie-break by |median_nes_sig_only| desc when primary col is n_donors_sig.
+  if (col === "n_donors_sig") {
+    out.sort((a, b) => {
+      if (a.n_donors_sig !== b.n_donors_sig)
+        return rev * (b.n_donors_sig - a.n_donors_sig);
+      const am = a.median_nes_sig_only == null ? -Infinity : Math.abs(a.median_nes_sig_only);
+      const bm = b.median_nes_sig_only == null ? -Infinity : Math.abs(b.median_nes_sig_only);
+      return bm - am;
+    });
+  }
+  return out;
+}
+
+function _khRenderProfile(r, fdrThresh, donors, donorMask, maxAbs) {
+  const cells = [];
+  for (let di = 0; di < donors.length; di++) {
+    if (donorMask && !donorMask.has(donors[di])) continue;
+    const nes = r._nes[di];
+    const fdrV = r._fdr[di];
+    const sig = fdrV != null && fdrV < fdrThresh;
+    let bg = "#fff";
+    if (nes != null && isFinite(nes) && maxAbs > 0) {
+      const a = Math.min(1, Math.abs(nes) / maxAbs);
+      const rgb = nes >= 0 ? [197,48,48] : [43,108,176];
+      bg = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${(0.15 + 0.85 * a).toFixed(3)})`;
+    }
+    const tip = nes == null
+      ? `${donors[di]}: n/a`
+      : `${donors[di]}: NES ${nes.toFixed(2)}${fdrV != null ? `, FDR ${fdrV.toExponential(1)}` : ""}${sig ? " (sig)" : ""}`;
+    cells.push(`<div class="npc${sig ? " sig" : ""}" style="background:${bg};" title="${_escapeHtml(tip)}"></div>`);
+  }
+  return `<div class="nes-profile-wrap"><div class="nes-profile-cell" style="grid-template-columns:repeat(${cells.length},1fr);">${cells.join("")}</div></div>`;
+}
+
+function renderKinaseHuman() {
+  if (!_KH_HAS) return;
+  const fdrThresh = Store.state.filters.fdr;
+  const donors = _KH.donors;
+  const donorMask = _KHState.donors.size ? _KHState.donors : null;
+  const rowsAll = _khFilter(_khAllRows());
+  // Compute maxAbs over the visible donor subset for color saturation.
+  let maxAbs = 0;
+  for (const r of rowsAll) {
+    for (let di = 0; di < donors.length; di++) {
+      if (donorMask && !donorMask.has(donors[di])) continue;
+      const v = r._nes[di];
+      if (v != null && isFinite(v)) maxAbs = Math.max(maxAbs, Math.abs(v));
+    }
+  }
+  const rows = _khSort(rowsAll);
+
+  const tbody = document.querySelector("#kh-table tbody");
+  if (!tbody) return;
+  const selKid = Store.state.selection.kinaseHuman;
+  const html = rows.map(r => {
+    const sigCls = r.id === selKid ? " kh-row-selected" : "";
+    const mNES = r.median_nes_sig_only;
+    const mStr = (mNES == null || !isFinite(mNES)) ? "—" : mNES.toFixed(2);
+    const seaLfc = r.sea_ad_lfc;
+    const agree = _khSeaAdAgreement(r);
+    let seaCell;
+    if (seaLfc == null || !isFinite(seaLfc)) {
+      seaCell = `<span class="muted" title="No SEA-AD coverage for this kinase's gene.">—</span>`;
+    } else {
+      const color = seaLfc >= 0 ? "#c8261c" : "#1f5fa6";
+      const mark = agree === "agree" ? `<span style="color:#1b5e20;" title="Sign matches median NES (sig).">✓</span>`
+                 : agree === "disagree" ? `<span style="color:#b71c1c;" title="Sign opposes median NES (sig).">✗</span>`
+                 : `<span class="muted" title="No signed NES to compare against.">·</span>`;
+      seaCell = `<span style="color:${color}; font-variant-numeric:tabular-nums;">${seaLfc.toFixed(2)}</span> ${mark}`;
+    }
+    return `<tr data-khid="${r.id}" class="${sigCls}" tabindex="0">`
+      + `<td>${_escapeHtml(r.name)}</td>`
+      + `<td>${_escapeHtml(r.gene_symbol || "")}</td>`
+      + `<td>${_escapeHtml(r.residue_type || "")}</td>`
+      + `<td>${_khRenderProfile(r, fdrThresh, donors, donorMask, maxAbs)}</td>`
+      + `<td>${mStr}</td>`
+      + `<td>${r.n_donors_sig}</td>`
+      + `<td>${r.n_donors_up}</td>`
+      + `<td>${r.n_donors_down}</td>`
+      + `<td>${seaCell}</td>`
+      + `</tr>`;
+  }).join("");
+  tbody.innerHTML = html;
+  const count = document.getElementById("kh-count");
+  if (count) count.textContent = `${rows.length} kinases · ${donors.length} donors · ` +
+                                 (donorMask ? `${donorMask.size} selected` : "all donors");
+  // Re-render detail panel if a selection is active.
+  if (selKid != null) _khRenderDetail(selKid);
+}
+
+function updateKinaseHumanSelection(khid) {
+  document.querySelectorAll("#kh-table tbody tr").forEach(tr => {
+    tr.classList.toggle("kh-row-selected", String(tr.dataset.khid) === String(khid));
+  });
+  if (khid != null) _khRenderDetail(khid);
+  else {
+    const det = document.getElementById("kh-detail");
+    if (det) det.innerHTML = `<div class="muted">Select a kinase to see per-donor details.</div>`;
+  }
+}
+
+function _khRenderDetail(khid) {
+  const det = document.getElementById("kh-detail");
+  if (!det) return;
+  const rows = _khAllRows();
+  const r = rows.find(x => x.id === khid);
+  if (!r) { det.innerHTML = `<div class="muted">Kinase not found.</div>`; return; }
+
+  // Initialize auditDonor on first selection: prefer first case donor with NES data.
+  if (_KHState.auditDonor == null || !_KH.donors.includes(_KHState.auditDonor)) {
+    const donors = _KH.donors;
+    let pick = donors[0];
+    for (let di = 0; di < donors.length; di++) {
+      if (r._nes[di] != null) { pick = donors[di]; break; }
+    }
+    _KHState.auditDonor = pick;
+  }
+
+  const mNES = r.median_nes_sig_only;
+  const recSummary = `${r.n_donors_sig}/${r.n_donors_tested} donors sig` +
+    ` · up ${r.n_donors_up} · down ${r.n_donors_down}` +
+    ` · median NES (sig) ${(mNES == null || !isFinite(mNES)) ? "—" : mNES.toFixed(2)}`;
+  const seaLfc = r.sea_ad_lfc;
+  const seaAgree = _khSeaAdAgreement(r);
+  const seaLine = (seaLfc == null || !isFinite(seaLfc))
+    ? `SEA-AD: <span class="muted">no coverage for ${_escapeHtml(r.gene_symbol || r.name)}</span>`
+    : `SEA-AD median LFC ${seaLfc.toFixed(2)} across ${r.sea_ad_n || 0} supertypes`
+      + ` · ${seaAgree === "agree" ? `<span style="color:#1b5e20;">agrees</span>` : seaAgree === "disagree" ? `<span style="color:#b71c1c;">disagrees</span>` : `<span class="muted">no signed NES</span>`}`
+      + ` with median NES (sig)`;
+
+  const tabsHtml = _KH_AUDIT_TABS.map(t =>
+    `<button type="button" class="kh-audit-tab${t.id === _KHState.auditTab ? " active" : ""}"`
+    + ` data-kh-audit-tab="${t.id}">${_escapeHtml(t.label)}</button>`
+  ).join("");
+  // Donor selector applies to all sub-tabs (score uses it for the per-donor scorecard + running enrichment).
+  const needsDonor = true;
+  const donorSelHtml = needsDonor
+    ? `<div class="kh-audit-toolbar"><label class="ke-filter-label">Donor `
+      + `<select id="kh-audit-donor">`
+      + _KH.donors.map(d => `<option value="${_escapeHtml(d)}"${d === _KHState.auditDonor ? " selected" : ""}>${_escapeHtml(d)}</option>`).join("")
+      + `</select></label></div>`
+    : "";
+
+  det.innerHTML = `
+    <h3 style="margin:0 0 6px 0;">${_escapeHtml(r.name)} <span class="muted" style="font-weight:400;">(${_escapeHtml(r.gene_symbol || "")} · ${_escapeHtml(r.residue_type || "")})</span></h3>
+    <div class="muted" style="margin-bottom:2px;">${_escapeHtml(recSummary)}</div>
+    <div class="muted" style="margin-bottom:8px;">${seaLine}</div>
+    <nav class="kh-audit-tabs" role="tablist">${tabsHtml}</nav>
+    ${donorSelHtml}
+    <div id="kh-audit-body" class="kh-audit-body"></div>
+  `;
+  // Wire sub-tab buttons.
+  det.querySelectorAll(".kh-audit-tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      _KHState.auditTab = btn.dataset.khAuditTab;
+      _khRenderDetail(khid);
+    });
+  });
+  const ds = document.getElementById("kh-audit-donor");
+  if (ds) ds.addEventListener("change", e => {
+    _KHState.auditDonor = e.target.value;
+    _khRenderAuditBody(r);
+  });
+  _khRenderAuditBody(r);
+}
+
+function _khRenderAuditBody(r) {
+  const body = document.getElementById("kh-audit-body");
+  if (!body) return;
+  const tab = _KHState.auditTab;
+  if (tab === "trace") return _khRenderTrace(body, r);
+  if (tab === "prep")  return _khRenderPrep(body, r);
+  if (tab === "score") return _khRenderScore(body, r);
+}
+
+function _khRenderTrace(body, r) {
+  if (!_KH.sites) { body.innerHTML = `<div class="muted">Site matrices not available in payload.</div>`; return; }
+  _khEnsureSiteIndex();
+  const donor = _KHState.auditDonor;
+  const pd = _khPerdonorFor(r.id, donor);
+  if (!pd || !pd.leading) {
+    body.innerHTML = `<p class="kinase-stage-note">No leading-edge substrates recorded for ${_escapeHtml(r.name)} in donor ${_escapeHtml(donor)} (may not have reached MEA significance).</p>`;
+    return;
+  }
+  const motifs = pd.leading.split(";").map(s => _normMotif(s)).filter(Boolean);
+  const S = _KH.sites;
+  const seen = new Set();
+  const rows = [];
+  for (const m of motifs) {
+    const idxs = _khSiteByMotif.get(m) || [];
+    for (const i of idxs) {
+      if (S.residue_type[i] !== r.residue_type) continue;
+      if (seen.has(i)) continue;
+      seen.add(i);
+      const stoichD = _khValAt(i, donor, "stoich");
+      const rawD    = _khValAt(i, donor, "raw");
+      const stoichCM = _khCtrlMean(i, "stoich");
+      const rawCM    = _khCtrlMean(i, "raw");
+      const delta = (stoichD != null && stoichCM != null) ? (stoichD - stoichCM) : null;
+      rows.push({
+        site_id: S.site_id[i], motif: S.motif[i], gene: S.gene_symbol[i], pos: S.site_position[i],
+        raw_d: rawD, raw_cm: rawCM, stoich_d: stoichD, stoich_cm: stoichCM, delta,
+      });
+    }
+  }
+  rows.sort((a, b) => {
+    const da = a.delta == null ? -Infinity : Math.abs(a.delta);
+    const db = b.delta == null ? -Infinity : Math.abs(b.delta);
+    return db - da;
+  });
+  const note = `<p class="kinase-stage-note">Per-site measurement trace for ${_escapeHtml(r.name)} (${_escapeHtml(r.residue_type)}) in donor <strong>${_escapeHtml(donor)}</strong>. Each row is a leading-edge substrate site for this (kinase, donor). CTRL mean is averaged across ${_KH.ctrl_donors.length} control donors; Δ = donor stoichiometry − CTRL mean.</p>`;
+  const head = `<thead><tr>`
+    + `<th>site_id</th><th>gene</th><th>motif</th><th>raw_phospho (donor)</th>`
+    + `<th>raw_phospho (CTRL μ)</th><th>stoich (donor)</th><th>stoich (CTRL μ)</th><th>Δ stoich</th>`
+    + `</tr></thead>`;
+  const tbody = `<tbody>` + rows.map(rw =>
+    `<tr><td>${_escapeHtml(rw.site_id)}</td>`
+    + `<td>${_escapeHtml(rw.gene)}</td>`
+    + `<td>${_escapeHtml(rw.motif)}</td>`
+    + `<td>${_khFmt(rw.raw_d, 3)}</td>`
+    + `<td>${_khFmt(rw.raw_cm, 3)}</td>`
+    + `<td>${_khFmt(rw.stoich_d, 3)}</td>`
+    + `<td>${_khFmt(rw.stoich_cm, 3)}</td>`
+    + `<td>${_khFmt(rw.delta, 3)}</td></tr>`
+  ).join("") + `</tbody>`;
+  body.innerHTML = note + `<div class="kh-audit-tablewrap"><table class="data-table">${head}${tbody}</table></div>`;
+}
+
+function _khRenderPrep(body, r) {
+  const donor = _KHState.auditDonor;
+  const residue = r.residue_type;
+  const contrast = donor + "_vs_CTRLmean";
+  const shift = (_KH.global_shift || []).find(g => g.donor === donor && g.residue_type === residue) || null;
+  const shiftLine = shift
+    ? `Median stoichiometry LFC across ${donor}'s ranked ${residue} sites: <strong>${_khFmt(shift.median_shift, 4)}</strong>. Subtracted from every site before GSEA to center the prerank at zero.`
+    : `<span class="muted">No global-shift record for ${donor} / ${residue}.</span>`;
+
+  // Winsorized sites for (donor, residue) — rebuild as row dicts matching the mouse column schema.
+  const W = _KH.winsor || null;
+  const wRows = [];
+  if (W) {
+    for (let i = 0; i < W.donor.length; i++) {
+      if (W.donor[i] !== donor || W.residue_type[i] !== residue) continue;
+      wRows.push({
+        contrast: contrast,
+        original_lfc: W.original_lfc[i],
+        clipped_lfc: W.clipped_lfc[i],
+        lower_bound: W.lower_bound[i],
+        upper_bound: W.upper_bound[i],
+        site_id: W.site_id[i],
+        gene_symbol: W.gene_symbol[i],
+      });
+    }
+  }
+  const bounds = wRows.length
+    ? `bounds [${_khFmt(wRows[0].lower_bound, 3)}, ${_khFmt(wRows[0].upper_bound, 3)}] · ${wRows.length.toLocaleString()} sites clipped across ${donor}/${residue}`
+    : `<span class="muted">No winsorization receipts for ${donor} / ${residue}.</span>`;
+
+  body.innerHTML =
+    `<section class="audit-panel"><h4>Step 1 · Global shift <span class="muted">(mea_global_shift.csv)</span></h4>`
+    + `<p class="kinase-stage-note">${shiftLine}</p>`
+    + `<div id="kh-mea-shift"></div></section>`
+    + `<section class="audit-panel"><h4>Step 2 · Winsorization <span class="muted">(winsorized_sites.csv)</span></h4>`
+    + `<p class="kinase-stage-note">Centered LFCs clipped to the 1st/99th percentile so individual sites cannot dominate the prerank. ${bounds}.</p>`
+    + `<div id="kh-mea-winsor"></div></section>`;
+
+  const shiftRows = shift ? [{
+    contrast: contrast,
+    median_shift: shift.median_shift,
+    mean_before: shift.mean_before,
+    pct_pos_before: shift.pct_pos_before,
+    pct_pos_after: shift.pct_pos_after,
+  }] : [];
+  new AuditTable("kh-mea-shift", {
+    tableKey: "mea_global_shift", rows: shiftRows,
+    columns: ["contrast", "median_shift", "mean_before", "pct_pos_before", "pct_pos_after"],
+    fullSourceKey: false,
+  }).render();
+  new AuditTable("kh-mea-winsor", {
+    tableKey: "winsorized_sites", rows: wRows,
+    columns: ["contrast", "site_id", "gene_symbol", "original_lfc", "clipped_lfc",
+              "lower_bound", "upper_bound"],
+    fullSourceKey: false,
+  }).render();
+}
+
+function _khBuildPrerank(donor, residue) {
+  // Build the prerank list of (motif, clipped_lfc, site_id, gene_symbol) for (donor, residue):
+  //   raw_lfc = stoich_by_site[siteIdx][donorIdx]
+  //   centered = raw_lfc − median_shift
+  //   clipped = clamp(centered, [lower_bound, upper_bound])
+  // Returns null if any input is missing.
+  if (!_KH || !_KH.sites || !_KH.stoich_by_site) return null;
+  const all = _KH.donors_all || [];
+  const di = all.indexOf(donor);
+  if (di < 0) return null;
+  const shift = (_KH.global_shift || []).find(g => g.donor === donor && g.residue_type === residue);
+  if (!shift || shift.median_shift == null) return null;
+  const W = _KH.winsor || null;
+  let lo = null, hi = null;
+  if (W) {
+    for (let i = 0; i < W.donor.length; i++) {
+      if (W.donor[i] === donor && W.residue_type[i] === residue) {
+        lo = Number(W.lower_bound[i]); hi = Number(W.upper_bound[i]);
+        break;
+      }
+    }
+  }
+  const med = Number(shift.median_shift);
+  const S = _KH.sites;
+  const N = S.site_id.length;
+  const out = [];
+  for (let i = 0; i < N; i++) {
+    if (S.residue_type[i] !== residue) continue;
+    const row = _KH.stoich_by_site[i];
+    if (!row) continue;
+    const raw = row[di];
+    if (raw == null || !isFinite(raw)) continue;
+    let v = raw - med;
+    if (lo != null && hi != null) v = Math.min(hi, Math.max(lo, v));
+    out.push({
+      site_id: S.site_id[i], gene_symbol: S.gene_symbol[i],
+      motif: _normMotif(S.motif[i]), clipped: v,
+    });
+  }
+  out.sort((a, b) => b.clipped - a.clipped);
+  return out;
+}
+
+function _khRunningES(ranked, substrateMotifs) {
+  // Mirrors mouse _computeRunningES (kinase_audit.js): weighted GSEA walk.
+  const N = ranked.length;
+  if (!N || !substrateMotifs || !substrateMotifs.size) return null;
+  const isHit = new Array(N);
+  let Nh = 0;
+  let hitSum = 0;
+  for (let i = 0; i < N; i++) {
+    const h = substrateMotifs.has(ranked[i].motif);
+    isHit[i] = h;
+    if (h) { Nh += 1; hitSum += Math.abs(ranked[i].clipped); }
+  }
+  if (!Nh || hitSum === 0) return null;
+  const missRate = 1 / (N - Nh || 1);
+  const running = new Array(N);
+  const hitIndices = [];
+  let cur = 0, peak = 0, peakIdx = 0;
+  for (let i = 0; i < N; i++) {
+    if (isHit[i]) {
+      cur += Math.abs(ranked[i].clipped) / hitSum;
+      hitIndices.push(i);
+    } else {
+      cur -= missRate;
+    }
+    running[i] = cur;
+    if (Math.abs(cur) > Math.abs(peak)) { peak = cur; peakIdx = i; }
+  }
+  const leadingEdge = peak >= 0
+    ? hitIndices.filter(i => i <= peakIdx)
+    : hitIndices.filter(i => i >= peakIdx);
+  return {N, Nh, running, hitIndices, peakES: peak, peakIdx, leadingEdge};
+}
+
+function _khRenderRunningEnrichment(hostId, r, donor) {
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  const pd = _khPerdonorFor(r.id, donor);
+  if (!pd) {
+    host.innerHTML = `<div class="muted" style="padding:1em">No per-donor MEA record for ${_escapeHtml(r.name)} in ${_escapeHtml(donor)} — running enrichment unavailable.</div>`;
+    return;
+  }
+  const motifsStr = pd.substrate_motifs || "";
+  if (!motifsStr) {
+    host.innerHTML = `<div class="muted" style="padding:1em">No substrate-set motifs recorded for ${_escapeHtml(r.name)} in ${_escapeHtml(donor)} (mea_substrate_sets.csv). Re-run <code>python alz/ingest_mukesh_perdonor.py</code>.</div>`;
+    return;
+  }
+  const ranked = _khBuildPrerank(donor, r.residue_type);
+  if (!ranked || !ranked.length) {
+    host.innerHTML = `<div class="muted" style="padding:1em">Prerank could not be built (missing site matrix, global shift, or winsor bounds for ${_escapeHtml(donor)} / ${_escapeHtml(r.residue_type)}).</div>`;
+    return;
+  }
+  const subs = new Set(motifsStr.split(";").map(_normMotif).filter(Boolean));
+  const walk = _khRunningES(ranked, subs);
+  if (!walk) {
+    host.innerHTML = `<div class="muted" style="padding:1em">Substrate-set motifs did not match any ranked site for ${_escapeHtml(r.name)} / ${_escapeHtml(donor)}.</div>`;
+    return;
+  }
+  const ranks = new Array(walk.N);
+  for (let i = 0; i < walk.N; i++) ranks[i] = i + 1;
+  const hitX = walk.hitIndices.map(i => i + 1);
+  const hitY = walk.hitIndices.map(i => walk.running[i]);
+  const hitText = walk.hitIndices.map(i => {
+    const e = ranked[i];
+    return `rank ${i + 1}<br>${_escapeHtml(e.gene_symbol || "")} · ${_escapeHtml(e.motif)}<br>clipped LFC ${e.clipped.toFixed(3)}<br>running ES ${walk.running[i].toFixed(3)}`;
+  });
+  const peakX = walk.peakIdx + 1;
+  const peakY = walk.peakES;
+  const leShape = walk.peakES >= 0
+    ? {x0: 1, x1: peakX}
+    : {x0: peakX, x1: walk.N};
+  Plotly.react(hostId, [
+    {type:"scatter", mode:"lines", x: ranks, y: walk.running,
+     line:{color:"#1f77b4", width:1.5}, name:"running ES", hoverinfo:"skip"},
+    {type:"scatter", mode:"markers", x: hitX, y: hitY,
+     marker:{color:"#1f77b4", size:5, opacity:0.9}, name:"hit",
+     text: hitText, hovertemplate:"%{text}<extra></extra>"},
+    {type:"scatter", mode:"markers", x:[peakX], y:[peakY],
+     marker:{color:"#000", size:9, symbol:"diamond"}, name:"peak ES",
+     hovertemplate:`peak ES ${peakY.toFixed(3)} at rank ${peakX}<extra></extra>`},
+  ], {
+    margin:{l:50, r:10, t:30, b:40}, height:300,
+    showlegend:false,
+    annotations:[{
+      x: peakX, y: peakY, xref:"x", yref:"y",
+      text: `peak ES ${peakY.toFixed(3)} at rank ${peakX}<br>leading edge: ${walk.leadingEdge.length} of ${walk.Nh} hits`,
+      showarrow:true, arrowhead:2, ax: 30, ay: peakY >= 0 ? -40 : 40,
+      font:{size:11},
+    }],
+    shapes:[{
+      type:"rect", xref:"x", yref:"paper",
+      x0: leShape.x0, x1: leShape.x1, y0: 0, y1: 1,
+      fillcolor:"#1f77b4", opacity:0.08, line:{width:0},
+    }, {
+      type:"line", xref:"x", yref:"y",
+      x0: 1, x1: walk.N, y0: 0, y1: 0,
+      line:{color:"#999", width:1, dash:"dot"},
+    }],
+    xaxis:{title:"prerank rank (1 = most up-shifted)", range:[1, walk.N]},
+    yaxis:{title:"running ES", zeroline:false},
+  }, {displaylogo:false, responsive:true});
+}
+
+function _khRenderNESAcrossDonors(hostId, r, selectedDonor) {
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  const donors = _KH.donors;
+  const fdrThresh = Store.state.filters.fdr;
+  const _hexToRgba = (hex, alpha) => {
+    const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
+    if (!m) return hex;
+    return `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},${alpha})`;
+  };
+  const colors = donors.map((_, di) => {
+    const nes = r._nes[di];
+    const fdr = r._fdr[di];
+    const base = (nes != null && nes < 0) ? "#1f5fa6" : "#c8261c";
+    const sig = fdr != null && fdr < fdrThresh;
+    return sig ? base : _hexToRgba(base, 0.28);
+  });
+  const selIdx = donors.indexOf(selectedDonor);
+  const outlines = donors.map((_, i) => i === selIdx ? "#000" : "rgba(0,0,0,0)");
+  const lineW = donors.map((_, i) => i === selIdx ? 2.5 : 0);
+  Plotly.react(hostId, [{
+    type:"bar", x: donors, y: r._nes.map(v => v == null ? 0 : v),
+    marker:{color: colors, line:{color: outlines, width: lineW}},
+    name:"NES",
+    hovertemplate:"%{x}<br>NES %{y:.2f}<extra></extra>",
+  }], {
+    margin:{l:40, r:10, t:10, b:60}, height:220,
+    yaxis:{zeroline:true, zerolinecolor:"#bbb", title:"NES"},
+    xaxis:{tickangle:-35},
+    showlegend:false,
+  }, {displaylogo:false, responsive:true}).then(() => {
+    if (host.on && !host.__khTrajWired) {
+      host.__khTrajWired = true;
+      host.on("plotly_click", (ev) => {
+        const pts = ev && ev.points ? ev.points : null;
+        if (!pts || !pts[0]) return;
+        const target = pts[0].x;
+        if (_KH.donors.includes(target)) {
+          _KHState.auditDonor = target;
+          _khRenderDetail(r.id);
+        }
+      });
+    }
+  });
+}
+
+function _khRenderScore(body, r) {
+  const donor = _KHState.auditDonor;
+  const pd = _khPerdonorFor(r.id, donor);
+  const fdrThresh = Store.state.filters.fdr;
+  const nesVal = pd ? pd.NES : null;
+  const fdrVal = pd ? pd.FDR : null;
+  const esVal = pd ? pd.ES : null;
+  const pVal = pd ? pd.p_value : null;
+  const subsFrac = pd ? pd.subs_fraction : "";
+  const tier = (() => {
+    if (fdrVal == null || !isFinite(fdrVal)) return {label: "no FDR", cls: "muted"};
+    if (fdrVal < fdrThresh) return {label: `FDR ${fdrVal.toFixed(3)} · passes ${fdrThresh}`, cls: "chip-pass"};
+    if (fdrVal < fdrThresh * 2) return {label: `FDR ${fdrVal.toFixed(3)} · borderline`, cls: "chip-borderline"};
+    return {label: `FDR ${fdrVal.toFixed(3)} · fails ${fdrThresh}`, cls: "chip-fail"};
+  })();
+  const nesColor = (nesVal == null || !isFinite(nesVal)) ? "#666"
+    : (nesVal > 0 ? "#c8261c" : "#1f5fa6");
+  const nesText = (nesVal == null || !isFinite(nesVal)) ? "—" : nesVal.toFixed(2);
+  const rawNes = pd ? pd.raw_NES : null;
+  const rawFdr = pd ? pd.raw_FDR : null;
+  const rawP   = pd ? pd.raw_p_value : null;
+  const rawAvailable = rawNes != null && isFinite(rawNes);
+
+  const num = (v) => (v == null || v === "" || !isFinite(Number(v))) ? null : Number(v);
+  const fmt = (v, d=3) => v == null ? "—" : Number(v).toFixed(d);
+  const fmtSigned = (v, d=3) => v == null ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(d);
+  const delta = (a, b) => (a == null || b == null) ? null : a - b;
+  // ES and Subs-fraction are not stored for the raw track; only NES / p / FDR are compared.
+  const cmp = [
+    {metric: "NES",          stoich: num(nesVal),  raw: num(rawNes)},
+    {metric: "p-value",      stoich: num(pVal),    raw: num(rawP)},
+    {metric: "FDR",          stoich: num(fdrVal),  raw: num(rawFdr)},
+  ];
+  const cmpHtml = cmp.map(row => {
+    const s = row.stoich, r = row.raw;
+    const d = delta(s, r);
+    const dgts = row.metric === "p-value" ? 4 : (row.metric === "FDR" ? 3 : 2);
+    return `<tr><td>${_escapeHtml(row.metric)}</td>`
+      + `<td>${fmt(s, dgts)}</td>`
+      + `<td>${fmt(r, dgts)}</td>`
+      + `<td>${fmtSigned(d, dgts)}</td></tr>`;
+  }).join("");
+  const cmpTable = rawAvailable
+    ? `<div class="kh-audit-tablewrap"><table class="data-table">`
+      + `<thead><tr><th>metric</th><th>stoich</th><th>raw</th><th>Δ (stoich − raw)</th></tr></thead>`
+      + `<tbody>${cmpHtml}</tbody></table></div>`
+    : `<div class="muted" style="padding:1em">Per-donor raw-phospho MEA not yet exported for this kinase / donor. Re-run <code>python alz/ingest_mukesh_perdonor.py</code> to regenerate the <code>mea_perdonor_raw{,_pY}.csv</code> files.</div>`;
+
+  body.innerHTML =
+    `<p class="kinase-stage-note">Per-donor MEA score for ${_escapeHtml(r.name)} (${_escapeHtml(r.residue_type)}) on ${_escapeHtml(donor)} vs CTRL mean.</p>`
+    + `<section class="audit-panel"><h4>Score for ${_escapeHtml(donor)}</h4>`
+    + `<div class="mea-scorecard">`
+    +   `<div class="mea-score-nes" style="color:${nesColor}">`
+    +     `<div class="mea-score-label">NES</div>`
+    +     `<div class="mea-score-value">${nesText}</div>`
+    +     `<div class="mea-score-chip ${tier.cls}">${_escapeHtml(tier.label)}</div>`
+    +   `</div>`
+    +   `<dl class="mea-score-stats">`
+    +     `<dt>ES</dt><dd>${_khFmt(esVal, 3)}</dd>`
+    +     `<dt>p-value</dt><dd>${_khFmt(pVal, 4)}</dd>`
+    +     `<dt>Substrates tested</dt><dd>${_escapeHtml(subsFrac || "—")}<span class="muted"> (kinase substrates &cap; donor prerank)</span></dd>`
+    +     `<dt>Raw phospho NES</dt><dd>${rawAvailable ? fmt(rawNes, 2) : "—"}${rawAvailable ? `<span class="muted"> · FDR ${fmt(rawFdr, 3)}</span>` : `<span class="muted"> (re-run ingest_mukesh_perdonor.py for raw track)</span>`}</dd>`
+    +   `</dl>`
+    + `</div></section>`
+    + `<section class="audit-panel"><h4>Running enrichment for ${_escapeHtml(donor)}</h4>`
+    + `<p class="kinase-stage-note">GSEA walk recomputed at view time from the cached prerank. The curve steps up at every substrate hit (weighted by |clipped LFC|) and down at every miss. Peak ES and the leading-edge prefix are marked. Hit set is this kinase's full substrate motif set (<code>mea_substrate_sets.csv</code>) restricted to this donor's prerank — same set GSEA used to score the kinase. Tie-breaking among sites with duplicated clipped values may differ from gseapy's internal order.</p>`
+    + `<div id="kh-mea-running" style="height:300px"></div></section>`
+    + `<section class="audit-panel"><h4>NES across all donors</h4>`
+    + `<p class="kinase-stage-note">Per-donor NES bars. Full saturation when FDR &lt; ${fdrThresh}, faded when not significant. The selected donor is outlined in black. Click a bar to switch the selected donor.</p>`
+    + `<div id="kh-mea-trajectory" style="height:220px"></div></section>`
+    + `<section class="audit-panel"><h4>Stoichiometry vs raw phospho for ${_escapeHtml(donor)}</h4>`
+    + `<p class="kinase-stage-note">Per-metric comparison of the same kinase × donor scored against two preprocessing tracks. Stoichiometry is primary; raw phospho is the sensitivity check. Δ = stoichiometry − raw. Sign-flips or significance divergence flag abundance-driven vs activity-driven signals.</p>`
+    + cmpTable
+    + `</section>`;
+
+  _khRenderRunningEnrichment("kh-mea-running", r, donor);
+  _khRenderNESAcrossDonors("kh-mea-trajectory", r, donor);
+}
+
+function _khBuildDonorChips() {
+  const host = document.getElementById("kh-ms-donors");
+  if (!host) return;
+  const donors = _KH.donors;
+  host.innerHTML = `<label class="ke-filter-label" style="margin-right:4px;">Donors</label>`
+    + donors.map(d =>
+        `<button type="button" class="chip kh-donor-chip" data-donor="${_escapeHtml(d)}">${_escapeHtml(d)}</button>`
+      ).join("");
+  host.querySelectorAll(".kh-donor-chip").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const d = btn.dataset.donor;
+      if (_KHState.donors.has(d)) _KHState.donors.delete(d);
+      else _KHState.donors.add(d);
+      btn.classList.toggle("active", _KHState.donors.has(d));
+      renderKinaseHuman();
+    });
+  });
+}
+
+function wireKinaseHuman() {
+  if (!_KH_HAS) return;
+  _khBuildDonorChips();
+  const search = document.getElementById("kh-search");
+  if (search) search.addEventListener("input", e => {
+    _KHState.search = e.target.value; renderKinaseHuman();
+  });
+  const nsig = document.getElementById("kh-filter-nsig");
+  if (nsig) nsig.addEventListener("change", e => {
+    _KHState.nsigMin = parseInt(e.target.value, 10) || 0; renderKinaseHuman();
+  });
+  const track = document.getElementById("kh-filter-track");
+  if (track) track.addEventListener("change", e => {
+    _KHState.track = e.target.value; renderKinaseHuman();
+  });
+  const seaad = document.getElementById("kh-filter-seaad");
+  if (seaad) seaad.addEventListener("change", e => {
+    _KHState.seaad = e.target.value; renderKinaseHuman();
+  });
+  const reset = document.getElementById("kh-filter-reset");
+  if (reset) reset.addEventListener("click", () => {
+    _KHState.search = ""; _KHState.donors.clear();
+    _KHState.nsigMin = 0; _KHState.track = ""; _KHState.seaad = "";
+    if (search) search.value = "";
+    if (nsig) nsig.value = 0;
+    if (track) track.value = "";
+    if (seaad) seaad.value = "";
+    document.querySelectorAll(".kh-donor-chip").forEach(b => b.classList.remove("active"));
+    renderKinaseHuman();
+  });
+  // Column-header sort.
+  document.querySelectorAll("#kh-table thead th[data-col]").forEach(th => {
+    th.addEventListener("click", () => {
+      const col = th.dataset.col;
+      if (_KHState.sortCol === col) _KHState.sortAsc = !_KHState.sortAsc;
+      else { _KHState.sortCol = col; _KHState.sortAsc = false; }
+      renderKinaseHuman();
+    });
+  });
+  // Row-click selection.
+  const tbody = document.querySelector("#kh-table tbody");
+  if (tbody) tbody.addEventListener("click", ev => {
+    const tr = ev.target.closest("tr[data-khid]");
+    if (!tr) return;
+    const khid = parseInt(tr.dataset.khid, 10);
+    Store.dispatch({type:"SET_SELECTION", key:"kinaseHuman",
+      value: Store.state.selection.kinaseHuman === khid ? null : khid});
+  });
+  // Splitter.
+  const sp = document.getElementById("kh-splitter");
+  if (sp) {
+    const leftPanel = sp.previousElementSibling;
+    if (leftPanel) {
+      let sx = 0, sw = 0;
+      sp.addEventListener("mousedown", e => {
+        sx = e.clientX; sw = leftPanel.getBoundingClientRect().width;
+        document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none";
+        function mv(ev) {
+          const w = Math.min(1200, Math.max(280, sw + (ev.clientX - sx)));
+          leftPanel.style.width = w + "px";
+        }
+        function up() {
+          document.body.style.cursor = ""; document.body.style.userSelect = "";
+          document.removeEventListener("mousemove", mv);
+          document.removeEventListener("mouseup", up);
+        }
+        document.addEventListener("mousemove", mv);
+        document.addEventListener("mouseup", up);
+        e.preventDefault();
+      });
+    }
+  }
+}

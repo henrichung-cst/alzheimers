@@ -359,13 +359,27 @@ const TAB_GROUP_LABELS = {
 const TAB_MANIFEST = {
   temporalv2: {
     group: "landscape", label: "Temporal v2",
-    filters: [], requires: [],
+    filters: [], requires: [], modes: ["mouse"],
     wire: () => wireTemporalV2(),
     render: () => renderTemporalV2(),
     rerenderOn: { filters: true, selection: [] },
   },
+  kinasehuman: {
+    group: "drilldown", label: "Kinase",
+    filters: ["fdr"], requires: [], modes: ["human"],
+    wire: () => { if (typeof wireKinaseHuman === "function") wireKinaseHuman(); },
+    render: () => { if (typeof renderKinaseHuman === "function") renderKinaseHuman(); },
+    rerenderOn: { filters: true, selection: [] },
+    onChange: ({ tabChanged, kinaseHumanSelChanged, khid }) => {
+      if (!kinaseHumanSelChanged || tabChanged) return false;
+      if (typeof updateKinaseHumanSelection === "function")
+        updateKinaseHumanSelection(khid);
+      return true;
+    },
+  },
   kinase: {
     group: "drilldown", label: "Kinase",
+    modes: ["mouse"],
     filters: ["fdr"], requires: [],
     wire: () => wireKinaseTable(),
     render: () => {
@@ -385,26 +399,37 @@ const TAB_MANIFEST = {
   },
   incytrheatmap: {
     group: "landscape", label: "Incytr Heatmap",
-    filters: [], requires: [],
+    filters: [], requires: [], modes: ["mouse"],
     wire: () => wireIncytrHeatmap(),
     render: () => renderIncytrHeatmap(),
     rerenderOn: { filters: false, selection: [] },
   },
   incytrpathways: {
     group: "drilldown", label: "Incytr Pathways",
-    filters: [], requires: [],
+    filters: [], requires: [], modes: ["mouse"],
     wire: () => wireIncytrPathways(),
     render: () => renderIncytrPathways(),
     rerenderOn: { filters: false, selection: [] },
   },
   methods: {
     group: "reference", label: "Methods",
-    filters: [], requires: [],
+    filters: [], requires: [], modes: ["mouse"],
     wire: () => {},
     render: () => {},
     rerenderOn: {},
   },
 };
+
+function _activeModeTabs() {
+  const mode = (Store.state.view && Store.state.view.mode) || "mouse";
+  const out = {};
+  for (const id of Object.keys(TAB_MANIFEST)) {
+    const m = TAB_MANIFEST[id];
+    const modes = m.modes || ["mouse"];
+    if (modes.includes(mode)) out[id] = m;
+  }
+  return out;
+}
 
 function syncFilterBarToTab(tab) {
   const manifest = TAB_MANIFEST[tab];

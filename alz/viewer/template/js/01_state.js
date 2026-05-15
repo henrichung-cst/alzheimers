@@ -12,10 +12,11 @@ const DISEASE_COLORS = META.diseaseColors;
 // ---------------------------------------------------------------------------
 // Store — reducer-style with {selection, filters, view} slices
 // ---------------------------------------------------------------------------
+const HAS_HUMAN = !!(PAYLOAD && PAYLOAD.human);
 const INITIAL_STATE = {
-  selection: { kinase:null, backbone:null, celltype:null },
+  selection: { kinase:null, backbone:null, celltype:null, kinaseHuman:null },
   filters:   { contrast:"ALL", fdr:0.25 },
-  view:      { activeTab:"kinase", glossaryOpen:false,
+  view:      { mode:"mouse", activeTab:"kinase", glossaryOpen:false,
                kinaseAuditTab:"measurement-trace",
                temporalLevel:"kinase" },
 };

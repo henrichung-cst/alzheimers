@@ -47,6 +47,7 @@ per-tab branches to `boot.js`.
 | `js/tabs/kinase_detail.js` | 42 | renderActiveKinaseAuditTab + renderKinaseDetail |
 | `js/tabs/kinase_wiring.js` | 344 | wireKinaseTable, filter UI |
 | `js/tabs/temporal_v2.js` | 609 | Decomp series builder |
+| `js/tabs/kinase_human.js` | — | Human (Mukesh/NBB) per-donor kinase explorer (active when PAYLOAD.human present) |
 
 ## Verification
 

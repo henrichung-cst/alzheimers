@@ -8,16 +8,18 @@ window.IncytrFilter = (function() {
   const _KEY = "incytrFilter.v1";
   const _defaults = {
     // Heatmap projection — single contrast picker, two ordinal selects, and
-    // pvalue + |PDS| gates (snapped to the heatmap_counts.thresholds /
-    // .abs_pds_thresholds grids).
+    // pvalue + |PDS| gates (snapped to heatmap_counts.thresholds /
+    // .abs_pds_thresholds). pvalue defaults to null (no gate) since the
+    // per-animal SigProb Wald-t is unreliable in this cohort; |PDS| is the
+    // recommended primary filter.
     hmDisease:      "App",
     hmTimepoint:    "2mo",
-    hmPvalue:       0.05,
+    hmPvalue:       null,
     hmAbsPds:       0.01,
 
     // Pathway table — multiselect filters (empty = any). sliderPds is the
-    // |PDS| effect-size floor; the legacy sliderSp (sigprob) was retired
-    // 2026-05-12 in favor of effect-size filtering.
+    // |PDS| effect-size floor (primary). sliderP is the pvalue gate (opt-in;
+    // legacy sliderSp (sigprob) was retired 2026-05-12).
     pair:           null,          // {sender, receiver} or null
     disease:        [],            // [] = any
     timepoint:      [],            // [] = any
@@ -25,8 +27,8 @@ window.IncytrFilter = (function() {
     receiverIn:     [],            // [] = any
     sliderP:        null,
     sliderPds:      null,
-    sortKey:        "pvalue",
-    sortDir:        1,
+    sortKey:        "PDS",
+    sortDir:        -1,
   };
   const _arrKeys = new Set(["disease","timepoint","senderIn","receiverIn"]);
   let _state = Object.assign({}, _defaults);
