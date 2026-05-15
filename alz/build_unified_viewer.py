@@ -30,6 +30,7 @@ import glob
 import gzip
 import json
 import os
+import re
 import resource
 import shutil
 import sys
@@ -752,6 +753,7 @@ def _human_track_load(suffix: str, residue: str) -> dict | None:
     raw_mea_path = os.path.join(HUMAN_PERDONOR_DIR, f"mea_perdonor_raw{suffix}.csv")
     raw_nes_path = os.path.join(HUMAN_PERDONOR_DIR, f"kinase_donor_nes_raw{suffix}.csv")
     raw_fdr_path = os.path.join(HUMAN_PERDONOR_DIR, f"kinase_donor_fdr_raw{suffix}.csv")
+    subs_path = os.path.join(HUMAN_PERDONOR_DIR, f"mea_substrate_sets{suffix}.csv")
     # Site-level matrices live one directory up from perdonor/
     parent = os.path.dirname(HUMAN_PERDONOR_DIR)
     stoich_path = os.path.join(parent, f"stoichiometry_matrix{suffix}.csv")
@@ -770,11 +772,13 @@ def _human_track_load(suffix: str, residue: str) -> dict | None:
     raw_mea = pd.read_csv(raw_mea_path) if os.path.exists(raw_mea_path) else pd.DataFrame()
     raw_nes = pd.read_csv(raw_nes_path).set_index("kinase") if os.path.exists(raw_nes_path) else pd.DataFrame()
     raw_fdr = pd.read_csv(raw_fdr_path).set_index("kinase") if os.path.exists(raw_fdr_path) else pd.DataFrame()
+    subs = pd.read_csv(subs_path) if os.path.exists(subs_path) else pd.DataFrame()
     return {
         "residue": residue, "rec": rec, "nes": nes, "fdr": fdr,
         "mea": mea, "shift": shift, "winsor": winsor,
         "stoich": stoich, "raw": raw,
         "raw_mea": raw_mea, "raw_nes": raw_nes, "raw_fdr": raw_fdr,
+        "subs": subs,
     }
 
 
@@ -848,7 +852,7 @@ def build_human_slice() -> dict | None:
         cols[f"NES_{d}_vs_CTRLmean"] = []
         cols[f"FDR_{d}_vs_CTRLmean"] = []
 
-    perdonor_rows: list[tuple] = []  # (kid, donor, NES, FDR, lead, ES, subs_fraction, p_value, raw_NES, raw_FDR, raw_p)
+    perdonor_rows: list[tuple] = []  # (kid, donor, NES, FDR, lead, ES, subs_fraction, p_value, raw_NES, raw_FDR, raw_p, substrate_motifs)
     next_id = 0
     for t in tracks:
         residue = t["residue"]
@@ -868,6 +872,20 @@ def build_human_slice() -> dict | None:
                     float(rrow.get("FDR")) if pd.notna(rrow.get("FDR")) else float("nan"),
                     float(rrow.get("p-value")) if pd.notna(rrow.get("p-value")) else float("nan"),
                 )
+        subs = t.get("subs", pd.DataFrame())
+        # Per-(kinase, donor) substrate motif set used by GSEA as the hit set.
+        # Mirrors the mouse `mea_substrate_sets.csv` contract; persisted by
+        # `ingest_mukesh_perdonor.py`. Used at view time to replay the GSEA walk
+        # against the full substrate set (not the leading-edge subset).
+        subs_lookup: dict[tuple[str, str], list[str]] = {}
+        if not subs.empty:
+            for _, srow in subs.iterrows():
+                k = str(srow.get("kinase", ""))
+                contrast = str(srow.get("contrast", ""))
+                donor = contrast.replace("_vs_CTRLmean", "")
+                motif = str(srow.get("motif", ""))
+                if motif:
+                    subs_lookup.setdefault((k, donor), []).append(motif)
         mea_lookup: dict[tuple[str, str], tuple[float, float, str, float, str, float]] = {}
         if not mea.empty:
             for _, row in mea.iterrows():
@@ -924,7 +942,8 @@ def build_human_slice() -> dict | None:
                 if (k, d) in mea_lookup:
                     n_, f_, lead, es_, subs_, p_ = mea_lookup[(k, d)]
                     rn_, rf_, rp_ = raw_lookup.get((k, d), (float("nan"), float("nan"), float("nan")))
-                    perdonor_rows.append((kid, d, n_, f_, lead, es_, subs_, p_, rn_, rf_, rp_))
+                    motifs = ";".join(subs_lookup.get((k, d), []))
+                    perdonor_rows.append((kid, d, n_, f_, lead, es_, subs_, p_, rn_, rf_, rp_, motifs))
 
     # Per-donor leading-substrate index (long, sparse).
     perdonor_index = {
@@ -939,6 +958,7 @@ def build_human_slice() -> dict | None:
         "raw_NES":     [round(r[8], 4) if pd.notna(r[8]) else None for r in perdonor_rows],
         "raw_FDR":     [round(r[9], 4) if pd.notna(r[9]) else None for r in perdonor_rows],
         "raw_p_value": [round(r[10], 6) if pd.notna(r[10]) else None for r in perdonor_rows],
+        "substrate_motifs": [r[11] for r in perdonor_rows],
     }
 
     # Global-shift diagnostics (track-tagged).
@@ -1415,7 +1435,7 @@ _INCYTR_PATHWAY_ABS_PDS = (0.0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
 # Pathway scoring stack — surfaced as table columns in the pathway tab.
 # PDS is already in the shard; these are net-new. log2FC and sigprob_max
 # were retired 2026-05-12 (mean-driven, inconsistent with the OLS pipeline).
-_INCYTR_SCORE_COLS = ("TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "multimodel_score")
+_INCYTR_SCORE_COLS = ("TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "SiK_score")
 
 # Per-node log2 fold-change columns. Only the four genuine log2FC metrics are
 # shipped — the Hill-shrunk aFC variants emitted by Incytr are NOT log2 fold-
@@ -1507,11 +1527,22 @@ def _write_incytr_pathways() -> dict | None:
     con = duckdb.connect()
     con.execute("PRAGMA threads=8; PRAGMA memory_limit='12GB';")
     con.execute("SET temp_directory='/home/hchung/.cache/duckdb';")
+    # SiK_score only exists in the pair-mode reshape (alz/integration/
+    # pair_to_receiver_cache.py); the legacy factorial cache does not carry
+    # it. NULL-fill when absent so the JS shard contract stays stable.
+    missing_score_cols = [c for c in _INCYTR_SCORE_COLS if c not in src_cols]
+    if missing_score_cols:
+        print(f"  (warn) incytr_pathways: source parquet missing score columns "
+              f"{missing_score_cols}; emitting NULL", flush=True)
     extra_score_select = ",\n          ".join(
-        f"CAST({c} AS DOUBLE) AS {c}" for c in _INCYTR_SCORE_COLS
+        f"CAST({c} AS DOUBLE) AS {c}" if c in src_cols
+        else f"CAST(NULL AS DOUBLE) AS {c}"
+        for c in _INCYTR_SCORE_COLS
     )
     extra_fc_select = ",\n          ".join(
-        f"CAST({c} AS DOUBLE) AS {c}" for c in _INCYTR_FC_COLS
+        f"CAST({c} AS DOUBLE) AS {c}" if c in src_cols
+        else f"CAST(NULL AS DOUBLE) AS {c}"
+        for c in _INCYTR_FC_COLS
     )
     label_clauses = [
         f'CAST("{src}" AS VARCHAR) AS {dst}' for src, dst in available_label_pairs
@@ -1768,6 +1799,365 @@ def _write_incytr_pathways() -> dict | None:
     }
 
 
+# ---------------------------------------------------------------------------
+# Pair-mode source (bench/incytr_pair_19/output/)
+# ---------------------------------------------------------------------------
+# Switch via INCYTR_SOURCE=pair_mode; input dir via INCYTR_PAIR_MODE_INPUT_DIR
+# (default bench/incytr_pair_19/output). Emits the same shard layout as the
+# factorial branch so the JS tabs (incytr_pathways.js, incytr_heatmap.js)
+# render unchanged. Pair-mode parquets carry path-level pr_up/down, ps_up/down,
+# py_up/down direction flags but no per-node log2FC or per-node DEG/prG labels
+# — those columns are NULL-filled to preserve the shard schema.
+_INCYTR_PAIR_GENO_NORMALIZE = {
+    "AppP": "App", "App": "App",
+    "Ttau": "Tau", "Tau": "Tau", "TtauP": "Tau",
+    "ApTt": "ApTt", "AppPTtau": "ApTt", "AppTtau": "ApTt",
+}
+
+
+def _pair_mode_contrast_from_filename(fname: str) -> str | None:
+    """`ma_2mo_AppP_ma_2mo_WTyp_incytr_output.parquet` → 'App_2mo'."""
+    m = re.match(
+        r"ma_(\d+)mo_([A-Za-z]+)_ma_\1mo_WTyp_incytr_output\.parquet$", fname
+    )
+    if not m:
+        return None
+    age, geno_token = m.group(1), m.group(2)
+    geno = _INCYTR_PAIR_GENO_NORMALIZE.get(geno_token)
+    if geno is None:
+        print(f"    (warn) unknown geno token '{geno_token}' in {fname}; skipping",
+              flush=True)
+        return None
+    return f"{geno}_{age}mo"
+
+
+def _write_incytr_pair_pathways() -> dict | None:
+    """Pair-mode equivalent of `_write_incytr_pathways`.
+
+    Reads `bench/incytr_pair_19/output/*.parquet` (one file per contrast,
+    Levy-19 spine) and emits the same shard layout + `incytr_pathways`
+    payload block as the factorial branch. Per-node `*_log2FC` and
+    `*_label` columns are NULL-filled (pair-mode does not compute them).
+    """
+    import duckdb
+
+    input_dir = os.environ.get(
+        "INCYTR_PAIR_MODE_INPUT_DIR",
+        os.path.join(config.REPO_ROOT, "bench", "incytr_pair_19", "output"),
+    )
+    if not os.path.isdir(input_dir):
+        print(f"  (warn) pair-mode input dir not found: {input_dir}; "
+              f"skipping incytr_pathways", flush=True)
+        return None
+
+    parquet_files = sorted(glob.glob(os.path.join(input_dir, "*_incytr_output.parquet")))
+    if not parquet_files:
+        print(f"  (warn) no pair-mode parquets in {input_dir}; "
+              f"skipping incytr_pathways", flush=True)
+        return None
+
+    # Pair each file with its contrast label. Drop files we can't parse.
+    file_to_contrast: list[tuple[str, str]] = []
+    for fpath in parquet_files:
+        contrast = _pair_mode_contrast_from_filename(os.path.basename(fpath))
+        if contrast is not None:
+            file_to_contrast.append((fpath, contrast))
+    if not file_to_contrast:
+        print(f"  (warn) no parseable pair-mode parquets in {input_dir}; "
+              f"skipping incytr_pathways", flush=True)
+        return None
+
+    # Contrast list: subset of the canonical 9, in canonical order.
+    present_contrasts = [c for c in _INCYTR_CONTRASTS
+                         if c in {c2 for _, c2 in file_to_contrast}]
+    contrast_to_idx = {c: i for i, c in enumerate(present_contrasts)}
+    print(f"  incytr_pair_pathways: {len(file_to_contrast)} parquet(s); "
+          f"contrasts = {present_contrasts}", flush=True)
+
+    con = duckdb.connect()
+    con.execute("PRAGMA threads=8; PRAGMA memory_limit='12GB';")
+    con.execute("SET temp_directory='/home/hchung/.cache/duckdb';")
+
+    # Detect optional path-level direction-flag columns once.
+    sample_schema = pq.read_schema(file_to_contrast[0][0])
+    src_cols = {f.name for f in sample_schema}
+    dir_flag_cols = [c for c in ("pr_up", "pr_down", "ps_up", "ps_down",
+                                  "py_up", "py_down")
+                     if c in src_cols]
+    extra_path_cols = [c for c in ("log2FC", "aFC") if c in src_cols]
+    if not dir_flag_cols:
+        print(f"    (warn) no direction-flag columns; downstream UI badges "
+              f"will be empty", flush=True)
+
+    # Build per-file SELECTs unioning into a single src table. Use disease-arm
+    # p-value (`p_value_ma_<age>mo_<geno>`) as the `pvalue` proxy — pair-mode
+    # has no factorial-OLS pooled p-value.
+    selects = []
+    for fpath, contrast in file_to_contrast:
+        sch = pq.read_schema(fpath)
+        names = {f.name for f in sch}
+        pcol_disease = None
+        for n in names:
+            if n.startswith("p_value_") and not n.endswith("_WTyp"):
+                pcol_disease = n
+                break
+        if pcol_disease is None:
+            print(f"    (warn) no disease-arm p_value col in "
+                  f"{os.path.basename(fpath)}; using NULL", flush=True)
+            pcol_clause = "CAST(NULL AS DOUBLE)"
+        else:
+            pcol_clause = f'CAST("{pcol_disease}" AS DOUBLE)'
+
+        dir_clauses = ",\n          ".join(
+            f"CAST({c} AS DOUBLE) AS {c}" for c in dir_flag_cols
+        )
+        path_clauses = ",\n          ".join(
+            f"CAST({c} AS DOUBLE) AS {c}" for c in extra_path_cols
+        )
+        score_clauses = ",\n          ".join(
+            f"CAST({c} AS DOUBLE) AS {c}" for c in _INCYTR_SCORE_COLS
+            if c in names
+        )
+        # Stable column order; missing scores are NULL.
+        missing_scores = [c for c in _INCYTR_SCORE_COLS if c not in names]
+        missing_score_clauses = ",\n          ".join(
+            f"CAST(NULL AS DOUBLE) AS {c}" for c in missing_scores
+        )
+        clauses = [score_clauses, missing_score_clauses,
+                   dir_clauses, path_clauses]
+        extra_select = ",\n          ".join(c for c in clauses if c)
+
+        selects.append(f"""
+        SELECT
+          "Sender.group"   AS sender,
+          "Receiver.group" AS receiver,
+          Path, Ligand, Receptor, EM, Target,
+          '{contrast}'      AS contrast,
+          {pcol_clause}     AS pvalue,
+          CAST(PDS AS DOUBLE) AS PDS,
+          {extra_select}
+        FROM read_parquet('{fpath}')
+        """)
+    union_sql = "\nUNION ALL\n".join(selects)
+    con.execute(f"CREATE TEMP TABLE src AS {union_sql}")
+    n_src = con.execute("SELECT COUNT(*) FROM src").fetchone()[0]
+    print(f"  incytr_pair_pathways: loaded {n_src:,} rows across "
+          f"{len(file_to_contrast)} contrast(s)", flush=True)
+
+    # Sender/receiver canonical lists from the data itself (Levy-19, already
+    # sanitized — no display↔sanitized indirection).
+    senders_canonical = sorted({r[0] for r in con.execute(
+        "SELECT DISTINCT sender FROM src").fetchall()})
+    receivers_canonical = sorted({r[0] for r in con.execute(
+        "SELECT DISTINCT receiver FROM src").fetchall()})
+    sender_to_idx = {s: i for i, s in enumerate(senders_canonical)}
+    receiver_to_idx = {r: i for i, r in enumerate(receivers_canonical)}
+    n_s, n_r, n_c = len(senders_canonical), len(receivers_canonical), len(present_contrasts)
+    print(f"    senders={n_s}, receivers={n_r}, contrasts={n_c} "
+          f"(pair count={n_s * n_r})", flush=True)
+
+    # --- heatmap_counts cube (same shape contract as factorial) ----------
+    n_thr = len(_INCYTR_PATHWAY_PVALUES)
+    n_ap = len(_INCYTR_PATHWAY_ABS_PDS)
+    hm_thr_clauses_list = []
+    for ip, tp in enumerate(_INCYTR_PATHWAY_PVALUES):
+        for iap, tap in enumerate(_INCYTR_PATHWAY_ABS_PDS):
+            hm_thr_clauses_list.append(
+                f"COUNT(*) FILTER (WHERE pvalue < {tp} "
+                f"AND COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
+            )
+    hm_thr_clauses = ", ".join(hm_thr_clauses_list)
+    hm_rows = con.execute(f"""
+        SELECT sender, receiver, contrast, {hm_thr_clauses}
+        FROM src
+        WHERE pvalue IS NOT NULL
+        GROUP BY sender, receiver, contrast
+    """).fetchall()
+    grid = np.zeros((n_s, n_r, n_c, n_thr, n_ap), dtype=np.uint32)
+    for row in hm_rows:
+        s_raw, r_raw, c = row[0], row[1], row[2]
+        if s_raw not in sender_to_idx or r_raw not in receiver_to_idx:
+            continue
+        if c not in contrast_to_idx:
+            continue
+        s_i, r_i, c_i = sender_to_idx[s_raw], receiver_to_idx[r_raw], contrast_to_idx[c]
+        offset = 3
+        for ip in range(n_thr):
+            for iap in range(n_ap):
+                grid[s_i, r_i, c_i, ip, iap] = int(row[offset])
+                offset += 1
+    totals = np.zeros((n_thr, n_ap), dtype=np.uint64)
+    for ip in range(n_thr):
+        for iap in range(n_ap):
+            totals[ip, iap] = int(grid[:, :, :, ip, iap].sum())
+    heatmap_counts = {
+        "thresholds": list(_INCYTR_PATHWAY_PVALUES),
+        "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
+        "shape": [n_s, n_r, n_c, n_thr, n_ap],
+        "counts": grid.flatten().tolist(),
+        "total_by_threshold": totals.tolist(),
+    }
+    p_005_idx = _INCYTR_PATHWAY_PVALUES.index(0.05)
+    ap_zero_idx = _INCYTR_PATHWAY_ABS_PDS.index(0.0)
+    ap_001_idx = _INCYTR_PATHWAY_ABS_PDS.index(0.01)
+    print(f"    heatmap_counts: total at pvalue<0.05 & |PDS|>=0    = "
+          f"{int(totals[p_005_idx, ap_zero_idx]):>9,}; "
+          f"at pvalue<0.05 & |PDS|>=0.01 = {int(totals[p_005_idx, ap_001_idx]):>9,}",
+          flush=True)
+
+    # --- pathway_counts cube ---------------------------------------------
+    thr_clauses = []
+    for ip, tp in enumerate(_INCYTR_PATHWAY_PVALUES):
+        for iap, tap in enumerate(_INCYTR_PATHWAY_ABS_PDS):
+            thr_clauses.append(
+                f"COUNT(*) FILTER (WHERE pvalue < {tp} "
+                f"AND COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
+            )
+    pathway_rows = con.execute(f"""
+        SELECT contrast,
+               CASE WHEN PDS > 0 THEN 2
+                    WHEN PDS < 0 THEN 0
+                    ELSE 1 END AS s,
+               {", ".join(thr_clauses)}
+        FROM src
+        WHERE pvalue IS NOT NULL
+        GROUP BY contrast, s
+    """).fetchall()
+    pathway_arr = np.zeros((n_c, 3, n_thr, n_ap), dtype=np.uint32)
+    for row in pathway_rows:
+        contrast, s_idx = row[0], int(row[1])
+        if contrast not in contrast_to_idx:
+            continue
+        c_idx = contrast_to_idx[contrast]
+        for ip in range(n_thr):
+            for iap in range(n_ap):
+                pathway_arr[c_idx, s_idx, ip, iap] = int(row[2 + ip * n_ap + iap])
+    pathway_counts = {
+        "thresholds": list(_INCYTR_PATHWAY_PVALUES),
+        "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
+        "contrasts": list(present_contrasts),
+        "counts": pathway_arr.flatten().tolist(),
+        "shape": [n_c, 3, n_thr, n_ap],
+        "sign_source": "PDS",
+    }
+
+    # --- shard the long table per (sender, receiver) ---------------------
+    os.makedirs(EDGE_SLICES_INCYTR_PATHWAYS_DIR, exist_ok=True)
+    for f in os.listdir(EDGE_SLICES_INCYTR_PATHWAYS_DIR):
+        if f.endswith(".parquet") or f == "index.json":
+            os.remove(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, f))
+
+    # Materialize once; group + write. Pair-mode now supplies per-node FC
+    # (driver Cal_scFC + post-hoc reconstruct_node_fc.R) and labels (driver
+    # DEG/prG assignment); fall back to NULL if the source parquet was
+    # produced by an older driver.
+    src_cols_pair = set(
+        con.execute("DESCRIBE SELECT * FROM src LIMIT 0").fetchdf()["column_name"]
+    )
+    fc_select = [
+        f'"{c}"' if c in src_cols_pair
+        else f'CAST(NULL AS DOUBLE) AS "{c}"'
+        for c in _INCYTR_FC_COLS
+    ]
+    label_select = [
+        f'"{src}" AS "{dst}"' if src in src_cols_pair
+        else f'CAST(NULL AS VARCHAR) AS "{dst}"'
+        for src, dst in zip(_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS)
+    ]
+    select_cols = (
+        ["sender", "receiver", "Path", "Ligand", "Receptor", "EM", "Target",
+         "contrast", "pvalue", "PDS"]
+        + list(_INCYTR_SCORE_COLS)
+        + dir_flag_cols
+        + extra_path_cols
+        + fc_select
+        + label_select
+    )
+    df = con.execute(f"SELECT {', '.join(select_cols)} FROM src").fetchdf()
+    con.close()
+
+    float_cols = (["pvalue", "PDS"]
+                  + list(_INCYTR_SCORE_COLS)
+                  + list(_INCYTR_FC_COLS)
+                  + dir_flag_cols + extra_path_cols)
+    for col in float_cols:
+        df[col] = df[col].astype("float32")
+    for col in _INCYTR_LABEL_COLS:
+        df[col] = pd.Categorical(df[col], categories=_INCYTR_LABEL_VOCAB)
+
+    shard_cols = (
+        ["Path", "Ligand", "Receptor", "EM", "Target",
+         "contrast", "pvalue", "PDS"]
+        + list(_INCYTR_SCORE_COLS)
+        + list(_INCYTR_FC_COLS)
+        + list(_INCYTR_LABEL_COLS)
+        + dir_flag_cols
+        + extra_path_cols
+    )
+    present_pairs: list[list[str]] = []
+    pair_row_counts: dict[str, int] = {}
+    total_rows = 0
+    max_shard_bytes = 0
+    max_shard_name = ""
+    for (s, r), g in df.groupby(["sender", "receiver"], sort=True):
+        sub = g[shard_cols].sort_values(
+            ["contrast", "pvalue"], kind="mergesort", na_position="last",
+        )
+        fname = f"{_incytr_sanitize(s)}__{_incytr_sanitize(r)}.parquet"
+        path = os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, fname)
+        pq.write_table(
+            pa.Table.from_pandas(sub, preserve_index=False),
+            path, compression="zstd",
+        )
+        present_pairs.append([s, r])
+        pair_row_counts[fname] = len(sub)
+        total_rows += len(sub)
+        sz = os.path.getsize(path)
+        if sz > max_shard_bytes:
+            max_shard_bytes = sz
+            max_shard_name = fname
+
+    index = {
+        "schema_version": SCHEMA_VERSION,
+        "filename_template": "{sender}__{receiver}.parquet",
+        "sanitize_rule": "replace('/', '-'); replace(' ', '_')",
+        "present": sorted(present_pairs),
+        "n_total_rows": total_rows,
+        "pair_row_counts": pair_row_counts,
+    }
+    with open(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, "index.json"), "w") as f:
+        json.dump(index, f)
+
+    total_bytes = sum(
+        os.path.getsize(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, fn))
+        for fn in os.listdir(EDGE_SLICES_INCYTR_PATHWAYS_DIR)
+        if fn.endswith(".parquet")
+    )
+    print(f"  incytr_pair_pathways: wrote {len(present_pairs)} shards "
+          f"({total_rows:,} rows; {total_bytes/1e6:.1f} MB total; "
+          f"max {max_shard_bytes/1e6:.2f} MB → {max_shard_name})", flush=True)
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "source": f"pair_mode ({os.path.relpath(input_dir, config.REPO_ROOT)})",
+        "contrasts": list(present_contrasts),
+        "senders": senders_canonical,
+        "receivers": receivers_canonical,
+        "empty_deg_celltypes": [],
+        "heatmap_counts": heatmap_counts,
+        "pathway_counts": pathway_counts,
+        "slice_index": index,
+        "score_columns": list(_INCYTR_SCORE_COLS),
+        "fc_nodes": list(_INCYTR_FC_NODES),
+        "fc_metrics": list(_INCYTR_FC_METRICS),
+        "label_columns": list(_INCYTR_LABEL_COLS),
+        "label_nodes": list(_INCYTR_LABEL_NODES),
+        "label_vocab": list(_INCYTR_LABEL_VOCAB),
+        "direction_flag_columns": list(dir_flag_cols),
+        "path_metric_columns": list(extra_path_cols),
+    }
+
+
 def _read_empty_deg_celltypes() -> list[str]:
     """Read the list of WMB classes with no DEGs from the upstream MANIFEST.
 
@@ -1828,8 +2218,15 @@ def build_payload(data: UnifiedData) -> dict:
     song_concordance_slice_index = _write_song_concordance_slices(_kinase_genes)
 
     # Incytr pathway shards: one parquet per (sender, receiver), backing the
-    # significant-pathway heatmap + table tabs.
-    incytr_pathways_block = _write_incytr_pathways()
+    # significant-pathway heatmap + table tabs. Source selectable via
+    # INCYTR_SOURCE env var: 'factorial' (default) or 'pair_mode'.
+    _incytr_source = os.environ.get("INCYTR_SOURCE", "factorial").lower()
+    if _incytr_source == "pair_mode":
+        print(f"  incytr source = pair_mode (INCYTR_SOURCE={_incytr_source})",
+              flush=True)
+        incytr_pathways_block = _write_incytr_pair_pathways()
+    else:
+        incytr_pathways_block = _write_incytr_pathways()
 
     meta = {
         "schema_version": SCHEMA_VERSION,

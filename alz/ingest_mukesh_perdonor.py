@@ -1,23 +1,34 @@
 """Per-donor MEA kinase enrichment for the human NBB (Mukesh) cohort.
 
-For each AD donor, builds a per-site stoichiometry delta vector
-(``stoich_AD_i - mean(stoich_CTRL)``) and runs MEA against it, then
-aggregates results into a kinase x donor NES matrix and a recurrence
+For each AD donor, builds a per-site delta vector against the CTRL mean
+on two preprocessing tracks and runs MEA against each:
+
+  * stoichiometry (`log2(phospho) − log2(protein)`) — primary signal
+  * raw phospho (uncorrected, normalized intensity) — sensitivity check
+
+Aggregates each into a kinase x donor NES matrix and a recurrence
 summary (kinases significant at FDR < MEA_FDR_THRESH in >= k donors).
+The raw-phospho variant mirrors `kinase_mechanism.py` for mouse: it lets
+the viewer cross-check whether a per-donor stoichiometry signal is
+abundance-driven vs activity-driven.
 
 Inputs (under outputs/reports/kinase_attribution_human/, written by
 ``ingest_mukesh.py --reshape``):
-  stoichiometry_matrix.csv       — IMAC (S/T) track
-  stoichiometry_matrix_pY.csv    — pY track
+  stoichiometry_matrix{,_pY}.csv     — stoichiometry track per residue class
+  raw_phospho_normalized{,_pY}.csv   — raw phospho track per residue class
   ../data_ingest_human/sample_mapping.csv
 
 Outputs (under outputs/reports/kinase_attribution_human/perdonor/):
-  mea_perdonor{suffix}.csv       — long form: donor, kinase, NES, FDR, ...
-  kinase_donor_nes{suffix}.csv   — kinase x donor wide NES matrix
-  kinase_donor_fdr{suffix}.csv   — kinase x donor wide FDR matrix
-  recurrence{suffix}.csv         — kinases significant in >= k donors
-  mea_global_shift{suffix}.csv   — per-donor median-centering log
-  winsorized_sites{suffix}.csv   — per-donor winsorized site log
+  mea_perdonor{,_raw}{suffix}.csv         — long form: donor, kinase, NES, FDR, ...
+  kinase_donor_nes{,_raw}{suffix}.csv     — kinase x donor wide NES matrix
+  kinase_donor_fdr{,_raw}{suffix}.csv     — kinase x donor wide FDR matrix
+  recurrence{,_raw}{suffix}.csv           — kinases significant in >= k donors
+  mea_global_shift{,_raw}{suffix}.csv     — per-donor median-centering log
+  winsorized_sites{,_raw}{suffix}.csv     — per-donor winsorized site log
+  mea_substrate_sets{,_raw}{suffix}.csv   — per (donor, kinase) substrate motif set
+                                            used as the GSEA hit set (mirrors the
+                                            mouse pipeline; consumed by the viewer
+                                            running-enrichment panel)
 """
 
 import argparse
@@ -43,10 +54,14 @@ from alz.ingest_mukesh import (
 PERDONOR_DIR = os.path.join(HUMAN_KINASE_DIR, "perdonor")
 
 
-def _load_track_matrix(track: str) -> pd.DataFrame:
+def _load_track_matrix(track: str, kind: str = "stoich") -> pd.DataFrame | None:
+    """Load the per-track matrix; ``kind`` selects stoichiometry vs raw phospho."""
     suffix = config.PHOSPHO_TRACKS[track]["output_suffix"]
-    path = os.path.join(HUMAN_KINASE_DIR, f"stoichiometry_matrix{suffix}.csv")
+    base = "stoichiometry_matrix" if kind == "stoich" else "raw_phospho_normalized"
+    path = os.path.join(HUMAN_KINASE_DIR, f"{base}{suffix}.csv")
     if not os.path.exists(path):
+        if kind == "raw":
+            return None
         raise FileNotFoundError(f"missing {path}; run ingest_mukesh.py --reshape")
     return pd.read_csv(path)
 
@@ -62,11 +77,11 @@ def _split_samples(mapping: pd.DataFrame) -> tuple[list[str], list[str]]:
 
 
 def _build_donor_deltas(
-    matrix: pd.DataFrame, ad_ids: list[str], ctrl_ids: list[str]
+    matrix: pd.DataFrame, ad_ids: list[str], ctrl_ids: list[str], lfc_key: str,
 ) -> dict[str, dict[str, np.ndarray]]:
-    """Return ``{donor: {"stoich_lfc": np.array per site}}``.
+    """Return ``{donor: {lfc_key: np.array per site}}``.
 
-    Delta is computed as ``stoich_AD_i - nanmean(stoich_CTRL)`` per site;
+    Delta is computed as ``value_AD_i - nanmean(value_CTRL)`` per site;
     sites with no CTRL coverage are NaN (downstream `_run_mea` drops them
     before ranking).
     """
@@ -77,46 +92,61 @@ def _build_donor_deltas(
     for donor in ad_ids:
         donor_vec = matrix[donor].to_numpy(dtype=float)
         delta = donor_vec - ctrl_mean
-        out[f"{donor}_vs_CTRLmean"] = {"stoich_lfc": delta}
+        out[f"{donor}_vs_CTRLmean"] = {lfc_key: delta}
     return out
 
 
-def _run_track(track: str, mapping: pd.DataFrame) -> None:
-    print(f"\n=== Per-donor MEA: track={track} ===")
-    matrix = _load_track_matrix(track)
+_KIND_SPEC = {
+    "stoich": {"matrix_kind": "stoich", "lfc_key": "stoich_lfc", "infix": ""},
+    "raw":    {"matrix_kind": "raw",    "lfc_key": "raw_lfc",    "infix": "_raw"},
+}
+
+
+def _run_track_kind(track: str, kind: str, mapping: pd.DataFrame) -> None:
+    spec = _KIND_SPEC[kind]
+    print(f"\n=== Per-donor MEA: track={track} kind={kind} ===")
+    matrix = _load_track_matrix(track, spec["matrix_kind"])
+    if matrix is None:
+        print(f"  [{track}/{kind}] input matrix missing; skip.")
+        return
     ad_ids, ctrl_ids = _split_samples(mapping)
     # Keep only samples present in the matrix.
     ad_ids = [s for s in ad_ids if s in matrix.columns]
     ctrl_ids = [s for s in ctrl_ids if s in matrix.columns]
     print(f"  AD donors: {len(ad_ids)}  CTRL: {len(ctrl_ids)}  sites: {len(matrix)}")
 
-    results = _build_donor_deltas(matrix, ad_ids, ctrl_ids)
+    results = _build_donor_deltas(matrix, ad_ids, ctrl_ids, spec["lfc_key"])
 
     motif_series = matrix["motif"]
     site_ids = matrix["site_id"].values
     gene_symbols = matrix["gene_symbol"].values
 
-    mea_df, shift_df, wins_df, _substrate_df = kinase_enrich._run_mea(
+    mea_df, shift_df, wins_df, substrate_df = kinase_enrich._run_mea(
         motif_series=motif_series,
         results_by_contrast=results,
-        lfc_key="stoich_lfc",
+        lfc_key=spec["lfc_key"],
         site_ids=site_ids,
         gene_symbols=gene_symbols,
         track=track,
     )
 
     suffix = config.PHOSPHO_TRACKS[track]["output_suffix"]
+    infix = spec["infix"]
     os.makedirs(PERDONOR_DIR, exist_ok=True)
 
-    mea_path = os.path.join(PERDONOR_DIR, f"mea_perdonor{suffix}.csv")
+    mea_path = os.path.join(PERDONOR_DIR, f"mea_perdonor{infix}{suffix}.csv")
     mea_df.to_csv(mea_path, index=False)
     print(f"  wrote {mea_path}  rows={len(mea_df)}")
 
     shift_df.to_csv(
-        os.path.join(PERDONOR_DIR, f"mea_global_shift{suffix}.csv"), index=False
+        os.path.join(PERDONOR_DIR, f"mea_global_shift{infix}{suffix}.csv"), index=False
     )
     wins_df.to_csv(
-        os.path.join(PERDONOR_DIR, f"winsorized_sites{suffix}.csv"), index=False
+        os.path.join(PERDONOR_DIR, f"winsorized_sites{infix}{suffix}.csv"), index=False
+    )
+    substrate_df.to_csv(
+        os.path.join(PERDONOR_DIR, f"mea_substrate_sets{infix}{suffix}.csv"),
+        index=False,
     )
 
     if mea_df.empty:
@@ -135,8 +165,8 @@ def _run_track(track: str, mapping: pd.DataFrame) -> None:
     )
     nes_wide = nes_wide.reindex(columns=ad_ids)
     fdr_wide = fdr_wide.reindex(columns=ad_ids)
-    nes_wide.to_csv(os.path.join(PERDONOR_DIR, f"kinase_donor_nes{suffix}.csv"))
-    fdr_wide.to_csv(os.path.join(PERDONOR_DIR, f"kinase_donor_fdr{suffix}.csv"))
+    nes_wide.to_csv(os.path.join(PERDONOR_DIR, f"kinase_donor_nes{infix}{suffix}.csv"))
+    fdr_wide.to_csv(os.path.join(PERDONOR_DIR, f"kinase_donor_fdr{infix}{suffix}.csv"))
 
     sig_mask = fdr_wide < config.MEA_FDR_THRESH
     up_mask = sig_mask & (nes_wide > 0)
@@ -153,7 +183,7 @@ def _run_track(track: str, mapping: pd.DataFrame) -> None:
     rec = rec.sort_values(
         ["n_donors_sig", "n_donors_tested"], ascending=[False, False]
     )
-    rec_path = os.path.join(PERDONOR_DIR, f"recurrence{suffix}.csv")
+    rec_path = os.path.join(PERDONOR_DIR, f"recurrence{infix}{suffix}.csv")
     rec.to_csv(rec_path, index=False)
     print(
         f"  recurrence written: {rec_path}  "
@@ -161,6 +191,11 @@ def _run_track(track: str, mapping: pd.DataFrame) -> None:
         f">=ceil(N/2) donors sig: "
         f"{(rec['n_donors_sig'] >= np.ceil(len(ad_ids) / 2)).sum()})"
     )
+
+
+def _run_track(track: str, mapping: pd.DataFrame) -> None:
+    _run_track_kind(track, "stoich", mapping)
+    _run_track_kind(track, "raw", mapping)
 
 
 def main(argv: list[str] | None = None) -> int:
