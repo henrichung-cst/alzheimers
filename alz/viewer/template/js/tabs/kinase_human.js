@@ -55,9 +55,10 @@ function _khCountUpDown(nesVec, fdrVec, mode, fdrThresh) {
 }
 
 const _KH_AUDIT_TABS = [
-  {id: "trace", label: "Measurement Trace"},
-  {id: "prep",  label: "MEA Preparation"},
-  {id: "score", label: "MEA Score"},
+  {id: "trace",    label: "Measurement Trace"},
+  {id: "prep",     label: "MEA Preparation"},
+  {id: "score",    label: "MEA Score"},
+  {id: "celltype", label: "Cell-type specificity"},
 ];
 
 // Lazy site-by-motif index for trace lookups: motif -> [site_indices...]
@@ -336,6 +337,10 @@ function renderKinaseHuman() {
                  : `<span class="muted" title="No signed NES to compare against.">·</span>`;
       seaCell = `<span style="color:${color}; font-variant-numeric:tabular-nums;">${seaLfc.toFixed(2)}</span> ${mark}`;
     }
+    // Top cell-type specificity columns (collapsible; absent when phase-2 data unavailable).
+    const topSeaadCell = _khTopCelltypeCell(r.name, "seaad_mtg");
+    const topHbcaCell  = _khTopCelltypeCell(r.name, "allen_hbca");
+    const hasSpec = _KH_HAS_CELLTYPE_SPEC;
     return `<tr data-khid="${r.id}" class="${sigCls}" tabindex="0">`
       + `<td>${_escapeHtml(r.name)}</td>`
       + `<td>${_escapeHtml(r.gene_symbol || "")}</td>`
@@ -347,6 +352,8 @@ function renderKinaseHuman() {
       + `<td>${r.n_donors_down}</td>`
       + `<td class="kh-ctrl-col" title="${r.n_ctrl_sig_up || 0} up / ${r.n_ctrl_sig_down || 0} down · CTRL spread ±${r.ctrl_sd == null ? "—" : r.ctrl_sd.toFixed(2)} NES">${r.n_ctrl_sig}</td>`
       + `<td>${seaCell}</td>`
+      + (hasSpec ? `<td class="kh-spec-col kh-spec-seaad" title="Top cell type by SEA-AD MTG specificity">${topSeaadCell}</td>` : "")
+      + (hasSpec ? `<td class="kh-spec-col kh-spec-hbca" title="Top cell type by HBCA specificity">${topHbcaCell}</td>` : "")
       + `</tr>`;
   }).join("");
   tbody.innerHTML = html;
@@ -449,9 +456,10 @@ function _khRenderAuditBody(r) {
   const body = document.getElementById("kh-audit-body");
   if (!body) return;
   const tab = _KHState.auditTab;
-  if (tab === "trace") return _khRenderTrace(body, r);
-  if (tab === "prep")  return _khRenderPrep(body, r);
-  if (tab === "score") return _khRenderScore(body, r);
+  if (tab === "trace")    return _khRenderTrace(body, r);
+  if (tab === "prep")     return _khRenderPrep(body, r);
+  if (tab === "score")    return _khRenderScore(body, r);
+  if (tab === "celltype") return _khRenderCelltypeSpecificity(body, r);
 }
 
 function _khRenderTrace(body, r) {
@@ -884,6 +892,92 @@ function _khRenderScore(body, r) {
 
   _khRenderRunningEnrichment("kh-mea-running", r, donor);
   _khRenderNESAcrossDonors("kh-mea-trajectory", r, donor);
+}
+
+// ---------------------------------------------------------------------------
+// Cell-type specificity helpers (CR03)
+// ---------------------------------------------------------------------------
+
+// Whether the celltype_specificity block is present in the current payload.
+const _KH_HAS_CELLTYPE_SPEC = _KH_HAS && !!(_KH.celltype_specificity);
+
+// Retrieve top-N cell types for a kinase from a given reference.
+// Returns [] when data is unavailable.
+function _khTopCelltypes(kinaseName, reference, n) {
+  if (!_KH_HAS_CELLTYPE_SPEC) return [];
+  const spec = _KH.celltype_specificity;
+  if (!spec || !spec[reference]) return [];
+  const topN = spec[reference].top_n_by_kinase;
+  if (!topN) return [];
+  return (topN[kinaseName] || []).slice(0, n || 8);
+}
+
+// Render the top-1 cell type as a compact table cell string.
+function _khTopCelltypeCell(kinaseName, reference) {
+  const tops = _khTopCelltypes(kinaseName, reference, 1);
+  if (!tops.length) return `<span class="muted">—</span>`;
+  const t = tops[0];
+  const scoreStr = t.score != null ? t.score.toFixed(2) : "—";
+  return `<span title="${_escapeHtml(t.celltype)} (log₂-ratio ${scoreStr})">${_escapeHtml(t.celltype)}</span>`;
+}
+
+// Render the cell-type specificity detail sub-tab body.
+function _khRenderCelltypeSpecificity(body, r) {
+  if (!_KH_HAS_CELLTYPE_SPEC) {
+    body.innerHTML = `<div class="muted" style="padding:1em;">
+      Cell-type specificity data is not available in this payload build.
+      Run <code>python alz/atlas_reference.py --sea-ad-expression</code> and
+      <code>python alz/atlas_reference.py --hbca-download</code> (phase 2), then
+      <code>python alz/human_reference_expression.py --ref both</code> and
+      <code>python alz/human_celltype_attribution.py</code>, and rebuild the viewer.
+    </div>`;
+    return;
+  }
+
+  const spec = _KH.celltype_specificity;
+  const refs = spec.references || [];
+  const refLabels = {
+    "seaad_mtg": "SEA-AD MTG (cortical supertypes)",
+    "allen_hbca": "Allen HBCA (whole-brain classes)",
+  };
+
+  let html = `<p class="kinase-stage-note">
+    Transcript-level specificity of <strong>${_escapeHtml(r.gene_symbol || r.name)}</strong>
+    across human brain cell types from two independent references.
+    Score = log₂(cell-type mean / brain-wide mean); positive = enriched in that cell type.
+    SEA-AD MTG is cortex-only; HBCA provides whole-brain coverage.
+    Specificity is a transcript-level prior, not a co-measurement with this cohort.
+  </p>`;
+
+  for (const ref of refs) {
+    const refSpec = spec[ref];
+    if (!refSpec) continue;
+    const topN = _khTopCelltypes(r.name, ref, 8);
+    const label = refLabels[ref] || ref;
+
+    const tableRows = topN.map((t, i) =>
+      `<tr>
+        <td>${i + 1}</td>
+        <td>${_escapeHtml(t.celltype)}</td>
+        <td style="font-variant-numeric:tabular-nums; color:${t.score >= 0 ? '#1b5e20' : '#b71c1c'};">${t.score != null ? t.score.toFixed(3) : "—"}</td>
+      </tr>`
+    ).join("");
+
+    const noData = !topN.length
+      ? `<p class="muted">No data for ${_escapeHtml(r.name)} in ${_escapeHtml(label)}.</p>`
+      : "";
+
+    html += `<section class="audit-panel">
+      <h4>${_escapeHtml(label)}</h4>
+      ${noData}
+      ${topN.length ? `<div class="kh-audit-tablewrap"><table class="data-table">
+        <thead><tr><th>Rank</th><th>Cell type</th><th>log₂-specificity</th></tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table></div>` : ""}
+    </section>`;
+  }
+
+  body.innerHTML = html;
 }
 
 function _khBuildDonorChips() {
