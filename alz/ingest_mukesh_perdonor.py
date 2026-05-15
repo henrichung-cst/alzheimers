@@ -82,40 +82,22 @@ def _build_donor_deltas(
 ) -> dict[str, dict[str, np.ndarray]]:
     """Return ``{donor: {lfc_key: np.array per site}}`` for AD + CTRL donors.
 
-    AD donors:  ``stoich(AD_i)  − nanmean(stoich(all CTRL))``       — new
-                observation vs. full CTRL reference.
-    CTRL donors: ``stoich(CTRL_i) − nanmean(stoich(CTRL_{−i}))``    — LOO,
-                so a control is scored against the *remaining* controls.
-
-    The asymmetry is intentional. AD is a new sample held up against the
-    full control reference; a CTRL donor's "would I look like a case if I
-    were dropped in?" needs the reference to exclude itself, otherwise the
-    delta is biased toward zero by ~1/N.
+    Delta is ``value_donor_i − nanmean(value_CTRL)`` per site, using the
+    *full* CTRL block as the reference for both groups (per supervisor
+    direction). CTRL donors are scored against the same mean they help
+    define; this biases CTRL deltas toward zero by ~1/N but keeps both
+    groups on a single, symmetric reference scale.
 
     Sites with no CTRL coverage are NaN (downstream ``_run_mea`` drops
     them before ranking).
     """
     ctrl_block = matrix[ctrl_ids].to_numpy(dtype=float)
     with np.errstate(all="ignore"):
-        ctrl_mean_full = np.nanmean(ctrl_block, axis=1)
+        ctrl_mean = np.nanmean(ctrl_block, axis=1)
     out: dict[str, dict[str, np.ndarray]] = {}
-    for donor in ad_ids:
+    for donor in (*ad_ids, *ctrl_ids):
         donor_vec = matrix[donor].to_numpy(dtype=float)
-        out[f"{donor}_vs_CTRLmean"] = {lfc_key: donor_vec - ctrl_mean_full}
-    # CTRL LOO: mask one column at a time.
-    n_ctrl = ctrl_block.shape[1]
-    for j, donor in enumerate(ctrl_ids):
-        if n_ctrl <= 1:
-            # No leftover to average against; produce a NaN vector so
-            # MEA records an empty contrast rather than crashing.
-            loo_mean = np.full(ctrl_block.shape[0], np.nan, dtype=float)
-        else:
-            mask = np.ones(n_ctrl, dtype=bool)
-            mask[j] = False
-            with np.errstate(all="ignore"):
-                loo_mean = np.nanmean(ctrl_block[:, mask], axis=1)
-        donor_vec = matrix[donor].to_numpy(dtype=float)
-        out[f"{donor}_vs_CTRLmean"] = {lfc_key: donor_vec - loo_mean}
+        out[f"{donor}_vs_CTRLmean"] = {lfc_key: donor_vec - ctrl_mean}
     return out
 
 
