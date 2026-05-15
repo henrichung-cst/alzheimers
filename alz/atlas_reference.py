@@ -7,6 +7,10 @@ Acquires Allen Institute transcriptomic datasets used by the live pipeline:
   - SEA-AD (Seattle Alzheimer's Disease MTG): pre-computed Nebula effect-size h5ads
     (`effect_sizes{,_early,_late}.h5ad`).  Used by `kinase_attribute.py` for
     transcriptomic concordance.
+  - SEA-AD MTG expression: per-supertype mean expression from the full donor-level
+    h5ad (~50 GB).  Used by `human_reference_expression.py`.  Phase-2 download.
+  - Allen Human Brain Cell Atlas (HBCA): per-class expression via abc_atlas_access.
+    Human analog of WMB.  Used by `human_reference_expression.py`.  Phase-2 download.
 
 Also exports a small set of helpers consumed by `wmb_expression.py` and
 `runners/supporting/extract_wmb_gene_subset.py`:
@@ -19,10 +23,12 @@ Optional dependencies:
     pip install boto3   # for SEA-AD S3 access
 
 Usage:
-    python alz/atlas_reference.py --sea-ad        # Download SEA-AD effect-size h5ads
-    python alz/atlas_reference.py --wmb-download  # Download all 13 WMB-10Xv3 log2 matrices (~95 GB)
-    python alz/atlas_reference.py --run           # SEA-AD + WMB download
-    python alz/atlas_reference.py --sea-ad-full   # Fallback: full SEA-AD MTG h5ad (~34 GB)
+    python alz/atlas_reference.py --sea-ad            # Download SEA-AD effect-size h5ads
+    python alz/atlas_reference.py --wmb-download      # Download all 13 WMB-10Xv3 log2 matrices (~95 GB)
+    python alz/atlas_reference.py --run               # SEA-AD + WMB download
+    python alz/atlas_reference.py --sea-ad-full       # Fallback: full SEA-AD MTG h5ad (~34 GB)
+    python alz/atlas_reference.py --sea-ad-expression # Phase 2: compute per-supertype mean expression
+    python alz/atlas_reference.py --hbca-download     # Phase 2: download Allen HBCA (~95 GB)
 """
 
 from __future__ import annotations
@@ -281,6 +287,174 @@ def download_sea_ad() -> Dict[str, Path]:
 
 
 # ---------------------------------------------------------------------------
+# SEA-AD MTG per-supertype expression (CR03 Phase-2 download)
+# ---------------------------------------------------------------------------
+
+
+def download_sea_ad_expression(chunk_size: int = 2000, force: bool = False) -> Path:
+    """Download the full SEA-AD MTG h5ad and compute per-supertype mean expression.
+
+    The full donor-level h5ad (~50 GB) is streamed in chunks to compute
+    log-mean expression per supertype without loading the full matrix into RAM.
+    Output: ``data/external/sea_ad/expression_by_supertype.csv``
+    (rows = gene HGNC symbols, columns = 139 supertypes).
+
+    Phase-2 only: requires ~50 GB download + ~16 GB RAM headroom.
+    Do NOT call during phase 1 (code-only) runs.
+    """
+    import anndata as ad
+
+    out_path = Path(config.SEA_AD_EXPRESSION_FILE)
+    if out_path.exists() and not force:
+        print(f"  Cached: {out_path} (use --force to recompute)")
+        return out_path
+
+    os.makedirs(config.SEA_AD_DIR, exist_ok=True)
+
+    # Identify and download (if needed) the full MTG h5ad.
+    local_h5ad = _sea_ad_download_main_h5ad(config.SEA_AD_DIR)
+    if local_h5ad is None or not local_h5ad.exists():
+        raise RuntimeError(
+            "SEA-AD MTG h5ad not found and could not be downloaded. "
+            "Check S3 access and try again."
+        )
+
+    print(f"\n  Computing per-supertype mean expression from {local_h5ad}")
+    print("  This requires substantial RAM (~8-16 GB); streaming in chunks ...")
+
+    adata = ad.read_h5ad(str(local_h5ad), backed="r")
+    print(f"  Shape: {adata.shape}")
+
+    # Determine gene name vector (prefer HGNC symbol column).
+    if "gene_symbol" in adata.var.columns:
+        gene_names = adata.var["gene_symbol"].tolist()
+    elif "feature_name" in adata.var.columns:
+        gene_names = adata.var["feature_name"].tolist()
+    else:
+        gene_names = adata.var_names.tolist()
+
+    # Determine supertype field in obs.
+    supertype_field = None
+    for cand in ("Supertype", "supertype", "cell_type_alias_label",
+                 "supertype_label", "supertypes"):
+        if cand in adata.obs.columns:
+            supertype_field = cand
+            break
+    if supertype_field is None:
+        raise RuntimeError(
+            f"Cannot find supertype column in obs. Available columns: "
+            f"{list(adata.obs.columns)}"
+        )
+    print(f"  Supertype field: '{supertype_field}'")
+
+    supertypes = sorted(adata.obs[supertype_field].dropna().unique().tolist())
+    st_to_idx: Dict[str, int] = {s: i for i, s in enumerate(supertypes)}
+    n_genes = adata.shape[1]
+    n_supertypes = len(supertypes)
+
+    expr_sum = np.zeros((n_genes, n_supertypes), dtype=np.float64)
+    cell_count = np.zeros(n_supertypes, dtype=np.int64)
+
+    obs_st = adata.obs[supertype_field].tolist()
+    n_cells = adata.shape[0]
+
+    print(f"  Supertypes: {n_supertypes}, Genes: {n_genes}, Cells: {n_cells:,}")
+
+    for start in range(0, n_cells, chunk_size):
+        end = min(start + chunk_size, n_cells)
+        chunk = adata.X[start:end]
+        if hasattr(chunk, "toarray"):
+            chunk = chunk.toarray()
+
+        for local_i, global_i in enumerate(range(start, end)):
+            st = obs_st[global_i]
+            si = st_to_idx.get(st)
+            if si is None:
+                continue
+            expr_sum[:, si] += chunk[local_i].astype(np.float64)
+            cell_count[si] += 1
+
+        if (start // chunk_size) % 10 == 0:
+            print(f"    ... {end:,}/{n_cells:,} cells processed", flush=True)
+
+    if hasattr(adata, "file") and adata.file is not None:
+        adata.file.close()
+
+    # Compute per-supertype mean and write CSV.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mean_expr = np.where(
+            cell_count[None, :] > 0,
+            expr_sum / cell_count[None, :],
+            0.0,
+        )
+
+    df = pd.DataFrame(mean_expr, index=gene_names, columns=supertypes)
+    df.index.name = "gene"
+    df.to_csv(out_path)
+    print(f"\n  Saved {df.shape} matrix to {out_path}")
+    print(f"  Supertypes: {supertypes[:5]} ... (first 5 of {len(supertypes)})")
+    return out_path
+
+
+# ---------------------------------------------------------------------------
+# Allen HBCA acquisition (CR03 Phase-2 download)
+# ---------------------------------------------------------------------------
+
+
+def download_hbca() -> Optional[Path]:
+    """Download Allen Human Brain Cell Atlas (HBCA) expression matrices.
+
+    Mirrors the WMB download approach: uses abc_atlas_access to stream
+    per-region log-expression files.  The HBCA dataset key within
+    abc_atlas_access is expected to be a human equivalent of WMB-10Xv3
+    (e.g. "WHB-10Xv3" or "HBCA-10Xv3"); the exact key is discovered by
+    inspecting ``cache.list_directories``.
+
+    Phase-2 only — this is a multi-hour, ~95 GB download.
+    Do NOT call during phase 1 (code-only) runs.
+
+    Returns the local HBCA cache directory path, or None if no matching
+    dataset was found.
+    """
+    cache = get_abc_cache()
+
+    # Discover HBCA dataset key — look for human whole-brain keys.
+    candidate_patterns = ["WHB", "HBCA", "human", "Human"]
+    hbca_key = None
+    print("  Scanning abc_atlas_access for human brain datasets ...")
+    dirs = cache.list_directories
+    for pat in candidate_patterns:
+        found = _find_dataset_key(cache, pat)
+        if found:
+            hbca_key = found
+            print(f"  Found HBCA dataset key: '{hbca_key}' (matched pattern '{pat}')")
+            break
+
+    if hbca_key is None:
+        print(
+            "  WARNING: No HBCA dataset found via abc_atlas_access. "
+            "Available directories:\n    " + "\n    ".join(str(d) for d in dirs[:20])
+        )
+        return None
+
+    os.makedirs(config.HBCA_CACHE_DIR, exist_ok=True)
+    print(f"  HBCA cache dir: {config.HBCA_CACHE_DIR}")
+    print(f"  Downloading HBCA dataset '{hbca_key}' (multi-GB, multi-hour) ...")
+
+    # List files for this dataset key and download expression matrices.
+    try:
+        # abc_atlas_access caches automatically; re-running is idempotent.
+        downloaded_path = _get_expression_path(cache, hbca_key, "")
+    except Exception as exc:
+        print(f"  WARNING: Could not enumerate HBCA files: {exc}")
+        print("  Use abc_atlas_access directly to identify file keys, then re-run.")
+        return None
+
+    print(f"  HBCA download complete → {config.HBCA_CACHE_DIR}")
+    return Path(config.HBCA_CACHE_DIR)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -306,6 +480,16 @@ def main():
                        help="Download all 13 WMB-10Xv3 log2 expression matrices (~95 GB)")
     group.add_argument("--sea-ad-full", action="store_true",
                        help="Fallback: download the full SEA-AD MTG h5ad (~34 GB)")
+    group.add_argument("--sea-ad-expression", action="store_true",
+                       help="Phase 2: download SEA-AD MTG h5ad and compute "
+                            "per-supertype mean expression → "
+                            "data/external/sea_ad/expression_by_supertype.csv")
+    group.add_argument("--hbca-download", action="store_true",
+                       help="Phase 2: download Allen Human Brain Cell Atlas (HBCA) "
+                            "expression matrices (~95 GB) via abc_atlas_access")
+    parser.add_argument("--force", action="store_true",
+                        help="Force recompute even if output already exists "
+                             "(applies to --sea-ad-expression)")
     args = parser.parse_args()
 
     if args.run:
@@ -316,6 +500,10 @@ def main():
         download_all_wmb_expression()
     elif args.sea_ad_full:
         _sea_ad_download_main_h5ad(config.SEA_AD_DIR)
+    elif args.sea_ad_expression:
+        download_sea_ad_expression(force=getattr(args, "force", False))
+    elif args.hbca_download:
+        download_hbca()
 
 
 if __name__ == "__main__":
