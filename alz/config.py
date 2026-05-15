@@ -340,6 +340,62 @@ WMB_METADATA_CSV = os.path.join(
 
 SEA_AD_S3_BUCKET = "sea-ad-single-cell-profiling"
 
+# ---------------------------------------------------------------------------
+# Human reference data — SEA-AD MTG expression + Allen HBCA (CR03)
+# ---------------------------------------------------------------------------
+
+# SEA-AD MTG per-supertype mean expression (genes × 139 supertypes).
+# Phase-2 download: atlas_reference.py --sea-ad-expression
+# Note: the raw MTG h5ad (~50 GB) is downloaded, chunked by supertype, and
+# the per-supertype mean written here. The donor-level h5ad object key on
+# s3://sea-ad-single-cell-profiling/MTG/RNAseq/ is confirmed during phase 2;
+# the canonical object name is expected to match "SEAAD_MTG_RNAseq_final-nuclei.2024-02-13.h5ad"
+# (the same file targeted by _sea_ad_download_main_h5ad). Confirm with:
+#   aws s3 ls s3://sea-ad-single-cell-profiling/MTG/RNAseq/ --no-sign-request
+SEA_AD_EXPRESSION_FILE = os.path.join(SEA_AD_DIR, "expression_by_supertype.csv")
+
+# Allen Human Brain Cell Atlas (HBCA) via abc_atlas_access.
+# Phase-2 download: atlas_reference.py --hbca-download
+# Dataset key within abc_atlas_access is expected to be "WHB-10Xv3" or similar
+# human equivalent of WMB-10Xv3; verify with cache.list_directories before download.
+# Top-level taxonomy field: HBCA uses "class" (analogous to WMB "class") — confirm
+# during phase 2 by inspecting the cell_metadata CSV.
+HBCA_CACHE_DIR = os.path.join(EXTERNAL_DATA_DIR, "allen_hbca")
+HBCA_EXPRESSION_FILE = os.path.join(HBCA_CACHE_DIR, "expression_by_class.csv")
+
+# Human reference output files consumed by human_celltype_attribution.py
+HUMAN_REFERENCE_OUTPUT_DIR = os.path.join("outputs", "reports", "human_reference_expression")
+SEAAD_KINASE_SPECIFICITY_FILE = os.path.join(
+    HUMAN_REFERENCE_OUTPUT_DIR, "seaad_kinase_specificity.csv"
+)
+HBCA_KINASE_SPECIFICITY_FILE = os.path.join(
+    HUMAN_REFERENCE_OUTPUT_DIR, "hbca_kinase_specificity.csv"
+)
+
+# Final per-kinase cell-type attribution output
+HUMAN_CELLTYPE_ATTRIBUTION_OUTPUT_DIR = os.path.join(
+    "outputs", "reports", "kinase_attribution_human"
+)
+CELLTYPE_SPECIFICITY_FILE = os.path.join(
+    HUMAN_CELLTYPE_ATTRIBUTION_OUTPUT_DIR, "celltype_specificity.csv"
+)
+
+# Top-N cell types per kinase per reference (for payload convenience tables)
+HUMAN_CELLTYPE_TOP_N = 8
+
+# SEA-AD MTG supertype list (139 supertypes; populated from expression file at runtime).
+# This is a runtime constant — populated by human_reference_expression.py.
+# The static fallback here is empty; callers that need the full list should load
+# the expression CSV directly.
+SEAAD_MTG_SUPERTYPES: list[str] = []
+
+# Human reference taxonomy label for HBCA. Analogous to WMB "class".
+# Spec note: HBCA top-level taxonomy field is expected to be "class" — confirm
+# during phase-2 download by running:
+#   import anndata as ad; a = ad.read_h5ad(<hbca_sample.h5ad>, backed="r"); print(a.obs.columns.tolist())
+# If the field name differs, update this constant and human_reference_expression.py accordingly.
+HBCA_CLASS_FIELD = "class"
+
 WMB_EXPRESSION_OUTPUT_DIR = os.path.join("outputs", "reports", "wmb_expression")
 WMB_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_kinase_expression.csv")
 WMB_EXPRESSION_SUBCLASS_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_kinase_expression_subclass.csv")
