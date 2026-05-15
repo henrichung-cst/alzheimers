@@ -52,6 +52,11 @@ sys.path.insert(0, os.path.join(HERE, "integration"))
 import config  # noqa: E402
 import config_integration as icfg  # noqa: E402
 import kinase_normalize as kattr  # noqa: E402  (Stage 1 helpers + load_sample_mapping)
+try:
+    from human_celltype_attribution import build_celltype_specificity_payload  # noqa: E402
+    _HAS_HUMAN_CELLTYPE = True
+except ImportError:
+    _HAS_HUMAN_CELLTYPE = False
 
 # ---------------------------------------------------------------------------
 # Paths — re-exported from viewer.paths so existing references in this module
@@ -1110,7 +1115,18 @@ def build_human_slice() -> dict | None:
                                if pd.notna(row.get("median_nes")) else None),
             })
 
-    return {
+    # Cell-type specificity block (CR03). Populated when human_reference_expression.py
+    # has been run and the specificity CSVs exist. Gracefully absent in phase-1 runs.
+    celltype_specificity: dict | None = None
+    if _HAS_HUMAN_CELLTYPE:
+        try:
+            celltype_specificity = build_celltype_specificity_payload(
+                top_n=config.HUMAN_CELLTYPE_TOP_N
+            )
+        except Exception as exc:
+            print(f"  human celltype_specificity: skipped ({exc})", flush=True)
+
+    human_slice: dict = {
         "schema_version": 2,  # bumped: adds ctrl_donors, NES_<ctrl>_vs_CTRLmean cols
         "kinases": cols,
         "donors": donors,
@@ -1126,6 +1142,9 @@ def build_human_slice() -> dict | None:
         "stoich_by_site": stoich_by_site,
         "raw_phospho_by_site": raw_by_site,
     }
+    if celltype_specificity is not None:
+        human_slice["celltype_specificity"] = celltype_specificity
+    return human_slice
 
 
 def _build_celltypes_slice(data: UnifiedData) -> dict:
