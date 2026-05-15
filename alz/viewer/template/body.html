@@ -113,7 +113,25 @@
               <option value="na">N/A</option>
             </select>
           </label>
-          <label class="ke-filter-label" id="kh-show-ctrl-label" title="Render a side-by-side CTRL donor column group. Controls are scored against the same CTRL mean used for AD donors and bias toward zero; bars are muted so they aren't confused with cases.">
+          <label class="ke-filter-label" title="Filter by direction-consistency across significant AD donors at the active FDR. All up = every sig AD donor has NES > 0. All down = every sig AD donor has NES < 0. Mixed = both directions present. None = no sig AD donors.">AD dir
+            <select id="kh-filter-ad-dir" aria-label="AD direction pattern">
+              <option value="">Any</option>
+              <option value="all_up">All up</option>
+              <option value="all_down">All down</option>
+              <option value="mixed">Mixed</option>
+              <option value="none">None sig</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Filter by direction-consistency across significant CTRL donors at the active FDR. Same semantic as AD dir but over the CTRL donor block.">CTRL dir
+            <select id="kh-filter-ctrl-dir" aria-label="CTRL direction pattern">
+              <option value="">Any</option>
+              <option value="all_up">All up</option>
+              <option value="all_down">All down</option>
+              <option value="mixed">Mixed</option>
+              <option value="none">None sig</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" id="kh-show-ctrl-label" title="Render a side-by-side CTRL donor column group. Controls are scored against the same CTRL mean used for AD donors; hatched fill marks the CTRL group while red/blue saturation still encodes sig/insig.">
             <input id="kh-show-ctrl" type="checkbox" checked/> Show controls
           </label>
           <button id="kh-filter-reset" class="ke-filter-reset" title="Reset all kinase filters">Reset</button>

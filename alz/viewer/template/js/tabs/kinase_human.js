@@ -16,12 +16,23 @@ const _KHState = {
   nsigMin: 0,
   track: "",
   seaad: "",           // "" | "agree" | "disagree" | "na"
+  adDir: "",           // "" | "all_up" | "all_down" | "mixed" | "none"
+  ctrlDir: "",         // "" | "all_up" | "all_down" | "mixed" | "none"
   showCtrl: true,      // render side-by-side CTRL column group
   sortCol: "n_donors_sig",
   sortAsc: false,
   auditTab: "score",     // trace | prep | score
   auditDonor: null,      // donor selected for donor-scoped sub-tabs
 };
+
+// Direction pattern over (n_up_sig, n_down_sig). "none" = no sig donors.
+function _khDirPattern(nUp, nDown) {
+  const u = nUp || 0, d = nDown || 0;
+  if (u === 0 && d === 0) return "none";
+  if (u > 0 && d === 0) return "all_up";
+  if (d > 0 && u === 0) return "all_down";
+  return "mixed";
+}
 
 const _KH_AUDIT_TABS = [
   {id: "trace", label: "Measurement Trace"},
@@ -176,12 +187,16 @@ function _khFilter(rows) {
   const minSig = _KHState.nsigMin;
   const track = _KHState.track;
   const seaad = _KHState.seaad;
+  const adDir = _KHState.adDir;
+  const ctrlDir = _KHState.ctrlDir;
   return rows.filter(r => {
     if (track && r.residue_type !== track) return false;
     if (r.n_donors_sig < minSig) return false;
     if (q && !(String(r.name).toLowerCase().includes(q)
             || String(r.gene_symbol).toLowerCase().includes(q))) return false;
     if (seaad && _khSeaAdAgreement(r) !== seaad) return false;
+    if (adDir && _khDirPattern(r.n_donors_up, r.n_donors_down) !== adDir) return false;
+    if (ctrlDir && _khDirPattern(r.n_ctrl_sig_up, r.n_ctrl_sig_down) !== ctrlDir) return false;
     return true;
   });
 }
@@ -698,23 +713,26 @@ function _khRenderNESAcrossDonors(hostId, r, selectedDonor) {
   const layoutShapes = [];
   const layoutAnnotations = [];
   if (showCtrl) {
-    // Muted CTRL bars in a desaturated palette (CTRL donors are scored
-    // against their own mean so they bias toward zero — visually muted
-    // so they aren't confused with cases).
-    const ctrlBase = "#90a4ae";
+    // CTRL bars use the same red/blue palette as AD so sig-vs-insig is
+    // legible. Hatched fill pattern marks them as the CTRL group instead
+    // of relying on a desaturated palette (which buried the signal).
     const ctrlColors = ctrlDonors.map((_, di) => {
       const nes = r._nesCtrl[di];
       const fdr = r._fdrCtrl[di];
       const sig = fdr != null && fdr < fdrThresh;
-      const col = (nes != null && nes < 0) ? "#7e9aae" : (nes != null && nes > 0) ? "#a78a93" : ctrlBase;
-      return sig ? col : _hexToRgba(col, 0.35);
+      const base = (nes != null && nes < 0) ? "#1f5fa6" : "#c8261c";
+      return sig ? base : _hexToRgba(base, 0.28);
     });
     const ctrlSelIdx = ctrlDonors.indexOf(selectedDonor);
     const ctrlOutlines = ctrlDonors.map((_, i) => i === ctrlSelIdx ? "#000" : "rgba(0,0,0,0)");
     const ctrlLineW = ctrlDonors.map((_, i) => i === ctrlSelIdx ? 2.5 : 0);
     traces.push({
       type:"bar", x: ctrlDonors, y: r._nesCtrl.map(v => v == null ? 0 : v),
-      marker:{color: ctrlColors, line:{color: ctrlOutlines, width: ctrlLineW}},
+      marker:{
+        color: ctrlColors,
+        line:{color: ctrlOutlines, width: ctrlLineW},
+        pattern:{shape:"/", size:5, solidity:0.45, fgcolor:"#ffffff"},
+      },
       name:"CTRL",
       hovertemplate:"%{x} (CTRL)<br>NES %{y:.2f}<extra></extra>",
     });
@@ -878,6 +896,22 @@ function wireKinaseHuman() {
   if (seaad) seaad.addEventListener("change", e => {
     _KHState.seaad = e.target.value; renderKinaseHuman();
   });
+  const adDir = document.getElementById("kh-filter-ad-dir");
+  if (adDir) adDir.addEventListener("change", e => {
+    _KHState.adDir = e.target.value; renderKinaseHuman();
+  });
+  const ctrlDir = document.getElementById("kh-filter-ctrl-dir");
+  if (ctrlDir) {
+    const ctrlCount = (_KH.ctrl_donors || []).length;
+    if (!ctrlCount) {
+      const wrap = ctrlDir.closest("label");
+      if (wrap) wrap.style.display = "none";
+    } else {
+      ctrlDir.addEventListener("change", e => {
+        _KHState.ctrlDir = e.target.value; renderKinaseHuman();
+      });
+    }
+  }
   const showCtrl = document.getElementById("kh-show-ctrl");
   // Hide the toggle entirely when there are no CTRL donors in the payload
   // (legacy build before CTRL columns were added).
@@ -899,10 +933,13 @@ function wireKinaseHuman() {
   if (reset) reset.addEventListener("click", () => {
     _KHState.search = ""; _KHState.donors.clear();
     _KHState.nsigMin = 0; _KHState.track = ""; _KHState.seaad = "";
+    _KHState.adDir = ""; _KHState.ctrlDir = "";
     if (search) search.value = "";
     if (nsig) nsig.value = 0;
     if (track) track.value = "";
     if (seaad) seaad.value = "";
+    if (adDir) adDir.value = "";
+    if (ctrlDir) ctrlDir.value = "";
     document.querySelectorAll(".kh-donor-chip").forEach(b => b.classList.remove("active"));
     renderKinaseHuman();
   });
