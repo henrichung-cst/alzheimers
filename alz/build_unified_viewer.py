@@ -743,6 +743,7 @@ def _human_track_load(suffix: str, residue: str) -> dict | None:
     raw entries are empty DataFrames and the viewer hides the comparison.
     """
     rec_path = os.path.join(HUMAN_PERDONOR_DIR, f"recurrence{suffix}.csv")
+    rec_ctrl_path = os.path.join(HUMAN_PERDONOR_DIR, f"recurrence_ctrl{suffix}.csv")
     nes_path = os.path.join(HUMAN_PERDONOR_DIR, f"kinase_donor_nes{suffix}.csv")
     fdr_path = os.path.join(HUMAN_PERDONOR_DIR, f"kinase_donor_fdr{suffix}.csv")
     mea_path = os.path.join(HUMAN_PERDONOR_DIR, f"mea_perdonor{suffix}.csv")
@@ -762,6 +763,7 @@ def _human_track_load(suffix: str, residue: str) -> dict | None:
         if not os.path.exists(p):
             return None
     rec = pd.read_csv(rec_path)
+    rec_ctrl = pd.read_csv(rec_ctrl_path) if os.path.exists(rec_ctrl_path) else pd.DataFrame()
     nes = pd.read_csv(nes_path).set_index("kinase")
     fdr = pd.read_csv(fdr_path).set_index("kinase")
     mea = pd.read_csv(mea_path) if os.path.exists(mea_path) else pd.DataFrame()
@@ -774,7 +776,8 @@ def _human_track_load(suffix: str, residue: str) -> dict | None:
     raw_fdr = pd.read_csv(raw_fdr_path).set_index("kinase") if os.path.exists(raw_fdr_path) else pd.DataFrame()
     subs = pd.read_csv(subs_path) if os.path.exists(subs_path) else pd.DataFrame()
     return {
-        "residue": residue, "rec": rec, "nes": nes, "fdr": fdr,
+        "residue": residue, "rec": rec, "rec_ctrl": rec_ctrl,
+        "nes": nes, "fdr": fdr,
         "mea": mea, "shift": shift, "winsor": winsor,
         "stoich": stoich, "raw": raw,
         "raw_mea": raw_mea, "raw_nes": raw_nes, "raw_fdr": raw_fdr,
@@ -798,15 +801,43 @@ def build_human_slice() -> dict | None:
     if not tracks:
         return None
 
-    # Donor axis: union across tracks, stable order (track-first wins).
-    donors: list[str] = []
+    # Donor membership — prefer the explicit donor_groups.json sidecar
+    # (written by ingest_mukesh_perdonor.py); fall back to name-prefix
+    # inference for older perdonor outputs that predate the sidecar.
+    donor_groups_path = os.path.join(HUMAN_PERDONOR_DIR, "donor_groups.json")
+    if os.path.exists(donor_groups_path):
+        with open(donor_groups_path) as fh:
+            _dg = json.load(fh)
+        ad_set = {str(x) for x in _dg.get("ad", [])}
+        ctrl_set = {str(x) for x in _dg.get("ctrl", [])}
+    else:
+        ad_set = set()
+        ctrl_set = set()
+
+    # AD donors drive the rendering axis ("donors"). CTRL donors are
+    # rendered side-by-side as a separate column group.
+    donors: list[str] = []          # AD only
+    ctrl_donors: list[str] = []     # CTRL only
     seen: set[str] = set()
     for t in tracks:
         for d in list(t["nes"].columns):
-            if d not in seen:
-                seen.add(d)
-                donors.append(str(d))
-    contrasts = [f"{d}_vs_CTRLmean" for d in donors]
+            ds = str(d)
+            if ds in seen:
+                continue
+            seen.add(ds)
+            if ctrl_set:
+                if ds in ad_set:
+                    donors.append(ds)
+                elif ds in ctrl_set:
+                    ctrl_donors.append(ds)
+                else:
+                    # Unknown — treat as AD so we don't silently drop it.
+                    donors.append(ds)
+            else:
+                # No sidecar: legacy prefix inference.
+                (ctrl_donors if ds.upper().startswith("CTRL") else donors).append(ds)
+    all_donors_axis = donors + ctrl_donors
+    contrasts = [f"{d}_vs_CTRLmean" for d in all_donors_axis]
 
     # Gene-symbol map from the cached mapping CSV; fall back to identity.
     gene_map: dict[str, str] = {}
@@ -848,7 +879,7 @@ def build_human_slice() -> dict | None:
         "median_nes": [], "median_nes_sig_only": [],
         "sea_ad_lfc": [], "sea_ad_n_supertypes": [], "sea_ad_direction_agreement": [],
     }
-    for d in donors:
+    for d in all_donors_axis:
         cols[f"NES_{d}_vs_CTRLmean"] = []
         cols[f"FDR_{d}_vs_CTRLmean"] = []
 
@@ -930,7 +961,7 @@ def build_human_slice() -> dict | None:
                 round(sea["agreement"], 3) if (sea and sea["agreement"] is not None) else None
             )
 
-            for d in donors:
+            for d in all_donors_axis:
                 if d in nes.columns:
                     v_nes = nes.loc[k, d] if k in nes.index else float("nan")
                     v_fdr = fdr.loc[k, d] if k in fdr.index else float("nan")
@@ -1017,8 +1048,16 @@ def build_human_slice() -> dict | None:
                 if c not in seen_all:
                     seen_all.add(c)
                     donors_all.append(str(c))
-    case_donors = [d for d in donors_all if not str(d).upper().startswith("CTRL")]
-    ctrl_donors = [d for d in donors_all if str(d).upper().startswith("CTRL")]
+    # Reorder donors_all so case (AD) donors land before CTRL — matches the
+    # rendering axis order and keeps wide loaders that key off column
+    # position stable.
+    if ctrl_donors:
+        ctrl_set_axis = set(ctrl_donors)
+        donors_all = (
+            [d for d in donors_all if d not in ctrl_set_axis]
+            + [d for d in donors_all if d in ctrl_set_axis]
+        )
+    case_donors = [d for d in donors_all if d not in set(ctrl_donors)]
 
     stoich_by_site: list[list[float | None]] = []
     raw_by_site: list[list[float | None]] = []
@@ -1050,9 +1089,32 @@ def build_human_slice() -> dict | None:
             stoich_by_site.append(srow_vals)
             raw_by_site.append(rrow_vals)
 
+    # CTRL recurrence sidecar (kinase × CTRL-donor sig counts). Always
+    # AD-only on the kinase columns — the CTRL block here is a separate
+    # diagnostic surface. Track-tagged.
+    ctrl_rec_rows: list[dict] = []
+    for t in tracks:
+        residue = t["residue"]
+        rec_ctrl = t.get("rec_ctrl")
+        if rec_ctrl is None or rec_ctrl.empty:
+            continue
+        for _, row in rec_ctrl.iterrows():
+            ctrl_rec_rows.append({
+                "kinase": str(row.get("kinase", "")),
+                "residue_type": residue,
+                "n_donors_sig": int(row.get("n_donors_sig", 0) or 0),
+                "n_donors_up": int(row.get("n_donors_up", 0) or 0),
+                "n_donors_down": int(row.get("n_donors_down", 0) or 0),
+                "n_donors_tested": int(row.get("n_donors_tested", 0) or 0),
+                "median_nes": (round(float(row["median_nes"]), 4)
+                               if pd.notna(row.get("median_nes")) else None),
+            })
+
     return {
+        "schema_version": 2,  # bumped: adds ctrl_donors, NES_<ctrl>_vs_CTRLmean cols
         "kinases": cols,
         "donors": donors,
+        "ctrl_donors": ctrl_donors,
         "contrasts": contrasts,
         "perdonor_index": perdonor_index,
         "global_shift": shift_rows,
@@ -1060,7 +1122,7 @@ def build_human_slice() -> dict | None:
         "sites": sites_cols,
         "donors_all": donors_all,
         "case_donors": case_donors,
-        "ctrl_donors": ctrl_donors,
+        "recurrence_ctrl": ctrl_rec_rows,
         "stoich_by_site": stoich_by_site,
         "raw_phospho_by_site": raw_by_site,
     }
