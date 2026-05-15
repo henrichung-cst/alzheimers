@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT"
 
-PYTHON=/home/hchung/.local/share/mamba/envs/alzheimers/bin/python
+PYTHON="${PYTHON:-pixi run --manifest-path "$REPO_ROOT/pixi.toml" python}"
 LOG="outputs/reports/wmb_expression/wmb_expression.log"
 mkdir -p outputs/reports/wmb_expression
 
@@ -21,8 +21,8 @@ if [ "$N_H5AD" -lt 13 ]; then
 fi
 
 echo "=== WMB expression export started at $(date) ===" | tee "$LOG"
-$PYTHON alz/wmb_expression.py --run 2>&1 | tee -a "$LOG"
+$PYTHON alz/wmb_expression.py --run "$@" 2>&1 | tee -a "$LOG"
 
 echo "=== WMB proteome expression started at $(date) ===" | tee -a "$LOG"
-$PYTHON alz/wmb_expression.py --proteome 2>&1 | tee -a "$LOG"
+$PYTHON alz/wmb_expression.py --proteome "$@" 2>&1 | tee -a "$LOG"
 echo "=== WMB expression export finished at $(date) ===" | tee -a "$LOG"

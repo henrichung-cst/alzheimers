@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT"
 
-PYTHON=/home/hchung/.local/share/mamba/envs/alzheimers/bin/python
+PYTHON="${PYTHON:-pixi run --manifest-path "$REPO_ROOT/pixi.toml" python}"
 
 # Ensure normalization has been run (uses all 72 samples, mode-independent)
 if [[ ! -f outputs/reports/kinase_attribution/stoichiometry_matrix.csv ]]; then
