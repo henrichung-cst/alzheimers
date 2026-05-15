@@ -32,6 +32,7 @@ Outputs (under outputs/reports/kinase_attribution_human/perdonor/):
 """
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -79,20 +80,42 @@ def _split_samples(mapping: pd.DataFrame) -> tuple[list[str], list[str]]:
 def _build_donor_deltas(
     matrix: pd.DataFrame, ad_ids: list[str], ctrl_ids: list[str], lfc_key: str,
 ) -> dict[str, dict[str, np.ndarray]]:
-    """Return ``{donor: {lfc_key: np.array per site}}``.
+    """Return ``{donor: {lfc_key: np.array per site}}`` for AD + CTRL donors.
 
-    Delta is computed as ``value_AD_i - nanmean(value_CTRL)`` per site;
-    sites with no CTRL coverage are NaN (downstream `_run_mea` drops them
-    before ranking).
+    AD donors:  ``stoich(AD_i)  − nanmean(stoich(all CTRL))``       — new
+                observation vs. full CTRL reference.
+    CTRL donors: ``stoich(CTRL_i) − nanmean(stoich(CTRL_{−i}))``    — LOO,
+                so a control is scored against the *remaining* controls.
+
+    The asymmetry is intentional. AD is a new sample held up against the
+    full control reference; a CTRL donor's "would I look like a case if I
+    were dropped in?" needs the reference to exclude itself, otherwise the
+    delta is biased toward zero by ~1/N.
+
+    Sites with no CTRL coverage are NaN (downstream ``_run_mea`` drops
+    them before ranking).
     """
     ctrl_block = matrix[ctrl_ids].to_numpy(dtype=float)
     with np.errstate(all="ignore"):
-        ctrl_mean = np.nanmean(ctrl_block, axis=1)
+        ctrl_mean_full = np.nanmean(ctrl_block, axis=1)
     out: dict[str, dict[str, np.ndarray]] = {}
     for donor in ad_ids:
         donor_vec = matrix[donor].to_numpy(dtype=float)
-        delta = donor_vec - ctrl_mean
-        out[f"{donor}_vs_CTRLmean"] = {lfc_key: delta}
+        out[f"{donor}_vs_CTRLmean"] = {lfc_key: donor_vec - ctrl_mean_full}
+    # CTRL LOO: mask one column at a time.
+    n_ctrl = ctrl_block.shape[1]
+    for j, donor in enumerate(ctrl_ids):
+        if n_ctrl <= 1:
+            # No leftover to average against; produce a NaN vector so
+            # MEA records an empty contrast rather than crashing.
+            loo_mean = np.full(ctrl_block.shape[0], np.nan, dtype=float)
+        else:
+            mask = np.ones(n_ctrl, dtype=bool)
+            mask[j] = False
+            with np.errstate(all="ignore"):
+                loo_mean = np.nanmean(ctrl_block[:, mask], axis=1)
+        donor_vec = matrix[donor].to_numpy(dtype=float)
+        out[f"{donor}_vs_CTRLmean"] = {lfc_key: donor_vec - loo_mean}
     return out
 
 
@@ -163,26 +186,37 @@ def _run_track_kind(track: str, kind: str, mapping: pd.DataFrame) -> None:
     fdr_wide = mea_df.pivot_table(
         index="kinase", columns="donor", values="FDR", aggfunc="first"
     )
-    nes_wide = nes_wide.reindex(columns=ad_ids)
-    fdr_wide = fdr_wide.reindex(columns=ad_ids)
+    # Keep AD first, then CTRL — column order matters for downstream wide
+    # loaders that key off the first N columns being case donors.
+    donor_order = ad_ids + ctrl_ids
+    nes_wide = nes_wide.reindex(columns=donor_order)
+    fdr_wide = fdr_wide.reindex(columns=donor_order)
     nes_wide.to_csv(os.path.join(PERDONOR_DIR, f"kinase_donor_nes{infix}{suffix}.csv"))
     fdr_wide.to_csv(os.path.join(PERDONOR_DIR, f"kinase_donor_fdr{infix}{suffix}.csv"))
 
-    sig_mask = fdr_wide < config.MEA_FDR_THRESH
-    up_mask = sig_mask & (nes_wide > 0)
-    dn_mask = sig_mask & (nes_wide < 0)
-    rec = pd.DataFrame({
-        "kinase": fdr_wide.index,
-        "n_donors_sig": sig_mask.sum(axis=1).values,
-        "n_donors_up": up_mask.sum(axis=1).values,
-        "n_donors_down": dn_mask.sum(axis=1).values,
-        "n_donors_tested": fdr_wide.notna().sum(axis=1).values,
-        "median_nes": nes_wide.median(axis=1, skipna=True).values,
-        "median_nes_sig_only": nes_wide.where(sig_mask).median(axis=1, skipna=True).values,
-    })
-    rec = rec.sort_values(
-        ["n_donors_sig", "n_donors_tested"], ascending=[False, False]
-    )
+    def _recurrence(donor_ids: list[str]) -> pd.DataFrame:
+        if not donor_ids:
+            return pd.DataFrame(columns=[
+                "kinase", "n_donors_sig", "n_donors_up", "n_donors_down",
+                "n_donors_tested", "median_nes", "median_nes_sig_only",
+            ])
+        nes_sub = nes_wide.reindex(columns=donor_ids)
+        fdr_sub = fdr_wide.reindex(columns=donor_ids)
+        sig = fdr_sub < config.MEA_FDR_THRESH
+        up = sig & (nes_sub > 0)
+        dn = sig & (nes_sub < 0)
+        return pd.DataFrame({
+            "kinase": fdr_sub.index,
+            "n_donors_sig": sig.sum(axis=1).values,
+            "n_donors_up": up.sum(axis=1).values,
+            "n_donors_down": dn.sum(axis=1).values,
+            "n_donors_tested": fdr_sub.notna().sum(axis=1).values,
+            "median_nes": nes_sub.median(axis=1, skipna=True).values,
+            "median_nes_sig_only": nes_sub.where(sig).median(axis=1, skipna=True).values,
+        }).sort_values(["n_donors_sig", "n_donors_tested"], ascending=[False, False])
+
+    # AD recurrence — primary, feeds SEA-AD agreement.
+    rec = _recurrence(ad_ids)
     rec_path = os.path.join(PERDONOR_DIR, f"recurrence{infix}{suffix}.csv")
     rec.to_csv(rec_path, index=False)
     print(
@@ -190,6 +224,15 @@ def _run_track_kind(track: str, kind: str, mapping: pd.DataFrame) -> None:
         f"(>=1 donor sig: {(rec['n_donors_sig'] >= 1).sum()}; "
         f">=ceil(N/2) donors sig: "
         f"{(rec['n_donors_sig'] >= np.ceil(len(ad_ids) / 2)).sum()})"
+    )
+    # CTRL recurrence — sibling table; never feeds SEA-AD agreement. Used by
+    # the viewer to surface controls that look case-like after LOO.
+    rec_ctrl = _recurrence(ctrl_ids)
+    rec_ctrl_path = os.path.join(PERDONOR_DIR, f"recurrence_ctrl{infix}{suffix}.csv")
+    rec_ctrl.to_csv(rec_ctrl_path, index=False)
+    print(
+        f"  ctrl recurrence written: {rec_ctrl_path}  "
+        f"(>=1 ctrl sig: {(rec_ctrl['n_donors_sig'] >= 1).sum() if len(rec_ctrl) else 0})"
     )
 
 
@@ -216,6 +259,15 @@ def main(argv: list[str] | None = None) -> int:
     tracks = ["st", "py"] if args.track == "both" else [args.track]
     for t in tracks:
         _run_track(t, mapping)
+
+    # Donor-group sidecar — saves the viewer build from re-parsing
+    # sample_mapping.csv to recover AD/CTRL membership.
+    ad_ids, ctrl_ids = _split_samples(mapping)
+    os.makedirs(PERDONOR_DIR, exist_ok=True)
+    groups_path = os.path.join(PERDONOR_DIR, "donor_groups.json")
+    with open(groups_path, "w") as fh:
+        json.dump({"ad": ad_ids, "ctrl": ctrl_ids}, fh, indent=2)
+    print(f"wrote {groups_path}  (AD={len(ad_ids)} CTRL={len(ctrl_ids)})")
     return 0
 
 
