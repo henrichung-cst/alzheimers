@@ -102,11 +102,29 @@ PHOSPHO_PER_CLUSTER_FILE = os.path.join(DECOMPOSITION_DIR, "phospho_per_cluster.
 PROTEIN_PER_CLUSTER_FILE = os.path.join(DECOMPOSITION_DIR, "protein_per_cluster.parquet")
 
 
-def load_cluster_spine() -> list[str]:
-    """Return the ordered list of in-spine cluster names (Levy-19)."""
+def resolve_cluster_spine_file(name: str = CLUSTER_SPINE) -> str:
+    """Resolve cluster_spine.csv for spine `name`, with legacy fallback.
+
+    Prefer the new layout (data/incytr/v2_46clusters/spines/<name>/), fall
+    back to the legacy top-level cluster_spine.csv when the new file is
+    absent and `name == "levy19"`.
+    """
+    new = os.path.join(
+        REPO_ROOT, "data", "incytr", "v2_46clusters", "spines", name,
+        "cluster_spine.csv",
+    )
+    if os.path.exists(new):
+        return new
+    if name == "levy19" and os.path.exists(CLUSTER_SPINE_FILE):
+        return CLUSTER_SPINE_FILE
+    return new
+
+
+def load_cluster_spine(name: str = CLUSTER_SPINE) -> list[str]:
+    """Return the ordered list of in-spine cluster names for spine `name`."""
     import pandas as pd
 
-    df = pd.read_csv(CLUSTER_SPINE_FILE)
+    df = pd.read_csv(resolve_cluster_spine_file(name))
     return df.loc[df["in_spine"] == True, "cluster_name"].tolist()  # noqa: E712
 
 

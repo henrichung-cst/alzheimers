@@ -94,6 +94,76 @@ def _contrast_lfc_se(
     return lfc, se
 
 
+def _build_contrast_vec(
+    param_names: list[str],
+    coef_map: dict[str, int],
+) -> np.ndarray | None:
+    """Materialize the contrast vector c against `param_names`.
+
+    Returns None when a coefficient name in the contrast is not present in
+    the design — that contrast is trivially unestimable for this design.
+    """
+    c = np.zeros(len(param_names))
+    for name, w in coef_map.items():
+        if name not in param_names:
+            return None
+        c[param_names.index(name)] = w
+    return c
+
+
+def _is_estimable(c: np.ndarray, X: np.ndarray, tol: float = 1e-8) -> bool:
+    """True if `c` lies in the row space of `X` (i.e. c'β is estimable).
+
+    Check: c ≈ c @ pinv(X) @ X — the projection of c onto rowspace(X) equals
+    c itself when c is already in that subspace.
+    """
+    projected = c @ np.linalg.pinv(X) @ X
+    return bool(np.allclose(projected, c, atol=tol, rtol=0))
+
+
+def _run_ols_pinv(Y: np.ndarray, X: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Rank-tolerant OLS via the Moore-Penrose pseudoinverse.
+
+    Mirrors the shape contract of kinase_enrich._run_ols_all_sites but uses
+    pinv so we never invert a singular X'X. For estimable contrasts, the
+    contrast estimate c'β is invariant to the choice of generalized inverse;
+    for unestimable contrasts the caller MUST gate on _is_estimable and
+    emit NaN.
+    """
+    n_sites, n_samples = Y.shape
+    n_params = X.shape[1]
+    betas = np.full((n_sites, n_params), np.nan)
+    n_obs = np.zeros(n_sites, dtype=int)
+    xtxinv_per_site = np.full((n_sites, n_params, n_params), np.nan)
+
+    XtX_pinv = np.linalg.pinv(X.T @ X)
+    complete_mask = np.all(np.isfinite(Y), axis=1)
+    if complete_mask.any():
+        Y_c = Y[complete_mask]
+        B_c = (XtX_pinv @ X.T @ Y_c.T).T
+        betas[complete_mask] = B_c
+        n_obs[complete_mask] = n_samples
+        xtxinv_per_site[complete_mask] = XtX_pinv
+
+    partial_idx = np.where(~complete_mask)[0]
+    for i in partial_idx:
+        valid = np.isfinite(Y[i])
+        n_valid = int(valid.sum())
+        if n_valid < n_params + 2:
+            continue
+        Xi = X[valid]
+        yi = Y[i, valid]
+        XtX_pinv_i = np.linalg.pinv(Xi.T @ Xi)
+        bi = XtX_pinv_i @ Xi.T @ yi
+        betas[i] = bi
+        n_obs[i] = n_valid
+        xtxinv_per_site[i] = XtX_pinv_i
+
+    # pvals are filled in by the caller per-contrast; return placeholder.
+    pvals = np.full((n_sites, n_params), np.nan)
+    return betas, pvals, n_obs, xtxinv_per_site
+
+
 def _ols_for_cluster(
     cluster: str,
     phospho_long: pd.DataFrame,
@@ -143,12 +213,31 @@ def _ols_for_cluster(
     X_np = X.values
     param_names = list(X.columns)
     rank = int(np.linalg.matrix_rank(X_np))
-    if rank < X_np.shape[1]:
+    rank_deficient = rank < X_np.shape[1]
+
+    # Determine which contrasts are estimable under the (possibly rank-
+    # deficient) design before running OLS — these get NaN rather than
+    # silently dropped, so the cluster stays in the spine.
+    unestimable: list[str] = []
+    estimable: dict[str, np.ndarray] = {}
+    for contrast, coefs in CONTRAST_COEFS.items():
+        c_vec = _build_contrast_vec(param_names, coefs)
+        if c_vec is None or not _is_estimable(c_vec, X_np):
+            unestimable.append(contrast)
+        else:
+            estimable[contrast] = c_vec
+
+    if not estimable:
         return ({"status": "skipped",
-                 "reason": f"design rank {rank} < {X_np.shape[1]}"},
+                 "reason": (f"no estimable contrasts (rank {rank} "
+                            f"< {X_np.shape[1]})"),
+                 "unestimable_contrasts": unestimable},
                 {}, pd.DataFrame())
 
-    betas, _, n_obs, xtxinv = _run_ols_all_sites(Y, X_np)
+    if rank_deficient:
+        betas, _, n_obs, xtxinv = _run_ols_pinv(Y, X_np)
+    else:
+        betas, _, n_obs, xtxinv = _run_ols_all_sites(Y, X_np)
 
     # site-level residual variance for per-contrast SE
     n_sites = Y.shape[0]
@@ -171,13 +260,22 @@ def _ols_for_cluster(
 
     site_rows = []
     mea_input = {}
+    n_sites_total = Y.shape[0]
+    nan_vec = np.full(n_sites_total, np.nan)
     for contrast, coefs in CONTRAST_COEFS.items():
-        lfc, se = _contrast_lfc_se(betas, xtxinv, sigma2, param_names, coefs)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            t = lfc / se
-        dof = np.maximum(n_obs - X_np.shape[1], 1)
-        p = 2 * sp_stats.t.sf(np.abs(t), df=dof)
-        fdr = _bh_fdr(p)
+        if contrast in unestimable:
+            lfc = nan_vec
+            se = nan_vec
+            t = nan_vec
+            p = nan_vec
+            fdr = nan_vec
+        else:
+            lfc, se = _contrast_lfc_se(betas, xtxinv, sigma2, param_names, coefs)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                t = lfc / se
+            dof = np.maximum(n_obs - X_np.shape[1], 1)
+            p = 2 * sp_stats.t.sf(np.abs(t), df=dof)
+            fdr = _bh_fdr(p)
         mea_input[contrast] = pd.DataFrame({"lfc": lfc})
         site_rows.append(pd.DataFrame({
             "cluster": cluster,
@@ -199,6 +297,9 @@ def _ols_for_cluster(
         "n_sites_fit": int(len(fit_idx)),
         "design_rank": rank,
         "design_n_params": int(X_np.shape[1]),
+        "rank_deficient": rank_deficient,
+        "unestimable_contrasts": unestimable,
+        "n_estimable_contrasts": len(estimable),
     }
     return audit, mea_input, site_ols_long, motif_series, site_meta
 
@@ -310,6 +411,12 @@ def main():
                                if v.get("status") == "ok"),
             "n_skipped": sum(1 for v in audit_per_cluster.values()
                              if v.get("status") == "skipped"),
+            "n_rank_deficient": sum(1 for v in audit_per_cluster.values()
+                                    if v.get("rank_deficient")),
+            "n_with_unestimable_contrasts": sum(
+                1 for v in audit_per_cluster.values()
+                if v.get("unestimable_contrasts")
+            ),
             "per_cluster": audit_per_cluster,
         }, fh, indent=2)
     print(f"Wrote {audit_path}")
