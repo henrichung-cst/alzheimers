@@ -113,6 +113,9 @@
               <option value="na">N/A</option>
             </select>
           </label>
+          <label class="ke-filter-label" id="kh-show-ctrl-label" title="Render a side-by-side CTRL donor column group. Controls are scored against the same CTRL mean used for AD donors and bias toward zero; bars are muted so they aren't confused with cases.">
+            <input id="kh-show-ctrl" type="checkbox" checked/> Show controls
+          </label>
           <button id="kh-filter-reset" class="ke-filter-reset" title="Reset all kinase filters">Reset</button>
           <span class="muted" id="kh-count"></span>
         </div>
@@ -127,6 +130,7 @@
               <th data-col="n_donors_sig" title="Donors significant at the active FDR.">n_sig</th>
               <th data-col="n_donors_up" title="Donors significant with NES &gt; 0.">up</th>
               <th data-col="n_donors_down" title="Donors significant with NES &lt; 0.">down</th>
+              <th data-col="n_ctrl_sig" class="kh-ctrl-col" title="CTRL donors significant at the active FDR (LOO control deltas). Useful when investigating wash-out: if many controls are also significant in the same direction, the AD-vs-CTRL signal is not specific.">n_ctrl_sig</th>
               <th data-col="sea_ad_lfc" title="SEA-AD AD-vs-control effect size for the kinase's gene (Nebula mixed-model log2FC from effect_sizes.h5ad, full CPS), median across all 139 MTG supertypes. Sign = cohort-level transcriptomic direction in AD vs control (not AD-only expression). ✓ = same sign as median NES (sig); ✗ = opposite.">SEA-AD LFC</th>
             </tr></thead>
             <tbody></tbody>

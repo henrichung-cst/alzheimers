@@ -12,10 +12,11 @@ const _KH = _KH_HAS ? PAYLOAD.human : null;
 
 const _KHState = {
   search: "",
-  donors: new Set(),   // empty = all
+  donors: new Set(),   // empty = all (filters AD axis only)
   nsigMin: 0,
   track: "",
   seaad: "",           // "" | "agree" | "disagree" | "na"
+  showCtrl: true,      // render side-by-side CTRL column group
   sortCol: "n_donors_sig",
   sortAsc: false,
   auditTab: "score",     // trace | prep | score
@@ -98,17 +99,35 @@ function _khFmt(v, digits) {
 function _khRows() {
   const K = _KH.kinases;
   const donors = _KH.donors;
+  const ctrlDonors = _KH.ctrl_donors || [];
   const n = K.id.length;
   const out = [];
+  const _pick = (d, prefix, i) => {
+    const v = K[prefix + d + "_vs_CTRLmean"];
+    return v ? v[i] : null;
+  };
+  // (kinase_name, residue) -> CTRL recurrence row from PAYLOAD.human.
+  const ctrlRecLookup = new Map();
+  for (const r of (_KH.recurrence_ctrl || [])) {
+    ctrlRecLookup.set(r.kinase + "|" + r.residue_type, r);
+  }
   for (let i = 0; i < n; i++) {
-    const nesVec = donors.map(d => {
-      const v = K["NES_" + d + "_vs_CTRLmean"];
-      return v ? v[i] : null;
-    });
-    const fdrVec = donors.map(d => {
-      const v = K["FDR_" + d + "_vs_CTRLmean"];
-      return v ? v[i] : null;
-    });
+    const nesVec = donors.map(d => _pick(d, "NES_", i));
+    const fdrVec = donors.map(d => _pick(d, "FDR_", i));
+    const nesCtrl = ctrlDonors.map(d => _pick(d, "NES_", i));
+    const fdrCtrl = ctrlDonors.map(d => _pick(d, "FDR_", i));
+    const rec = ctrlRecLookup.get(K.name[i] + "|" + K.residue_type[i]);
+    const nCtrlSig = rec ? rec.n_donors_sig : 0;
+    const nCtrlSigUp = rec ? rec.n_donors_up : 0;
+    const nCtrlSigDn = rec ? rec.n_donors_down : 0;
+    // CTRL spread: 1 SD of finite CTRL NES values.
+    let ctrlSd = null;
+    const finite = nesCtrl.filter(v => v != null && isFinite(v));
+    if (finite.length >= 2) {
+      const m = finite.reduce((a, b) => a + b, 0) / finite.length;
+      const v = finite.reduce((a, b) => a + (b - m) * (b - m), 0) / (finite.length - 1);
+      ctrlSd = Math.sqrt(v);
+    }
     out.push({
       id: K.id[i],
       name: K.name[i],
@@ -118,6 +137,10 @@ function _khRows() {
       n_donors_up: K.n_donors_up[i],
       n_donors_down: K.n_donors_down[i],
       n_donors_tested: K.n_donors_tested[i],
+      n_ctrl_sig: nCtrlSig,
+      n_ctrl_sig_up: nCtrlSigUp,
+      n_ctrl_sig_down: nCtrlSigDn,
+      ctrl_sd: ctrlSd,
       median_nes: K.median_nes[i],
       median_nes_sig_only: K.median_nes_sig_only[i],
       sea_ad_lfc: K.sea_ad_lfc ? K.sea_ad_lfc[i] : null,
@@ -125,6 +148,8 @@ function _khRows() {
       sea_ad_direction_agreement: K.sea_ad_direction_agreement ? K.sea_ad_direction_agreement[i] : null,
       _nes: nesVec,
       _fdr: fdrVec,
+      _nesCtrl: nesCtrl,
+      _fdrCtrl: fdrCtrl,
     });
   }
   return out;
@@ -199,24 +224,37 @@ function _khSort(rows) {
 }
 
 function _khRenderProfile(r, fdrThresh, donors, donorMask, maxAbs) {
-  const cells = [];
-  for (let di = 0; di < donors.length; di++) {
-    if (donorMask && !donorMask.has(donors[di])) continue;
-    const nes = r._nes[di];
-    const fdrV = r._fdr[di];
-    const sig = fdrV != null && fdrV < fdrThresh;
-    let bg = "#fff";
-    if (nes != null && isFinite(nes) && maxAbs > 0) {
-      const a = Math.min(1, Math.abs(nes) / maxAbs);
-      const rgb = nes >= 0 ? [197,48,48] : [43,108,176];
-      bg = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${(0.15 + 0.85 * a).toFixed(3)})`;
+  const _renderCells = (donorList, nesArr, fdrArr) => {
+    const cells = [];
+    for (let di = 0; di < donorList.length; di++) {
+      if (donorMask && !donorMask.has(donorList[di])) continue;
+      const nes = nesArr[di];
+      const fdrV = fdrArr[di];
+      const sig = fdrV != null && fdrV < fdrThresh;
+      let bg = "#fff";
+      if (nes != null && isFinite(nes) && maxAbs > 0) {
+        const a = Math.min(1, Math.abs(nes) / maxAbs);
+        const rgb = nes >= 0 ? [197,48,48] : [43,108,176];
+        bg = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${(0.15 + 0.85 * a).toFixed(3)})`;
+      }
+      const tip = nes == null
+        ? `${donorList[di]}: n/a`
+        : `${donorList[di]}: NES ${nes.toFixed(2)}${fdrV != null ? `, FDR ${fdrV.toExponential(1)}` : ""}${sig ? " (sig)" : ""}`;
+      cells.push(`<div class="npc${sig ? " sig" : ""}" style="background:${bg};" title="${_escapeHtml(tip)}"></div>`);
     }
-    const tip = nes == null
-      ? `${donors[di]}: n/a`
-      : `${donors[di]}: NES ${nes.toFixed(2)}${fdrV != null ? `, FDR ${fdrV.toExponential(1)}` : ""}${sig ? " (sig)" : ""}`;
-    cells.push(`<div class="npc${sig ? " sig" : ""}" style="background:${bg};" title="${_escapeHtml(tip)}"></div>`);
+    return cells;
+  };
+  const adCells = _renderCells(donors, r._nes, r._fdr);
+  const ctrlDonors = _KH.ctrl_donors || [];
+  const showCtrl = _KHState.showCtrl && ctrlDonors.length;
+  const adBlock = `<div class="nes-profile-cell" style="grid-template-columns:repeat(${adCells.length || 1},1fr);">${adCells.join("")}</div>`;
+  if (!showCtrl) {
+    return `<div class="nes-profile-wrap">${adBlock}</div>`;
   }
-  return `<div class="nes-profile-wrap"><div class="nes-profile-cell" style="grid-template-columns:repeat(${cells.length},1fr);">${cells.join("")}</div></div>`;
+  // CTRL group is not filtered by the donor multiselect (which targets AD).
+  const ctrlCells = _renderCells(ctrlDonors, r._nesCtrl, r._fdrCtrl);
+  const ctrlBlock = `<div class="nes-profile-cell kh-ctrl-group" style="grid-template-columns:repeat(${ctrlCells.length || 1},1fr);" title="CTRL donors scored against the same CTRL mean — muted because they bias toward zero by design.">${ctrlCells.join("")}</div>`;
+  return `<div class="nes-profile-wrap">${adBlock}<span class="nes-profile-spacer" aria-hidden="true"></span>${ctrlBlock}</div>`;
 }
 
 function renderKinaseHuman() {
@@ -264,10 +302,14 @@ function renderKinaseHuman() {
       + `<td>${r.n_donors_sig}</td>`
       + `<td>${r.n_donors_up}</td>`
       + `<td>${r.n_donors_down}</td>`
+      + `<td class="kh-ctrl-col" title="${r.n_ctrl_sig_up || 0} up / ${r.n_ctrl_sig_down || 0} down · CTRL spread ±${r.ctrl_sd == null ? "—" : r.ctrl_sd.toFixed(2)} NES">${r.n_ctrl_sig}</td>`
       + `<td>${seaCell}</td>`
       + `</tr>`;
   }).join("");
   tbody.innerHTML = html;
+  // Toggle CTRL column visibility on the table.
+  const tbl = document.getElementById("kh-table");
+  if (tbl) tbl.classList.toggle("show-ctrl-off", !_KHState.showCtrl);
   const count = document.getElementById("kh-count");
   if (count) count.textContent = `${rows.length} kinases · ${donors.length} donors · ` +
                                  (donorMask ? `${donorMask.size} selected` : "all donors");
@@ -293,8 +335,10 @@ function _khRenderDetail(khid) {
   const r = rows.find(x => x.id === khid);
   if (!r) { det.innerHTML = `<div class="muted">Kinase not found.</div>`; return; }
 
+  const ctrlDonorsAll = _KH.ctrl_donors || [];
+  const donorPool = _KH.donors.concat(ctrlDonorsAll);
   // Initialize auditDonor on first selection: prefer first case donor with NES data.
-  if (_KHState.auditDonor == null || !_KH.donors.includes(_KHState.auditDonor)) {
+  if (_KHState.auditDonor == null || !donorPool.includes(_KHState.auditDonor)) {
     const donors = _KH.donors;
     let pick = donors[0];
     for (let di = 0; di < donors.length; di++) {
@@ -321,10 +365,17 @@ function _khRenderDetail(khid) {
   ).join("");
   // Donor selector applies to all sub-tabs (score uses it for the per-donor scorecard + running enrichment).
   const needsDonor = true;
+  const _opt = (d, group) =>
+    `<option value="${_escapeHtml(d)}"${d === _KHState.auditDonor ? " selected" : ""}>${_escapeHtml(d)}${group ? " (CTRL)" : ""}</option>`;
+  const adOpts = _KH.donors.map(d => _opt(d, false)).join("");
+  const ctrlOpts = ctrlDonorsAll.length
+    ? `<optgroup label="Control">${ctrlDonorsAll.map(d => _opt(d, true)).join("")}</optgroup>`
+    : "";
   const donorSelHtml = needsDonor
     ? `<div class="kh-audit-toolbar"><label class="ke-filter-label">Donor `
       + `<select id="kh-audit-donor">`
-      + _KH.donors.map(d => `<option value="${_escapeHtml(d)}"${d === _KHState.auditDonor ? " selected" : ""}>${_escapeHtml(d)}</option>`).join("")
+      + (ctrlDonorsAll.length ? `<optgroup label="AD">${adOpts}</optgroup>` : adOpts)
+      + ctrlOpts
       + `</select></label></div>`
     : "";
 
@@ -620,13 +671,15 @@ function _khRenderNESAcrossDonors(hostId, r, selectedDonor) {
   const host = document.getElementById(hostId);
   if (!host) return;
   const donors = _KH.donors;
+  const ctrlDonors = _KH.ctrl_donors || [];
+  const showCtrl = _KHState.showCtrl && ctrlDonors.length;
   const fdrThresh = Store.state.filters.fdr;
   const _hexToRgba = (hex, alpha) => {
     const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
     if (!m) return hex;
     return `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},${alpha})`;
   };
-  const colors = donors.map((_, di) => {
+  const adColors = donors.map((_, di) => {
     const nes = r._nes[di];
     const fdr = r._fdr[di];
     const base = (nes != null && nes < 0) ? "#1f5fa6" : "#c8261c";
@@ -634,18 +687,63 @@ function _khRenderNESAcrossDonors(hostId, r, selectedDonor) {
     return sig ? base : _hexToRgba(base, 0.28);
   });
   const selIdx = donors.indexOf(selectedDonor);
-  const outlines = donors.map((_, i) => i === selIdx ? "#000" : "rgba(0,0,0,0)");
-  const lineW = donors.map((_, i) => i === selIdx ? 2.5 : 0);
-  Plotly.react(hostId, [{
+  const adOutlines = donors.map((_, i) => i === selIdx ? "#000" : "rgba(0,0,0,0)");
+  const adLineW = donors.map((_, i) => i === selIdx ? 2.5 : 0);
+  const traces = [{
     type:"bar", x: donors, y: r._nes.map(v => v == null ? 0 : v),
-    marker:{color: colors, line:{color: outlines, width: lineW}},
-    name:"NES",
+    marker:{color: adColors, line:{color: adOutlines, width: adLineW}},
+    name:"AD",
     hovertemplate:"%{x}<br>NES %{y:.2f}<extra></extra>",
-  }], {
-    margin:{l:40, r:10, t:10, b:60}, height:220,
+  }];
+  const layoutShapes = [];
+  const layoutAnnotations = [];
+  if (showCtrl) {
+    // Muted CTRL bars in a desaturated palette (CTRL donors are scored
+    // against their own mean so they bias toward zero — visually muted
+    // so they aren't confused with cases).
+    const ctrlBase = "#90a4ae";
+    const ctrlColors = ctrlDonors.map((_, di) => {
+      const nes = r._nesCtrl[di];
+      const fdr = r._fdrCtrl[di];
+      const sig = fdr != null && fdr < fdrThresh;
+      const col = (nes != null && nes < 0) ? "#7e9aae" : (nes != null && nes > 0) ? "#a78a93" : ctrlBase;
+      return sig ? col : _hexToRgba(col, 0.35);
+    });
+    const ctrlSelIdx = ctrlDonors.indexOf(selectedDonor);
+    const ctrlOutlines = ctrlDonors.map((_, i) => i === ctrlSelIdx ? "#000" : "rgba(0,0,0,0)");
+    const ctrlLineW = ctrlDonors.map((_, i) => i === ctrlSelIdx ? 2.5 : 0);
+    traces.push({
+      type:"bar", x: ctrlDonors, y: r._nesCtrl.map(v => v == null ? 0 : v),
+      marker:{color: ctrlColors, line:{color: ctrlOutlines, width: ctrlLineW}},
+      name:"CTRL",
+      hovertemplate:"%{x} (CTRL)<br>NES %{y:.2f}<extra></extra>",
+    });
+    // Dashed divider between AD and CTRL groups (placed between the last
+    // AD x category and the first CTRL x category).
+    if (donors.length && ctrlDonors.length) {
+      layoutShapes.push({
+        type:"line", xref:"x", yref:"paper",
+        x0: donors.length - 0.5, x1: donors.length - 0.5, y0: 0, y1: 1,
+        line:{color:"#b0bec5", width:1, dash:"dash"},
+      });
+    }
+    // CTRL spread annotation (1 SD over the CTRL NES values).
+    if (r.ctrl_sd != null && isFinite(r.ctrl_sd)) {
+      layoutAnnotations.push({
+        xref:"paper", yref:"paper", x: 1.0, y: 1.02, xanchor:"right", yanchor:"bottom",
+        text: `CTRL spread = ±${r.ctrl_sd.toFixed(2)} NES`,
+        showarrow:false, font:{size:11, color:"#546e7a"},
+      });
+    }
+  }
+  Plotly.react(hostId, traces, {
+    margin:{l:40, r:10, t:24, b:60}, height:220,
     yaxis:{zeroline:true, zerolinecolor:"#bbb", title:"NES"},
-    xaxis:{tickangle:-35},
+    xaxis:{tickangle:-35, type:"category"},
     showlegend:false,
+    barmode:"group",
+    shapes: layoutShapes,
+    annotations: layoutAnnotations,
   }, {displaylogo:false, responsive:true}).then(() => {
     if (host.on && !host.__khTrajWired) {
       host.__khTrajWired = true;
@@ -653,7 +751,8 @@ function _khRenderNESAcrossDonors(hostId, r, selectedDonor) {
         const pts = ev && ev.points ? ev.points : null;
         if (!pts || !pts[0]) return;
         const target = pts[0].x;
-        if (_KH.donors.includes(target)) {
+        const ctrlList = _KH.ctrl_donors || [];
+        if (_KH.donors.includes(target) || ctrlList.includes(target)) {
           _KHState.auditDonor = target;
           _khRenderDetail(r.id);
         }
@@ -779,6 +878,23 @@ function wireKinaseHuman() {
   if (seaad) seaad.addEventListener("change", e => {
     _KHState.seaad = e.target.value; renderKinaseHuman();
   });
+  const showCtrl = document.getElementById("kh-show-ctrl");
+  // Hide the toggle entirely when there are no CTRL donors in the payload
+  // (legacy build before CTRL columns were added).
+  if (showCtrl) {
+    const ctrlCount = (_KH.ctrl_donors || []).length;
+    if (!ctrlCount) {
+      const lab = document.getElementById("kh-show-ctrl-label");
+      if (lab) lab.style.display = "none";
+      _KHState.showCtrl = false;
+    } else {
+      showCtrl.checked = _KHState.showCtrl;
+      showCtrl.addEventListener("change", e => {
+        _KHState.showCtrl = !!e.target.checked;
+        renderKinaseHuman();
+      });
+    }
+  }
   const reset = document.getElementById("kh-filter-reset");
   if (reset) reset.addEventListener("click", () => {
     _KHState.search = ""; _KHState.donors.clear();

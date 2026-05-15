@@ -369,6 +369,16 @@ main#app-main { padding:14px; }
 .nes-profile-col-labels { display:flex; gap:1px; padding:0 1px; font-size:9px;
   color:#78909c; line-height:1; margin-bottom:1px; justify-content:space-around; }
 .nes-profile-wrap { display:inline-flex; align-items:center; gap:2px; }
+/* CTRL column group on the human kinase tab: muted background + thin
+   left rule so it reads as a separate block from the AD donors. */
+.nes-profile-cell.kh-ctrl-group { background:#f7f7f7; border-color:#dcdcdc;
+  border-left:2px solid #b0bec5; }
+.nes-profile-cell.kh-ctrl-group .npc { opacity:0.65; }
+.nes-profile-cell.kh-ctrl-group .npc.sig { outline-color:#455a64; opacity:0.95; }
+.nes-profile-spacer { width:6px; height:14px; align-self:center;
+  border-left:1px dashed #b0bec5; margin:0 1px; }
+/* n_ctrl_sig column — only revealed when "Show controls" is on. */
+#kh-table.show-ctrl-off .kh-ctrl-col { display:none; }
 .agreement-profile-cell { display:inline-grid; grid-template-columns:repeat(3, 12px);
   grid-auto-rows:12px; gap:1px; padding:1px; background:#eceff1;
   border:1px solid #cfd8dc; border-radius:2px; vertical-align:middle; }
