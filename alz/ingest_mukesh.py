@@ -1316,6 +1316,18 @@ def run_reshape() -> None:
     # Emit phospho and stoichiometry per track.
     stoich_dropped: list[dict] = []
 
+    # Gene → canonical accession lookup for isoform-specific site rescue.
+    # PG.Quantity collapses isoforms at the quant step (Mukesh ships one
+    # PG row per gene regardless of isoform attribution), so an
+    # isoform-specific site (e.g. P10636-8_S113) joins to parent protein
+    # quant under the gene's canonical accession (P10636). This preserves
+    # the isoform-level site_id while still enabling stoichiometry.
+    gene_to_canon: dict[str, str] = {}
+    for g, entry in cache.items():
+        ca = (entry or {}).get("canonical_accession")
+        if ca:
+            gene_to_canon[g] = ca
+
     def _emit(track_name: str, site_quant: dict[str, dict[str, float]]) -> tuple[int, int]:
         suffix = "" if track_name == "IMAC" else "_pY"
         phospho_path = os.path.join(
@@ -1343,6 +1355,15 @@ def run_reshape() -> None:
                 wp.writerow(phospho_row)
                 n_phos += 1
                 parent = protein_quant.get(meta["protein_id"])
+                parent_source = meta["protein_id"]
+                if parent is None and "-" in meta["protein_id"]:
+                    # Isoform-specific site: fall back to gene's canonical
+                    # accession since PG.Quantity is gene-level only.
+                    canon = gene_to_canon.get(meta["gene_symbol"])
+                    if canon:
+                        parent = protein_quant.get(canon)
+                        if parent is not None:
+                            parent_source = canon
                 if parent is None:
                     stoich_dropped.append(
                         {
