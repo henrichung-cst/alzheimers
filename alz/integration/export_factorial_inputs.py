@@ -52,11 +52,15 @@ SUBSET_LABELS = ("Astrocytes", "Microglia")
 
 # Source kldata.csv (incytr-schema, mouse-mapped) bundled into the
 # fixture so downstream Integr_kinasedata has its inputs alongside the
-# transcript inputs. The kinase library is a chemical/biochemical
-# substrate map (PSPA motif specificity), not study-specific, so the
-# 5xFAD-derived file applies to Song.
+# transcript inputs. The kinase library IS study-specific: its substrate
+# row set is the sites actually phosphoprofiled in this cohort, ranked
+# against PSPA motif specificity to predict the top-N kinases per site.
+# Earlier builds defaulted to 5xFAD/kinase/kldata_pspy.csv, which silently
+# scored Song factorial paths against a different study's substrate set —
+# rebuild via `pixi run python alz/integration/build_yuyu_kldata.py` if
+# the file is missing.
 KLDATA_SOURCE_REL = os.path.join(
-    "data", "datasets", "5xFAD", "kinase", "kldata_pspy.csv"
+    "data", "datasets", "song", "kinase", "kldata_pspy.csv"
 )
 
 
@@ -140,6 +144,13 @@ def write_per_cluster_bundle(
             "gene_symbol",
         ),
     ]
+    # Stage 6 parquets are keyed on proteomics-side animal_id; the fixture
+    # vocabulary is transcript-side snrna_sample_id (adata.obs["sample"]).
+    # Bridge via sample_mapping.csv (has_snrna_seq == True rows only).
+    smap_path = os.path.join(REPO_ROOT, "outputs/reports/data_ingest/sample_mapping.csv")
+    smap = pd.read_csv(smap_path)
+    smap = smap.loc[smap["has_snrna_seq"] == True, ["animal_id", "snrna_sample_id"]]  # noqa: E712
+    proteomics_to_snrna = dict(zip(smap["animal_id"], smap["snrna_sample_id"]))
     kept_set = set(kept_animal_ids)
     for layer, src, gene_key in layer_specs:
         if not os.path.exists(src):
@@ -147,6 +158,9 @@ def write_per_cluster_bundle(
             summary[layer] = {"source": src, "status": "missing"}
             continue
         long = pd.read_parquet(src)
+        long = long.assign(
+            animal_id=long["animal_id"].map(proteomics_to_snrna)
+        ).dropna(subset=["animal_id"])
         wide_by_cluster = _long_to_per_cluster_wide(long, "value", gene_key)
         layer_dir = os.path.join(out_dir, "per_cluster", layer)
         os.makedirs(layer_dir, exist_ok=True)
@@ -176,17 +190,26 @@ def write_per_cluster_bundle(
     return summary
 
 
-def write_seedlist_pr_matrix(
-    out_dir: str,
-    kept_animal_ids: list[str],
-) -> str | None:
+def write_seedlist_pr_matrix(out_dir: str) -> str | None:
     """Write a flat bulk pr_matrix.csv (genes × animals) for compute_seed_lists.R.
 
     Seed-list DEP estimation (limma on bulk proteomics) is upstream of the
     per-cluster decomposition; it should stay flat. Source is the same
     ``total_proteome_normalized.csv`` that Stage 1 emits; columns are TMT
-    ``column_name`` values that we map to transcript-side animal_ids via
+    ``column_name`` values that we map to proteomics-side animal_ids via
     ``sample_mapping.csv``.
+
+    Proteomics and transcript pipelines use disjoint animal_id namespaces
+    (e.g. ``31_D224(L)_F_2mo_APP`` vs ``C198_ma_2mo_WTyp``), and the bridge
+    in ``yuyu_samplekey.csv`` is group-level (sex×timepoint×genotype) — not
+    per-animal — so we cannot reindex the bulk proteomics matrix onto
+    transcript animal_ids. The limma step in compute_seed_lists.R runs in
+    the proteomics namespace; we emit a paired ``pr_animal_metadata.csv``
+    with genotype normalized to the transcript convention so the
+    ``contrast_conditions`` lookup (e.g. ``WTyp_2mo``) matches.
+
+    Males-only filter applied to mirror the transcript-side pseudobulk
+    (write_pseudobulk_counts), keeping the seed-list cohort consistent.
     """
     src = os.path.join(
         REPO_ROOT, "outputs/reports/kinase_attribution/total_proteome_normalized.csv"
@@ -197,19 +220,44 @@ def write_seedlist_pr_matrix(
         return None
     tp = pd.read_csv(src)
     smap = pd.read_csv(smap_path)
-    col_to_animal = dict(zip(smap["column_name"], smap["animal_id"]))
+    smap_m = smap[smap["sex"] == "M"].copy()
+    col_to_animal = dict(zip(smap_m["column_name"], smap_m["animal_id"]))
     meta_cols = [c for c in ("gene_symbol", "protein_id") if c in tp.columns]
     val_cols = [c for c in tp.columns if c not in meta_cols and c in col_to_animal]
     flat = tp[["gene_symbol"] + val_cols].dropna(subset=["gene_symbol"]).copy()
     flat = flat.rename(columns={c: col_to_animal[c] for c in val_cols})
-    # one row per gene (first occurrence; total proteome ≈ unique)
     flat = flat.drop_duplicates(subset=["gene_symbol"], keep="first")
     flat = flat.set_index("gene_symbol")
-    flat = flat.reindex(columns=kept_animal_ids)
+    # total_proteome_normalized.csv is IRS-normalized TMT SN on the linear
+    # scale (median ~73, range ~0–700). limma assumes log-normal residuals,
+    # and the compute_seed_lists log2fc threshold is meaningless on linear
+    # values — log2-transform here. Floor at a small positive value to keep
+    # negatives/zeros (rare normalization artifacts) finite.
+    flat = np.log2(flat.clip(lower=1e-3))
     path = os.path.join(out_dir, "pr_matrix.csv")
     flat.to_csv(path, index_label="gene")
     print(f"    wrote {path}  ({flat.shape[0]} genes x {flat.shape[1]} animals; "
-          f"seed-list limma input)")
+          f"seed-list limma input, males-only, log2-transformed)")
+
+    # Sidecar metadata for limma's design: animal_id, genotype (transcript
+    # convention), timepoint. Keeps the transcript-side animal_metadata.csv
+    # consumed by factorial.R untouched.
+    proteomics_to_transcript = {
+        "WT": "WTyp", "APP": "AppP", "T22": "Ttau", "T22/APP": "ApTt",
+    }
+    pr_meta = smap_m[["animal_id", "genotype", "timepoint"]].copy()
+    pr_meta = pr_meta[pr_meta["animal_id"].isin(flat.columns)]
+    unmapped = sorted(set(pr_meta["genotype"]) - proteomics_to_transcript.keys())
+    if unmapped:
+        raise SystemExit(
+            f"sample_mapping genotype values not in proteomics->transcript map: "
+            f"{unmapped}; update write_seedlist_pr_matrix"
+        )
+    pr_meta["genotype"] = pr_meta["genotype"].map(proteomics_to_transcript)
+    meta_path = os.path.join(out_dir, "pr_animal_metadata.csv")
+    pr_meta.to_csv(meta_path, index=False)
+    print(f"    wrote {meta_path}  ({len(pr_meta)} animals, "
+          f"genotype normalized to transcript convention)")
     return path
 
 
@@ -377,7 +425,7 @@ def build_manifest(
         "alz_repo_git_sha": git_sha(),
         "source": {
             "h5ad_path": h5ad_path,
-            "subclass_prob_min": float(main_config.SONG_MIN_SUBCLASS_PROB),
+            "subclass_prob_min": None,
             "cluster_spine": icfg.CLUSTER_SPINE,
             "cluster_spine_file": os.path.relpath(
                 icfg.CLUSTER_SPINE_FILE, REPO_ROOT,
@@ -462,9 +510,11 @@ def build_manifest(
         ),
         "kldata.csv": (
             "Kinase library substrate map (incytr schema: gene, site_pos, "
-            "motif.geneName, Type). Copied from 5xFAD/kinase/kldata_pspy.csv; "
-            "the kinase library is a chemical motif map and is not "
-            "study-specific."
+            "motif.geneName, Type). Copied from song/kinase/kldata_pspy.csv, "
+            "generated by alz/integration/build_yuyu_kldata.py from this "
+            "cohort's IMAC + pY sitequant tables ranked through "
+            "kinase-library + homologene. Study-specific: substrate row set "
+            "must come from the sites actually phosphoprofiled here."
         ),
         "pseudobulk_counts.mtx": (
             "Sparse MatrixMarket integer counts: rows=genes, cols=pseudosamples. "
@@ -651,14 +701,10 @@ def main() -> None:
     )
     print(f"  After sex/genotype/timepoint filter: {int(sex_geno_time.sum())} cells")
 
-    if "subclass_prob" in adata.obs.columns:
-        prob_mask = adata.obs["subclass_prob"] >= main_config.SONG_MIN_SUBCLASS_PROB
-        print(
-            f"  After subclass_prob >= {main_config.SONG_MIN_SUBCLASS_PROB}: "
-            f"{int((sex_geno_time & prob_mask).sum())} cells"
-        )
-    else:
-        prob_mask = pd.Series(True, index=adata.obs.index)
+    # subclass_prob gate retired with the Levy-19 spine pivot. Cell-type
+    # assignment now flows from barcode_to_cluster.csv (Seurat clusters), so
+    # the Allen Cell Type Mapper confidence column is no longer the gate.
+    prob_mask = pd.Series(True, index=adata.obs.index)
 
     # Levy-19 cluster spine: per-cluster pivot replaces WMB-34 labels.
     # barcode_to_cluster.csv stores seurat_cluster_id; the Cluster ID → New_ID
@@ -761,7 +807,7 @@ def main() -> None:
     write_bundle(args.out_dir, adata_intersect, meta_intersect, animal_meta_intersect)
     print("\n  Per-cluster parquet bundles (Stage 6 source):")
     per_cluster_summary = write_per_cluster_bundle(args.out_dir, kept_ids)
-    write_seedlist_pr_matrix(args.out_dir, kept_ids)
+    write_seedlist_pr_matrix(args.out_dir)
     write_kldata(args.out_dir)
 
     print("\n  Pseudobulk raw counts (pre-intersect, all male transcript animals)...")

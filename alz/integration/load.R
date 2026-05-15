@@ -110,6 +110,14 @@ load_ad_factorial_inputs <- function(input_dir = "alz/integration/intermediates/
   # pivots that long parquet into per_cluster/{pr,ps,py}/{cluster}.parquet
   # (gene x animal). Upstream Incytr's resolve_wide dispatches on is.list, so
   # each layer is returned as list(data_wide = list(cluster -> matrix)).
+  #
+  # export_factorial_inputs.py sanitizes cluster labels for filenames
+  # (space->'_', '/'->'-'). The engine looks up data_wide by the unsanitized
+  # label (e.g. "Excitatory principal neurons in the hippocampal dentate gyrus")
+  # so we invert the sanitization here against meta$labels — keying by the raw
+  # filename stem silently breaks any cluster name containing whitespace.
+  raw_labels <- unique(as.character(meta$labels))
+  sanitize_to_raw <- setNames(raw_labels, sanitize_celltype(raw_labels))
   load_per_cluster_layer <- function(layer) {
     layer_dir <- file.path(input_dir, "per_cluster", layer)
     if (!dir.exists(layer_dir)) return(NULL)
@@ -122,7 +130,16 @@ load_ad_factorial_inputs <- function(input_dir = "alz/integration/intermediates/
       rownames(mat) <- gene_col
       mat
     })
-    names(mats) <- sub("\\.parquet$", "", basename(files))
+    stems <- sub("\\.parquet$", "", basename(files))
+    keys <- sanitize_to_raw[stems]
+    unmatched <- stems[is.na(keys)]
+    if (length(unmatched) > 0L) {
+      stop(sprintf(
+        "per_cluster/%s/ filename stems have no matching meta$labels entry: %s",
+        layer, paste(unmatched, collapse = ", ")
+      ))
+    }
+    names(mats) <- unname(keys)
     list(data_wide = mats)
   }
   pr_mat <- load_per_cluster_layer("pr")

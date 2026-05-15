@@ -216,14 +216,20 @@ run_limma <- function(input_dir, contrast_pairs, p_threshold, lfc_threshold, min
   pr <- read.csv(file.path(input_dir, "pr_matrix.csv"),
                  row.names = 1, check.names = FALSE)
   pr_mat <- as.matrix(pr)
-  animal_meta <- read.csv(file.path(input_dir, "animal_metadata.csv"),
-                          check.names = FALSE, stringsAsFactors = FALSE)
-  matched <- animal_meta[match(colnames(pr_mat), animal_meta$animal_id), , drop = FALSE]
+  # Bulk proteomics lives in its own animal_id namespace (separate from
+  # transcript animal_metadata.csv consumed by factorial.R). The export
+  # writes pr_animal_metadata.csv with genotype normalized to transcript
+  # convention so contrast_pairs entries like "WTyp_2mo" resolve.
+  pr_meta <- read.csv(file.path(input_dir, "pr_animal_metadata.csv"),
+                      check.names = FALSE, stringsAsFactors = FALSE)
+  matched <- pr_meta[match(colnames(pr_mat), pr_meta$animal_id), , drop = FALSE]
   if (any(is.na(matched$animal_id))) {
-    stop("pr_matrix columns do not all appear in animal_metadata.csv")
+    stop("pr_matrix columns do not all appear in pr_animal_metadata.csv")
   }
 
   # Marginalize over timepoint, same rationale as DESeq2 above.
+  # load_contrast_pairs collapses MANIFEST.contrast_conditions to bare
+  # genotype pairs (e.g. c("AppP","WTyp")), so the factor must match.
   group <- factor(matched$genotype)
   design <- model.matrix(~ 0 + group)
   colnames(design) <- levels(group)

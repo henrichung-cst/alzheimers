@@ -128,9 +128,9 @@ if (!is.null(inputs$cond_pairs)) {
 # and `n_paths`. The wrapper then re-shards into the existing
 # receiver_cache layout that downstream consumers expect.
 omics <- list(
-  pr = list(data_wide = inputs$pr_mat),
-  ps = list(data_wide = inputs$ps_mat),
-  py = list(data_wide = inputs$py_mat)
+  pr = inputs$pr_mat,
+  ps = inputs$ps_mat,
+  py = inputs$py_mat
 )
 
 pair_staging <- file.path(args$out_dir, ".staging", "pair_parquets")
@@ -154,7 +154,8 @@ results_summary <- factorial_engine$score(
   omics = omics,
   kldata = inputs$kldata,
   output_dir = pair_staging,
-  n_perm = n_perm
+  n_perm = n_perm,
+  aggregate = FALSE
 )
 message("DEBUG results_summary:")
 print(results_summary)
