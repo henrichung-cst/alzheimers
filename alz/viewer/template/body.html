@@ -105,6 +105,28 @@
               <option value="Y">Y</option>
             </select>
           </label>
+          <label class="ke-filter-label" title="Require at least one high/moderate attribution row in the selected human reference cell type.">Cell type
+            <select id="kh-filter-celltype" aria-label="Human attributed cell type">
+              <option value="">Any</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Minimum human attribution confidence tier. High = specificity plus SEA-AD LFC support; moderate = either specificity or SEA-AD LFC support.">Confidence
+            <select id="kh-filter-confidence" aria-label="Minimum human attribution confidence">
+              <option value="">Any</option>
+              <option value="high">high+</option>
+              <option value="moderate">moderate+</option>
+              <option value="low">low+</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Minimum human reference specificity tier. Kinase passes if any attribution row reaches this tier.">Specificity
+            <select id="kh-filter-specificity" aria-label="Minimum human specificity tier">
+              <option value="0">Any</option>
+              <option value="1">≥1×</option>
+              <option value="2">≥2×</option>
+              <option value="3">≥5×</option>
+              <option value="4">≥10×</option>
+            </select>
+          </label>
           <label class="ke-filter-label" title="Compare median NES (sig) sign to the kinase's SEA-AD AD-vs-control effect size (Nebula log2FC, median across all 139 MTG supertypes). Agree = same sign; Disagree = opposite sign; N/A = either side is unsigned or SEA-AD has no coverage.">SEA-AD
             <select id="kh-filter-seaad" aria-label="SEA-AD agreement">
               <option value="">Any</option>
@@ -155,7 +177,9 @@
               <th data-col="n_donors_up" title="Donors significant with NES &gt; 0.">up</th>
               <th data-col="n_donors_down" title="Donors significant with NES &lt; 0.">down</th>
               <th data-col="n_ctrl_sig" class="kh-ctrl-col" title="CTRL donors significant at the active FDR (LOO control deltas). Useful when investigating wash-out: if many controls are also significant in the same direction, the AD-vs-CTRL signal is not specific.">n_ctrl_sig</th>
-              <th data-col="sea_ad_lfc" title="SEA-AD AD-vs-control effect size for the kinase's gene (Nebula mixed-model log2FC from effect_sizes.h5ad, full CPS), median across all 139 MTG supertypes. Sign = cohort-level transcriptomic direction in AD vs control (not AD-only expression). ✓ = same sign as median NES (sig); ✗ = opposite.">SEA-AD LFC</th>
+              <th data-col="n_attributed_celltypes" class="kh-spec-col" title="Human reference cell types attributed at high or moderate confidence. Click to sort by count.">Cell types</th>
+              <th data-col="max_specificity_tier" class="kh-spec-col" title="Maximum human reference specificity tier reached by any attribution row: ≥10× / ≥5× / ≥2× / ≥1×. Click to sort by tier.">Specificity</th>
+              <th data-col="conf" class="kh-spec-col" title="Highest human attribution confidence tier reached across SEA-AD MTG and cortex/hippocampus-scoped HBCA. Click to sort by confidence.">Conf</th>
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -243,6 +267,9 @@
         <label class="ke-filter-label" title="Keep rows with |PDS| &gt;= threshold. Blank = no constraint.">|PDS| ≥
           <input id="ip-slider-pds" type="number" step="0.05" min="0" style="width:64px;"/>
         </label>
+        <label class="ke-filter-label" title="Substring search across Ligand / Receptor / EM / Target / Path / Sender / Receiver / contrast. Case-insensitive. Space-separated tokens are AND'd.">search
+          <input id="ip-search" type="search" placeholder="gene or path…" style="width:140px;"/>
+        </label>
         <button id="ip-reset" class="ke-filter-reset" title="Reset all pathway filters">Reset</button>
         <span class="muted" id="ip-count"></span>
       </div>
@@ -292,4 +319,3 @@
     <dt>Contrast</dt><dd>disease &times; timepoint: App/Tau/ApTt at 2/4/6mo.</dd>
   </dl>
 </aside>
-

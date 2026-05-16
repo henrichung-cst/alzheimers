@@ -155,9 +155,9 @@ def _audit_specs() -> list[tuple[str, str, str]]:
          os.path.join(config.ATTRIBUTION_RECOVERY_OUTPUT_DIR, "celltype_evidence_table.csv")),
         ("kinase_hypothesis_table", "Kinase hypothesis table",
          os.path.join(config.ATTRIBUTION_RECOVERY_OUTPUT_DIR, "kinase_hypothesis_table.csv")),
-        ("kinase_decomposition", "Kinase decomposition (Levy-19)",
+        ("kinase_decomposition", "Kinase decomposition (Levy-T5)",
          os.path.join(config.REPO_ROOT, "outputs", "reports", "decomposition",
-                      "levy19", "mea_per_cluster.parquet")),
+                      "levy_t5", "mea_per_cluster.parquet")),
     ])
     return specs
 
@@ -608,10 +608,10 @@ def load_all_data() -> UnifiedData:
     ) if os.path.exists(_ua_full_path) else pd.DataFrame(columns=_ua_full_cols)
 
     # `cluster` is renamed to `wmb_class` so downstream agreement_index /
-    # decomposition_index code paths don't need updating; values are Levy-19.
+    # decomposition_index code paths don't need updating; values are Levy-T5.
     _decomp_path = os.path.join(
         config.REPO_ROOT, "outputs", "reports", "decomposition",
-        "levy19", "mea_per_cluster.parquet",
+        "levy_t5", "mea_per_cluster.parquet",
     )
     _decomp_out_cols = ["kinase", "wmb_class", "contrast", "NES", "FDR"]
     if os.path.exists(_decomp_path):
@@ -1120,9 +1120,7 @@ def build_human_slice() -> dict | None:
     celltype_specificity: dict | None = None
     if _HAS_HUMAN_CELLTYPE:
         try:
-            celltype_specificity = build_celltype_specificity_payload(
-                top_n=config.HUMAN_CELLTYPE_TOP_N
-            )
+            celltype_specificity = build_celltype_specificity_payload()
         except Exception as exc:
             print(f"  human celltype_specificity: skipped ({exc})", flush=True)
 
@@ -1960,67 +1958,89 @@ def _write_incytr_pathways() -> dict | None:
     # vocab = {"DEG","prG"}) returned with the seed-list rerun and surface in
     # the table as evidence-source badges next to each gene name.
     extra_cols = list(_INCYTR_SCORE_COLS) + list(_INCYTR_FC_COLS)
-    extra_select = ", ".join(extra_cols)
     label_cols = list(_INCYTR_LABEL_COLS)
-    label_select = ", ".join(label_cols)
-    df = con.execute(f"""
-        SELECT sender, receiver, Path, Ligand, Receptor, EM, Target,
-               contrast, pvalue, PDS,
-               {extra_select},
-               {label_select}
-        FROM src
-    """).fetchdf()
-    con.close()
 
-    # Receivers arrive sanitized (hive partition); senders raw.
-    df["receiver"] = df["receiver"].map(lambda r: sanitized_to_display.get(r, r))
-    float_cols = ["pvalue", "PDS"] + extra_cols
-    for col in float_cols:
-        df[col] = df[col].astype("float32")
-    # Labels are categoricals with a tiny fixed vocab — shrink to category for
-    # ~1/4 the parquet bytes vs raw strings.
-    for col in label_cols:
-        df[col] = df[col].astype("category")
-
-    # CR-04: annotate each shard row with traj_label + sign_vec columns.
-    # Also build small summary dicts (recur_index, trajectory_summary) for
-    # the payload. Full trajectory_index is NOT inlined in the payload —
-    # JS reads traj_label/sign_vec directly from the loaded shard rows.
-    # Phase-1 mock: uses factorial OLS PDS/pvalue in place of pair-mode values.
-    # Swap point for phase 2: just replace df with pair-mode table.
-    df, recur_index, traj_summary = _annotate_trajectory_columns(
-        df, source_label="factorial",
+    # Stream pair-by-pair via DuckDB COPY to avoid materializing the entire
+    # receiver_cache (~10M rows × 14 cols on levy_t5 — OOMs as a single
+    # pandas DataFrame). Receivers are stored sanitized (hive partition) in
+    # src, so we register the display-name map and join inline.
+    map_df = pd.DataFrame(
+        sanitized_to_display.items(), columns=["sanitized", "display"],
     )
+    con.register("recv_map", map_df)
 
-    shard_cols = [
-        "Path", "Ligand", "Receptor", "EM", "Target",
-        "contrast", "pvalue", "PDS",
-        *extra_cols,
-        *label_cols,
-        "traj_label", "sign_vec",
-    ]
+    pair_rows = con.execute("""
+        SELECT sender, COALESCE(m.display, src.receiver) AS receiver, COUNT(*) AS n
+        FROM src
+        LEFT JOIN recv_map m ON src.receiver = m.sanitized
+        GROUP BY sender, COALESCE(m.display, src.receiver)
+        ORDER BY sender, receiver
+    """).fetchall()
+
+    select_cols = ["Path", "Ligand", "Receptor", "EM", "Target",
+                   "contrast",
+                   "CAST(pvalue AS FLOAT) AS pvalue",
+                   "CAST(PDS AS FLOAT) AS PDS",
+                   *[f"CAST({c} AS FLOAT) AS {c}" for c in extra_cols],
+                   *label_cols]
+    select_sql = ",\n               ".join(select_cols)
+
     present_pairs: list[list[str]] = []
     pair_row_counts: dict[str, int] = {}
     total_rows = 0
     max_shard_bytes = 0
     max_shard_name = ""
-    for (s, r), g in df.groupby(["sender", "receiver"], sort=True):
-        sub = g[shard_cols].sort_values(
-            ["contrast", "pvalue"], kind="mergesort", na_position="last",
-        )
-        fname = f"{_incytr_sanitize(s)}__{_incytr_sanitize(r)}.parquet"
+    # CR-04: trajectory annotation runs per-pair inside the streaming loop
+    # (the full receiver_cache OOMs as a single DataFrame on levy_t5). Each
+    # path_string is unique to one (sender, receiver) pair, so per-pair
+    # recur dicts and traj label counts compose by simple union / sum.
+    recur_index: dict = {}
+    traj_summary: dict = {}
+    for s, r_display, n in pair_rows:
+        fname = f"{_incytr_sanitize(s)}__{_incytr_sanitize(r_display)}.parquet"
         path = os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, fname)
-        pq.write_table(
-            pa.Table.from_pandas(sub, preserve_index=False),
-            path, compression="zstd",
+        # Re-derive the sanitized receiver(s) that map to this display name
+        # (there's typically one but the map is many-to-one in principle).
+        sanitized = [k for k, v in sanitized_to_display.items() if v == r_display]
+        if not sanitized:
+            sanitized = [r_display]
+        in_list = ", ".join(f"'{x.replace(chr(39), chr(39)+chr(39))}'" for x in sanitized)
+        s_lit = s.replace("'", "''")
+        # Materialize this pair's rows (small — thousands of rows) so we can
+        # annotate trajectory columns before writing parquet. Sender/receiver
+        # are added as constants so _annotate_trajectory_columns can key its
+        # path_string on the (sender, receiver, Path) triple.
+        pair_df = con.execute(f"""
+            SELECT {select_sql}
+            FROM src
+            WHERE sender = '{s_lit}' AND receiver IN ({in_list})
+            ORDER BY contrast, pvalue NULLS LAST
+        """).fetchdf()
+        if pair_df.empty:
+            continue
+        pair_df["sender"] = s
+        pair_df["receiver"] = r_display
+        for col in label_cols:
+            pair_df[col] = pair_df[col].astype("category")
+        pair_df, pair_recur, pair_traj = _annotate_trajectory_columns(
+            pair_df, source_label="factorial",
         )
-        present_pairs.append([s, r])
-        pair_row_counts[fname] = len(sub)
-        total_rows += len(sub)
+        # path_strings are globally unique across pairs → safe to union.
+        recur_index.update(pair_recur)
+        for label, count in pair_traj.items():
+            traj_summary[label] = traj_summary.get(label, 0) + int(count)
+        # Drop sender/receiver before write (constant within a shard, kept
+        # only for trajectory keying).
+        pair_df = pair_df.drop(columns=["sender", "receiver"])
+        pair_df.to_parquet(path, compression="zstd", index=False)
+        present_pairs.append([s, r_display])
+        pair_row_counts[fname] = len(pair_df)
+        total_rows += len(pair_df)
         sz = os.path.getsize(path)
         if sz > max_shard_bytes:
             max_shard_bytes = sz
             max_shard_name = fname
+    con.close()
 
     index = {
         "schema_version": SCHEMA_VERSION,
@@ -2112,7 +2132,7 @@ def _write_incytr_pair_pathways() -> dict | None:
 
     input_dir = os.environ.get(
         "INCYTR_PAIR_MODE_INPUT_DIR",
-        os.path.join(config.REPO_ROOT, "bench", "incytr_pair_19", "output"),
+        os.path.join(config.REPO_ROOT, "bench", "incytr_pair_levy_t5", "output"),
     )
     if not os.path.isdir(input_dir):
         print(f"  (warn) pair-mode input dir not found: {input_dir}; "
@@ -2153,7 +2173,10 @@ def _write_incytr_pair_pathways() -> dict | None:
     dir_flag_cols = [c for c in ("pr_up", "pr_down", "ps_up", "ps_down",
                                   "py_up", "py_down")
                      if c in src_cols]
-    extra_path_cols = [c for c in ("log2FC", "aFC") if c in src_cols]
+    # aFC is byte-identical to log2FC in every row (verified across all 9
+    # contrasts) — drop the duplicate to save ~17% of shard storage. log2FC
+    # is the canonical path-level fold-change column.
+    extra_path_cols = [c for c in ("log2FC",) if c in src_cols]
     if not dir_flag_cols:
         print(f"    (warn) no direction-flag columns; downstream UI badges "
               f"will be empty", flush=True)
@@ -2192,10 +2215,32 @@ def _write_incytr_pair_pathways() -> dict | None:
         missing_score_clauses = ",\n          ".join(
             f"CAST(NULL AS DOUBLE) AS {c}" for c in missing_scores
         )
+        # Per-node FC columns (Ligand_sclog2FC, …): NULL-fill if absent in
+        # this driver's output. Names match _INCYTR_FC_COLS exactly.
+        fc_clauses = ",\n          ".join(
+            (f'CAST("{c}" AS DOUBLE) AS "{c}"' if c in names
+             else f'CAST(NULL AS DOUBLE) AS "{c}"')
+            for c in _INCYTR_FC_COLS
+        )
+        # Per-node evidence labels: source columns use dot notation
+        # ("Ligand.label"), aliased to underscore ("Ligand_label") in the
+        # output shard. NULL-fill if upstream driver omitted them.
+        label_clauses = ",\n          ".join(
+            (f'CAST("{src}" AS VARCHAR) AS "{dst}"' if src in names
+             else f'CAST(NULL AS VARCHAR) AS "{dst}"')
+            for src, dst in zip(_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS)
+        )
         clauses = [score_clauses, missing_score_clauses,
-                   dir_clauses, path_clauses]
+                   dir_clauses, path_clauses, fc_clauses, label_clauses]
         extra_select = ",\n          ".join(c for c in clauses if c)
 
+        # Pre-filter: keep rows with |PDS| >= 0.01 (gating signal — pvalue is
+        # untrustworthy in pair-mode) AND drop rows with clearly-no-signal
+        # disease-arm pvalue > 0.75 (coarse no-signal cut, not a ranking gate).
+        pval_drop_clause = (
+            f"AND ({pcol_clause} IS NULL OR {pcol_clause} <= 0.75)"
+            if pcol_disease is not None else ""
+        )
         selects.append(f"""
         SELECT
           "Sender.group"   AS sender,
@@ -2206,12 +2251,20 @@ def _write_incytr_pair_pathways() -> dict | None:
           CAST(PDS AS DOUBLE) AS PDS,
           {extra_select}
         FROM read_parquet('{fpath}')
+        WHERE COALESCE(ABS(CAST(PDS AS DOUBLE)), 0) >= 0.30
+          {pval_drop_clause}
         """)
     union_sql = "\nUNION ALL\n".join(selects)
-    con.execute(f"CREATE TEMP TABLE src AS {union_sql}")
+    # VIEW (not TEMP TABLE) — DuckDB re-reads parquet on demand for each query,
+    # avoiding a 57M-row in-memory materialization that OOMs the box. The
+    # per-file WHERE pre-filter (|PDS| >= 0.30 AND disease-arm pvalue <= 0.75)
+    # cuts ~22% of rows that carry no actionable signal. Pair-mode pvalue is
+    # untrustworthy for ranking, but pvalue > 0.75 is a coarse no-signal cut.
+    con.execute(f"CREATE VIEW src AS {union_sql}")
     n_src = con.execute("SELECT COUNT(*) FROM src").fetchone()[0]
     print(f"  incytr_pair_pathways: loaded {n_src:,} rows across "
-          f"{len(file_to_contrast)} contrast(s)", flush=True)
+          f"{len(file_to_contrast)} contrast(s) (pre-filtered |PDS|>=0.30 AND p<=0.75)",
+          flush=True)
 
     # Sender/receiver canonical lists from the data itself (Levy-19, already
     # sanitized — no display↔sanitized indirection).
@@ -2328,13 +2381,19 @@ def _write_incytr_pair_pathways() -> dict | None:
         else f'CAST(NULL AS DOUBLE) AS "{c}"'
         for c in _INCYTR_FC_COLS
     ]
+    # The union SELECT above already aliased `<Node>.label` → `<Node>_label`,
+    # so the view exposes the underscore form. Reference the dst name.
     label_select = [
-        f'"{src}" AS "{dst}"' if src in src_cols_pair
+        f'"{dst}"' if dst in src_cols_pair
         else f'CAST(NULL AS VARCHAR) AS "{dst}"'
-        for src, dst in zip(_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS)
+        for dst in _INCYTR_LABEL_COLS
     ]
-    select_cols = (
-        ["sender", "receiver", "Path", "Ligand", "Receptor", "EM", "Target",
+    # Per-pair shard columns: sender/receiver are constant within a shard so
+    # they're omitted (matches the factorial path's contract). `Path` is also
+    # omitted — it's just `Ligand|Receptor|EM|Target` concatenated and is
+    # reconstructed client-side in incytr_pathways.js (~10% disk savings).
+    shard_select_cols = (
+        ["Ligand", "Receptor", "EM", "Target",
          "contrast", "pvalue", "PDS"]
         + list(_INCYTR_SCORE_COLS)
         + dir_flag_cols
@@ -2342,48 +2401,92 @@ def _write_incytr_pair_pathways() -> dict | None:
         + fc_select
         + label_select
     )
-    df = con.execute(f"SELECT {', '.join(select_cols)} FROM src").fetchdf()
-    con.close()
+    # pvalue stays float32 to preserve dynamic range for small values
+    # (float16's smallest normal is ~6e-8). All other floats compress to
+    # float16 — ~3 decimal digits of precision, matching the UI display.
+    float32_cols = ["pvalue"]
+    float16_cols = (["PDS"]
+                    + list(_INCYTR_SCORE_COLS)
+                    + list(_INCYTR_FC_COLS)
+                    + dir_flag_cols + extra_path_cols)
+    float_cols = float32_cols + float16_cols  # for BSS encoding selection
 
-    float_cols = (["pvalue", "PDS"]
-                  + list(_INCYTR_SCORE_COLS)
-                  + list(_INCYTR_FC_COLS)
-                  + dir_flag_cols + extra_path_cols)
-    for col in float_cols:
-        df[col] = df[col].astype("float32")
-    for col in _INCYTR_LABEL_COLS:
-        df[col] = pd.Categorical(df[col], categories=_INCYTR_LABEL_VOCAB)
-
-    # CR-04: annotate each shard row with traj_label + sign_vec columns.
-    # In phase 2, this df IS the pair-mode source — no mock needed.
-    df, recur_index, traj_summary = _annotate_trajectory_columns(
-        df, source_label="pair_mode",
-    )
-
-    shard_cols = (
-        ["Path", "Ligand", "Receptor", "EM", "Target",
-         "contrast", "pvalue", "PDS"]
-        + list(_INCYTR_SCORE_COLS)
-        + list(_INCYTR_FC_COLS)
-        + list(_INCYTR_LABEL_COLS)
-        + dir_flag_cols
-        + extra_path_cols
-        + ["traj_label", "sign_vec"]
-    )
     present_pairs: list[list[str]] = []
     pair_row_counts: dict[str, int] = {}
     total_rows = 0
     max_shard_bytes = 0
     max_shard_name = ""
-    for (s, r), g in df.groupby(["sender", "receiver"], sort=True):
-        sub = g[shard_cols].sort_values(
-            ["contrast", "pvalue"], kind="mergesort", na_position="last",
+    # CR-04: trajectory annotation runs per-pair inside _flush. Per-pair
+    # path_strings (sender||receiver||Path) are globally unique, so per-pair
+    # recur dicts and traj label counts compose by simple union / sum.
+    recur_index: dict = {}
+    traj_summary: dict = {}
+
+    # Single streaming pass over the union view, ordered by (sender, receiver)
+    # so each pair's rows arrive contiguously. Previous implementation issued
+    # one DuckDB query per (sender, receiver) — 961 queries × 9 parquet rescans
+    # each = ~8.6k parquet reads. This pass reads each parquet once.
+    def _flush(key: tuple[str, str], frames: list[pd.DataFrame]) -> None:
+        nonlocal total_rows, max_shard_bytes, max_shard_name
+        if not frames:
+            return
+        sub = pd.concat(frames, ignore_index=True, copy=False)
+        for col in _INCYTR_LABEL_COLS:
+            if col in sub.columns:
+                sub[col] = pd.Categorical(sub[col], categories=_INCYTR_LABEL_VOCAB)
+        # CR-04: annotate traj_label + sign_vec. Add sender/receiver/Path as
+        # temp columns (constant within a shard) so the annotation function
+        # can key on (sender, receiver, Path); drop sender/receiver after
+        # annotation (Path is rebuilt client-side, so also dropped).
+        s_key, r_key = key
+        sub["sender"] = s_key
+        sub["receiver"] = r_key
+        sub["Path"] = (sub["Ligand"].astype(str) + "|"
+                       + sub["Receptor"].astype(str) + "|"
+                       + sub["EM"].astype(str) + "|"
+                       + sub["Target"].astype(str))
+        sub, pair_recur, pair_traj = _annotate_trajectory_columns(
+            sub, source_label="pair_mode",
         )
+        recur_index.update(pair_recur)
+        for label, count in pair_traj.items():
+            traj_summary[label] = traj_summary.get(label, 0) + int(count)
+        sub = sub.drop(columns=["sender", "receiver", "Path"])
+        # Float dtype compression runs after annotation so traj_label
+        # (categorical) and sign_vec (str) are unaffected.
+        for col in float32_cols:
+            if col in sub.columns:
+                sub[col] = sub[col].astype("float32")
+        for col in float16_cols:
+            if col in sub.columns:
+                sub[col] = sub[col].astype("float16")
+        # Sort by (Ligand, Receptor, EM, Target, contrast) so the path-string
+        # columns form long RLE runs in the parquet dictionary encoding.
+        # 4,130 distinct paths × 9 contrasts repeated → 5-10× compression on
+        # the string columns vs the previous (contrast, pvalue) sort, which
+        # scattered identical paths across the file.
+        path_sort_cols = [c for c in ("Ligand", "Receptor", "EM", "Target", "contrast")
+                          if c in sub.columns]
+        if path_sort_cols:
+            sub = sub.sort_values(path_sort_cols, kind="stable",
+                                  na_position="last").reset_index(drop=True)
+        s, r = key
         fname = f"{_incytr_sanitize(s)}__{_incytr_sanitize(r)}.parquet"
         path = os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, fname)
+        # byte_stream_split on float columns improves zstd compression of
+        # float bit-patterns by ~15-25% (parquet docs §encoding). pyarrow
+        # refuses column_encoding when use_dictionary=True, so pass
+        # use_dictionary as an explicit list of non-float columns (which keeps
+        # RLE_DICTIONARY on string/categorical columns) and BYTE_STREAM_SPLIT
+        # on the float columns via column_encoding.
+        present_floats = [c for c in float_cols if c in sub.columns]
+        bss_cols = {c: "BYTE_STREAM_SPLIT" for c in present_floats}
+        dict_cols = [c for c in sub.columns if c not in bss_cols]
         pq.write_table(
             pa.Table.from_pandas(sub, preserve_index=False),
             path, compression="zstd",
+            column_encoding=bss_cols if bss_cols else None,
+            use_dictionary=dict_cols if bss_cols else True,
         )
         present_pairs.append([s, r])
         pair_row_counts[fname] = len(sub)
@@ -2392,6 +2495,36 @@ def _write_incytr_pair_pathways() -> dict | None:
         if sz > max_shard_bytes:
             max_shard_bytes = sz
             max_shard_name = fname
+
+    # Per-sender streaming: 31 queries (one per sender) instead of one global
+    # sort over 42M rows (OOMs DuckDB) or one query per (sender, receiver)
+    # pair (961 queries × 9 parquet rescans). Each sender query is ~1.4M rows,
+    # well within memory; sort is local to one sender.
+    stream_cols = ["receiver"] + shard_select_cols
+    for s in senders_canonical:
+        df = con.execute(
+            f"""SELECT {', '.join(stream_cols)}
+                FROM src
+                WHERE sender = ?
+                ORDER BY receiver, contrast, pvalue NULLS LAST""",
+            [s],
+        ).fetchdf()
+        if df.empty:
+            continue
+        receivers = df["receiver"].tolist()
+        # Run-length partition by receiver.
+        starts = [0]
+        for i in range(1, len(receivers)):
+            if receivers[i] != receivers[i - 1]:
+                starts.append(i)
+        starts.append(len(receivers))
+        for j in range(len(starts) - 1):
+            a, b = starts[j], starts[j + 1]
+            r = receivers[a]
+            run = df.iloc[a:b].drop(columns=["receiver"])
+            _flush((s, r), [run])
+        del df
+    con.close()
 
     index = {
         "schema_version": SCHEMA_VERSION,
@@ -2499,8 +2632,8 @@ def build_payload(data: UnifiedData) -> dict:
 
     # Incytr pathway shards: one parquet per (sender, receiver), backing the
     # significant-pathway heatmap + table tabs. Source selectable via
-    # INCYTR_SOURCE env var: 'factorial' (default) or 'pair_mode'.
-    _incytr_source = os.environ.get("INCYTR_SOURCE", "factorial").lower()
+    # INCYTR_SOURCE env var: 'pair_mode' (default, levy_t5) or 'factorial'.
+    _incytr_source = os.environ.get("INCYTR_SOURCE", "pair_mode").lower()
     if _incytr_source == "pair_mode":
         print(f"  incytr source = pair_mode (INCYTR_SOURCE={_incytr_source})",
               flush=True)
@@ -2689,14 +2822,17 @@ def write_html(payload: dict, json_str: str | None = None) -> dict:
     os.makedirs(UNIFIED_VIEWER_DIR, exist_ok=True)
     if json_str is None:
         json_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    # Escape </ so an embedded "</script>" in the JSON can't terminate the tag.
-    safe = json_str.replace("</", "<\\/")
+    # PAYLOAD inlined inside <script type="application/json" id="payload-data">.
+    # Trade-off: index.html grows to ~85 MB (vs ~1 MB with async fetch), but
+    # the viewer is a single self-contained file with no second-fetch failure
+    # mode (S3 ACL / file:// / CORS / etc). JS still supports the async-fetch
+    # path as a fallback when the inline payload is empty/null.
     html = _render_template()
     for sentinel, value in (
         ("__APP_COLOR__", config.DISEASE_COLORS["App"]),
         ("__TAU_COLOR__", config.DISEASE_COLORS["Tau"]),
         ("__APTT_COLOR__", config.DISEASE_COLORS["ApTt"]),
-        ("__PAYLOAD_SENTINEL__", safe),
+        ("__PAYLOAD_SENTINEL__", json_str),
     ):
         html = html.replace(sentinel, value)
     raw = html.encode("utf-8")
