@@ -26,7 +26,9 @@ window.IncytrFilter = (function() {
     senderIn:       [],            // [] = any
     receiverIn:     [],            // [] = any
     sliderP:        null,
-    sliderPds:      null,
+    sliderPds:      0.5,
+    searchText:     "",
+    pairPage:       0,
     sortKey:        "PDS",
     sortDir:        -1,
   };

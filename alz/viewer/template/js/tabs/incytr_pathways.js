@@ -12,6 +12,12 @@
 const _IP_DISEASES = ["App", "Tau", "ApTt"];
 const _IP_TIMEPOINTS = ["2mo", "4mo", "6mo"];
 const _IP_ROW_CAP = 1000;
+// Hard cap on number of (sender, receiver) shards loaded simultaneously.
+// With ~45k rows/shard average post-filter and ~960 pairs total, an
+// unrestricted "show all" pulls tens of millions of rows into JS memory and
+// instantly crashes most browsers. The user must narrow Sender/Receiver
+// (or pin a pair via the heatmap) below this cap before rows are fetched.
+const _IP_PAIR_CAP = 16;
 
 // Score and per-node FC columns are advertised on the payload block but kept
 // in module-local fallbacks so the JS stays usable against an older payload.
@@ -108,19 +114,26 @@ function _ipBlock() {
 }
 
 function _ipPairsInScope(block) {
-  // Returns [{sender, receiver}] to load. Honors the multiselect filters; if
-  // both are empty, defaults to ALL present pairs ("show all pathways").
+  // Returns {pairs, totalMatched, page, pageCount}. Always slices to ≤
+  // _IP_PAIR_CAP via pair-level pagination over the post-filter list, so the
+  // table is always populated even when no Sender/Receiver filter is set.
   const f = IncytrFilter.get();
-  if (f.pair) return [f.pair];
+  if (f.pair) {
+    return { pairs: [f.pair], totalMatched: 1, page: 0, pageCount: 1 };
+  }
   const sIn = new Set(f.senderIn || []);
   const rIn = new Set(f.receiverIn || []);
-  const out = [];
+  const all = [];
   for (const [s, r] of block.slice_index.present) {
     if (sIn.size && !sIn.has(s)) continue;
     if (rIn.size && !rIn.has(r)) continue;
-    out.push({ sender: s, receiver: r });
+    all.push({ sender: s, receiver: r });
   }
-  return out;
+  const pageSize = _IP_PAIR_CAP;
+  const pageCount = Math.max(1, Math.ceil(all.length / pageSize));
+  const page = Math.min(Math.max(0, f.pairPage | 0), pageCount - 1);
+  const pairs = all.slice(page * pageSize, (page + 1) * pageSize);
+  return { pairs, totalMatched: all.length, page, pageCount };
 }
 
 function _ipScopeSig(pairs) {
@@ -136,9 +149,13 @@ function _ipMountMultiselect(hostId, label, options, key) {
     label, options,
     current: IncytrFilter.get(key) || [],
     onChange: (next) => {
-      // Picking sender/receiver clears any pinned pair from the heatmap.
+      // Picking sender/receiver clears any pinned pair from the heatmap and
+      // resets pagination to page 0 so the user lands on the new top page.
       const patch = { [key]: next };
-      if (key === "senderIn" || key === "receiverIn") patch.pair = null;
+      if (key === "senderIn" || key === "receiverIn") {
+        patch.pair = null;
+        patch.pairPage = 0;
+      }
       IncytrFilter.set(patch);
       _ipMountMultiselect(hostId, label, options, key);   // re-render badge
       _ipInvalidateScope();
@@ -162,12 +179,15 @@ function _ipSyncControls(block) {
   };
   set("ip-slider-p",   f.sliderP);
   set("ip-slider-pds", f.sliderPds);
+  const searchEl = document.getElementById("ip-search");
+  if (searchEl) searchEl.value = f.searchText || "";
 }
 
 function _ipInvalidateScope() {
   _ipRuntime.rows = null;
   _ipRuntime.loadedKey = null;
   _ipRuntime.openKeys = new Set();
+  _ipRuntime.shardFailures = [];
 }
 
 // ---- shard loading ----
@@ -175,7 +195,16 @@ function _ipInvalidateScope() {
 async function _ipEnsureShards() {
   const block = _ipBlock();
   if (!block) return;
-  const pairs = _ipPairsInScope(block);
+  const scope = _ipPairsInScope(block);
+  const pairs = scope.pairs;
+  if (pairs.length === 0) {
+    _ipRuntime.rows = null;
+    _ipRuntime.loadedKey = null;
+    _ipRuntime.loading = false;
+    _ipRuntime.loadError = null;
+    _ipRenderTable();
+    return;
+  }
   const sig = _ipScopeSig(pairs);
   if (_ipRuntime.loadedKey === sig) {
     _ipRenderTable();
@@ -186,23 +215,39 @@ async function _ipEnsureShards() {
   _ipRuntime.rows = null;
   _ipRenderTable();
   try {
-    // Parallel fetch — for "show all" the scope is 349 pairs, so sequential
-    // awaits would be O(seconds). Browser concurrency limits already gate this.
-    const perPair = await Promise.all(pairs.map(p =>
+    // Parallel fetch via allSettled — a single shard returning 403 (e.g. a
+    // stale index.json listing pairs whose files aren't deployed) should not
+    // kill the whole batch. Failures are counted and surfaced separately.
+    const settled = await Promise.allSettled(pairs.map(p =>
       SliceCache.loadIncytrShard(p.sender, p.receiver).then(rows => {
-        // Stamp sender/receiver so multi-pair queries still identify the
-        // originating cell-type pair in the table.
-        for (const r of rows) { r._sender = p.sender; r._receiver = p.receiver; }
+        // Stamp sender/receiver and reconstruct Path (dropped from the shard
+        // — it's just L|R|E|T concatenated) so the table column renders.
+        for (const r of rows) {
+          r._sender = p.sender;
+          r._receiver = p.receiver;
+          if (r.Path == null)
+            r.Path = `${r.Ligand}|${r.Receptor}|${r.EM}|${r.Target}`;
+        }
         return rows;
       })
     ));
     // Resolve race: only commit if the scope hasn't changed mid-fetch.
-    const newSig = _ipScopeSig(_ipPairsInScope(block));
+    const newSig = _ipScopeSig(_ipPairsInScope(block).pairs);
     if (newSig !== sig) return;
     const all = [];
-    for (const arr of perPair) all.push(...arr);
+    const failures = [];
+    settled.forEach((s, i) => {
+      if (s.status === "fulfilled") all.push(...s.value);
+      else failures.push({ pair: pairs[i], reason: s.reason && s.reason.message || s.reason });
+    });
     _ipRuntime.rows = all;
     _ipRuntime.loadedKey = sig;
+    _ipRuntime.shardFailures = failures;
+    if (failures.length) {
+      console.warn(`incytr_pathways: ${failures.length} of ${pairs.length} `
+        + `shards failed to load; continuing with the rest.`,
+        failures.slice(0, 5));
+    }
   } catch (e) {
     _ipRuntime.loadError = String(e.message || e);
     console.error("incytr shards load failed", e);
@@ -219,6 +264,8 @@ function _ipFilterRows() {
   const f = IncytrFilter.get();
   const diseaseSet   = new Set(f.disease   || []);
   const timeSet      = new Set(f.timepoint || []);
+  const searchTokens = (f.searchText || "")
+    .toLowerCase().split(/\s+/).filter(Boolean);
   const out = [];
   for (const r of _ipRuntime.rows) {
     if (diseaseSet.size || timeSet.size) {
@@ -228,6 +275,17 @@ function _ipFilterRows() {
     }
     if (f.sliderP   != null && !(r.pvalue       <  f.sliderP))   continue;
     if (f.sliderPds != null && !(Math.abs(r.PDS) >= f.sliderPds)) continue;
+    if (searchTokens.length) {
+      const hay = (
+        (r._sender || "") + "\n" + (r._receiver || "") + "\n" +
+        (r.Ligand || "") + "\n" + (r.Receptor || "") + "\n" +
+        (r.EM || "") + "\n" + (r.Target || "") + "\n" +
+        (r.Path || "") + "\n" + (r.contrast || "")
+      ).toLowerCase();
+      let ok = true;
+      for (const t of searchTokens) { if (hay.indexOf(t) < 0) { ok = false; break; } }
+      if (!ok) continue;
+    }
     out.push(r);
   }
   const key = f.sortKey, dir = f.sortDir;
@@ -251,48 +309,92 @@ function _ipFmtNum(v, digits) {
   return Number(v).toFixed(digits == null ? 3 : digits);
 }
 
+function _ipRenderPager(scope) {
+  // Pager lives just above #ip-table-wrap, recreated each render. Shown only
+  // when the post-filter pair list spans more than one page (or when a
+  // single-pair pin is active, for clarity).
+  const wrap = document.getElementById("ip-table-wrap");
+  if (!wrap) return;
+  let host = document.getElementById("ip-pager");
+  if (host) host.remove();
+  if (!scope || scope.pageCount <= 1) return;
+  const { page, pageCount, totalMatched } = scope;
+  const start = page * _IP_PAIR_CAP + 1;
+  const end = Math.min((page + 1) * _IP_PAIR_CAP, totalMatched);
+  host = document.createElement("div");
+  host.id = "ip-pager";
+  host.style.cssText = "display:flex;gap:8px;align-items:center;margin:4px 0 8px 0;font-size:12px;";
+  host.innerHTML =
+    `<button id="ip-pager-prev" class="ke-filter-reset"${page === 0 ? " disabled" : ""}`
+    + ` title="Previous 16 (sender, receiver) pairs">‹ Prev</button>`
+    + `<span class="muted">Pairs ${start.toLocaleString()}–${end.toLocaleString()} `
+    + `of ${totalMatched.toLocaleString()} `
+    + `(page ${page + 1} of ${pageCount})</span>`
+    + `<button id="ip-pager-next" class="ke-filter-reset"${page >= pageCount - 1 ? " disabled" : ""}`
+    + ` title="Next 16 (sender, receiver) pairs">Next ›</button>`;
+  wrap.parentNode.insertBefore(host, wrap);
+  const prev = document.getElementById("ip-pager-prev");
+  const next = document.getElementById("ip-pager-next");
+  if (prev) prev.addEventListener("click", () => {
+    if (page > 0) { IncytrFilter.set({ pairPage: page - 1 }); _ipInvalidateScope(); _ipEnsureShards(); }
+  });
+  if (next) next.addEventListener("click", () => {
+    if (page < pageCount - 1) { IncytrFilter.set({ pairPage: page + 1 }); _ipInvalidateScope(); _ipEnsureShards(); }
+  });
+}
+
 function _ipRenderTable() {
   const countEl = document.getElementById("ip-count");
   const wrap = document.getElementById("ip-table-wrap");
   const block = _ipBlock();
   if (!wrap || !countEl || !block) return;
 
-  const pairs = _ipPairsInScope(block);
+  const scope = _ipPairsInScope(block);
+  const pairs = scope.pairs;
+  const f = IncytrFilter.get();
   if (!pairs.length) {
     countEl.textContent = "No (sender, receiver) pairs match the current selection.";
     wrap.innerHTML = '<div class="muted" style="padding:16px;">Try clearing or widening the sender / receiver filters.</div>';
+    _ipRenderPager(scope);
     return;
   }
   if (_ipRuntime.loading) {
-    countEl.textContent = `Loading ${pairs.length} shard${pairs.length === 1 ? "" : "s"} in parallel…`;
+    countEl.textContent = `Loading ${pairs.length} (sender, receiver) shard${pairs.length === 1 ? "" : "s"}…`;
     wrap.innerHTML = '<div class="muted" style="padding:16px;">Fetching shards…</div>';
+    _ipRenderPager(scope);
     return;
   }
   if (_ipRuntime.loadError) {
     countEl.textContent = "Shard load failed.";
     wrap.innerHTML = `<div class="muted" style="padding:16px;">${_escapeHtml(_ipRuntime.loadError)}</div>`;
+    _ipRenderPager(scope);
     return;
   }
   if (!_ipRuntime.rows) {
     countEl.textContent = "";
     wrap.innerHTML = "";
+    _ipRenderPager(scope);
     return;
   }
   if (!_ipRuntime.rows.length) {
     countEl.textContent = "No rows in the selected shard(s).";
     wrap.innerHTML = '<div class="muted" style="padding:16px;">Empty (likely an empty-DEG cell type).</div>';
+    _ipRenderPager(scope);
     return;
   }
   const filtered = _ipFilterRows();
   const total = _ipRuntime.rows.length;
   const shown = Math.min(filtered.length, _IP_ROW_CAP);
-  const f = IncytrFilter.get();
+  const failures = (_ipRuntime.shardFailures || []).length;
   countEl.textContent =
     `${filtered.length.toLocaleString()} rows pass filters `
-    + `(of ${total.toLocaleString()} loaded from ${pairs.length} pair${pairs.length === 1 ? "" : "s"}).`
+    + `(of ${total.toLocaleString()} loaded from ${pairs.length} pair${pairs.length === 1 ? "" : "s"}`
+    + (failures ? `; ${failures} shard${failures === 1 ? "" : "s"} skipped — see console` : "")
+    + `).`
     + (filtered.length > _IP_ROW_CAP
         ? ` Showing top ${shown.toLocaleString()} by ${f.sortKey}.`
         : "");
+  _ipRenderPager(scope);
 
   const scoreCols = _ipScoreCols().map(k => ({
     key: k, label: k, numeric: true, digits: 3,
@@ -420,6 +522,13 @@ function wireIncytrPathways() {
   };
   wireSlider("ip-slider-p",   "sliderP");
   wireSlider("ip-slider-pds", "sliderPds");
+
+  // Search box — substring AND across Path/nodes/sender/receiver/contrast.
+  const searchEl = document.getElementById("ip-search");
+  if (searchEl) searchEl.addEventListener("input", () => {
+    IncytrFilter.set({ searchText: searchEl.value || "" });
+    _ipRenderTable();
+  });
 
   // Reset.
   const resetBtn = document.getElementById("ip-reset");
