@@ -118,60 +118,59 @@ const _ipRuntime = {
 };
 
 // ---------------------------------------------------------------------------
-// Trajectory-index helpers (CR-04)
+// Trajectory helpers (CR-04)
 // ---------------------------------------------------------------------------
-
-function _ipTrajIndex() {
-  const block = _ipBlock();
-  return (block && block.trajectory_index) || null;
-}
+// traj_label and sign_vec are shard columns — read directly from each row.
+// recur_index is in the payload block (small enough to inline).
 
 function _ipRecurIndex() {
   const block = _ipBlock();
   return (block && block.recur_index) || null;
 }
 
-// Derive a path_id from a shard row. Matches the Python build: use the Path
-// string directly when present (it is already unique within a shard because
-// shards are per-(sender,receiver)); fall back to a hash string when absent.
-function _ipPathId(r) {
-  if (r.path_id != null) return String(r.path_id);
+// Derive a path string from a shard row — matches the Python build key:
+// sender||receiver||Path.
+function _ipPathStr(r) {
   return `${r._sender}||${r._receiver}||${r.Path}`;
 }
 
-// Return the trajectory entry for this row's path_id from the contrast that
-// matches r.contrast (disease prefix match). Returns null when not found.
+// Return the trajectory entry for this row: { traj_label, sign_vec }.
+// Reads from shard columns traj_label / sign_vec (set by the Python build).
+// Returns null when the payload pre-dates CR-04 (version < 2).
 function _ipTrajEntry(r) {
-  const idx = _ipTrajIndex();
-  if (!idx) return null;
-  const pid = _ipPathId(r);
-  const entries = idx[pid];
-  if (!entries) return null;
-  // entries may be an array [{contrast, traj_label, sign_vec}, ...] or a
-  // single object (when the index is keyed by path_id directly).
-  if (Array.isArray(entries)) {
-    const [d] = (r.contrast || "").split("_");
-    return entries.find(e => e.contrast === d) || entries[0] || null;
+  if (r.traj_label == null) return null;
+  return { traj_label: r.traj_label, sign_vec: r.sign_vec || "???" };
+}
+
+// Return all distinct (disease, traj_label, sign_vec) tuples for a path across
+// the currently-loaded rows — used by the trajectory chart to show all 3 diseases.
+function _ipTrajEntriesForPath(pathStr, allRows) {
+  const seen = new Set();
+  const out = [];
+  for (const r of (allRows || [])) {
+    if (_ipPathStr(r) !== pathStr) continue;
+    if (r.traj_label == null) continue;
+    const [dis] = (r.contrast || "").split("_");
+    const key = `${dis}|${r.traj_label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ contrast: dis, traj_label: r.traj_label, sign_vec: r.sign_vec || "" });
   }
-  return entries;
+  return out;
 }
 
-// Return all trajectory entries for a path_id across all disease contrasts.
-function _ipTrajEntriesAll(pathId) {
-  const idx = _ipTrajIndex();
-  if (!idx) return [];
-  const entries = idx[pathId];
-  if (!entries) return [];
-  if (Array.isArray(entries)) return entries;
-  return [entries];
-}
-
-// Return the set of disease contrasts in which this path_id is significant,
-// using recur_index when available, else derived from loaded rows.
-function _ipRecurSet(pathId) {
+// Return the set of disease contrasts in which this path is significant,
+// using recur_index when available, else falling back to loaded rows.
+function _ipRecurSetForPath(pathStr) {
   const ri = _ipRecurIndex();
-  if (ri && ri[pathId]) return new Set(ri[pathId]);
+  if (ri && ri[pathStr]) return new Set(ri[pathStr]);
   return new Set();
+}
+
+// Check whether trajectory data is available (payload version >= 2).
+function _ipHasTraj() {
+  const block = _ipBlock();
+  return !!(block && block.version >= 2);
 }
 
 function _ipScoreCols() {
@@ -261,9 +260,8 @@ function _ipSyncControls(block) {
 function _ipRenderTrajChips() {
   const host = document.getElementById("ip-traj-chips");
   if (!host) return;
-  const hasIndex = !!_ipTrajIndex();
-  if (!hasIndex) {
-    // No trajectory_index in payload — hide the chip bar gracefully.
+  if (!_ipHasTraj()) {
+    // Payload pre-dates CR-04 — hide the chip bar gracefully.
     host.style.display = "none";
     return;
   }
@@ -353,8 +351,7 @@ function _ipFilterRows() {
   const trajSet       = new Set(f.trajLabels     || []);
   const recurSet      = new Set(f.recurContrasts || []);
   const hasRecur      = recurSet.size > 0;
-  const hasTraj       = trajSet.size > 0;
-  const trajIdx       = hasTraj  ? _ipTrajIndex() : null;
+  const hasTraj       = trajSet.size > 0 && _ipHasTraj();
   const recurIdx      = hasRecur ? _ipRecurIndex() : null;
 
   // For recur filtering: if recur_index is absent, build a fast path_id →
@@ -368,7 +365,7 @@ function _ipFilterRows() {
       const pdsSig = f.sliderPds == null || Math.abs(r.PDS || 0) >= f.sliderPds;
       if (!pSig || !pdsSig) continue;
       const [d] = (r.contrast || "").split("_");
-      const pid = _ipPathId(r);
+      const pid = _ipPathStr(r);
       if (!recurPathMap.has(pid)) recurPathMap.set(pid, new Set());
       recurPathMap.get(pid).add(d);
     }
@@ -385,14 +382,14 @@ function _ipFilterRows() {
     if (f.sliderPds != null && !(Math.abs(r.PDS || 0) >= f.sliderPds)) continue;
 
     // CR-04: trajectory label chip filter (OR across selected labels).
-    if (hasTraj && trajIdx) {
-      const entry = _ipTrajEntry(r);
-      if (!entry || !trajSet.has(entry.traj_label)) continue;
+    // traj_label is a shard column — read directly from the row.
+    if (hasTraj) {
+      if (!trajSet.has(r.traj_label)) continue;
     }
 
     // CR-04: recur_in filter (AND across selected disease contrasts).
     if (hasRecur) {
-      const pid = _ipPathId(r);
+      const pid = _ipPathStr(r);
       let diseases;
       if (recurIdx) {
         diseases = new Set(recurIdx[pid] || []);
@@ -474,7 +471,7 @@ function _ipRenderTable() {
         ? ` Showing top ${shown.toLocaleString()} by ${f.sortKey}.`
         : "");
 
-  const hasTrajIdx = !!_ipTrajIndex();
+  const hasTrajIdx = _ipHasTraj();
   const scoreCols = _ipScoreCols().map(k => ({
     key: k, label: k, numeric: true, digits: 3,
     tip: _IP_SCORE_TIPS[k] || `${k} score column from Incytr factorial scoring.`,
@@ -531,12 +528,11 @@ function _ipRenderTable() {
       + `${isOpen ? "▾" : "▸"}</td>`;
     const cells = cols.map(c => {
       if (c.isTraj) {
-        const entry = _ipTrajEntry(r);
-        if (!entry) return `<td class="muted">—</td>`;
-        const label = entry.traj_label || "—";
-        const sv = entry.sign_vec ? ` (${entry.sign_vec})` : "";
+        const label = r.traj_label || null;
+        if (!label) return `<td class="muted">—</td>`;
+        const sv = r.sign_vec || "";
         const cpal = _IP_TRAJ_COLORS[label] || { bg: "#eee", fg: "#444" };
-        const tip = (_IP_TRAJ_TIPS[label] || label) + (entry.sign_vec ? ` Sign vector: ${entry.sign_vec}` : "");
+        const tip = (_IP_TRAJ_TIPS[label] || label) + (sv ? ` Sign vector: ${sv}` : "");
         return `<td title="${_escapeHtml(tip)}">`
           + `<span style="padding:1px 7px;border-radius:10px;font-size:10px;`
           + `background:${cpal.bg};color:${cpal.fg};white-space:nowrap;">`
@@ -618,7 +614,7 @@ function _ipRenderTable() {
 // ---------------------------------------------------------------------------
 
 function _ipRenderDetailPanel(r, rk, activeTab) {
-  const hasTrajIdx = !!_ipTrajIndex();
+  const hasTrajIdx = _ipHasTraj();
   // Sub-tab switcher buttons.
   const tabBar = `<div style="display:flex;gap:6px;margin-bottom:8px;">` +
     `<button type="button" data-ip-detail-tab="fc" data-ip-detail-rk="${_escapeHtml(rk)}"
@@ -686,15 +682,15 @@ function _ipRenderTrajChart(rk, r) {
     host.innerHTML = `<div class="muted">Plotly not available for trajectory chart.</div>`;
     return;
   }
-  const pathId = _ipPathId(r);
-  const entries = _ipTrajEntriesAll(pathId);
+  const pathStr = _ipPathStr(r);
+  const entries = _ipTrajEntriesForPath(pathStr, _ipRuntime.rows);
 
   // Load PDS values directly from the loaded rows (all contrasts present in
   // the shard — one row per disease×timepoint). Keyed by contrast string.
   const pdsByContrast = new Map();
   const pvalByContrast = new Map();
   for (const row of (_ipRuntime.rows || [])) {
-    if (_ipPathId(row) === pathId) {
+    if (_ipPathStr(row) === pathStr) {
       const k = row.contrast || "";
       pdsByContrast.set(k, row.PDS != null ? Number(row.PDS) : null);
       pvalByContrast.set(k, row.pvalue != null ? Number(row.pvalue) : null);
@@ -741,10 +737,8 @@ function _ipRenderTrajChart(rk, r) {
     };
   });
 
-  const traj = entries.find(e => {
-    const [d] = (r.contrast || "").split("_");
-    return e.contrast === d;
-  }) || entries[0];
+  const [curDis] = (r.contrast || "").split("_");
+  const traj = entries.find(e => e.contrast === curDis) || entries[0];
   const titleText = traj
     ? `Trajectory: <b>${traj.traj_label}</b> (sign vec ${traj.sign_vec || "—"}) · ${r.Path || ""}`
     : `PDS over time · ${r.Path || ""}`;
