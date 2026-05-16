@@ -15,9 +15,11 @@ const _IP_ROW_CAP = 1000;
 // Hard cap on number of (sender, receiver) shards loaded simultaneously.
 // With ~45k rows/shard average post-filter and ~960 pairs total, an
 // unrestricted "show all" pulls tens of millions of rows into JS memory and
-// instantly crashes most browsers. The user must narrow Sender/Receiver
-// (or pin a pair via the heatmap) below this cap before rows are fetched.
-const _IP_PAIR_CAP = 16;
+// instantly crashes most browsers. Previously 16, lowered to 8 because every
+// post-load operation (filter, sort, search) is O(N) over the union and
+// 8 × 45k ≈ 360k rows is already the point where the search box starts to
+// stutter on commodity hardware. Pager lets the user step through batches.
+const _IP_PAIR_CAP = 8;
 
 // Coarse trajectory labels (CR-04). Ordered for chip display.
 // Sign vectors are triples of 'u' (up), 'd' (down), 'f' (flat) at 2/4/6 mo.
@@ -121,6 +123,7 @@ const _ipRuntime = {
   loadError:      null,
   openKeys:       new Set(),    // keys of rows whose per-node FC detail is expanded
   detailTab:      {},           // rk → "fc" | "trajectory" (which sub-tab is active)
+  recurFallback:  null,         // { sig, map } cache for fallback recurPathMap
 };
 
 // ---------------------------------------------------------------------------
@@ -135,9 +138,10 @@ function _ipRecurIndex() {
 }
 
 // Derive a path string from a shard row — matches the Python build key:
-// sender||receiver||Path.
+// sender||receiver||Path. Prefer the precomputed r._pathStr (stamped at
+// shard-load time) to avoid per-row template-literal allocation in hot loops.
 function _ipPathStr(r) {
-  return `${r._sender}||${r._receiver}||${r.Path}`;
+  return r._pathStr || (`${r._sender}||${r._receiver}||${r.Path}`);
 }
 
 // Return the trajectory entry for this row: { traj_label, sign_vec }.
@@ -299,7 +303,10 @@ function _ipRenderTrajChips() {
              font-weight:${on ? "600" : "400"};"
     >${_escapeHtml(label)}</button>`;
   }).join("");
-  host.addEventListener("click", ev => {
+  // Use onclick (overwrites prior handler) — addEventListener would leak a
+  // new listener on every chip toggle, causing duplicate-fire bugs and
+  // per-click slowdowns.
+  host.onclick = ev => {
     const btn = ev.target.closest("button[data-ip-traj]");
     if (!btn) return;
     const label = btn.dataset.ipTraj;
@@ -309,14 +316,27 @@ function _ipRenderTrajChips() {
     IncytrFilter.set({ trajLabels: [...cur] });
     _ipRenderTrajChips();
     _ipRenderTable();
-  });
+  };
 }
+
+// Debounce helper. Returns a wrapped function that fires `fn` only after
+// `delay` ms have passed without another call. Used for the search box and
+// numeric sliders so each keystroke/drag doesn't re-filter the full row set.
+function _ipDebounce(fn, delay) {
+  let h = null;
+  return function() {
+    if (h) clearTimeout(h);
+    h = setTimeout(() => { h = null; fn(); }, delay);
+  };
+}
+const _ipRenderTableDebounced = _ipDebounce(() => _ipRenderTable(), 180);
 
 function _ipInvalidateScope() {
   _ipRuntime.rows = null;
   _ipRuntime.loadedKey = null;
   _ipRuntime.openKeys = new Set();
   _ipRuntime.shardFailures = [];
+  _ipRuntime.recurFallback = null;
 }
 
 // ---- shard loading ----
@@ -351,11 +371,21 @@ async function _ipEnsureShards() {
       SliceCache.loadIncytrShard(p.sender, p.receiver).then(rows => {
         // Stamp sender/receiver and reconstruct Path (dropped from the shard
         // — it's just L|R|E|T concatenated) so the table column renders.
+        // Also precompute _pathStr and _hay so hot filter loops don't allocate.
+        const sPipe = p.sender + "||" + p.receiver + "||";
         for (const r of rows) {
           r._sender = p.sender;
           r._receiver = p.receiver;
           if (r.Path == null)
-            r.Path = `${r.Ligand}|${r.Receptor}|${r.EM}|${r.Target}`;
+            r.Path = (r.Ligand || "") + "|" + (r.Receptor || "") + "|"
+                   + (r.EM || "") + "|" + (r.Target || "");
+          r._pathStr = sPipe + r.Path;
+          r._hay = (
+            p.sender + "\n" + p.receiver + "\n" +
+            (r.Ligand || "") + "\n" + (r.Receptor || "") + "\n" +
+            (r.EM || "") + "\n" + (r.Target || "") + "\n" +
+            r.Path + "\n" + (r.contrast || "")
+          ).toLowerCase();
         }
         return rows;
       })
@@ -401,65 +431,73 @@ function _ipFilterRows() {
   const searchTokens  = (f.searchText || "")
     .toLowerCase().split(/\s+/).filter(Boolean);
 
-  // For recur filtering: if recur_index is absent, build a fast path_id →
+  // For recur filtering: if recur_index is absent, build a fast pathStr →
   // disease-set map from the already-loaded rows (applying the active
-  // pvalue/|PDS| gates) so we don't have to re-scan for every row.
+  // pvalue/|PDS| gates) so we don't have to re-scan for every row. Cache it
+  // by (loadedKey, sliderP, sliderPds) — invalidated on shard reload.
   let recurPathMap = null;
   if (hasRecur && !recurIdx) {
-    recurPathMap = new Map();
-    for (const r of _ipRuntime.rows) {
-      const pSig = f.sliderP   == null || (r.pvalue != null && r.pvalue < f.sliderP);
-      const pdsSig = f.sliderPds == null || Math.abs(r.PDS || 0) >= f.sliderPds;
-      if (!pSig || !pdsSig) continue;
-      const [d] = (r.contrast || "").split("_");
-      const pid = _ipPathStr(r);
-      if (!recurPathMap.has(pid)) recurPathMap.set(pid, new Set());
-      recurPathMap.get(pid).add(d);
+    const sig = `${_ipRuntime.loadedKey}|${f.sliderP}|${f.sliderPds}`;
+    const cached = _ipRuntime.recurFallback;
+    if (cached && cached.sig === sig) {
+      recurPathMap = cached.map;
+    } else {
+      recurPathMap = new Map();
+      const sP = f.sliderP, sPds = f.sliderPds;
+      for (const r of _ipRuntime.rows) {
+        if (sP   != null && !(r.pvalue != null && r.pvalue < sP)) continue;
+        if (sPds != null && !(Math.abs(r.PDS || 0) >= sPds))      continue;
+        const c = r.contrast || "";
+        const ui = c.indexOf("_");
+        const d = ui < 0 ? c : c.substring(0, ui);
+        const pid = _ipPathStr(r);
+        let s = recurPathMap.get(pid);
+        if (!s) { s = new Set(); recurPathMap.set(pid, s); }
+        s.add(d);
+      }
+      _ipRuntime.recurFallback = { sig, map: recurPathMap };
     }
   }
 
+  const sP = f.sliderP, sPds = f.sliderPds;
+  const hasSearch = searchTokens.length > 0;
+  const hasDis = diseaseSet.size > 0, hasTime = timeSet.size > 0;
   const out = [];
   for (const r of _ipRuntime.rows) {
-    if (diseaseSet.size || timeSet.size) {
-      const [d, t] = (r.contrast || "").split("_");
-      if (diseaseSet.size && !diseaseSet.has(d)) continue;
-      if (timeSet.size    && !timeSet.has(t))    continue;
+    if (hasDis || hasTime) {
+      const c = r.contrast || "";
+      const ui = c.indexOf("_");
+      const d = ui < 0 ? c : c.substring(0, ui);
+      const t = ui < 0 ? "" : c.substring(ui + 1);
+      if (hasDis  && !diseaseSet.has(d)) continue;
+      if (hasTime && !timeSet.has(t))    continue;
     }
-    if (f.sliderP   != null && !(r.pvalue       <  f.sliderP))   continue;
-    if (f.sliderPds != null && !(Math.abs(r.PDS || 0) >= f.sliderPds)) continue;
+    if (sP   != null && !(r.pvalue < sP))          continue;
+    if (sPds != null && !(Math.abs(r.PDS || 0) >= sPds)) continue;
 
-    if (searchTokens.length) {
-      const hay = (
-        (r._sender || "") + "\n" + (r._receiver || "") + "\n" +
-        (r.Ligand || "") + "\n" + (r.Receptor || "") + "\n" +
-        (r.EM || "") + "\n" + (r.Target || "") + "\n" +
-        (r.Path || "") + "\n" + (r.contrast || "")
-      ).toLowerCase();
+    if (hasSearch) {
+      const hay = r._hay || "";
       let ok = true;
       for (const t of searchTokens) { if (hay.indexOf(t) < 0) { ok = false; break; } }
       if (!ok) continue;
     }
 
-    // CR-04: trajectory label chip filter (OR across selected labels).
-    // traj_label is a shard column — read directly from the row.
     if (hasTraj) {
       if (!trajSet.has(r.traj_label)) continue;
     }
 
-    // CR-04: recur_in filter (AND across selected disease contrasts).
     if (hasRecur) {
       const pid = _ipPathStr(r);
-      let diseases;
-      if (recurIdx) {
-        diseases = new Set(recurIdx[pid] || []);
-      } else if (recurPathMap) {
-        diseases = recurPathMap.get(pid) || new Set();
-      } else {
-        diseases = new Set();
-      }
+      const diseases = recurIdx
+        ? recurIdx[pid]
+        : (recurPathMap ? recurPathMap.get(pid) : null);
+      if (!diseases) continue;
+      // diseases is an Array (recur_index) or a Set (fallback map).
+      const isArr = Array.isArray(diseases);
       let passes = true;
       for (const d of recurSet) {
-        if (!diseases.has(d)) { passes = false; break; }
+        const has = isArr ? (diseases.indexOf(d) >= 0) : diseases.has(d);
+        if (!has) { passes = false; break; }
       }
       if (!passes) continue;
     }
@@ -470,15 +508,72 @@ function _ipFilterRows() {
   const numericKeys = new Set([
     "pvalue", "PDS", ..._ipScoreCols(),
   ]);
-  out.sort((a, b) => {
-    const av = a[key], bv = b[key];
-    if (av == null && bv == null) return 0;
-    if (av == null) return 1;
-    if (bv == null) return -1;
-    if (numericKeys.has(key)) return dir * (av - bv);
-    return dir * (String(av).localeCompare(String(bv)));
-  });
+  const isNumeric = numericKeys.has(key);
+  const cmp = isNumeric
+    ? (a, b) => {
+        const av = a[key], bv = b[key];
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        return dir * (av - bv);
+      }
+    : (a, b) => {
+        const av = a[key], bv = b[key];
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        if (av < bv) return -dir;
+        if (av > bv) return  dir;
+        return 0;
+      };
+  // Partial sort: when result vastly exceeds row cap, maintain a top-K heap.
+  // Stash the true matched count for the count-line in _ipRenderTable.
+  _ipRuntime.lastMatched = out.length;
+  if (out.length > _IP_ROW_CAP * 2) {
+    return _ipTopK(out, _IP_ROW_CAP, cmp);
+  }
+  out.sort(cmp);
   return out;
+}
+
+// Top-K selector using a max-heap of size K (where "max" is the worst item
+// kept, by the comparator's ordering: cmp(a,b) < 0 means a sorts earlier =
+// better). Replaces full sort + slice when out.length >> K. Returns the K
+// best in sorted order.
+function _ipTopK(arr, K, cmp) {
+  if (arr.length <= K) { arr.sort(cmp); return arr; }
+  // Min-heap of "worst" — we want to evict the item with the largest cmp
+  // value relative to candidates. Use a simple heap keyed by inverse cmp.
+  const heap = [];
+  // Worst-at-root: parent compares "worse" than children. "Worse" means
+  // greater cmp value when compared against the candidate, so root is the
+  // current worst kept. Heap order: root = item where cmp(root, x) > 0 for
+  // all x in heap. Implement as max-heap under cmp.
+  function swap(i, j) { const t = heap[i]; heap[i] = heap[j]; heap[j] = t; }
+  function up(i) {
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (cmp(heap[i], heap[p]) > 0) { swap(i, p); i = p; } else break;
+    }
+  }
+  function down(i) {
+    const n = heap.length;
+    for (;;) {
+      const l = 2 * i + 1, r = l + 1;
+      let m = i;
+      if (l < n && cmp(heap[l], heap[m]) > 0) m = l;
+      if (r < n && cmp(heap[r], heap[m]) > 0) m = r;
+      if (m === i) break;
+      swap(i, m); i = m;
+    }
+  }
+  for (let i = 0; i < arr.length; i++) {
+    const v = arr[i];
+    if (heap.length < K) { heap.push(v); up(heap.length - 1); }
+    else if (cmp(v, heap[0]) < 0) { heap[0] = v; down(0); }
+  }
+  heap.sort(cmp);
+  return heap;
 }
 
 function _ipFmtNum(v, digits) {
@@ -504,12 +599,12 @@ function _ipRenderPager(scope) {
   host.style.cssText = "display:flex;gap:8px;align-items:center;margin:4px 0 8px 0;font-size:12px;";
   host.innerHTML =
     `<button id="ip-pager-prev" class="ke-filter-reset"${page === 0 ? " disabled" : ""}`
-    + ` title="Previous 16 (sender, receiver) pairs">‹ Prev</button>`
+    + ` title="Previous 8 (sender, receiver) pairs">‹ Prev</button>`
     + `<span class="muted">Pairs ${start.toLocaleString()}–${end.toLocaleString()} `
     + `of ${totalMatched.toLocaleString()} `
     + `(page ${page + 1} of ${pageCount})</span>`
     + `<button id="ip-pager-next" class="ke-filter-reset"${page >= pageCount - 1 ? " disabled" : ""}`
-    + ` title="Next 16 (sender, receiver) pairs">Next ›</button>`;
+    + ` title="Next 8 (sender, receiver) pairs">Next ›</button>`;
   wrap.parentNode.insertBefore(host, wrap);
   const prev = document.getElementById("ip-pager-prev");
   const next = document.getElementById("ip-pager-next");
@@ -561,15 +656,16 @@ function _ipRenderTable() {
     return;
   }
   const filtered = _ipFilterRows();
+  const matched = (_ipRuntime.lastMatched != null) ? _ipRuntime.lastMatched : filtered.length;
   const total = _ipRuntime.rows.length;
   const shown = Math.min(filtered.length, _IP_ROW_CAP);
   const failures = (_ipRuntime.shardFailures || []).length;
   countEl.textContent =
-    `${filtered.length.toLocaleString()} rows pass filters `
+    `${matched.toLocaleString()} rows pass filters `
     + `(of ${total.toLocaleString()} loaded from ${pairs.length} pair${pairs.length === 1 ? "" : "s"}`
     + (failures ? `; ${failures} shard${failures === 1 ? "" : "s"} skipped — see console` : "")
     + `).`
-    + (filtered.length > _IP_ROW_CAP
+    + (matched > _IP_ROW_CAP
         ? ` Showing top ${shown.toLocaleString()} by ${f.sortKey}.`
         : "");
   _ipRenderPager(scope);
@@ -866,24 +962,30 @@ function _ipHexAlpha(hex, alpha) {
 }
 
 function wireIncytrPathways() {
-  // Numeric sliders.
+  // Numeric sliders. State updates synchronously (so a Reset/sync read sees
+  // the latest values); the heavy re-render is debounced so dragging a slider
+  // doesn't refilter ~700K rows per `input` event.
   const wireSlider = (id, key) => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener("input", () => {
       const raw = el.value === "" ? null : parseFloat(el.value);
       IncytrFilter.set({ [key]: (raw != null && isFinite(raw)) ? raw : null });
-      _ipRenderTable();
+      // Slider change invalidates the cached recur-fallback map (it depends
+      // on the active pvalue/|PDS| gates).
+      _ipRuntime.recurFallback = null;
+      _ipRenderTableDebounced();
     });
   };
   wireSlider("ip-slider-p",   "sliderP");
   wireSlider("ip-slider-pds", "sliderPds");
 
   // Search box — substring AND across Path/nodes/sender/receiver/contrast.
+  // Debounced for the same reason as sliders.
   const searchEl = document.getElementById("ip-search");
   if (searchEl) searchEl.addEventListener("input", () => {
     IncytrFilter.set({ searchText: searchEl.value || "" });
-    _ipRenderTable();
+    _ipRenderTableDebounced();
   });
 
   // Reset.
