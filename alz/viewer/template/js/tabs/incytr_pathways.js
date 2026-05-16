@@ -13,6 +13,35 @@ const _IP_DISEASES = ["App", "Tau", "ApTt"];
 const _IP_TIMEPOINTS = ["2mo", "4mo", "6mo"];
 const _IP_ROW_CAP = 1000;
 
+// Coarse trajectory labels (CR-04). Ordered for chip display.
+// Sign vectors are triples of 'u' (up), 'd' (down), 'f' (flat) at 2/4/6 mo.
+const _IP_TRAJ_LABELS = [
+  "always-up", "always-down", "monotonic-up", "monotonic-down",
+  "early-only", "late-onset", "mixed", "flat",
+];
+// Color palette for trajectory chips — distinct hues per label.
+const _IP_TRAJ_COLORS = {
+  "always-up":      { bg: "#ffe0e0", fg: "#a3203c", border: "#e8a0a0" },
+  "always-down":    { bg: "#dde8f8", fg: "#1f4ea3", border: "#a0bee8" },
+  "monotonic-up":   { bg: "#fff0d0", fg: "#9a5000", border: "#e8c080" },
+  "monotonic-down": { bg: "#e0f0ff", fg: "#005090", border: "#80c0e0" },
+  "early-only":     { bg: "#e8f8e0", fg: "#206020", border: "#90d080" },
+  "late-onset":     { bg: "#f0e8f8", fg: "#602080", border: "#c090e0" },
+  "mixed":          { bg: "#f8f0e0", fg: "#705020", border: "#d0b080" },
+  "flat":           { bg: "#f0f0f0", fg: "#606060", border: "#c0c0c0" },
+};
+// Human-readable tooltip for each label (sign vector semantics).
+const _IP_TRAJ_TIPS = {
+  "always-up":      "Sign vector uuu: up at 2, 4, and 6 months in this disease contrast.",
+  "always-down":    "Sign vector ddd: down at 2, 4, and 6 months.",
+  "monotonic-up":   "Sign monotonically up: starts flat or up and rises (e.g., fuu, uuu).",
+  "monotonic-down": "Sign monotonically down: starts flat or down and falls (e.g., fdd, ddd).",
+  "early-only":     "Signal at early timepoints only (uff, udf, dff — dies by 6 mo).",
+  "late-onset":     "Signal appears late (ffu, ffd — absent at 2 mo, present at 6 mo).",
+  "mixed":          "Mixed direction across timepoints (not monotonic; e.g., udu, dud).",
+  "flat":           "No signal at any timepoint (|PDS| < 0.01 AND pvalue ≥ 0.05 at all three).",
+};
+
 // Score and per-node FC columns are advertised on the payload block but kept
 // in module-local fallbacks so the JS stays usable against an older payload.
 const _IP_SCORE_COLS_FALLBACK = ["TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "SiK_score"];
@@ -80,12 +109,70 @@ function _ipNodeCell(name, label) {
 }
 
 const _ipRuntime = {
-  rows:        null,         // concatenated rows from currently-loaded shards
-  loadedKey:   null,         // sig string of pairs currently loaded
-  loading:     false,
-  loadError:   null,
-  openKeys:    new Set(),    // keys of rows whose per-node FC detail is expanded
+  rows:           null,         // concatenated rows from currently-loaded shards
+  loadedKey:      null,         // sig string of pairs currently loaded
+  loading:        false,
+  loadError:      null,
+  openKeys:       new Set(),    // keys of rows whose per-node FC detail is expanded
+  detailTab:      {},           // rk → "fc" | "trajectory" (which sub-tab is active)
 };
+
+// ---------------------------------------------------------------------------
+// Trajectory-index helpers (CR-04)
+// ---------------------------------------------------------------------------
+
+function _ipTrajIndex() {
+  const block = _ipBlock();
+  return (block && block.trajectory_index) || null;
+}
+
+function _ipRecurIndex() {
+  const block = _ipBlock();
+  return (block && block.recur_index) || null;
+}
+
+// Derive a path_id from a shard row. Matches the Python build: use the Path
+// string directly when present (it is already unique within a shard because
+// shards are per-(sender,receiver)); fall back to a hash string when absent.
+function _ipPathId(r) {
+  if (r.path_id != null) return String(r.path_id);
+  return `${r._sender}||${r._receiver}||${r.Path}`;
+}
+
+// Return the trajectory entry for this row's path_id from the contrast that
+// matches r.contrast (disease prefix match). Returns null when not found.
+function _ipTrajEntry(r) {
+  const idx = _ipTrajIndex();
+  if (!idx) return null;
+  const pid = _ipPathId(r);
+  const entries = idx[pid];
+  if (!entries) return null;
+  // entries may be an array [{contrast, traj_label, sign_vec}, ...] or a
+  // single object (when the index is keyed by path_id directly).
+  if (Array.isArray(entries)) {
+    const [d] = (r.contrast || "").split("_");
+    return entries.find(e => e.contrast === d) || entries[0] || null;
+  }
+  return entries;
+}
+
+// Return all trajectory entries for a path_id across all disease contrasts.
+function _ipTrajEntriesAll(pathId) {
+  const idx = _ipTrajIndex();
+  if (!idx) return [];
+  const entries = idx[pathId];
+  if (!entries) return [];
+  if (Array.isArray(entries)) return entries;
+  return [entries];
+}
+
+// Return the set of disease contrasts in which this path_id is significant,
+// using recur_index when available, else derived from loaded rows.
+function _ipRecurSet(pathId) {
+  const ri = _ipRecurIndex();
+  if (ri && ri[pathId]) return new Set(ri[pathId]);
+  return new Set();
+}
 
 function _ipScoreCols() {
   const block = _ipBlock();
@@ -155,6 +242,9 @@ function _ipSyncControls(block) {
   _ipMountMultiselect("ip-ms-disease",  "Disease",   _IP_DISEASES,    "disease");
   _ipMountMultiselect("ip-ms-time",     "Timepoint", _IP_TIMEPOINTS,  "timepoint");
 
+  // CR-04: "Recur in" multiselect — AND gate across selected disease contrasts.
+  _ipMountMultiselect("ip-ms-recur", "Recur in", _IP_DISEASES, "recurContrasts");
+
   // Numeric sliders.
   const set = (id, v) => {
     const el = document.getElementById(id);
@@ -162,6 +252,47 @@ function _ipSyncControls(block) {
   };
   set("ip-slider-p",   f.sliderP);
   set("ip-slider-pds", f.sliderPds);
+
+  // CR-04: trajectory chips.
+  _ipRenderTrajChips();
+}
+
+// Render the trajectory chip bar. Chips toggle trajLabels (OR within the set).
+function _ipRenderTrajChips() {
+  const host = document.getElementById("ip-traj-chips");
+  if (!host) return;
+  const hasIndex = !!_ipTrajIndex();
+  if (!hasIndex) {
+    // No trajectory_index in payload — hide the chip bar gracefully.
+    host.style.display = "none";
+    return;
+  }
+  host.style.display = "flex";
+  const selected = new Set(IncytrFilter.get("trajLabels") || []);
+  host.innerHTML = _IP_TRAJ_LABELS.map(label => {
+    const on = selected.has(label);
+    const c = _IP_TRAJ_COLORS[label] || { bg: "#eee", fg: "#444", border: "#bbb" };
+    const tip = _IP_TRAJ_TIPS[label] || label;
+    return `<button type="button" data-ip-traj="${_escapeHtml(label)}"
+      title="${_escapeHtml(tip)}"
+      style="padding:3px 10px;border-radius:12px;font-size:11px;cursor:pointer;
+             border:1.5px solid ${on ? c.fg : c.border};
+             background:${on ? c.fg : c.bg};
+             color:${on ? "#fff" : c.fg};
+             font-weight:${on ? "600" : "400"};"
+    >${_escapeHtml(label)}</button>`;
+  }).join("");
+  host.addEventListener("click", ev => {
+    const btn = ev.target.closest("button[data-ip-traj]");
+    if (!btn) return;
+    const label = btn.dataset.ipTraj;
+    const cur = new Set(IncytrFilter.get("trajLabels") || []);
+    if (cur.has(label)) cur.delete(label);
+    else cur.add(label);
+    IncytrFilter.set({ trajLabels: [...cur] });
+    _ipRenderTrajChips();
+    _ipRenderTable();
+  });
 }
 
 function _ipInvalidateScope() {
@@ -217,8 +348,32 @@ async function _ipEnsureShards() {
 function _ipFilterRows() {
   if (!_ipRuntime.rows) return [];
   const f = IncytrFilter.get();
-  const diseaseSet   = new Set(f.disease   || []);
-  const timeSet      = new Set(f.timepoint || []);
+  const diseaseSet    = new Set(f.disease        || []);
+  const timeSet       = new Set(f.timepoint      || []);
+  const trajSet       = new Set(f.trajLabels     || []);
+  const recurSet      = new Set(f.recurContrasts || []);
+  const hasRecur      = recurSet.size > 0;
+  const hasTraj       = trajSet.size > 0;
+  const trajIdx       = hasTraj  ? _ipTrajIndex() : null;
+  const recurIdx      = hasRecur ? _ipRecurIndex() : null;
+
+  // For recur filtering: if recur_index is absent, build a fast path_id →
+  // disease-set map from the already-loaded rows (applying the active
+  // pvalue/|PDS| gates) so we don't have to re-scan for every row.
+  let recurPathMap = null;
+  if (hasRecur && !recurIdx) {
+    recurPathMap = new Map();
+    for (const r of _ipRuntime.rows) {
+      const pSig = f.sliderP   == null || (r.pvalue != null && r.pvalue < f.sliderP);
+      const pdsSig = f.sliderPds == null || Math.abs(r.PDS || 0) >= f.sliderPds;
+      if (!pSig || !pdsSig) continue;
+      const [d] = (r.contrast || "").split("_");
+      const pid = _ipPathId(r);
+      if (!recurPathMap.has(pid)) recurPathMap.set(pid, new Set());
+      recurPathMap.get(pid).add(d);
+    }
+  }
+
   const out = [];
   for (const r of _ipRuntime.rows) {
     if (diseaseSet.size || timeSet.size) {
@@ -227,7 +382,32 @@ function _ipFilterRows() {
       if (timeSet.size    && !timeSet.has(t))    continue;
     }
     if (f.sliderP   != null && !(r.pvalue       <  f.sliderP))   continue;
-    if (f.sliderPds != null && !(Math.abs(r.PDS) >= f.sliderPds)) continue;
+    if (f.sliderPds != null && !(Math.abs(r.PDS || 0) >= f.sliderPds)) continue;
+
+    // CR-04: trajectory label chip filter (OR across selected labels).
+    if (hasTraj && trajIdx) {
+      const entry = _ipTrajEntry(r);
+      if (!entry || !trajSet.has(entry.traj_label)) continue;
+    }
+
+    // CR-04: recur_in filter (AND across selected disease contrasts).
+    if (hasRecur) {
+      const pid = _ipPathId(r);
+      let diseases;
+      if (recurIdx) {
+        diseases = new Set(recurIdx[pid] || []);
+      } else if (recurPathMap) {
+        diseases = recurPathMap.get(pid) || new Set();
+      } else {
+        diseases = new Set();
+      }
+      let passes = true;
+      for (const d of recurSet) {
+        if (!diseases.has(d)) { passes = false; break; }
+      }
+      if (!passes) continue;
+    }
+
     out.push(r);
   }
   const key = f.sortKey, dir = f.sortDir;
@@ -294,6 +474,7 @@ function _ipRenderTable() {
         ? ` Showing top ${shown.toLocaleString()} by ${f.sortKey}.`
         : "");
 
+  const hasTrajIdx = !!_ipTrajIndex();
   const scoreCols = _ipScoreCols().map(k => ({
     key: k, label: k, numeric: true, digits: 3,
     tip: _IP_SCORE_TIPS[k] || `${k} score column from Incytr factorial scoring.`,
@@ -320,11 +501,21 @@ function _ipRenderTable() {
     { key: "PDS",           label: "PDS",    numeric: true, digits: 3,
       tip: "Pathway Disturbance Score — composite per-path effect-size (multimodel)." },
     ...scoreCols,
+    // CR-04: trajectory column — rendered only when the payload carries trajectory_index.
+    ...(hasTrajIdx ? [{
+      key: "_trajectory", label: "trajectory",
+      tip: "Coarse temporal trajectory label for this pathway in this disease contrast. Sign vector (u/f/d at 2/4/6 mo) shown on hover.",
+      isTraj: true,
+    }] : []),
   ];
   // Leading expander column header is non-sortable.
   const thead =
-    `<th style="width:24px;" title="Toggle per-node log₂ fold-change detail (sc / pr / ps / py)."></th>`
+    `<th style="width:24px;" title="Toggle detail panel (fold-change matrix + trajectory chart)."></th>`
     + cols.map(c => {
+        if (c.isTraj) {
+          const tip = c.tip ? ` title="${_escapeHtml(c.tip)}"` : "";
+          return `<th${tip}>${_escapeHtml(c.label)}</th>`;
+        }
         const on = (f.sortKey === c.key);
         const arrow = on ? (f.sortDir > 0 ? " ▲" : " ▼") : "";
         const tip = c.tip ? ` title="${_escapeHtml(c.tip)}"` : "";
@@ -336,9 +527,21 @@ function _ipRenderTable() {
     const rk = _ipRowKey(r);
     const isOpen = _ipRuntime.openKeys.has(rk);
     const toggle = `<td style="text-align:center;cursor:pointer;" `
-      + `data-ip-toggle="${idx}" title="${isOpen ? "Hide" : "Show"} per-node fold-change detail">`
+      + `data-ip-toggle="${idx}" title="${isOpen ? "Hide" : "Show"} detail panel">`
       + `${isOpen ? "▾" : "▸"}</td>`;
     const cells = cols.map(c => {
+      if (c.isTraj) {
+        const entry = _ipTrajEntry(r);
+        if (!entry) return `<td class="muted">—</td>`;
+        const label = entry.traj_label || "—";
+        const sv = entry.sign_vec ? ` (${entry.sign_vec})` : "";
+        const cpal = _IP_TRAJ_COLORS[label] || { bg: "#eee", fg: "#444" };
+        const tip = (_IP_TRAJ_TIPS[label] || label) + (entry.sign_vec ? ` Sign vector: ${entry.sign_vec}` : "");
+        return `<td title="${_escapeHtml(tip)}">`
+          + `<span style="padding:1px 7px;border-radius:10px;font-size:10px;`
+          + `background:${cpal.bg};color:${cpal.fg};white-space:nowrap;">`
+          + `${_escapeHtml(label)}</span></td>`;
+      }
       const v = r[c.key];
       if (c.numeric) return `<td style="text-align:right;">${_ipFmtNum(v, c.digits)}</td>`;
       if (c.labelKey) return `<td>${_ipNodeCell(v, r[c.labelKey])}</td>`;
@@ -346,9 +549,11 @@ function _ipRenderTable() {
     }).join("");
     let html = `<tr data-ip-row="${idx}">${toggle}${cells}</tr>`;
     if (isOpen) {
-      html += `<tr class="ip-detail-row"><td></td><td colspan="${cols.length}" `
-        + `style="padding:8px 12px;background:#fafafa;">`
-        + _ipRenderDetail(r) + `</td></tr>`;
+      const activeTab = _ipRuntime.detailTab[rk] || "fc";
+      html += `<tr class="ip-detail-row" data-ip-detail="${idx}"><td></td>`
+        + `<td colspan="${cols.length}" style="padding:8px 12px;background:#fafafa;">`
+        + _ipRenderDetailPanel(r, rk, activeTab)
+        + `</td></tr>`;
     }
     return html;
   }).join("");
@@ -365,20 +570,82 @@ function _ipRenderTable() {
   });
   const body = wrap.querySelector("#ip-table tbody");
   if (body) body.addEventListener("click", ev => {
+    // Row expander toggle.
     const cell = ev.target.closest("td[data-ip-toggle]");
-    if (!cell) return;
-    const idx = +cell.dataset.ipToggle;
-    const r = visible[idx];
-    if (!r) return;
-    const rk = _ipRowKey(r);
-    if (_ipRuntime.openKeys.has(rk)) _ipRuntime.openKeys.delete(rk);
-    else _ipRuntime.openKeys.add(rk);
-    _ipRenderTable();
+    if (cell) {
+      const idx = +cell.dataset.ipToggle;
+      const r = visible[idx];
+      if (!r) return;
+      const rk = _ipRowKey(r);
+      if (_ipRuntime.openKeys.has(rk)) {
+        _ipRuntime.openKeys.delete(rk);
+        delete _ipRuntime.detailTab[rk];
+      } else {
+        _ipRuntime.openKeys.add(rk);
+        if (!_ipRuntime.detailTab[rk]) _ipRuntime.detailTab[rk] = "fc";
+      }
+      _ipRenderTable();
+      return;
+    }
+    // Detail sub-tab switcher.
+    const tabBtn = ev.target.closest("button[data-ip-detail-tab]");
+    if (tabBtn) {
+      const rk = tabBtn.dataset.ipDetailRk;
+      const tab = tabBtn.dataset.ipDetailTab;
+      _ipRuntime.detailTab[rk] = tab;
+      // Re-render only the detail panel in-place to avoid full re-render.
+      const detailIdx = +tabBtn.closest("tr[data-ip-detail]").dataset.ipDetail;
+      const r = visible[detailIdx];
+      if (!r) { _ipRenderTable(); return; }
+      const tdEl = tabBtn.closest("td");
+      if (tdEl) tdEl.innerHTML = _ipRenderDetailPanel(r, rk, tab);
+      // Re-wire Plotly if we switched to trajectory.
+      if (tab === "trajectory") _ipRenderTrajChart(rk, r);
+      return;
+    }
   });
+  // After render, draw Plotly charts for any open trajectory panels.
+  for (const rk of _ipRuntime.openKeys) {
+    if ((_ipRuntime.detailTab[rk] || "fc") === "trajectory") {
+      const idx = visible.findIndex(r => _ipRowKey(r) === rk);
+      if (idx >= 0) _ipRenderTrajChart(rk, visible[idx]);
+    }
+  }
 }
 
-function _ipRenderDetail(r) {
-  // 4×7 matrix of per-node fold-changes (single-cell + 3 omics layers × 2
+// ---------------------------------------------------------------------------
+// Detail panel: two sub-tabs — "FC matrix" and "Trajectory" (CR-04).
+// ---------------------------------------------------------------------------
+
+function _ipRenderDetailPanel(r, rk, activeTab) {
+  const hasTrajIdx = !!_ipTrajIndex();
+  // Sub-tab switcher buttons.
+  const tabBar = `<div style="display:flex;gap:6px;margin-bottom:8px;">` +
+    `<button type="button" data-ip-detail-tab="fc" data-ip-detail-rk="${_escapeHtml(rk)}"
+       style="padding:2px 12px;border-radius:4px;font-size:12px;cursor:pointer;
+              border:1px solid #c0c0c0;
+              background:${activeTab === "fc" ? "#1f4ea3" : "#f4f4f4"};
+              color:${activeTab === "fc" ? "#fff" : "#444"};"
+    >Fold-change</button>` +
+    (hasTrajIdx
+      ? `<button type="button" data-ip-detail-tab="trajectory" data-ip-detail-rk="${_escapeHtml(rk)}"
+           style="padding:2px 12px;border-radius:4px;font-size:12px;cursor:pointer;
+                  border:1px solid #c0c0c0;
+                  background:${activeTab === "trajectory" ? "#1f4ea3" : "#f4f4f4"};
+                  color:${activeTab === "trajectory" ? "#fff" : "#444"};"
+         >Trajectory</button>`
+      : "") +
+    `</div>`;
+  if (activeTab === "trajectory" && hasTrajIdx) {
+    const chartId = `ip-traj-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
+    return tabBar
+      + `<div id="${_escapeHtml(chartId)}" style="width:100%;min-height:220px;"></div>`;
+  }
+  return tabBar + _ipRenderFcMatrix(r);
+}
+
+function _ipRenderFcMatrix(r) {
+  // 4×N matrix of per-node fold-changes (single-cell + 3 omics layers × 2
   // metrics). Cells where the layer has no value render as "—".
   const nodes   = _ipFcNodes();
   const metrics = _ipFcMetrics();
@@ -407,6 +674,100 @@ function _ipRenderDetail(r) {
     + `<thead>${head}</thead><tbody>${rows}</tbody></table>`;
 }
 
+// Render the temporal PDS bar chart for a path in the trajectory sub-tab.
+// Reuses the grouped-bar pattern from kinase_audit.js _renderMeaTrajectory.
+// x = 2/4/6 mo timepoints, grouped by App / Tau / ApTt disease contrasts.
+// Bar color: red (positive PDS), blue (negative), grey (flat/missing).
+function _ipRenderTrajChart(rk, r) {
+  const chartId = `ip-traj-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  const host = document.getElementById(chartId);
+  if (!host) return;
+  if (typeof Plotly === "undefined") {
+    host.innerHTML = `<div class="muted">Plotly not available for trajectory chart.</div>`;
+    return;
+  }
+  const pathId = _ipPathId(r);
+  const entries = _ipTrajEntriesAll(pathId);
+
+  // Load PDS values directly from the loaded rows (all contrasts present in
+  // the shard — one row per disease×timepoint). Keyed by contrast string.
+  const pdsByContrast = new Map();
+  const pvalByContrast = new Map();
+  for (const row of (_ipRuntime.rows || [])) {
+    if (_ipPathId(row) === pathId) {
+      const k = row.contrast || "";
+      pdsByContrast.set(k, row.PDS != null ? Number(row.PDS) : null);
+      pvalByContrast.set(k, row.pvalue != null ? Number(row.pvalue) : null);
+    }
+  }
+
+  const timepoints = ["2mo", "4mo", "6mo"];
+  const diseaseOrder = ["App", "Tau", "ApTt"];
+  const diseaseColors = { App: "#c8261c", Tau: "#1f5fa6", ApTt: "#5c2d91" };
+
+  // Flat threshold from spec: |PDS| < 0.01 AND pvalue >= 0.05.
+  const FLAT_PDS = 0.01, FLAT_P = 0.05;
+  const isFlat = (pds, pv) =>
+    (pds == null || Math.abs(pds) < FLAT_PDS) &&
+    (pv  == null || pv >= FLAT_P);
+
+  const traces = diseaseOrder.map(dis => {
+    const xs = [], ys = [], colors = [], hovers = [];
+    for (const tp of timepoints) {
+      const contrast = `${dis}_${tp}`;
+      const pds = pdsByContrast.get(contrast);
+      const pv  = pvalByContrast.get(contrast);
+      const flat = isFlat(pds, pv);
+      const y = pds != null ? pds : 0;
+      const base = diseaseColors[dis] || "#888";
+      const color = flat ? "rgba(160,160,160,0.35)"
+        : (y >= 0 ? `${base}` : `${base}`);
+      // Slightly desaturate negative bars by blending toward blue.
+      const fillColor = flat ? "rgba(160,160,160,0.35)"
+        : (y >= 0 ? _ipHexAlpha(base, 0.85) : _ipHexAlpha(base, 0.55));
+      xs.push(tp);
+      ys.push(pds != null ? pds : 0);
+      colors.push(fillColor);
+      const pvStr = pv != null ? pv.toExponential(2) : "—";
+      hovers.push(`${dis} ${tp}<br>PDS ${y.toFixed(3)}<br>p ${pvStr}${flat ? " (flat)" : ""}`);
+    }
+    return {
+      type: "bar",
+      name: dis,
+      x: xs, y: ys,
+      marker: { color: colors, line: { color: "rgba(0,0,0,0.15)", width: 0.5 } },
+      hovertemplate: "%{customdata}<extra></extra>",
+      customdata: hovers,
+    };
+  });
+
+  const traj = entries.find(e => {
+    const [d] = (r.contrast || "").split("_");
+    return e.contrast === d;
+  }) || entries[0];
+  const titleText = traj
+    ? `Trajectory: <b>${traj.traj_label}</b> (sign vec ${traj.sign_vec || "—"}) · ${r.Path || ""}`
+    : `PDS over time · ${r.Path || ""}`;
+
+  Plotly.react(chartId, traces, {
+    barmode: "group",
+    margin: { l: 48, r: 12, t: 32, b: 48 },
+    height: 240,
+    title: { text: titleText, font: { size: 12 } },
+    yaxis: { zeroline: true, zerolinecolor: "#bbb", title: "PDS" },
+    xaxis: { title: "timepoint" },
+    showlegend: true,
+    legend: { orientation: "h", y: -0.25 },
+  }, { displaylogo: false, responsive: true });
+}
+
+// Hex color to rgba with alpha (for the trajectory chart color generation).
+function _ipHexAlpha(hex, alpha) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
+  if (!m) return hex;
+  return `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},${alpha})`;
+}
+
 function wireIncytrPathways() {
   // Numeric sliders.
   const wireSlider = (id, key) => {
@@ -427,6 +788,7 @@ function wireIncytrPathways() {
     IncytrFilter.reset();
     const block = _ipBlock();
     if (block) _ipSyncControls(block);
+    _ipRenderTrajChips();
     _ipInvalidateScope();
     _ipEnsureShards();
   });

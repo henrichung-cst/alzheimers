@@ -235,6 +235,8 @@
               title="Filter rows by disease contrast prefix. Empty = any."></span>
         <span id="ip-ms-time"     class="ke-filter-label"
               title="Filter rows by timepoint contrast suffix. Empty = any."></span>
+        <span id="ip-ms-recur"    class="ke-filter-label"
+              title="AND-filter: keep only pathways that appear as significant in ALL selected disease contrasts (at the active pvalue/|PDS| gates). Empty = no recur constraint."></span>
         <label class="ke-filter-label" title="Keep rows with pvalue &lt; threshold. Blank = no constraint. (Per-animal SigProb Wald-t is unreliable in this cohort; prefer |PDS|.)">pvalue &lt;
           <input id="ip-slider-p" type="number" step="0.005" min="0" max="1" style="width:64px;"/>
         </label>
@@ -244,6 +246,10 @@
         <button id="ip-reset" class="ke-filter-reset" title="Reset all pathway filters">Reset</button>
         <span class="muted" id="ip-count"></span>
       </div>
+      <!-- Trajectory chip bar (CR-04): one toggleable chip per coarse label.
+           Chips are rendered by incytr_pathways.js once trajectory_index loads. -->
+      <div id="ip-traj-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 4px 0;min-height:28px;"
+           title="Filter by coarse trajectory label. Hover a chip to see the sign-vector meaning. Multiple chips = OR within labels. Empty = any."></div>
       <div class="muted" style="margin:4px 0 8px 0;font-size:11px;"
            title="Each node carries a {DEG, prG} badge marking the seed list that admitted the gene.">
         Evidence-source badges:
