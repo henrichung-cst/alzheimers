@@ -5,15 +5,17 @@
 # Sequential, no background polling. Fails loud on any stage error.
 #
 # Usage:
-#   bash alz/runners/main/run_pivot_smoke.sh [--skip-normalize] [--skip-incytr]
+#   bash alz/runners/main/run_pivot_smoke.sh [--skip-normalize]
 #
 # Stages:
 #   1. Stage 1 (bulk normalize) — only if total_proteome_normalized.csv missing
 #   2. Stage 5 — snRNA per-cluster proportions
 #   3. Stage 6 — proportional decomposition (st + py)
 #   4. Stage 7 — per-cluster MEA enrichment (st + py)
-#   5. Stage 8a — factorial input export (per-cluster parquets)
-#   6. Stage 8b — Incytr factorial R wrapper (gated on upstream Incytr exports)
+#   5. Verification (alz/decomposition/verify_decomposition.py)
+#
+# Factorial Incytr was archived 2026-05-18 (see archive/incytr_factorial_2026-05-18/);
+# pair-mode is the active Incytr path, driven by run_pair_mode_pipeline.sh.
 
 set -euo pipefail
 
@@ -22,12 +24,10 @@ cd "$(git rev-parse --show-toplevel)"
 SPINE="levy19"
 NORM_FILE="outputs/reports/kinase_attribution/total_proteome_normalized.csv"
 SKIP_NORMALIZE=0
-SKIP_INCYTR=0
 
 for arg in "$@"; do
   case "$arg" in
     --skip-normalize) SKIP_NORMALIZE=1 ;;
-    --skip-incytr)    SKIP_INCYTR=1 ;;
     *) echo "Unknown arg: $arg" >&2; exit 2 ;;
   esac
 done
@@ -53,17 +53,7 @@ echo "=== Step 4b: Stage 7 — per-cluster MEA (py) ==="
 pixi run python -m alz.decomposition.enrich_celltype --spine "$SPINE" --track py || \
   echo "  pY track skipped/failed (likely missing phospho_per_cluster_pY.parquet)"
 
-echo "=== Step 5: Stage 8a — Incytr factorial input export ==="
-pixi run python alz/integration/export_factorial_inputs.py
-
-if [[ $SKIP_INCYTR -eq 1 ]]; then
-  echo "=== Step 6: Stage 8b skipped (--skip-incytr) ==="
-else
-  echo "=== Step 6: Stage 8b — Incytr factorial R wrapper ==="
-  pixi run incytr-factorial
-fi
-
-echo "=== Step 7: verification ==="
+echo "=== Step 5: verification ==="
 pixi run python alz/decomposition/verify_decomposition.py --spine "$SPINE"
 
 echo "=== DONE ==="

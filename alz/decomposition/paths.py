@@ -11,13 +11,13 @@ REPO_ROOT = config.REPO_ROOT
 # Spine path resolution
 # ---------------------------------------------------------------------------
 # New layout (per CR-02 spine re-threshold):
-#   data/incytr/v2_46clusters/spines/<name>/cluster_spine.csv
+#   data/incytr_frozen/v2_46clusters/spines/<name>/cluster_spine.csv
 # Legacy layout (still present for levy19 via a symlink written by
 # build_cluster_spine.py):
-#   data/incytr/v2_46clusters/cluster_spine.csv
-SPINES_ROOT = os.path.join(REPO_ROOT, "data", "incytr", "v2_46clusters", "spines")
+#   data/incytr_frozen/v2_46clusters/cluster_spine.csv
+SPINES_ROOT = os.path.join(REPO_ROOT, "data", "incytr_frozen", "v2_46clusters", "spines")
 LEGACY_SPINE_CSV = os.path.join(
-    REPO_ROOT, "data", "incytr", "v2_46clusters", "cluster_spine.csv"
+    REPO_ROOT, "data", "incytr_frozen", "v2_46clusters", "cluster_spine.csv"
 )
 
 

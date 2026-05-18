@@ -1,5 +1,5 @@
 #!/usr/bin/env Rscript
-# Emit data/incytr/v2_46clusters/barcode_to_cluster.csv
+# Emit data/incytr_frozen/v2_46clusters/barcode_to_cluster.csv
 # (barcode, seurat_cluster_id) from incytr_obj.rds@meta.data.
 #
 # Source taxonomy: kr_cluster_id_key.csv (Cluster.ID 0-109 -> New_ID).
@@ -9,10 +9,10 @@ suppressPackageStartupMessages({
   library(SeuratObject)
 })
 
-obj_path <- "data/incytr/v2_46clusters/incytr input/incytr_obj.rds"
-key_path <- "data/incytr/v2_46clusters/provenance/kr_cluster_id_key.csv"
-out_path <- "data/incytr/v2_46clusters/barcode_to_cluster.csv"
-meta_path <- "data/incytr/v2_46clusters/cell_metadata.csv"
+obj_path <- "data/incytr_frozen/v2_46clusters/incytr input/incytr_obj.rds"
+key_path <- "data/incytr_frozen/v2_46clusters/provenance/kr_cluster_id_key.csv"
+out_path <- "data/incytr_frozen/v2_46clusters/barcode_to_cluster.csv"
+meta_path <- "data/incytr_frozen/v2_46clusters/cell_metadata.csv"
 
 obj <- readRDS(obj_path)
 md <- obj@meta.data

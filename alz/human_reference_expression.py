@@ -81,7 +81,7 @@ def compute_specificity(
     expr_df: pd.DataFrame,
     kinase_genes_human: set[str],
     label: str = "reference",
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Compute kinase-celltype specificity matrix from a genes × celltypes expression table.
 
     Parameters
@@ -97,11 +97,11 @@ def compute_specificity(
 
     Returns
     -------
-    pd.DataFrame
-        Shape: kinase × celltype.
-        Columns = cell type labels from expr_df.
-        Index = gene symbol (HGNC uppercase, = kinase_id).
-        Values = specificity score = log2(celltype_mean / brain_mean).
+    (spec_df, expr_df_matched)
+        spec_df: kinase × celltype log2-ratio specificity scores.
+        expr_df_matched: kinase × celltype raw mean log2 expression
+          (same shape; subset of input ``expr_df`` rows matching kinase set).
+        Both indexed by gene symbol (HGNC uppercase, = kinase_id).
 
     Notes
     -----
@@ -177,7 +177,13 @@ def compute_specificity(
         spec_df = spec_df.fillna(0.0)
 
     print(f"  [{label}] Specificity matrix shape: {spec_df.shape}")
-    return spec_df
+
+    # Companion: raw mean log2 expression matrix for the same (kinase, celltype)
+    # grid. Surfaced in the human Attribution tab as an absolute-level sanity
+    # check (low values flag a noise-driven specificity score).
+    expr_matched = kp_df.copy()
+    expr_matched.index.name = "kinase_id"
+    return spec_df, expr_matched
 
 
 # ---------------------------------------------------------------------------
@@ -234,10 +240,12 @@ def compute_seaad_specificity(force: bool = False) -> pd.DataFrame:
     human_phosphatases |= (expr_idx_upper & human_phos_extra)
 
     all_kp_human = human_kinases | human_phosphatases
-    spec_df = compute_specificity(expr_df, all_kp_human, label="SEA-AD MTG")
+    spec_df, expr_matched = compute_specificity(expr_df, all_kp_human, label="SEA-AD MTG")
 
     spec_df.to_csv(SEAAD_SPEC_FILE)
+    expr_matched.to_csv(config.SEAAD_KINASE_EXPRESSION_FILE)
     print(f"\n  Saved to {SEAAD_SPEC_FILE}")
+    print(f"  Saved to {config.SEAAD_KINASE_EXPRESSION_FILE}")
     return spec_df
 
 
@@ -297,10 +305,12 @@ def compute_hbca_specificity(force: bool = False) -> pd.DataFrame:
     human_phosphatases |= (expr_idx_upper & human_phos_extra)
 
     all_kp_human = human_kinases | human_phosphatases
-    spec_df = compute_specificity(expr_df, all_kp_human, label="HBCA")
+    spec_df, expr_matched = compute_specificity(expr_df, all_kp_human, label="HBCA")
 
     spec_df.to_csv(HBCA_SPEC_FILE)
+    expr_matched.to_csv(config.HBCA_KINASE_EXPRESSION_FILE)
     print(f"\n  Saved to {HBCA_SPEC_FILE}")
+    print(f"  Saved to {config.HBCA_KINASE_EXPRESSION_FILE}")
     return spec_df
 
 

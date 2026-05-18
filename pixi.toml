@@ -23,9 +23,6 @@ snrna = "python alz/snrna_integration.py --run"
 bubbles = "python alz/plot_attribution_bubbles.py"
 viewer = "python alz/build_unified_viewer.py"
 install-incytr = "R CMD INSTALL --no-multiarch ../incytr"
-export-factorial-inputs = "python alz/integration/export_factorial_inputs.py"
-compute-seed-lists = "Rscript alz/integration/compute_seed_lists.R"
-incytr-factorial = "bash alz/integration/run_factorial.sh"
 
 [dependencies]
 python = "3.11.*"
@@ -81,3 +78,4 @@ kinase-library = "*"
 py-spy = ">=0.4.1, <0.5"
 kedro = ">=1.3, <2"
 kedro-datasets = { version = ">=9.3.0, <10", extras = ["pandas-csvdataset", "pandas-exceldataset"] }
+abc-atlas-access = { git = "https://github.com/alleninstitute/abc_atlas_access.git" }

@@ -21,33 +21,28 @@ const _IP_ROW_CAP = 1000;
 // stutter on commodity hardware. Pager lets the user step through batches.
 const _IP_PAIR_CAP = 8;
 
-// Coarse trajectory labels (CR-04). Ordered for chip display.
-// Sign vectors are triples of 'u' (up), 'd' (down), 'f' (flat) at 2/4/6 mo.
+// Trajectory labels — fixed at build time, derived per (path, disease) from
+// raw PDS at 2/4/6 mo. Non-exclusive: a single (path, disease) tuple can
+// carry multiple labels (e.g. always-up AND monotonic-up). Shard rows carry
+// a semicolon-joined string in `traj_labels`. Incomplete paths (any
+// timepoint missing in the Incytr output) get an empty string and render
+// "—" in the table.
 const _IP_TRAJ_LABELS = [
-  "always-up", "always-down", "monotonic-up", "monotonic-down",
-  "early-only", "late-onset", "mixed", "flat",
+  "always-up", "always-down", "monotonic-up", "monotonic-down", "mixed",
 ];
-// Color palette for trajectory chips — distinct hues per label.
 const _IP_TRAJ_COLORS = {
   "always-up":      { bg: "#ffe0e0", fg: "#a3203c", border: "#e8a0a0" },
   "always-down":    { bg: "#dde8f8", fg: "#1f4ea3", border: "#a0bee8" },
   "monotonic-up":   { bg: "#fff0d0", fg: "#9a5000", border: "#e8c080" },
   "monotonic-down": { bg: "#e0f0ff", fg: "#005090", border: "#80c0e0" },
-  "early-only":     { bg: "#e8f8e0", fg: "#206020", border: "#90d080" },
-  "late-onset":     { bg: "#f0e8f8", fg: "#602080", border: "#c090e0" },
   "mixed":          { bg: "#f8f0e0", fg: "#705020", border: "#d0b080" },
-  "flat":           { bg: "#f0f0f0", fg: "#606060", border: "#c0c0c0" },
 };
-// Human-readable tooltip for each label (sign vector semantics).
 const _IP_TRAJ_TIPS = {
-  "always-up":      "Sign vector uuu: up at 2, 4, and 6 months in this disease contrast.",
-  "always-down":    "Sign vector ddd: down at 2, 4, and 6 months.",
-  "monotonic-up":   "Sign monotonically up: starts flat or up and rises (e.g., fuu, uuu).",
-  "monotonic-down": "Sign monotonically down: starts flat or down and falls (e.g., fdd, ddd).",
-  "early-only":     "Signal at early timepoints only (uff, udf, dff — dies by 6 mo).",
-  "late-onset":     "Signal appears late (ffu, ffd — absent at 2 mo, present at 6 mo).",
-  "mixed":          "Mixed direction across timepoints (not monotonic; e.g., udu, dud).",
-  "flat":           "No signal at any timepoint (|PDS| < 0.01 AND pvalue ≥ 0.05 at all three).",
+  "always-up":      "PDS > 0 at all three timepoints (uuu).",
+  "always-down":    "PDS < 0 at all three timepoints (ddd).",
+  "monotonic-up":   "PDS strictly increasing: PDS(2mo) < PDS(4mo) < PDS(6mo).",
+  "monotonic-down": "PDS strictly decreasing: PDS(2mo) > PDS(4mo) > PDS(6mo).",
+  "mixed":          "Sign of PDS changes across timepoints (e.g. udu, ddu).",
 };
 
 // Score and per-node FC columns are advertised on the payload block but kept
@@ -124,63 +119,87 @@ const _ipRuntime = {
   openKeys:       new Set(),    // keys of rows whose per-node FC detail is expanded
   detailTab:      {},           // rk → "fc" | "trajectory" (which sub-tab is active)
   recurFallback:  null,         // { sig, map } cache for fallback recurPathMap
+  pathIndex:      null,         // Map<pathStr, rows[]> — built at shard-load
+  pathLabels:     null,         // Map<pathStr, Map<disease, Set<label>>> — for chip filter
+  trajCounts:     null,         // Map<disease, Map<label, count>> — built on demand
 };
 
 // ---------------------------------------------------------------------------
-// Trajectory helpers (CR-04)
+// Trajectory helpers (build-time labels, per-disease multi-label)
 // ---------------------------------------------------------------------------
-// traj_label and sign_vec are shard columns — read directly from each row.
-// recur_index is in the payload block (small enough to inline).
+// Shard rows carry `traj_labels` (semicolon-joined string) and `sign_vec`.
+// A precomputed `pathLabels: Map<pathStr, Map<disease, Set<label>>>` is
+// built once at shard-load and reused for filter, chip counts, and chart.
 
 function _ipRecurIndex() {
   const block = _ipBlock();
   return (block && block.recur_index) || null;
 }
 
-// Derive a path string from a shard row — matches the Python build key:
-// sender||receiver||Path. Prefer the precomputed r._pathStr (stamped at
-// shard-load time) to avoid per-row template-literal allocation in hot loops.
 function _ipPathStr(r) {
   return r._pathStr || (`${r._sender}||${r._receiver}||${r.Path}`);
 }
 
-// Return the trajectory entry for this row: { traj_label, sign_vec }.
-// Reads from shard columns traj_label / sign_vec (set by the Python build).
-// Returns null when the payload pre-dates CR-04 (version < 2).
-function _ipTrajEntry(r) {
-  if (r.traj_label == null) return null;
-  return { traj_label: r.traj_label, sign_vec: r.sign_vec || "???" };
+// Decode the semicolon-joined traj_labels string into an array. Empty
+// strings → []. Returns the raw array; callers wrap in Set when needed.
+function _ipDecodeLabels(s) {
+  if (!s) return [];
+  return s.split(";");
 }
 
-// Return all distinct (disease, traj_label, sign_vec) tuples for a path across
-// the currently-loaded rows — used by the trajectory chart to show all 3 diseases.
-function _ipTrajEntriesForPath(pathStr, allRows) {
+// Return distinct (disease, traj_labels, sign_vec) tuples for a path. Uses
+// the precomputed pathIndex (O(1) lookup).
+function _ipTrajEntriesForPath(pathStr) {
+  const idx = _ipRuntime.pathIndex;
+  const rows = idx ? idx.get(pathStr) : null;
+  if (!rows) return [];
   const seen = new Set();
   const out = [];
-  for (const r of (allRows || [])) {
-    if (_ipPathStr(r) !== pathStr) continue;
-    if (r.traj_label == null) continue;
-    const [dis] = (r.contrast || "").split("_");
-    const key = `${dis}|${r.traj_label}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ contrast: dis, traj_label: r.traj_label, sign_vec: r.sign_vec || "" });
+  for (const r of rows) {
+    if (!r.traj_labels) continue;
+    const c = r.contrast || "";
+    const ui = c.indexOf("_");
+    const dis = ui < 0 ? c : c.substring(0, ui);
+    if (seen.has(dis)) continue;
+    seen.add(dis);
+    out.push({
+      contrast: dis,
+      traj_labels: _ipDecodeLabels(r.traj_labels),
+      sign_vec: r.sign_vec || "",
+    });
   }
   return out;
 }
 
-// Return the set of disease contrasts in which this path is significant,
-// using recur_index when available, else falling back to loaded rows.
-function _ipRecurSetForPath(pathStr) {
-  const ri = _ipRecurIndex();
-  if (ri && ri[pathStr]) return new Set(ri[pathStr]);
-  return new Set();
-}
-
-// Check whether trajectory data is available (payload version >= 2).
+// Trajectory is build-time; v3+ payload carries multi-label traj_labels.
 function _ipHasTraj() {
   const block = _ipBlock();
-  return !!(block && block.version >= 2);
+  return !!(block && block.version >= 3);
+}
+
+// Per-(disease, label) counts over the loaded shards — for chip UI.
+// Returns Map<disease, Map<label, count>>.
+function _ipTrajCounts() {
+  if (_ipRuntime.trajCounts) return _ipRuntime.trajCounts;
+  const counts = new Map();
+  if (!_ipRuntime.rows) return counts;
+  const seen = new Set();
+  for (const r of _ipRuntime.rows) {
+    if (!r.traj_labels) continue;
+    const c = r.contrast || "";
+    const ui = c.indexOf("_");
+    const dis = ui < 0 ? c : c.substring(0, ui);
+    const k = _ipPathStr(r) + "|" + dis;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    let byLbl = counts.get(dis);
+    if (!byLbl) { byLbl = new Map(); counts.set(dis, byLbl); }
+    for (const lbl of _ipDecodeLabels(r.traj_labels)) {
+      byLbl.set(lbl, (byLbl.get(lbl) || 0) + 1);
+    }
+  }
+  _ipRuntime.trajCounts = counts;
+  return counts;
 }
 
 function _ipScoreCols() {
@@ -279,41 +298,57 @@ function _ipSyncControls(block) {
   _ipRenderTrajChips();
 }
 
-// Render the trajectory chip bar. Chips toggle trajLabels (OR within the set).
+// Render trajectory chips — one row per disease (App / Tau / ApTt), each
+// row offering the 5 labels. OR within a row, AND across rows. Counts
+// reflect the loaded shards.
 function _ipRenderTrajChips() {
   const host = document.getElementById("ip-traj-chips");
   if (!host) return;
   if (!_ipHasTraj()) {
-    // Payload pre-dates CR-04 — hide the chip bar gracefully.
     host.style.display = "none";
     return;
   }
   host.style.display = "flex";
-  const selected = new Set(IncytrFilter.get("trajLabels") || []);
-  host.innerHTML = _IP_TRAJ_LABELS.map(label => {
-    const on = selected.has(label);
-    const c = _IP_TRAJ_COLORS[label] || { bg: "#eee", fg: "#444", border: "#bbb" };
-    const tip = _IP_TRAJ_TIPS[label] || label;
-    return `<button type="button" data-ip-traj="${_escapeHtml(label)}"
-      title="${_escapeHtml(tip)}"
-      style="padding:3px 10px;border-radius:12px;font-size:11px;cursor:pointer;
-             border:1.5px solid ${on ? c.fg : c.border};
-             background:${on ? c.fg : c.bg};
-             color:${on ? "#fff" : c.fg};
-             font-weight:${on ? "600" : "400"};"
-    >${_escapeHtml(label)}</button>`;
-  }).join("");
-  // Use onclick (overwrites prior handler) — addEventListener would leak a
-  // new listener on every chip toggle, causing duplicate-fire bugs and
-  // per-click slowdowns.
+  host.style.flexDirection = "column";
+  host.style.gap = "4px";
+  const trajLabels = IncytrFilter.get("trajLabels") || {};
+  const counts = _ipTrajCounts();
+  const rowHtml = (disease) => {
+    const sel = new Set(trajLabels[disease] || []);
+    const byLbl = counts.get(disease) || new Map();
+    const chips = _IP_TRAJ_LABELS.map(label => {
+      const on = sel.has(label);
+      const c = _IP_TRAJ_COLORS[label] || { bg: "#eee", fg: "#444", border: "#bbb" };
+      const tip = _IP_TRAJ_TIPS[label] || label;
+      const n = byLbl.get(label) || 0;
+      const check = on ? "✓ " : "";
+      return `<button type="button" data-ip-traj-dis="${disease}" data-ip-traj-lbl="${_escapeHtml(label)}"
+        title="${_escapeHtml(disease + ": " + tip)}"
+        style="padding:3px 10px;border-radius:14px;font-size:11px;cursor:pointer;
+               border:${on ? "2px" : "1px"} solid ${on ? c.fg : c.border};
+               background:${on ? c.fg : c.bg};
+               color:${on ? "#fff" : c.fg};
+               font-weight:${on ? "700" : "500"};
+               box-shadow:${on ? "0 0 0 2px " + c.bg : "none"};"
+      >${check}${_escapeHtml(label)} <span style="opacity:0.75;font-weight:400;">(${n.toLocaleString()})</span></button>`;
+    }).join("");
+    return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+        <span style="min-width:42px;font-size:11px;font-weight:600;color:#444;">${disease}:</span>
+        ${chips}
+      </div>`;
+  };
+  host.innerHTML = _IP_DISEASES.map(rowHtml).join("");
   host.onclick = ev => {
-    const btn = ev.target.closest("button[data-ip-traj]");
+    const btn = ev.target.closest("button[data-ip-traj-dis]");
     if (!btn) return;
-    const label = btn.dataset.ipTraj;
-    const cur = new Set(IncytrFilter.get("trajLabels") || []);
-    if (cur.has(label)) cur.delete(label);
-    else cur.add(label);
-    IncytrFilter.set({ trajLabels: [...cur] });
+    const dis = btn.dataset.ipTrajDis;
+    const lbl = btn.dataset.ipTrajLbl;
+    const cur = Object.assign({}, IncytrFilter.get("trajLabels") || {});
+    const set = new Set(cur[dis] || []);
+    if (set.has(lbl)) set.delete(lbl);
+    else set.add(lbl);
+    cur[dis] = [...set];
+    IncytrFilter.set({ trajLabels: cur });
     _ipRenderTrajChips();
     _ipRenderTable();
   };
@@ -337,6 +372,10 @@ function _ipInvalidateScope() {
   _ipRuntime.openKeys = new Set();
   _ipRuntime.shardFailures = [];
   _ipRuntime.recurFallback = null;
+  _ipRuntime.pathIndex = null;
+  _ipRuntime.pathLabels = null;
+  _ipRuntime.trajCounts = null;
+  _ipRuntime._didDebugLog = false;
 }
 
 // ---- shard loading ----
@@ -402,6 +441,30 @@ async function _ipEnsureShards() {
     _ipRuntime.rows = all;
     _ipRuntime.loadedKey = sig;
     _ipRuntime.shardFailures = failures;
+    // Build two indexes once so per-render filtering is O(1) lookups:
+    //   pathIndex  : pathStr → rows[]   (chart, debug)
+    //   pathLabels : pathStr → Map<disease, Set<label>>  (chip filter)
+    const pathIndex  = new Map();
+    const pathLabels = new Map();
+    for (const r of all) {
+      const pid = _ipPathStr(r);
+      let bucket = pathIndex.get(pid);
+      if (!bucket) { bucket = []; pathIndex.set(pid, bucket); }
+      bucket.push(r);
+      if (r.traj_labels) {
+        const c = r.contrast || "";
+        const ui = c.indexOf("_");
+        const dis = ui < 0 ? c : c.substring(0, ui);
+        let byDis = pathLabels.get(pid);
+        if (!byDis) { byDis = new Map(); pathLabels.set(pid, byDis); }
+        if (!byDis.has(dis)) {
+          byDis.set(dis, new Set(_ipDecodeLabels(r.traj_labels)));
+        }
+      }
+    }
+    _ipRuntime.pathIndex  = pathIndex;
+    _ipRuntime.pathLabels = pathLabels;
+    _ipRuntime.trajCounts = null;
     if (failures.length) {
       console.warn(`incytr_pathways: ${failures.length} of ${pairs.length} `
         + `shards failed to load; continuing with the rest.`,
@@ -423,11 +486,20 @@ function _ipFilterRows() {
   const f = IncytrFilter.get();
   const diseaseSet    = new Set(f.disease        || []);
   const timeSet       = new Set(f.timepoint      || []);
-  const trajSet       = new Set(f.trajLabels     || []);
   const recurSet      = new Set(f.recurContrasts || []);
   const hasRecur      = recurSet.size > 0;
-  const hasTraj       = trajSet.size > 0 && _ipHasTraj();
-  const recurIdx      = hasRecur ? _ipRecurIndex() : null;
+  // Per-disease trajectory chip selection: { App: [...], Tau: [...], ApTt: [...] }.
+  // Active when at least one disease has a non-empty array. OR within disease,
+  // AND across diseases.
+  const trajByDis = f.trajLabels || {};
+  const trajGates = [];   // [{ disease, labels: Set<string> }]
+  for (const d of _IP_DISEASES) {
+    const arr = trajByDis[d] || [];
+    if (arr.length) trajGates.push({ disease: d, labels: new Set(arr) });
+  }
+  const hasTraj  = trajGates.length > 0 && _ipHasTraj();
+  const pathLbl  = hasTraj ? _ipRuntime.pathLabels : null;
+  const recurIdx = hasRecur ? _ipRecurIndex() : null;
   const searchTokens  = (f.searchText || "")
     .toLowerCase().split(/\s+/).filter(Boolean);
 
@@ -483,7 +555,37 @@ function _ipFilterRows() {
     }
 
     if (hasTraj) {
-      if (!trajSet.has(r.traj_label)) continue;
+      const byDis = pathLbl ? pathLbl.get(_ipPathStr(r)) : null;
+      if (!byDis) continue;
+      let passes = true;
+      // AND within disease (path must satisfy every selected label) and
+      // AND across diseases. Picking incompatible labels (always-up +
+      // always-down) is meant to yield zero results.
+      for (const gate of trajGates) {
+        const lbls = byDis.get(gate.disease);
+        if (!lbls) { passes = false; break; }
+        for (const lbl of gate.labels) {
+          if (!lbls.has(lbl)) { passes = false; break; }
+        }
+        if (!passes) break;
+      }
+      if (!passes) continue;
+    }
+    // One-time diagnostic per filter call: log gate setup + pathLabels stats.
+    if (hasTraj && !_ipRuntime._didDebugLog) {
+      _ipRuntime._didDebugLog = true;
+      const sample = [];
+      let n = 0;
+      for (const [pid, byDis] of pathLbl || []) {
+        if (n++ >= 3) break;
+        const dump = {};
+        for (const [d, s] of byDis) dump[d] = [...s];
+        sample.push({ pid, labels: dump });
+      }
+      console.log("[ip-filter] trajGates=",
+        trajGates.map(g => ({ disease: g.disease, labels: [...g.labels] })));
+      console.log("[ip-filter] pathLabels size=", pathLbl ? pathLbl.size : 0,
+        " sample=", sample);
     }
 
     if (hasRecur) {
@@ -700,7 +802,7 @@ function _ipRenderTable() {
     // CR-04: trajectory column — rendered only when the payload carries trajectory_index.
     ...(hasTrajIdx ? [{
       key: "_trajectory", label: "trajectory",
-      tip: "Coarse temporal trajectory label for this pathway in this disease contrast. Sign vector (u/f/d at 2/4/6 mo) shown on hover.",
+      tip: "Trajectory labels for this (pathway, disease): any combination of always-up (uuu), always-down (ddd), monotonic-up (PDS strictly increasing), monotonic-down (strictly decreasing), or mixed (sign changes). Only populated when all 3 timepoints have rows in the Incytr output. Hover for sign vector.",
       isTraj: true,
     }] : []),
   ];
@@ -727,15 +829,18 @@ function _ipRenderTable() {
       + `${isOpen ? "▾" : "▸"}</td>`;
     const cells = cols.map(c => {
       if (c.isTraj) {
-        const label = r.traj_label || null;
-        if (!label) return `<td class="muted">—</td>`;
+        const labels = _ipDecodeLabels(r.traj_labels);
+        if (!labels.length) return `<td class="muted">—</td>`;
         const sv = r.sign_vec || "";
-        const cpal = _IP_TRAJ_COLORS[label] || { bg: "#eee", fg: "#444" };
-        const tip = (_IP_TRAJ_TIPS[label] || label) + (sv ? ` Sign vector: ${sv}` : "");
-        return `<td title="${_escapeHtml(tip)}">`
-          + `<span style="padding:1px 7px;border-radius:10px;font-size:10px;`
-          + `background:${cpal.bg};color:${cpal.fg};white-space:nowrap;">`
-          + `${_escapeHtml(label)}</span></td>`;
+        const tipParts = labels.map(l => _IP_TRAJ_TIPS[l] || l);
+        const tip = tipParts.join(" • ") + (sv ? ` · Sign vector: ${sv}` : "");
+        const badges = labels.map(label => {
+          const cpal = _IP_TRAJ_COLORS[label] || { bg: "#eee", fg: "#444" };
+          return `<span style="padding:1px 6px;margin-right:2px;border-radius:10px;`
+            + `font-size:10px;background:${cpal.bg};color:${cpal.fg};white-space:nowrap;">`
+            + `${_escapeHtml(label)}</span>`;
+        }).join("");
+        return `<td title="${_escapeHtml(tip)}">${badges}</td>`;
       }
       const v = r[c.key];
       if (c.numeric) return `<td style="text-align:right;">${_ipFmtNum(v, c.digits)}</td>`;
@@ -872,7 +977,7 @@ function _ipRenderFcMatrix(r) {
 // Render the temporal PDS bar chart for a path in the trajectory sub-tab.
 // Reuses the grouped-bar pattern from kinase_audit.js _renderMeaTrajectory.
 // x = 2/4/6 mo timepoints, grouped by App / Tau / ApTt disease contrasts.
-// Bar color: red (positive PDS), blue (negative), grey (flat/missing).
+// Bar color: red (positive PDS), blue (negative), grey (missing).
 function _ipRenderTrajChart(rk, r) {
   const chartId = `ip-traj-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
   const host = document.getElementById(chartId);
@@ -900,31 +1005,23 @@ function _ipRenderTrajChart(rk, r) {
   const diseaseOrder = ["App", "Tau", "ApTt"];
   const diseaseColors = { App: "#c8261c", Tau: "#1f5fa6", ApTt: "#5c2d91" };
 
-  // Flat threshold from spec: |PDS| < 0.01 AND pvalue >= 0.05.
-  const FLAT_PDS = 0.01, FLAT_P = 0.05;
-  const isFlat = (pds, pv) =>
-    (pds == null || Math.abs(pds) < FLAT_PDS) &&
-    (pv  == null || pv >= FLAT_P);
-
+  // No flat threshold — color by raw PDS sign. Missing rows are grey.
   const traces = diseaseOrder.map(dis => {
     const xs = [], ys = [], colors = [], hovers = [];
     for (const tp of timepoints) {
       const contrast = `${dis}_${tp}`;
       const pds = pdsByContrast.get(contrast);
       const pv  = pvalByContrast.get(contrast);
-      const flat = isFlat(pds, pv);
-      const y = pds != null ? pds : 0;
+      const missing = (pds == null);
+      const y = missing ? 0 : pds;
       const base = diseaseColors[dis] || "#888";
-      const color = flat ? "rgba(160,160,160,0.35)"
-        : (y >= 0 ? `${base}` : `${base}`);
-      // Slightly desaturate negative bars by blending toward blue.
-      const fillColor = flat ? "rgba(160,160,160,0.35)"
+      const fillColor = missing ? "rgba(160,160,160,0.35)"
         : (y >= 0 ? _ipHexAlpha(base, 0.85) : _ipHexAlpha(base, 0.55));
       xs.push(tp);
-      ys.push(pds != null ? pds : 0);
+      ys.push(y);
       colors.push(fillColor);
       const pvStr = pv != null ? pv.toExponential(2) : "—";
-      hovers.push(`${dis} ${tp}<br>PDS ${y.toFixed(3)}<br>p ${pvStr}${flat ? " (flat)" : ""}`);
+      hovers.push(`${dis} ${tp}<br>PDS ${y.toFixed(3)}<br>p ${pvStr}${missing ? " (missing)" : ""}`);
     }
     return {
       type: "bar",
@@ -936,10 +1033,15 @@ function _ipRenderTrajChart(rk, r) {
     };
   });
 
-  const [curDis] = (r.contrast || "").split("_");
-  const traj = entries.find(e => e.contrast === curDis) || entries[0];
-  const titleText = traj
-    ? `Trajectory: <b>${traj.traj_label}</b> (sign vec ${traj.sign_vec || "—"}) · ${r.Path || ""}`
+  // Show all three diseases' labels in the title — trajectory is per-disease,
+  // and the chart plots all three groups, so the title must reflect each.
+  const titleParts = entries.map(e => {
+    const lbls = (e.traj_labels && e.traj_labels.length)
+      ? e.traj_labels.join("+") : "—";
+    return `<b>${e.contrast}</b>: ${lbls} (${e.sign_vec || "—"})`;
+  });
+  const titleText = titleParts.length
+    ? `${titleParts.join(" · ")} — ${r.Path || ""}`
     : `PDS over time · ${r.Path || ""}`;
 
   Plotly.react(chartId, traces, {

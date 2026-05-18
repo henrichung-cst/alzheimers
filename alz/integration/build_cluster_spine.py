@@ -1,11 +1,11 @@
 """Build a per-cluster spine + rejection log from the Levy 46-cluster taxonomy.
 
 Inputs (must exist):
-  - data/incytr/v2_46clusters/provenance/kr_cluster_id_key.csv
-  - data/incytr/v2_46clusters/barcode_to_cluster.csv
-  - data/incytr/v2_46clusters/cell_metadata.csv
+  - data/incytr_frozen/v2_46clusters/provenance/kr_cluster_id_key.csv
+  - data/incytr_frozen/v2_46clusters/barcode_to_cluster.csv
+  - data/incytr_frozen/v2_46clusters/cell_metadata.csv
 
-Outputs (under data/incytr/v2_46clusters/spines/<spine-name>/):
+Outputs (under data/incytr_frozen/v2_46clusters/spines/<spine-name>/):
   - cluster_spine.csv         (46 rows, in_spine bool)
   - rejected_clusters.csv     (with reason)
   - spine.scope.json          {name, min_cells, rank_gate, generated_at, n_in_spine}
@@ -23,11 +23,11 @@ Gate logic:
 
 Backward compatibility:
   Defaults (--spine-name levy19, --min-cells 20, rank gate ON) reproduce the
-  legacy `data/incytr/v2_46clusters/cluster_spine.csv` outputs. To preserve
+  legacy `data/incytr_frozen/v2_46clusters/cluster_spine.csv` outputs. To preserve
   existing readers (config_integration.CLUSTER_SPINE_FILE,
   plot_cluster_spine.py, etc.) the levy19 outputs are also surfaced via a
   top-level symlink:
-    data/incytr/v2_46clusters/cluster_spine.csv -> spines/levy19/cluster_spine.csv
+    data/incytr_frozen/v2_46clusters/cluster_spine.csv -> spines/levy19/cluster_spine.csv
 """
 
 from __future__ import annotations
@@ -42,10 +42,10 @@ import numpy as np
 import pandas as pd
 
 REPO = Path(__file__).resolve().parents[2]
-KEY_PATH = REPO / "data/incytr/v2_46clusters/provenance/kr_cluster_id_key.csv"
-BC_PATH = REPO / "data/incytr/v2_46clusters/barcode_to_cluster.csv"
-META_PATH = REPO / "data/incytr/v2_46clusters/cell_metadata.csv"
-V2_ROOT = REPO / "data/incytr/v2_46clusters"
+KEY_PATH = REPO / "data/incytr_frozen/v2_46clusters/provenance/kr_cluster_id_key.csv"
+BC_PATH = REPO / "data/incytr_frozen/v2_46clusters/barcode_to_cluster.csv"
+META_PATH = REPO / "data/incytr_frozen/v2_46clusters/cell_metadata.csv"
+V2_ROOT = REPO / "data/incytr_frozen/v2_46clusters"
 SPINES_ROOT = V2_ROOT / "spines"
 LEGACY_SPINE_CSV = V2_ROOT / "cluster_spine.csv"
 LEGACY_REJECT_CSV = V2_ROOT / "rejected_clusters.csv"

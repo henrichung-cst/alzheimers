@@ -34,11 +34,13 @@ import numpy as np
 import pandas as pd
 
 import config
+from integration.config_integration import load_cluster_spine
 
 
-SPINE_REGISTRY = {
-    "levy19": config.CLUSTER_SPINE,
-}
+def _resolve_spine(name: str) -> list[str]:
+    if name == "levy19":
+        return config.CLUSTER_SPINE
+    return load_cluster_spine(name)
 
 # Song snRNA sample-ID encoding → TMT metadata vocab.
 # Sample IDs look like `{id}_{sex}_{timepoint}_{genotype}`.
@@ -174,9 +176,7 @@ def _pool_donors_for_stratum(
 
 
 def step_proportions(spine: str) -> None:
-    if spine not in SPINE_REGISTRY:
-        raise ValueError(f"Unknown spine {spine!r}; known: {list(SPINE_REGISTRY)}")
-    spine_clusters = SPINE_REGISTRY[spine]
+    spine_clusters = _resolve_spine(spine)
     print(f"[proportions] spine={spine} ({len(spine_clusters)} clusters)")
 
     out_dir = _output_dir(spine)
@@ -302,8 +302,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--run", action="store_true", help="compute proportions")
     ap.add_argument("--summary", action="store_true", help="print cached summary")
-    ap.add_argument("--spine", default="levy19", choices=list(SPINE_REGISTRY),
-                    help="cell-type spine to use (default: levy19)")
+    ap.add_argument("--spine", default="levy19",
+                    help="cell-type spine name (default: levy19)")
     args = ap.parse_args()
     if not (args.run or args.summary):
         ap.print_help()

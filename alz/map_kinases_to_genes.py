@@ -13,20 +13,35 @@ import config
 
 MAPPING_CACHE_FILE = config.MAPPING_CACHE_FILE
 
+KINASE_SYMBOL_OVERRIDES = {
+    # ALK1 is the common kinase abbreviation for activin receptor-like kinase 1.
+    # MyGene can return SLPI because "ALK1" appears as a secretory leukocyte
+    # protease inhibitor alias; that is not the kinase intended here.
+    "ALK1": "ACVRL1",
+}
+
 def get_mapping_cache():
     """Loads the mapping cache from CSV or creates an empty one."""
     if os.path.exists(MAPPING_CACHE_FILE):
-        return pd.read_csv(MAPPING_CACHE_FILE, index_col=0).to_dict()['gene_symbol']
-    return {}
+        cache = pd.read_csv(MAPPING_CACHE_FILE, index_col=0).to_dict()['gene_symbol']
+    else:
+        cache = {}
+    cache.update(KINASE_SYMBOL_OVERRIDES)
+    return cache
 
 def save_mapping_cache(cache_dict):
     """Saves the mapping cache to CSV."""
+    cache_dict = dict(cache_dict)
+    cache_dict.update(KINASE_SYMBOL_OVERRIDES)
     df = pd.DataFrame.from_dict(cache_dict, orient='index', columns=['gene_symbol'])
     df.index.name = 'kinase_abbreviation'
     df.to_csv(MAPPING_CACHE_FILE)
 
 def resolve_kinase_symbol(kinase_name, cache):
     """Uses MyGene.info REST API to find the official gene symbol, with caching."""
+    if kinase_name in KINASE_SYMBOL_OVERRIDES:
+        cache[kinase_name] = KINASE_SYMBOL_OVERRIDES[kinase_name]
+        return cache[kinase_name]
     if kinase_name in cache:
         return cache[kinase_name]
 

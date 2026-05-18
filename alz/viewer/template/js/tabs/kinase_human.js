@@ -7,20 +7,25 @@
 //   - detail panel scopes per-cohort: per-donor NES bar, recurrence,
 //     leading substrates, global-shift diagnostics
 
-const _KH_HAS = typeof PAYLOAD !== "undefined" && !!PAYLOAD.human;
-const _KH = _KH_HAS ? PAYLOAD.human : null;
+// PAYLOAD is async-loaded; declare these as `let` so boot.js can re-assign
+// them after _loadPayload() resolves, before any tab is rendered.
+let _KH_HAS = false;
+let _KH = null;
 
 const _KHState = {
   search: "",
   donors: new Set(),   // empty = all (filters AD axis only)
   nsigMin: 0,
   track: "",
+  celltype: "",
+  confidence: "",
+  specificityTier: 0,
   seaad: "",           // "" | "agree" | "disagree" | "na"
   adDir: "",           // "" | "all_up" | "all_down" | "mixed" | "none"
   ctrlDir: "",         // "" | "all_up" | "all_down" | "mixed" | "none"
   dirMode: "sig",      // "sig" = significant donors only · "tested" = any donor with a finite NES
   showCtrl: true,      // render side-by-side CTRL column group
-  sortCol: "n_donors_sig",
+  sortCol: "conf",
   sortAsc: false,
   auditTab: "score",     // trace | prep | score
   auditDonor: null,      // donor selected for donor-scoped sub-tabs
@@ -55,10 +60,10 @@ function _khCountUpDown(nesVec, fdrVec, mode, fdrThresh) {
 }
 
 const _KH_AUDIT_TABS = [
-  {id: "trace",    label: "Measurement Trace"},
-  {id: "prep",     label: "MEA Preparation"},
-  {id: "score",    label: "MEA Score"},
-  {id: "celltype", label: "Cell-type specificity"},
+  {id: "trace",       label: "Measurement Trace"},
+  {id: "prep",        label: "MEA Preparation"},
+  {id: "score",       label: "MEA Score"},
+  {id: "attribution", label: "Attribution"},
 ];
 
 // Lazy site-by-motif index for trace lookups: motif -> [site_indices...]
@@ -207,6 +212,9 @@ function _khFilter(rows) {
   const q = _KHState.search.trim().toLowerCase();
   const minSig = _KHState.nsigMin;
   const track = _KHState.track;
+  const celltype = _KHState.celltype;
+  const confidence = _KHState.confidence;
+  const specificityTier = _KHState.specificityTier;
   const seaad = _KHState.seaad;
   const adDir = _KHState.adDir;
   const ctrlDir = _KHState.ctrlDir;
@@ -217,6 +225,12 @@ function _khFilter(rows) {
     if (r.n_donors_sig < minSig) return false;
     if (q && !(String(r.name).toLowerCase().includes(q)
             || String(r.gene_symbol).toLowerCase().includes(q))) return false;
+    if ((celltype || confidence || specificityTier > 0) && _khHasCelltypeSpec()) {
+      const summary = _khAttributionSummary(r);
+      if (celltype && !summary.rows.some(row => row.cell_type === celltype)) return false;
+      if (confidence && _khAttrConfRank(summary.conf) < _khAttrConfRank(confidence)) return false;
+      if (specificityTier > 0 && summary.maxTierRank < specificityTier) return false;
+    }
     if (seaad && _khSeaAdAgreement(r) !== seaad) return false;
     if (adDir) {
       const [u, d] = _khCountUpDown(r._nes, r._fdr, mode, fdrThresh);
@@ -233,7 +247,6 @@ function _khFilter(rows) {
 function _khSort(rows) {
   const col = _KHState.sortCol;
   const asc = _KHState.sortAsc;
-  const rev = asc ? 1 : -1;
   const cmp = (a, b) => {
     let va, vb;
     if (col === "nes_profile") {
@@ -242,15 +255,21 @@ function _khSort(rows) {
     } else if (col === "median_nes_sig_only") {
       va = a.median_nes_sig_only == null ? -Infinity : Math.abs(a.median_nes_sig_only);
       vb = b.median_nes_sig_only == null ? -Infinity : Math.abs(b.median_nes_sig_only);
-    } else if (col === "sea_ad_lfc") {
-      va = (a.sea_ad_lfc == null || !isFinite(a.sea_ad_lfc)) ? -Infinity : Math.abs(a.sea_ad_lfc);
-      vb = (b.sea_ad_lfc == null || !isFinite(b.sea_ad_lfc)) ? -Infinity : Math.abs(b.sea_ad_lfc);
+    } else if (col === "n_attributed_celltypes") {
+      va = _khAttributionSummary(a).count;
+      vb = _khAttributionSummary(b).count;
+    } else if (col === "max_specificity_tier") {
+      va = _khAttributionSummary(a).maxTierRank;
+      vb = _khAttributionSummary(b).maxTierRank;
+    } else if (col === "conf") {
+      va = _khAttrConfRank(_khAttributionSummary(a).conf);
+      vb = _khAttrConfRank(_khAttributionSummary(b).conf);
     } else { va = a[col]; vb = b[col]; }
     if (va == null && vb == null) return 0;
     if (va == null) return 1;
     if (vb == null) return -1;
     if (typeof va === "string") return asc ? va.localeCompare(vb) : vb.localeCompare(va);
-    return rev * (vb - va);
+    return asc ? (va - vb) : (vb - va);
   };
   const out = rows.slice();
   out.sort(cmp);
@@ -258,7 +277,22 @@ function _khSort(rows) {
   if (col === "n_donors_sig") {
     out.sort((a, b) => {
       if (a.n_donors_sig !== b.n_donors_sig)
-        return rev * (b.n_donors_sig - a.n_donors_sig);
+        return asc ? (a.n_donors_sig - b.n_donors_sig) : (b.n_donors_sig - a.n_donors_sig);
+      const am = a.median_nes_sig_only == null ? -Infinity : Math.abs(a.median_nes_sig_only);
+      const bm = b.median_nes_sig_only == null ? -Infinity : Math.abs(b.median_nes_sig_only);
+      return bm - am;
+    });
+  } else if (col === "conf") {
+    out.sort((a, b) => {
+      const ar = _khAttrConfRank(_khAttributionSummary(a).conf);
+      const br = _khAttrConfRank(_khAttributionSummary(b).conf);
+      if (ar !== br) return asc ? (ar - br) : (br - ar);
+      const at = _khAttributionSummary(a).maxTierRank;
+      const bt = _khAttributionSummary(b).maxTierRank;
+      if (at !== bt) return bt - at;
+      const ac = _khAttributionSummary(a).count;
+      const bc = _khAttributionSummary(b).count;
+      if (ac !== bc) return bc - ac;
       const am = a.median_nes_sig_only == null ? -Infinity : Math.abs(a.median_nes_sig_only);
       const bm = b.median_nes_sig_only == null ? -Infinity : Math.abs(b.median_nes_sig_only);
       return bm - am;
@@ -325,22 +359,8 @@ function renderKinaseHuman() {
     const sigCls = r.id === selKid ? " kh-row-selected" : "";
     const mNES = r.median_nes_sig_only;
     const mStr = (mNES == null || !isFinite(mNES)) ? "—" : mNES.toFixed(2);
-    const seaLfc = r.sea_ad_lfc;
-    const agree = _khSeaAdAgreement(r);
-    let seaCell;
-    if (seaLfc == null || !isFinite(seaLfc)) {
-      seaCell = `<span class="muted" title="No SEA-AD coverage for this kinase's gene.">—</span>`;
-    } else {
-      const color = seaLfc >= 0 ? "#c8261c" : "#1f5fa6";
-      const mark = agree === "agree" ? `<span style="color:#1b5e20;" title="Sign matches median NES (sig).">✓</span>`
-                 : agree === "disagree" ? `<span style="color:#b71c1c;" title="Sign opposes median NES (sig).">✗</span>`
-                 : `<span class="muted" title="No signed NES to compare against.">·</span>`;
-      seaCell = `<span style="color:${color}; font-variant-numeric:tabular-nums;">${seaLfc.toFixed(2)}</span> ${mark}`;
-    }
-    // Top cell-type specificity columns (collapsible; absent when phase-2 data unavailable).
-    const topSeaadCell = _khTopCelltypeCell(r.name, "seaad_mtg");
-    const topHbcaCell  = _khTopCelltypeCell(r.name, "allen_hbca");
-    const hasSpec = _KH_HAS_CELLTYPE_SPEC;
+    const hasSpec = _khHasCelltypeSpec();
+    const attrSummary = hasSpec ? _khAttributionSummary(r) : null;
     return `<tr data-khid="${r.id}" class="${sigCls}" tabindex="0">`
       + `<td>${_escapeHtml(r.name)}</td>`
       + `<td>${_escapeHtml(r.gene_symbol || "")}</td>`
@@ -351,9 +371,9 @@ function renderKinaseHuman() {
       + `<td>${r.n_donors_up}</td>`
       + `<td>${r.n_donors_down}</td>`
       + `<td class="kh-ctrl-col" title="${r.n_ctrl_sig_up || 0} up / ${r.n_ctrl_sig_down || 0} down · CTRL spread ±${r.ctrl_sd == null ? "—" : r.ctrl_sd.toFixed(2)} NES">${r.n_ctrl_sig}</td>`
-      + `<td>${seaCell}</td>`
-      + (hasSpec ? `<td class="kh-spec-col kh-spec-seaad" title="Top cell type by SEA-AD MTG specificity">${topSeaadCell}</td>` : "")
-      + (hasSpec ? `<td class="kh-spec-col kh-spec-hbca" title="Top cell type by HBCA specificity">${topHbcaCell}</td>` : "")
+      + (hasSpec ? `<td class="kh-spec-col">${_khRenderCelltypePills(attrSummary)}</td>` : "")
+      + (hasSpec ? `<td class="kh-spec-col">${_khSpecTierBadge(attrSummary.maxTierRank)}</td>` : "")
+      + (hasSpec ? `<td class="kh-spec-col">${_khConfBadge(attrSummary.conf, attrSummary)}</td>` : "")
       + `</tr>`;
   }).join("");
   tbody.innerHTML = html;
@@ -459,7 +479,7 @@ function _khRenderAuditBody(r) {
   if (tab === "trace")    return _khRenderTrace(body, r);
   if (tab === "prep")     return _khRenderPrep(body, r);
   if (tab === "score")    return _khRenderScore(body, r);
-  if (tab === "celltype") return _khRenderCelltypeSpecificity(body, r);
+  if (tab === "attribution") return _khRenderAttribution(body, r);
 }
 
 function _khRenderTrace(body, r) {
@@ -895,21 +915,55 @@ function _khRenderScore(body, r) {
 }
 
 // ---------------------------------------------------------------------------
-// Cell-type specificity helpers (CR03)
+// Attribution helpers — human mirror of the mouse Attribution sub-tab.
+//
+// Row spine on the human side is the per-kinase ranked list of human reference
+// cell types (Levy T5 clusters rolled up from SEA-AD MTG supertypes and Allen
+// HBCA superclusters) from celltype_specificity.ranked_by_kinase. Columns mirror the mouse Attribution
+// tab in spirit; columns that have no human equivalent (Song LFC, Decomp NES /
+// FDR, vs Bulk) are omitted rather than re-invented. The contrast-varying
+// signal is the per-donor kinase NES from perdonor_index at the currently
+// selected donor — broadcast across all rows of the kinase.
 // ---------------------------------------------------------------------------
 
 // Whether the celltype_specificity block is present in the current payload.
-const _KH_HAS_CELLTYPE_SPEC = _KH_HAS && !!(_KH.celltype_specificity);
+// PAYLOAD is loaded asynchronously, so this must be evaluated at render time.
+function _khHasCelltypeSpec() {
+  return !!(_KH_HAS && _KH && _KH.celltype_specificity);
+}
 
-// Retrieve top-N cell types for a kinase from a given reference.
-// Returns [] when data is unavailable.
-function _khTopCelltypes(kinaseName, reference, n) {
-  if (!_KH_HAS_CELLTYPE_SPEC) return [];
+const _KH_REF_LABEL = {
+  "seaad_mtg":  "SEA-AD MTG",
+  "allen_hbca": "Allen HBCA",
+};
+
+function _khAttributionKeys(rOrName) {
+  if (rOrName && typeof rOrName === "object") {
+    const keys = [rOrName.gene_symbol, rOrName.name]
+      .filter(v => v != null && String(v).trim() !== "")
+      .map(v => String(v).trim());
+    return Array.from(new Set(keys));
+  }
+  return [String(rOrName || "").trim()].filter(Boolean);
+}
+
+function _khRankedForReference(rOrName, reference) {
+  if (!_khHasCelltypeSpec()) return [];
   const spec = _KH.celltype_specificity;
-  if (!spec || !spec[reference]) return [];
-  const topN = spec[reference].top_n_by_kinase;
-  if (!topN) return [];
-  return (topN[kinaseName] || []).slice(0, n || 8);
+  if (!spec || !spec[reference] || !spec[reference].ranked_by_kinase) return [];
+  const rankedByKinase = spec[reference].ranked_by_kinase;
+  for (const key of _khAttributionKeys(rOrName)) {
+    if (rankedByKinase[key]) return rankedByKinase[key];
+  }
+  return [];
+}
+
+// Retrieve top-N cell types for a kinase from a given reference. Reads the
+// full ranked list emitted by build_celltype_specificity_payload and slices
+// to top-N for compact callers (e.g. the kinase row preview columns).
+// Returns [] when data is unavailable.
+function _khTopCelltypes(rOrName, reference, n) {
+  return _khRankedForReference(rOrName, reference).slice(0, n || 8);
 }
 
 // Render the top-1 cell type as a compact table cell string.
@@ -918,66 +972,447 @@ function _khTopCelltypeCell(kinaseName, reference) {
   if (!tops.length) return `<span class="muted">—</span>`;
   const t = tops[0];
   const scoreStr = t.score != null ? t.score.toFixed(2) : "—";
-  return `<span title="${_escapeHtml(t.celltype)} (log₂-ratio ${scoreStr})">${_escapeHtml(t.celltype)}</span>`;
+  const source = t.source_celltypes && t.source_celltypes.length
+    ? `; source labels: ${t.source_celltypes.join(", ")}`
+    : "";
+  return `<span title="${_escapeHtml(t.celltype)} (log₂-ratio ${scoreStr}${source})">${_escapeHtml(t.celltype)}</span>`;
 }
 
-// Render the cell-type specificity detail sub-tab body.
-function _khRenderCelltypeSpecificity(body, r) {
-  if (!_KH_HAS_CELLTYPE_SPEC) {
+function _khTopCelltypeName(kinaseName, reference) {
+  const tops = _khTopCelltypes(kinaseName, reference, 1);
+  return tops.length ? String(tops[0].celltype || "") : "";
+}
+
+const KH_ATTR_COLS = [
+  {key:"cell_type",            label:"Cell type",   type:"str", group:"id",
+   title:"Levy T5 cluster. SEA-AD supertypes and HBCA superclusters are rolled up to this shared nomenclature before ranking."},
+  {key:"combined_tier",        label:"Conf",        type:"conf", group:"attr",
+   title:"Human mirror of the mouse confidence tier: high / moderate / low / none. High requires both specificity ≥ log2(2) and |SEA-AD LFC| ≥ 0.1."},
+  {key:"specificity",          label:"Specificity", type:"num", group:"attr",
+   title:"log2(cell-type mean / reference-wide mean). > 0 means enriched in this cell type."},
+  {key:"specificity_tier_rank",label:"Tier",        type:"num", group:"attr",
+   title:"Specificity bucket by multiple of uniform: ≥10× / ≥5× / ≥2× / ≥1×."},
+  {key:"mean_log2_expression", label:"log2 expr",   type:"num", group:"attr",
+   title:"Mean log2 expression in this cell type. Low absolute expression can make specificity less interpretable."},
+  {key:"sea_ad_lfc",           label:"SEA-AD LFC",  type:"num", group:"attr",
+   title:"SEA-AD AD-vs-control LFC for this kinase in this SEA-AD supertype. HBCA rows have no SEA-AD analog."},
+  {key:"combined_score",       label:"Score",       type:"num", group:"attr",
+   title:"Combined attribution score. With donor NES and SEA-AD LFC: sign(NES) × LFC × (0.5 + specificity); otherwise specificity."},
+  {key:"donor_nes",            label:"Donor NES",   type:"num", group:"activity",
+   title:"Per-donor kinase MEA NES for the selected donor. Same value is broadcast to each row for this kinase."},
+  {key:"donor_fdr",            label:"Donor FDR",   type:"num", group:"activity",
+   title:"Per-donor kinase MEA FDR for the selected donor. Bold values pass < 0.25."},
+];
+
+function _khAttrConfRank(conf) {
+  if (conf === "high") return 3;
+  if (conf === "moderate") return 2;
+  if (conf === "low") return 1;
+  return 0;
+}
+
+function _khSpecTierRank(score) {
+  if (score == null || !isFinite(score)) return null;
+  if (score >= Math.log2(10)) return 4;
+  if (score >= Math.log2(5)) return 3;
+  if (score >= Math.log2(2)) return 2;
+  if (score >= 0) return 1;
+  return 0;
+}
+
+function _khSpecTierLabel(rank) {
+  if (rank >= 4) return "≥10×";
+  if (rank >= 3) return "≥5×";
+  if (rank >= 2) return "≥2×";
+  if (rank >= 1) return "≥1×";
+  return "";
+}
+
+function _khSpecTierBadge(rank) {
+  if (!rank) return `<span class="muted">—</span>`;
+  const cls = rank >= 4 ? "wmb-tier-10x"
+            : rank >= 3 ? "wmb-tier-5x"
+            : rank >= 2 ? "wmb-tier-2x"
+            : "wmb-tier-1x";
+  return `<span class="wmb-tier ${cls}" title="${_khSpecTierLabel(rank)} uniform human-reference specificity">${_khSpecTierLabel(rank)}</span>`;
+}
+
+function _khMergeAttributionRows(rawRows) {
+  const byCell = new Map();
+  for (const raw of rawRows || []) {
+    const cell = raw.cell_type || raw.celltype;
+    if (!cell) continue;
+    const ref = raw.reference || "";
+    const spec = raw.specificity != null ? Number(raw.specificity)
+               : raw.score != null ? Number(raw.score)
+               : null;
+    const expr = raw.mean_log2_expression == null ? null : Number(raw.mean_log2_expression);
+    const seaLfc = raw.sea_ad_lfc == null ? null : Number(raw.sea_ad_lfc);
+    const rank = raw.rank_in_ref == null ? raw.rank : raw.rank_in_ref;
+    let row = byCell.get(cell);
+    if (!row) {
+      row = {
+        cell_type: cell,
+        references: [],
+        source_by_reference: {},
+        source_celltypes: [],
+        specificity: null,
+        score: null,
+        mean_log2_expression: null,
+        sea_ad_lfc: null,
+        rank_in_ref: rank == null ? null : Number(rank),
+      };
+      byCell.set(cell, row);
+    }
+    if (ref && !row.references.includes(ref)) row.references.push(ref);
+    const src = Array.isArray(raw.source_celltypes) ? raw.source_celltypes : [];
+    if (ref && src.length) {
+      const prev = row.source_by_reference[ref] || [];
+      row.source_by_reference[ref] = Array.from(new Set(prev.concat(src))).sort();
+    }
+    row.source_celltypes = Array.from(new Set(row.source_celltypes.concat(src))).sort();
+    if (rank != null && isFinite(Number(rank))) {
+      row.rank_in_ref = row.rank_in_ref == null ? Number(rank) : Math.min(row.rank_in_ref, Number(rank));
+    }
+    const prevSpec = row.specificity == null || !isFinite(row.specificity) ? -Infinity : row.specificity;
+    if (spec != null && isFinite(spec) && spec > prevSpec) {
+      row.specificity = spec;
+      row.score = spec;
+      row.mean_log2_expression = expr;
+    } else if (row.mean_log2_expression == null && expr != null && isFinite(expr)) {
+      row.mean_log2_expression = expr;
+    }
+    if (seaLfc != null && isFinite(seaLfc)) {
+      const prevLfc = row.sea_ad_lfc;
+      if (prevLfc == null || Math.abs(seaLfc) > Math.abs(prevLfc)) row.sea_ad_lfc = seaLfc;
+    }
+  }
+  const rows = Array.from(byCell.values());
+  for (const row of rows) {
+    row.references.sort((a, b) => String(a).localeCompare(String(b)));
+    row.conf = _khAttrConf(row.specificity, row.sea_ad_lfc);
+    row.combined_tier = row.conf;
+    row.conf_rank = _khAttrConfRank(row.conf);
+    row.tier_rank = _khSpecTierRank(row.specificity);
+    row.specificity_tier_rank = row.tier_rank;
+  }
+  return rows;
+}
+
+function _khSourceEvidenceTitle(row) {
+  const refs = (row.references || []).map(ref => {
+    const label = _KH_REF_LABEL[ref] || ref;
+    const src = row.source_by_reference && row.source_by_reference[ref];
+    return src && src.length ? `${label}: ${src.join(", ")}` : label;
+  });
+  return refs.length ? refs.join(" | ") : (row.source_celltypes || []).join(", ");
+}
+
+function _khRowsForAttributionSummary(rOrName) {
+  if (!_khHasCelltypeSpec()) return [];
+  const spec = _KH.celltype_specificity;
+  const refs = (spec.references || []).filter(ref => spec[ref] && spec[ref].ranked_by_kinase);
+  const out = [];
+  for (const ref of refs) {
+    const ranked = _khRankedForReference(rOrName, ref);
+    for (const ent of ranked) {
+      const score = ent.score == null ? null : Number(ent.score);
+      const seaLfc = ent.sea_ad_lfc == null ? null : Number(ent.sea_ad_lfc);
+      const conf = _khAttrConf(score, seaLfc);
+      out.push({
+        reference: ref,
+        cell_type: ent.celltype,
+        source_celltypes: ent.source_celltypes || [],
+        score: score,
+        sea_ad_lfc: seaLfc,
+        conf: conf,
+        conf_rank: _khAttrConfRank(conf),
+        tier_rank: _khSpecTierRank(score),
+      });
+    }
+  }
+  return _khMergeAttributionRows(out);
+}
+
+function _khAttributionSummary(r) {
+  const rows = _khRowsForAttributionSummary(r);
+  if (!rows.length) return {count:0, maxTierRank:0, conf:"none", rows:[]};
+  const deduped = rows.slice();
+  deduped.sort((a, b) =>
+    (b.conf_rank - a.conf_rank) ||
+    ((b.tier_rank || 0) - (a.tier_rank || 0)) ||
+    ((b.score || -Infinity) - (a.score || -Infinity)) ||
+    String(a.cell_type).localeCompare(String(b.cell_type))
+  );
+  const attributed = deduped.filter(row => row.conf === "high" || row.conf === "moderate");
+  const maxTierRank = Math.max(0, ...deduped.map(row => row.tier_rank || 0));
+  const bestConfRank = Math.max(0, ...deduped.map(row => row.conf_rank || 0));
+  const conf = bestConfRank >= 3 ? "high"
+            : bestConfRank >= 2 ? "moderate"
+            : bestConfRank >= 1 ? "low"
+            : "none";
+  return {count: attributed.length, maxTierRank, conf, rows: attributed};
+}
+
+function _khRenderCelltypePills(summary) {
+  if (!summary || !summary.rows.length) {
+    return `<span class="muted" title="No high or moderate human attribution rows.">—</span>`;
+  }
+  const shown = summary.rows.slice(0, 3).map(row => {
+    const cls = row.conf === "high" ? "hi" : "mid";
+    const evidence = _khSourceEvidenceTitle(row);
+    const tip = `${row.cell_type} · ${row.conf}` +
+      (row.score != null && isFinite(row.score) ? ` · specificity ${row.score.toFixed(2)}` : "") +
+      (evidence ? ` · evidence: ${evidence}` : "");
+    return `<span class="ctx-chip ${cls}" title="${_escapeHtml(tip)}">${_escapeHtml(row.cell_type)}</span>`;
+  }).join("");
+  const overflow = summary.rows.length > 3
+    ? `<span class="ctx-overflow" title="${summary.rows.length - 3} additional high/moderate human attribution rows">+${summary.rows.length - 3}</span>`
+    : "";
+  return shown + overflow;
+}
+
+function _khConfBadge(conf, summary) {
+  const cls = conf === "high" ? "hi"
+            : conf === "moderate" ? "mid"
+            : "lo";
+  const label = conf === "high" ? "HIGH"
+              : conf === "moderate" ? "MOD"
+              : conf === "low" ? "low"
+              : "none";
+  const count = summary ? summary.count : 0;
+  const tip = conf === "none"
+    ? "No human attribution rows above low confidence."
+    : `${label} human attribution; ${count} high/moderate cell type${count === 1 ? "" : "s"}.`;
+  return `<span class="badge ${cls}" title="${_escapeHtml(tip)}">${label}</span>`;
+}
+
+function _khAttrCmp(a, b, key, type, asc) {
+  let va, vb;
+  if (type === "num") {
+    va = a[key]; vb = b[key];
+    va = (va == null || !isFinite(va)) ? null : Number(va);
+    vb = (vb == null || !isFinite(vb)) ? null : Number(vb);
+  } else if (type === "conf") {
+    va = _khAttrConfRank(a[key]);
+    vb = _khAttrConfRank(b[key]);
+  } else {
+    va = (a[key] || "").toString();
+    vb = (b[key] || "").toString();
+  }
+  if (va == null && vb == null) return 0;
+  if (va == null) return 1;
+  if (vb == null) return -1;
+  if (typeof va === "string") return asc ? va.localeCompare(vb) : vb.localeCompare(va);
+  return asc ? (va - vb) : (vb - va);
+}
+
+// Derive a confidence tier from the human evidence available for one row.
+// Mirrors the mouse confidence rubric (high / moderate / low / none) but
+// without Song (no human equivalent). Gates:
+//   high     — specificity ≥ 2× uniform (log2 ≥ 1.0) AND |SEA-AD LFC| ≥ 0.1
+//   moderate — specificity ≥ 2× uniform OR  |SEA-AD LFC| ≥ 0.1 (when known)
+//   low      — specificity ≥ 0 (cell-type ≥ brain mean) but neither gate cleared
+//   none     — specificity < 0 (cell-type below brain mean)
+// HBCA rows have no SEA-AD LFC — they cap at moderate / low / none.
+function _khAttrConf(score, seaLfc) {
+  if (score == null || !isFinite(score)) return "none";
+  const specOk = score >= 1.0;          // log2(2) = 2× uniform
+  const lfcOk  = seaLfc != null && isFinite(seaLfc) && Math.abs(seaLfc) >= 0.1;
+  if (specOk && lfcOk) return "high";
+  if (specOk || lfcOk) return "moderate";
+  if (score >= 0)      return "low";
+  return "none";
+}
+
+// Render the human Attribution sub-tab.
+function _khRenderAttribution(body, r) {
+  if (!_khHasCelltypeSpec()) {
     body.innerHTML = `<div class="muted" style="padding:1em;">
-      Cell-type specificity data is not available in this payload build.
+      Attribution data is not available in this payload build.
       Run <code>python alz/atlas_reference.py --sea-ad-expression</code> and
-      <code>python alz/atlas_reference.py --hbca-download</code> (phase 2), then
-      <code>python alz/human_reference_expression.py --ref both</code> and
-      <code>python alz/human_celltype_attribution.py</code>, and rebuild the viewer.
+      <code>python alz/atlas_reference.py --hbca-download</code>, then
+      <code>python alz/human_reference_expression.py --ref both --force</code>
+      and rebuild the viewer.
     </div>`;
     return;
   }
 
   const spec = _KH.celltype_specificity;
-  const refs = spec.references || [];
-  const refLabels = {
-    "seaad_mtg": "SEA-AD MTG (cortical supertypes)",
-    "allen_hbca": "Allen HBCA (whole-brain classes)",
-  };
-
-  let html = `<p class="kinase-stage-note">
-    Transcript-level specificity of <strong>${_escapeHtml(r.gene_symbol || r.name)}</strong>
-    across human brain cell types from two independent references.
-    Score = log₂(cell-type mean / brain-wide mean); positive = enriched in that cell type.
-    SEA-AD MTG is cortex-only; HBCA provides whole-brain coverage.
-    Specificity is a transcript-level prior, not a co-measurement with this cohort.
-  </p>`;
-
-  for (const ref of refs) {
-    const refSpec = spec[ref];
-    if (!refSpec) continue;
-    const topN = _khTopCelltypes(r.name, ref, 8);
-    const label = refLabels[ref] || ref;
-
-    const tableRows = topN.map((t, i) =>
-      `<tr>
-        <td>${i + 1}</td>
-        <td>${_escapeHtml(t.celltype)}</td>
-        <td style="font-variant-numeric:tabular-nums; color:${t.score >= 0 ? '#1b5e20' : '#b71c1c'};">${t.score != null ? t.score.toFixed(3) : "—"}</td>
-      </tr>`
-    ).join("");
-
-    const noData = !topN.length
-      ? `<p class="muted">No data for ${_escapeHtml(r.name)} in ${_escapeHtml(label)}.</p>`
-      : "";
-
-    html += `<section class="audit-panel">
-      <h4>${_escapeHtml(label)}</h4>
-      ${noData}
-      ${topN.length ? `<div class="kh-audit-tablewrap"><table class="data-table">
-        <thead><tr><th>Rank</th><th>Cell type</th><th>log₂-specificity</th></tr></thead>
-        <tbody>${tableRows}</tbody>
-      </table></div>` : ""}
-    </section>`;
+  const refs = (spec.references || []).filter(ref => spec[ref] && spec[ref].ranked_by_kinase);
+  if (!refs.length) {
+    body.innerHTML = `<div class="muted" style="padding:1em;">No reference cell-type rankings for ${_escapeHtml(r.name)}.</div>`;
+    return;
   }
 
-  body.innerHTML = html;
+  // Collect ranked Levy T5 evidence from every available human reference, then
+  // collapse to one displayed row per Levy T5 cell type.
+  const rawRows = [];
+  for (const ref of refs) {
+    const ranked = _khRankedForReference(r, ref);
+    for (const ent of ranked) {
+      rawRows.push({
+        reference: ref,
+        cell_type: ent.celltype,
+        source_celltypes: ent.source_celltypes || [],
+        rank_in_ref: ent.rank,
+        specificity: ent.score,
+        mean_log2_expression: ent.mean_log2_expression == null ? null : ent.mean_log2_expression,
+        sea_ad_lfc: ent.sea_ad_lfc == null ? null : ent.sea_ad_lfc,
+      });
+    }
+  }
+  const rows = _khMergeAttributionRows(rawRows);
+
+  // Per-donor kinase NES — broadcast across every row of this kinase. Changes
+  // when the donor selector fires.
+  const donor = _KHState.auditDonor;
+  const pd = (donor != null) ? _khPerdonorFor(r.id, donor) : null;
+  const donorNES = pd ? pd.NES : null;
+  const donorFDR = pd ? pd.FDR : null;
+
+  // Combined score (mirrors mouse): effective_concordance × (0.5 + specificity).
+  // Specificity is the strongest human-reference prior for the Levy T5 cell
+  // type; SEA-AD LFC is folded in when available for the same cell-type row.
+  const scoreOf = (row) => {
+    const spec = row.specificity;
+    const lfc = row.sea_ad_lfc;
+    if (donorNES != null && isFinite(donorNES) && lfc != null && isFinite(lfc)) {
+      const ec = Math.sign(donorNES) * lfc;
+      return ec * (0.5 + Math.max(0, spec || 0));
+    }
+    return spec;
+  };
+  for (const row of rows) {
+    row.combined_score = scoreOf(row);
+    row.combined_tier  = _khAttrConf(row.specificity, row.sea_ad_lfc);
+    row.specificity_tier_rank = _khSpecTierRank(row.specificity);
+    row.donor_nes = donorNES;
+    row.donor_fdr = donorFDR;
+  }
+
+  const sortKey = body.dataset.khAttrSortKey || "combined_tier";
+  const sortAsc = body.dataset.khAttrSortAsc === "1";
+  const sortCol = KH_ATTR_COLS.find(c => c.key === sortKey)
+    || KH_ATTR_COLS.find(c => c.key === "combined_tier")
+    || KH_ATTR_COLS[KH_ATTR_COLS.length - 1];
+  rows.sort((a, b) => _khAttrCmp(a, b, sortCol.key, sortCol.type, sortAsc));
+  if (sortCol.key === "combined_tier") {
+    rows.sort((a, b) => {
+      const primary = _khAttrCmp(a, b, sortCol.key, sortCol.type, sortAsc);
+      if (primary !== 0) return primary;
+      return ((b.specificity_tier_rank || 0) - (a.specificity_tier_rank || 0)) ||
+             ((b.combined_score || -Infinity) - (a.combined_score || -Infinity));
+    });
+  }
+
+  // Donor selector: surface so the user can change which donor's NES is shown.
+  // Defaults to the first case donor when none is picked.
+  const donors = _KH.donors || [];
+  const donorOpts = donors.map(d =>
+    `<option value="${_escapeHtml(d)}"${d === donor ? " selected" : ""}>${_escapeHtml(d)}</option>`
+  ).join("");
+  const donorSelector =
+    `<div class="attr-bulk-anchor">Donor for NES column: ` +
+      `<select id="kh-attr-donor-select" class="attr-bulk-pill">` +
+        `<option value=""${donor == null ? " selected" : ""}>—</option>${donorOpts}` +
+      `</select> ` +
+      `<span class="attr-bulk-pill">` +
+        (donor != null && donorNES != null && isFinite(donorNES)
+          ? (donorNES > 0
+              ? `<span class="attr-bulk-up">↑ NES = +${donorNES.toFixed(2)}</span>`
+              : `<span class="attr-bulk-down">↓ NES = ${donorNES.toFixed(2)}</span>`)
+          : `<span class="attr-bulk-ns">NES n/a</span>`) +
+        " · " +
+        (donor != null && donorFDR != null && isFinite(donorFDR)
+          ? `FDR = ${donorFDR.toFixed(3)}${donorFDR < 0.25 ? "" : " (n.s.)"}`
+          : "FDR n/a") +
+      `</span> ` +
+      `<span class="muted">— per-donor kinase NES from the human MEA; broadcast to every row.</span>` +
+    `</div>`;
+
+  const num = (v, d=3) => (v == null || !isFinite(v)) ? "" : Number(v).toFixed(d);
+  const tbody = rows.map((row, i) => {
+    const tierChip =
+      `<span class="${_attrConfidenceClass(row.combined_tier)}">${_escapeHtml(row.combined_tier.replace('_', ' '))}</span>`;
+    // Specificity tier: uses the same ≥10× / ≥5× / ≥2× / ≥1× of uniform logic
+    // as the mouse WMB tier, applied to the human log2-ratio score directly.
+    const specTier = row.specificity == null || !isFinite(row.specificity)
+      ? "" : _wmbSpecToHumanTier(row.specificity);
+    const seaCell = (row.sea_ad_lfc == null || !isFinite(row.sea_ad_lfc))
+      ? `<td class="attr-num attr-empty">—</td>`
+      : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(row.sea_ad_lfc)}">${num(row.sea_ad_lfc, 3)}</td>`;
+    const nesCell = (donorNES == null || !isFinite(donorNES))
+      ? `<td class="attr-num attr-empty">—</td>`
+      : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(donorNES)}">${num(donorNES, 2)}</td>`;
+    const fdrCell = (donorFDR == null || !isFinite(donorFDR))
+      ? `<td class="attr-num attr-empty">—</td>`
+      : `<td class="attr-num"${donorFDR < 0.25 ? ' style="font-weight:600"' : ''}>${num(donorFDR, 3)}</td>`;
+    const evidenceTitle = _khSourceEvidenceTitle(row);
+    return `<tr class="attr-verdict-row${i === 0 ? ' attr-verdict-selected' : ''}">` +
+      `<td class="attr-celltype" title="${_escapeHtml(evidenceTitle)}">${_escapeHtml(row.cell_type)}</td>` +
+      `<td>${tierChip}</td>` +
+      `<td class="attr-num">${num(row.specificity, 3)}</td>` +
+      `<td class="attr-num">${specTier}</td>` +
+      `<td class="attr-num">${num(row.mean_log2_expression, 2)}</td>` +
+      seaCell +
+      `<td class="attr-num">${num(row.combined_score, 3)}</td>` +
+      nesCell +
+      fdrCell +
+      `</tr>`;
+  }).join("");
+
+  const headCells = KH_ATTR_COLS.map(c => {
+    const arrow = (c.key === sortCol.key) ? (sortAsc ? " ▲" : " ▼") : "";
+    const title = c.title ? ` title="${_escapeHtml(c.title)}"` : "";
+    return `<th class="attr-verdict-th" data-sort-key="${c.key}"${title}>${c.label}${arrow}</th>`;
+  }).join("");
+  const head = `<tr>${headCells}</tr>`;
+  const superHead =
+    `<tr class="attr-verdict-supergroup">` +
+      `<th class="attr-supergroup-spacer" colspan="1"></th>` +
+      `<th class="attr-supergroup-attr" colspan="6" title="Cell-type attribution evidence (human references — transcript-level specificity + SEA-AD AD effect).">Attribution</th>` +
+      `<th class="attr-supergroup-decomp" colspan="2" title="Per-donor kinase activity from the human MEA. Broadcast per kinase; changes with the donor selector.">Donor kinase activity</th>` +
+    `</tr>`;
+
+  body.innerHTML =
+    `<p class="kinase-stage-note">` +
+    `Cell-type attribution of <strong>${_escapeHtml(r.gene_symbol || r.name)}</strong> ` +
+    `across human reference atlases, consolidated to Levy T5 clusters before display. ` +
+    `Specificity is a transcript-level prior; ` +
+    `SEA-AD LFC is the AD-vs-control effect rolled up to the same cluster; donor NES ` +
+    `is the kinase's per-donor MEA activity broadcast to every row. ` +
+    `HBCA rows lack SEA-AD LFC.` +
+    `</p>` +
+    donorSelector +
+    `<table class="attr-verdict-table"><thead>${superHead}${head}</thead><tbody>${tbody}</tbody></table>`;
+
+  const sel = document.getElementById("kh-attr-donor-select");
+  if (sel) sel.addEventListener("change", () => {
+    _KHState.auditDonor = sel.value || null;
+    _khRenderAttribution(body, r);
+  });
+  body.querySelectorAll("th.attr-verdict-th").forEach(th => th.addEventListener("click", () => {
+    const k = th.dataset.sortKey;
+    if (body.dataset.khAttrSortKey === k) {
+      body.dataset.khAttrSortAsc = body.dataset.khAttrSortAsc === "1" ? "0" : "1";
+    } else {
+      body.dataset.khAttrSortKey = k;
+      const col = KH_ATTR_COLS.find(c => c.key === k);
+      body.dataset.khAttrSortAsc = (col && col.type === "str") ? "1" : "0";
+    }
+    _khRenderAttribution(body, r);
+  }));
+}
+
+// Specificity → tier badge string, mirroring _wmbTierBadge styling. The
+// human references have different cell-type counts than WMB-34, so the
+// "multiple of uniform" thresholds for high/moderate/low are interpreted
+// directly off the log2-ratio score: ≥1.0 → ≥2× uniform → "high" tier.
+function _wmbSpecToHumanTier(score) {
+  const rank = _khSpecTierRank(score);
+  if (rank) return _khSpecTierBadge(rank);
+  return "";
 }
 
 function _khBuildDonorChips() {
@@ -999,9 +1434,34 @@ function _khBuildDonorChips() {
   });
 }
 
+function _khPopulateCelltypeFilter() {
+  const sel = document.getElementById("kh-filter-celltype");
+  if (!sel || !_khHasCelltypeSpec()) return;
+  const seen = new Set();
+  const spec = _KH.celltype_specificity;
+  for (const ref of (spec.references || [])) {
+    const rankedByKinase = spec[ref] && spec[ref].ranked_by_kinase;
+    if (!rankedByKinase) continue;
+    for (const rows of Object.values(rankedByKinase)) {
+      for (const ent of rows || []) {
+        const score = ent.score == null ? null : Number(ent.score);
+        const seaLfc = ent.sea_ad_lfc == null ? null : Number(ent.sea_ad_lfc);
+        const conf = _khAttrConf(score, seaLfc);
+        if (conf === "high" || conf === "moderate") seen.add(ent.celltype);
+      }
+    }
+  }
+  const opts = Array.from(seen).sort((a, b) => String(a).localeCompare(String(b)))
+    .map(ct => `<option value="${_escapeHtml(ct)}">${_escapeHtml(ct)}</option>`)
+    .join("");
+  sel.innerHTML = `<option value="">Any</option>${opts}`;
+  sel.value = _KHState.celltype || "";
+}
+
 function wireKinaseHuman() {
   if (!_KH_HAS) return;
   _khBuildDonorChips();
+  _khPopulateCelltypeFilter();
   const search = document.getElementById("kh-search");
   if (search) search.addEventListener("input", e => {
     _KHState.search = e.target.value; renderKinaseHuman();
@@ -1013,6 +1473,19 @@ function wireKinaseHuman() {
   const track = document.getElementById("kh-filter-track");
   if (track) track.addEventListener("change", e => {
     _KHState.track = e.target.value; renderKinaseHuman();
+  });
+  const celltype = document.getElementById("kh-filter-celltype");
+  if (celltype) celltype.addEventListener("change", e => {
+    _KHState.celltype = e.target.value || ""; renderKinaseHuman();
+  });
+  const confidence = document.getElementById("kh-filter-confidence");
+  if (confidence) confidence.addEventListener("change", e => {
+    _KHState.confidence = e.target.value || ""; renderKinaseHuman();
+  });
+  const specificity = document.getElementById("kh-filter-specificity");
+  if (specificity) specificity.addEventListener("change", e => {
+    _KHState.specificityTier = Math.max(0, parseInt(e.target.value, 10) || 0);
+    renderKinaseHuman();
   });
   const seaad = document.getElementById("kh-filter-seaad");
   if (seaad) seaad.addEventListener("change", e => {
@@ -1058,11 +1531,15 @@ function wireKinaseHuman() {
   const reset = document.getElementById("kh-filter-reset");
   if (reset) reset.addEventListener("click", () => {
     _KHState.search = ""; _KHState.donors.clear();
-    _KHState.nsigMin = 0; _KHState.track = ""; _KHState.seaad = "";
+    _KHState.nsigMin = 0; _KHState.track = ""; _KHState.celltype = "";
+    _KHState.confidence = ""; _KHState.specificityTier = 0; _KHState.seaad = "";
     _KHState.adDir = ""; _KHState.ctrlDir = ""; _KHState.dirMode = "sig";
     if (search) search.value = "";
     if (nsig) nsig.value = 0;
     if (track) track.value = "";
+    if (celltype) celltype.value = "";
+    if (confidence) confidence.value = "";
+    if (specificity) specificity.value = "0";
     if (seaad) seaad.value = "";
     if (adDir) adDir.value = "";
     if (ctrlDir) ctrlDir.value = "";
@@ -1098,7 +1575,7 @@ function wireKinaseHuman() {
         sx = e.clientX; sw = leftPanel.getBoundingClientRect().width;
         document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none";
         function mv(ev) {
-          const w = Math.min(1200, Math.max(280, sw + (ev.clientX - sx)));
+          const w = Math.min(1600, Math.max(420, sw + (ev.clientX - sx)));
           leftPanel.style.width = w + "px";
         }
         function up() {

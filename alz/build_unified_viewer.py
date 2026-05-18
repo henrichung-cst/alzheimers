@@ -1502,60 +1502,26 @@ _INCYTR_CONTRASTS = (
 # ---------------------------------------------------------------------------
 # CR-04: trajectory_index + recur_index computation
 # ---------------------------------------------------------------------------
-# Flat threshold: |PDS| < 0.01 AND pvalue >= 0.05 → 'f'; else sign(PDS).
-_TRAJ_FLAT_PDS = 0.01
-_TRAJ_FLAT_P   = 0.05
-
-# Canonical timepoint order for sign-vector construction.
+# Trajectory is a property of the path's raw PDS sign vector — NOT of any
+# significance gate. A (path, disease) earns a label only when the Incytr
+# pipeline produced a row at all three timepoints (2/4/6 mo); incomplete
+# paths get no label (rendered as "—" in the viewer). Sign chars are 'u'
+# (PDS > 0) or 'd' (PDS < 0) — no 'f', no hardcoded flat threshold. The
+# viewer's pvalue/|PDS| sliders filter visible rows but do not redefine
+# the trajectory.
 _TRAJ_TIMEPOINTS = ("2mo", "4mo", "6mo")
 
 
-def _sign_char(pds: float | None, pvalue: float | None) -> str:
-    """Return 'u', 'd', or 'f' for a single (PDS, pvalue) observation."""
-    if pds is None:
-        return "f"
-    flat = (abs(pds) < _TRAJ_FLAT_PDS) and (pvalue is None or pvalue >= _TRAJ_FLAT_P)
-    if flat:
-        return "f"
-    return "u" if pds > 0 else "d"
-
-
-def _sign_vec_to_label(sv: str) -> str:
-    """Map a 3-char sign vector (e.g. 'uuu') to a coarse trajectory label.
-
-    The mapping follows the spec in change_request_04_incytr_viewer.md.
-    Sign-monotonic (not |PDS|-monotonic) is used — flag (a) resolved as
-    sign-monotonic, which is cheaper and more interpretable for the UI.
-    """
-    assert len(sv) == 3, sv
-    a, b, c = sv[0], sv[1], sv[2]
-    if sv == "uuu":
-        return "always-up"
-    if sv == "ddd":
-        return "always-down"
-    if sv == "fff":
-        return "flat"
-    # Monotonic-up: non-decreasing in sign (f→f, f→u, u→u), ends at 'u'.
-    if c == "u" and b in ("u", "f") and a in ("u", "f") and sv != "fff":
-        return "monotonic-up"
-    # Monotonic-down: non-increasing in sign (f→f, f→d, d→d), ends at 'd'.
-    if c == "d" and b in ("d", "f") and a in ("d", "f") and sv != "fff":
-        return "monotonic-down"
-    # Early-only: non-flat at 2 mo, flat by 6 mo.
-    if a != "f" and b == "f" and c == "f":
-        return "early-only"
-    if a != "f" and b != "f" and c == "f":
-        return "early-only"
-    # Late-onset: flat at 2 mo, non-flat at 6 mo.
-    if a == "f" and c != "f":
-        return "late-onset"
-    return "mixed"
-
-
-# Labels used in trajectory column — categorical dtype keeps shard size minimal.
+# Trajectory label vocabulary — non-exclusive: a (path, disease) tuple can
+# carry multiple labels (e.g. "always-up" + "monotonic-up" if PDS is
+# positive and strictly increasing). Stored as a semicolon-joined string in
+# the shard so a single column carries the set.
 _SIGN_VEC_LABELS = (
-    "always-up", "always-down", "monotonic-up", "monotonic-down",
-    "early-only", "late-onset", "mixed", "flat",
+    "always-up",        # uuu — every PDS > 0
+    "always-down",      # ddd — every PDS < 0
+    "monotonic-up",     # PDS[2] < PDS[4] < PDS[6] (strictly)
+    "monotonic-down",   # PDS[2] > PDS[4] > PDS[6] (strictly)
+    "mixed",            # sign changes across timepoints
 )
 
 
@@ -1563,7 +1529,7 @@ def _annotate_trajectory_columns(
     df: "pd.DataFrame",
     source_label: str = "factorial",
 ) -> "tuple[pd.DataFrame, dict, dict]":
-    """Add traj_label and sign_vec columns to the long-form shard DataFrame.
+    """Add traj_labels and sign_vec columns to the long-form shard DataFrame.
 
     Fully vectorised (no Python-level row loops) — handles 10M+ rows in a
     few seconds via pandas pivot + string ops.
@@ -1573,7 +1539,7 @@ def _annotate_trajectory_columns(
         timepoint. path_string = sender||receiver||Path. Small enough to inline.
       - traj_summary: { label → count } aggregate across all paths.
 
-    traj_label and sign_vec are added as columns to every shard row.
+    traj_labels and sign_vec are added as columns to every shard row.
     The JS reads them directly from loaded shards (no separate index needed).
     The full per-path index is NOT inlined in the main payload to keep it small.
 
@@ -1596,76 +1562,108 @@ def _annotate_trajectory_columns(
     df["_timepoint"] = split[1].fillna("")
 
     if df is None or df.empty:
-        df["traj_label"] = pd.Categorical([], categories=list(_SIGN_VEC_LABELS))
+        df["traj_labels"] = ""
         df["sign_vec"] = ""
         return df, {}, {}
 
-    # ---- 1. Per-row sign character ----------------------------------------
+    # ---- 1. Per-row sign char + raw PDS (no flat threshold) --------------
     pds_col = df["PDS"].astype(float)
-    pv_col  = df["pvalue"].astype(float)
-    flat_mask = (pds_col.abs() < _TRAJ_FLAT_PDS) & (
-        pv_col.isna() | (pv_col >= _TRAJ_FLAT_P)
-    )
-    sign_ser = pd.Series("f", index=df.index, dtype="str")
-    sign_ser.loc[~flat_mask & (pds_col > 0)] = "u"
-    sign_ser.loc[~flat_mask & (pds_col < 0)] = "d"
+    sign_ser = pd.Series("", index=df.index, dtype="str")
+    sign_ser.loc[pds_col > 0] = "u"
+    sign_ser.loc[pds_col < 0] = "d"
     df["_sign"] = sign_ser
+    df["_pds"]  = pds_col
 
-    # ---- 2. Pivot: (path_str, disease) × timepoint → sign char -----------
+    # ---- 2. Pivot: (path, disease) × timepoint → sign & PDS --------------
     valid_tp = set(_TRAJ_TIMEPOINTS)
     valid_dis = {"App", "Tau", "ApTt"}
-    pivot_mask = df["_disease"].isin(valid_dis) & df["_timepoint"].isin(valid_tp)
-    sub = df.loc[pivot_mask, ["_path_str", "_disease", "_timepoint", "_sign"]]
+    pivot_mask = (
+        df["_disease"].isin(valid_dis)
+        & df["_timepoint"].isin(valid_tp)
+        & df["_sign"].isin(["u", "d"])
+    )
+    sub = df.loc[pivot_mask, ["_path_str", "_disease", "_timepoint", "_sign", "_pds"]]
 
     if sub.empty:
         print(f"  trajectory ({source_label}): no canonical contrasts; skipping",
               flush=True)
-        df["traj_label"] = "flat"
-        df["sign_vec"] = "fff"
+        df["traj_labels"] = ""
+        df["sign_vec"] = ""
         return df, {}, {}
 
-    pivot = sub.pivot_table(
+    sign_pivot = sub.pivot_table(
         index=["_path_str", "_disease"],
         columns="_timepoint",
         values="_sign",
         aggfunc="first",
     )
+    pds_pivot = sub.pivot_table(
+        index=["_path_str", "_disease"],
+        columns="_timepoint",
+        values="_pds",
+        aggfunc="first",
+    )
     for tp in _TRAJ_TIMEPOINTS:
-        if tp not in pivot.columns:
-            pivot[tp] = "f"
-    pivot = pivot[list(_TRAJ_TIMEPOINTS)].fillna("f")
+        if tp not in sign_pivot.columns: sign_pivot[tp] = pd.NA
+        if tp not in pds_pivot.columns:  pds_pivot[tp]  = pd.NA
+    sign_pivot = sign_pivot[list(_TRAJ_TIMEPOINTS)]
+    pds_pivot  = pds_pivot[list(_TRAJ_TIMEPOINTS)]
+    complete_mask = sign_pivot.notna().all(axis=1) & pds_pivot.notna().all(axis=1)
+    sign_pivot = sign_pivot.loc[complete_mask]
+    pds_pivot  = pds_pivot.loc[complete_mask]
 
-    # ---- 3. Sign vectors and coarse labels --------------------------------
-    pivot["sign_vec"] = pivot["2mo"] + pivot["4mo"] + pivot["6mo"]
-    sv_to_label = {sv: _sign_vec_to_label(sv) for sv in pivot["sign_vec"].unique()}
-    pivot["traj_label"] = pivot["sign_vec"].map(sv_to_label).fillna("mixed")
+    if sign_pivot.empty:
+        df["traj_labels"] = ""
+        df["sign_vec"] = ""
+        return df, {}, {}
 
-    # ---- 4. Back-join trajectory columns onto every shard row -----------
-    # Join on (_path_str, _disease) → one (sign_vec, traj_label) per row.
-    traj_map = pivot[["sign_vec", "traj_label"]].reset_index()
+    # ---- 3. Vectorised label derivation (non-exclusive) ------------------
+    s2, s4, s6 = sign_pivot["2mo"], sign_pivot["4mo"], sign_pivot["6mo"]
+    v2, v4, v6 = pds_pivot["2mo"], pds_pivot["4mo"], pds_pivot["6mo"]
+    out = pd.DataFrame(index=sign_pivot.index)
+    out["sign_vec"]    = s2 + s4 + s6
+    out["always_up"]   = (s2 == "u") & (s4 == "u") & (s6 == "u")
+    out["always_down"] = (s2 == "d") & (s4 == "d") & (s6 == "d")
+    out["monotonic_up"]   = (v2 < v4) & (v4 < v6)
+    out["monotonic_down"] = (v2 > v4) & (v4 > v6)
+    # "mixed" = sign changes (sign_vec uses both 'u' and 'd').
+    out["mixed"] = ~(out["always_up"] | out["always_down"])
+
+    def _join_labels(row):
+        names = []
+        if row["always_up"]:       names.append("always-up")
+        if row["always_down"]:     names.append("always-down")
+        if row["monotonic_up"]:    names.append("monotonic-up")
+        if row["monotonic_down"]:  names.append("monotonic-down")
+        if row["mixed"]:           names.append("mixed")
+        return ";".join(names)
+
+    out["traj_labels"] = out.apply(_join_labels, axis=1)
+
+    # ---- 4. Back-join onto every shard row -------------------------------
+    traj_map = out[["sign_vec", "traj_labels"]].reset_index()
     df = df.merge(traj_map, on=["_path_str", "_disease"], how="left")
-    df["traj_label"] = df["traj_label"].fillna("flat").astype("category")
-    df["sign_vec"] = df["sign_vec"].fillna("fff")
+    df["traj_labels"] = df["traj_labels"].fillna("")
+    df["sign_vec"]    = df["sign_vec"].fillna("")
 
-    # ---- 5. Build recur_index (payload-level) ----------------------------
-    # A path recurs in a disease if its sign_vec is not "fff".
-    sig_mask = pivot["sign_vec"] != "fff"
-    sig_pivot = pivot[sig_mask].reset_index()[["_path_str", "_disease"]]
+    # ---- 5. recur_index — path → list of diseases with complete trajectory
+    sig_pivot = out.reset_index()[["_path_str", "_disease"]]
     recur_index: dict = {}
     if len(sig_pivot):
         recur_series = sig_pivot.groupby("_path_str", sort=False)["_disease"].agg(list)
         recur_index = {str(pid): dis for pid, dis in recur_series.items()}
 
-    # ---- 6. Trajectory summary (label counts) ---------------------------
-    traj_summary = pivot["traj_label"].value_counts().to_dict()
+    # ---- 6. Trajectory summary (per-label counts across (path, disease)) -
+    traj_summary: dict = {lbl: int(out[lbl.replace("-", "_")].sum())
+                          for lbl in _SIGN_VEC_LABELS}
 
-    n_paths = len(pivot.index.get_level_values("_path_str").unique())
+    n_paths = len(out.index.get_level_values("_path_str").unique())
     print(f"  trajectory ({source_label}): {n_paths:,} unique paths annotated; "
           f"{len(recur_index):,} recur in ≥1 disease; "
           f"label dist = {dict(sorted(traj_summary.items()))}", flush=True)
 
     # Drop temp columns.
-    df.drop(columns=["_path_str", "_disease", "_timepoint", "_sign"],
+    df.drop(columns=["_path_str", "_disease", "_timepoint", "_sign", "_pds"],
             inplace=True, errors="ignore")
     return df, recur_index, traj_summary
 
@@ -2065,7 +2063,7 @@ def _write_incytr_pathways() -> dict | None:
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "version": 2,           # CR-04: bumped to signal trajectory/recur blocks present
+        "version": 3,           # CR-04: v3 = multi-label traj_labels (semicolon-joined)
         "source": "receiver_cache/ (unfiltered)",
         "source_mode": "factorial",  # phase-2 swap: becomes "pair_mode"
         "contrasts": list(_INCYTR_CONTRASTS),
@@ -2081,7 +2079,7 @@ def _write_incytr_pathways() -> dict | None:
         "label_columns": list(_INCYTR_LABEL_COLS),
         "label_nodes": list(_INCYTR_LABEL_NODES),
         "label_vocab": list(_INCYTR_LABEL_VOCAB),
-        # CR-04: traj_label/sign_vec live in shard rows (not here).
+        # CR-04: traj_labels/sign_vec live in shard rows (not here).
         # recur_index is omitted from the payload — too large for 3M paths.
         # The JS derives recur membership client-side from loaded shard rows.
         "trajectory_summary": traj_summary,
@@ -2434,7 +2432,7 @@ def _write_incytr_pair_pathways() -> dict | None:
         for col in _INCYTR_LABEL_COLS:
             if col in sub.columns:
                 sub[col] = pd.Categorical(sub[col], categories=_INCYTR_LABEL_VOCAB)
-        # CR-04: annotate traj_label + sign_vec. Add sender/receiver/Path as
+        # CR-04: annotate traj_labels + sign_vec. Add sender/receiver/Path as
         # temp columns (constant within a shard) so the annotation function
         # can key on (sender, receiver, Path); drop sender/receiver after
         # annotation (Path is rebuilt client-side, so also dropped).
@@ -2452,8 +2450,8 @@ def _write_incytr_pair_pathways() -> dict | None:
         for label, count in pair_traj.items():
             traj_summary[label] = traj_summary.get(label, 0) + int(count)
         sub = sub.drop(columns=["sender", "receiver", "Path"])
-        # Float dtype compression runs after annotation so traj_label
-        # (categorical) and sign_vec (str) are unaffected.
+        # Float dtype compression runs after annotation so traj_labels
+        # (string) and sign_vec (str) are unaffected.
         for col in float32_cols:
             if col in sub.columns:
                 sub[col] = sub[col].astype("float32")
@@ -2548,7 +2546,7 @@ def _write_incytr_pair_pathways() -> dict | None:
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "version": 2,           # CR-04: bumped to signal trajectory/recur blocks present
+        "version": 3,           # CR-04: v3 = multi-label traj_labels (semicolon-joined)
         "source": f"pair_mode ({os.path.relpath(input_dir, config.REPO_ROOT)})",
         "source_mode": "pair_mode",
         "contrasts": list(present_contrasts),
@@ -2566,7 +2564,7 @@ def _write_incytr_pair_pathways() -> dict | None:
         "label_vocab": list(_INCYTR_LABEL_VOCAB),
         "direction_flag_columns": list(dir_flag_cols),
         "path_metric_columns": list(extra_path_cols),
-        # CR-04: traj_label/sign_vec live in shard rows; summary inline.
+        # CR-04: traj_labels/sign_vec live in shard rows; summary inline.
         "trajectory_summary": traj_summary,
     }
 

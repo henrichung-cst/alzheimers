@@ -2,42 +2,26 @@
 
 A thin AD-specific wrapper around the upstream `incytr` R package
 (`~/Projects/work/incytr/`). All math, scoring, and pathway construction
-lives in the package; this directory only loads AD inputs, persists
-results to parquet, and defines aggregation views.
+lives in the package; this directory holds the AD-side helpers that build
+inputs and consume outputs.
+
+## Status (2026-05-18)
+
+The **factorial** Incytr path was archived. Pair-mode is the active path,
+driven by `alz/runners/main/run_pair_mode_pipeline.sh` (the runner formerly
+known as `run_change_requests.sh`) and the bench scripts under
+`bench/incytr_pair_19/` / `bench/run_pair_mode_19.sh`. The archived factorial
+plumbing lives at `archive/incytr_factorial_2026-05-18/` — recover from
+there if needed.
 
 ## Files
 
 | File | Role |
 |---|---|
-| `export_factorial_inputs.py` | Reads the Song h5ad, filters to males x 4 genotypes x 3 timepoints, writes the on-disk contract `load.R` consumes. Also writes pseudobulk raw counts (`pseudobulk_counts.mtx` + sidecars) for DESeq2 seed-list DE. |
-| `compute_seed_lists.R` | Per-cell-type DESeq2 on pseudobulk + limma on `pr_matrix.csv` → `deg_lists.json` + `prg_list.csv`. Loaded by `load.R` when present; consumed by upstream `construct_factorial_paths` for DEG/prG `.label` assignment. See `docs/integrations/seed_list_labels.md`. |
-| `factorial.R` | Entry point. Asserts the production engine is present (`Incytr::construct_factorial_paths`, `Incytr::score_factorial_paths`), then loads inputs, runs the engine, writes per-receiver parquet. |
-| `load.R` | AD data loader. Reads `expression_*.csv`/`.mtx`, `animal_metadata.csv`, and (when present) `deg_lists.json`/`prg_list.csv` produced by the exporter and seed-list step. |
-| `persist.R` | Hive-partitioned parquet writers + `views.sql` copy. |
-| `views.sql` | DuckDB views over `receiver_cache/` for backbone provenance, contrast comparison, temporal dynamics, hub matrix, backbone recurrence, target convergence. |
-| `run_factorial.sh` | One-line `Rscript` shim invoked by `pixi run incytr-factorial`. |
-| `config_integration.py` | Filter values, design columns, contrast vectors, paths. Read by `export_factorial_inputs.py`. |
-
-## How to run
-
-```bash
-pixi run install-incytr             # builds + installs ../incytr
-pixi run export-factorial-inputs    # h5ad -> data/incytr_factorial_inputs/
-pixi run compute-seed-lists         # DESeq2 DEGs + limma prGs (optional, gates on pseudobulk)
-pixi run incytr-factorial           # runs the factorial engine (uses seed lists if present)
-```
-
-The R wrapper hard-fails before loading any data if the upstream package
-does not export `construct_factorial_paths()` and `score_factorial_paths()`.
-Until those land in `../incytr` with the constrained pathway construction
-and scale guardrails described in `docs/incytr_remediation_plan.md`,
-`pixi run incytr-factorial` will refuse to start.
-
-## What's not here
-
-The legacy R wrappers, Python adapters, sidecars, and orchestrator
-shell scripts that previously lived under `alz/integration/wrappers/`
-and `alz/integration/adapters/` were retired during the rewrite.
-Recover them from git history if needed; the current architecture
-treats them as the bug, not the baseline. See
-`docs/incytr_remediation_plan.md` for the rationale.
+| `config_integration.py` | Filter values, design columns, contrast vectors, paths. `load_cluster_spine()` is consumed by `alz/snrna_proportions.py`, `alz/decomposition/verify_decomposition.py`, and the viewer. |
+| `build_cluster_spine.py` | Run-once generator: builds the 19-cluster spine CSV from the legacy Levy lab cluster key + barcode-to-cluster table. Outputs to `data/incytr_frozen/v2_46clusters/spines/<name>/cluster_spine.csv`. |
+| `extract_cluster_assignments.R` | Run-once generator: emits `barcode_to_cluster.csv` and `cell_metadata.csv` from the legacy `incytr_obj.rds`. |
+| `plot_cluster_spine.py` | Diagnostic plots over `cluster_spine.csv`. |
+| `build_seaad_bridge.py` | One-shot: generates `cluster_to_seaad_supertype.csv` (hand-curated 19-cluster → SEA-AD supertype map). |
+| `build_yuyu_kldata.py` | Builds the `kldata_pspy.csv` consumed by pair-mode (`bench/incytr_pair_*/incytr input/kldata.csv`). |
+| `pair_to_receiver_cache.py` | Reshapes pair-mode output (9 wide parquets) into the long-form `receiver_cache/` layout the unified viewer consumes. Invoked by `alz/runners/main/run_pair_mode_viewer_build.sh`. |

@@ -39,6 +39,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+import numpy as np
 import pandas as pd
 
 import config
@@ -291,19 +292,21 @@ def download_sea_ad() -> Dict[str, Path]:
 # ---------------------------------------------------------------------------
 
 
-def download_sea_ad_expression(chunk_size: int = 2000, force: bool = False) -> Path:
+def download_sea_ad_expression(chunk_size: int = 5000, force: bool = False,
+                               mem_cap_gb: float = 22.0) -> Path:
     """Download the full SEA-AD MTG h5ad and compute per-supertype mean expression.
 
-    The full donor-level h5ad (~50 GB) is streamed in chunks to compute
-    log-mean expression per supertype without loading the full matrix into RAM.
+    Streams the CSR-sparse X matrix via h5py directly (no anndata backed-mode
+    handle) so memory stays bounded across slices. anndata's backed mode leaks
+    h5py chunk-cache state across X[start:end] reads and OOMs at ~26 GB on this
+    dataset (1.378M cells × 36,601 genes, 7.6B nonzeros).
+
+    A process-level RLIMIT_AS cap (default 22 GB) keeps any blow-up confined to
+    this process — kernel global OOM-killer doesn't fire.
+
     Output: ``data/external/sea_ad/expression_by_supertype.csv``
     (rows = gene HGNC symbols, columns = 139 supertypes).
-
-    Phase-2 only: requires ~50 GB download + ~16 GB RAM headroom.
-    Do NOT call during phase 1 (code-only) runs.
     """
-    import anndata as ad
-
     out_path = Path(config.SEA_AD_EXPRESSION_FILE)
     if out_path.exists() and not force:
         print(f"  Cached: {out_path} (use --force to recompute)")
@@ -311,7 +314,6 @@ def download_sea_ad_expression(chunk_size: int = 2000, force: bool = False) -> P
 
     os.makedirs(config.SEA_AD_DIR, exist_ok=True)
 
-    # Identify and download (if needed) the full MTG h5ad.
     local_h5ad = _sea_ad_download_main_h5ad(config.SEA_AD_DIR)
     if local_h5ad is None or not local_h5ad.exists():
         raise RuntimeError(
@@ -319,68 +321,87 @@ def download_sea_ad_expression(chunk_size: int = 2000, force: bool = False) -> P
             "Check S3 access and try again."
         )
 
+    # Cap process VM so MemoryError lands here, not in the OOM-killer.
+    if mem_cap_gb and mem_cap_gb > 0:
+        import resource
+        cap = int(mem_cap_gb * (1024 ** 3))
+        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        resource.setrlimit(resource.RLIMIT_AS,
+                           (cap, hard if hard != resource.RLIM_INFINITY else cap))
+        print(f"  RLIMIT_AS capped at {mem_cap_gb:g} GB for this process")
+
+    import h5py
+    import gc
+
     print(f"\n  Computing per-supertype mean expression from {local_h5ad}")
-    print("  This requires substantial RAM (~8-16 GB); streaming in chunks ...")
+    print(f"  chunk_size={chunk_size:,} cells/slice (raw h5py, no anndata)")
 
-    adata = ad.read_h5ad(str(local_h5ad), backed="r")
-    print(f"  Shape: {adata.shape}")
+    # 32 MB h5py chunk cache per dataset — big enough to amortize sequential reads,
+    # bounded enough that it doesn't grow indefinitely.
+    with h5py.File(str(local_h5ad), "r", rdcc_nbytes=32 * 1024 * 1024) as f:
+        # Gene symbols
+        var_index = f["var/_index"][:]
+        gene_names = [g.decode() if isinstance(g, bytes) else g for g in var_index]
+        n_genes = len(gene_names)
 
-    # Determine gene name vector (prefer HGNC symbol column).
-    if "gene_symbol" in adata.var.columns:
-        gene_names = adata.var["gene_symbol"].tolist()
-    elif "feature_name" in adata.var.columns:
-        gene_names = adata.var["feature_name"].tolist()
-    else:
-        gene_names = adata.var_names.tolist()
+        # Supertype categories + integer codes per cell
+        if "Supertype" not in f["obs"]:
+            raise RuntimeError(
+                f"obs/Supertype not found. Available: {list(f['obs'].keys())[:10]}"
+            )
+        cats = f["obs/__categories/Supertype"][:]
+        supertypes = [c.decode() if isinstance(c, bytes) else c for c in cats]
+        n_supertypes = len(supertypes)
+        st_codes = f["obs/Supertype"][:]  # int16 codes, ~2.6 MB
 
-    # Determine supertype field in obs.
-    supertype_field = None
-    for cand in ("Supertype", "supertype", "cell_type_alias_label",
-                 "supertype_label", "supertypes"):
-        if cand in adata.obs.columns:
-            supertype_field = cand
-            break
-    if supertype_field is None:
-        raise RuntimeError(
-            f"Cannot find supertype column in obs. Available columns: "
-            f"{list(adata.obs.columns)}"
-        )
-    print(f"  Supertype field: '{supertype_field}'")
+        # CSR layout
+        if "X" not in f or "indptr" not in f["X"]:
+            raise RuntimeError("X is not a CSR sparse group in this h5ad")
+        indptr = f["X/indptr"][:]  # 1.378M+1 × int64 ≈ 11 MB
+        n_cells = int(indptr.shape[0] - 1)
+        data_ds = f["X/data"]
+        indices_ds = f["X/indices"]
 
-    supertypes = sorted(adata.obs[supertype_field].dropna().unique().tolist())
-    st_to_idx: Dict[str, int] = {s: i for i, s in enumerate(supertypes)}
-    n_genes = adata.shape[1]
-    n_supertypes = len(supertypes)
+        print(f"  Supertypes: {n_supertypes}, Genes: {n_genes}, Cells: {n_cells:,}")
+        print(f"  Total nonzeros: {int(indptr[-1]):,}")
 
-    expr_sum = np.zeros((n_genes, n_supertypes), dtype=np.float64)
-    cell_count = np.zeros(n_supertypes, dtype=np.int64)
+        expr_sum = np.zeros((n_genes, n_supertypes), dtype=np.float64)
+        cell_count = np.zeros(n_supertypes, dtype=np.int64)
 
-    obs_st = adata.obs[supertype_field].tolist()
-    n_cells = adata.shape[0]
+        for start in range(0, n_cells, chunk_size):
+            end = min(start + chunk_size, n_cells)
+            d_start = int(indptr[start])
+            d_end = int(indptr[end])
 
-    print(f"  Supertypes: {n_supertypes}, Genes: {n_genes}, Cells: {n_cells:,}")
+            # Per-chunk reads: contiguous slabs of data + column indices.
+            data_chunk = data_ds[d_start:d_end]
+            idx_chunk = indices_ds[d_start:d_end]
+            row_lens = np.diff(indptr[start:end + 1])
 
-    for start in range(0, n_cells, chunk_size):
-        end = min(start + chunk_size, n_cells)
-        chunk = adata.X[start:end]
-        if hasattr(chunk, "toarray"):
-            chunk = chunk.toarray()
+            # Map each nonzero entry to its supertype code via row repetition.
+            row_idx_per_entry = np.repeat(np.arange(end - start, dtype=np.int64),
+                                          row_lens)
+            codes_per_entry = st_codes[start:end][row_idx_per_entry]
 
-        for local_i, global_i in enumerate(range(start, end)):
-            st = obs_st[global_i]
-            si = st_to_idx.get(st)
-            if si is None:
-                continue
-            expr_sum[:, si] += chunk[local_i].astype(np.float64)
-            cell_count[si] += 1
+            # Scatter-add into expr_sum (no duplicates within a row in CSR, but
+            # multiple cells of the same supertype touch the same (gene, code)).
+            np.add.at(expr_sum,
+                      (idx_chunk.astype(np.intp, copy=False),
+                       codes_per_entry.astype(np.intp, copy=False)),
+                      data_chunk.astype(np.float64, copy=False))
 
-        if (start // chunk_size) % 10 == 0:
-            print(f"    ... {end:,}/{n_cells:,} cells processed", flush=True)
+            # Cell counts via bincount.
+            chunk_codes = st_codes[start:end]
+            valid = chunk_codes[chunk_codes >= 0]
+            if valid.size:
+                cell_count += np.bincount(valid.astype(np.int64),
+                                          minlength=n_supertypes)
 
-    if hasattr(adata, "file") and adata.file is not None:
-        adata.file.close()
+            del data_chunk, idx_chunk, row_lens, row_idx_per_entry, codes_per_entry
+            if (start // chunk_size) % 5 == 0:
+                gc.collect()
+                print(f"    ... {end:,}/{n_cells:,} cells processed", flush=True)
 
-    # Compute per-supertype mean and write CSV.
     with np.errstate(divide="ignore", invalid="ignore"):
         mean_expr = np.where(
             cell_count[None, :] > 0,
@@ -401,57 +422,197 @@ def download_sea_ad_expression(chunk_size: int = 2000, force: bool = False) -> P
 # ---------------------------------------------------------------------------
 
 
-def download_hbca() -> Optional[Path]:
-    """Download Allen Human Brain Cell Atlas (HBCA) expression matrices.
+def download_hbca(force: bool = False, mem_cap_gb: float = 22.0,
+                  chunk_size: int = 5000) -> Optional[Path]:
+    """Download Allen HBCA (WHB-10Xv3) log2 expression and aggregate per supercluster.
 
-    Mirrors the WMB download approach: uses abc_atlas_access to stream
-    per-region log-expression files.  The HBCA dataset key within
-    abc_atlas_access is expected to be a human equivalent of WMB-10Xv3
-    (e.g. "WHB-10Xv3" or "HBCA-10Xv3"); the exact key is discovered by
-    inspecting ``cache.list_directories``.
+    Output (the contract consumed by ``alz/human_reference_expression.py``):
+        ``data/external/allen_hbca/expression_by_class.csv``
+        (rows = gene HGNC symbols, columns = HBCA superclusters).
 
-    Phase-2 only — this is a multi-hour, ~95 GB download.
-    Do NOT call during phase 1 (code-only) runs.
+    Sources (Siletti 2023, ~3.37M nuclei, 31 superclusters):
+      * ``WHB-10Xv3-Neurons-log2.h5ad``       (~33 GB)
+      * ``WHB-10Xv3-Nonneurons-log2.h5ad``    (~17 GB)
+      * ``WHB-10Xv3/cell_metadata.csv``       (cluster_alias per cell)
+      * ``WHB-taxonomy/cluster_to_cluster_annotation_membership.csv``
+        (cluster_alias → supercluster, filtered to term_set
+        ``config.HBCA_TAXONOMY_TERM_SET``).
 
-    Returns the local HBCA cache directory path, or None if no matching
-    dataset was found.
+    Memory: streams CSR-sparse X via h5py (no anndata backed mode), capped at
+    ``mem_cap_gb`` GB via RLIMIT_AS so a blow-up lands as MemoryError in this
+    process instead of triggering the global OOM-killer.
     """
-    cache = get_abc_cache()
-
-    # Discover HBCA dataset key — look for human whole-brain keys.
-    candidate_patterns = ["WHB", "HBCA", "human", "Human"]
-    hbca_key = None
-    print("  Scanning abc_atlas_access for human brain datasets ...")
-    dirs = cache.list_directories
-    for pat in candidate_patterns:
-        found = _find_dataset_key(cache, pat)
-        if found:
-            hbca_key = found
-            print(f"  Found HBCA dataset key: '{hbca_key}' (matched pattern '{pat}')")
-            break
-
-    if hbca_key is None:
-        print(
-            "  WARNING: No HBCA dataset found via abc_atlas_access. "
-            "Available directories:\n    " + "\n    ".join(str(d) for d in dirs[:20])
-        )
-        return None
+    out_path = Path(config.HBCA_EXPRESSION_FILE)
+    if out_path.exists() and not force:
+        print(f"  Cached: {out_path} (use --force to recompute)")
+        return out_path
 
     os.makedirs(config.HBCA_CACHE_DIR, exist_ok=True)
-    print(f"  HBCA cache dir: {config.HBCA_CACHE_DIR}")
-    print(f"  Downloading HBCA dataset '{hbca_key}' (multi-GB, multi-hour) ...")
-
-    # List files for this dataset key and download expression matrices.
-    try:
-        # abc_atlas_access caches automatically; re-running is idempotent.
-        downloaded_path = _get_expression_path(cache, hbca_key, "")
-    except Exception as exc:
-        print(f"  WARNING: Could not enumerate HBCA files: {exc}")
-        print("  Use abc_atlas_access directly to identify file keys, then re-run.")
+    cache = get_abc_cache()
+    hbca_key = _find_dataset_key(cache, "WHB-10Xv3") or _find_dataset_key(cache, "WHB")
+    if hbca_key is None:
+        print("  ERROR: WHB-10Xv3 not found in abc_atlas_access.")
         return None
+    taxonomy_key = _find_dataset_key(cache, "WHB-taxonomy")
+    if taxonomy_key is None:
+        print("  ERROR: WHB-taxonomy not found in abc_atlas_access.")
+        return None
+    print(f"  HBCA dataset key: {hbca_key} | taxonomy: {taxonomy_key}")
 
-    print(f"  HBCA download complete → {config.HBCA_CACHE_DIR}")
-    return Path(config.HBCA_CACHE_DIR)
+    # Cap process VM so MemoryError lands here, not in the OOM-killer.
+    if mem_cap_gb and mem_cap_gb > 0:
+        import resource
+        cap = int(mem_cap_gb * (1024 ** 3))
+        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        resource.setrlimit(resource.RLIMIT_AS,
+                           (cap, hard if hard != resource.RLIM_INFINITY else cap))
+        print(f"  RLIMIT_AS capped at {mem_cap_gb:g} GB for this process")
+
+    # 1. Cluster_alias → supercluster (~31 classes).
+    print("\n  Building cluster_alias → supercluster map ...")
+    membership = cache.get_metadata_dataframe(
+        directory=taxonomy_key,
+        file_name="cluster_to_cluster_annotation_membership",
+    )
+    supc = membership[
+        membership["cluster_annotation_term_set_label"] == config.HBCA_TAXONOMY_TERM_SET
+    ][["cluster_alias", "cluster_annotation_term_name"]].rename(
+        columns={"cluster_annotation_term_name": "supercluster"}
+    )
+    supc = supc.drop_duplicates("cluster_alias").set_index("cluster_alias")["supercluster"]
+    print(f"    {len(supc):,} cluster_alias → {supc.nunique()} superclusters")
+
+    # 2. cell_label → cluster_alias for the whole HBCA (3.37M cells).
+    print("\n  Loading cell_metadata (cell_label, cluster_alias) ...")
+    cell_meta = cache.get_metadata_dataframe(
+        directory=hbca_key, file_name="cell_metadata",
+    )[["cell_label", "cluster_alias"]]
+    cell_meta["supercluster"] = cell_meta["cluster_alias"].map(supc)
+    n_unmapped = cell_meta["supercluster"].isna().sum()
+    if n_unmapped:
+        print(f"    WARNING: {n_unmapped:,} cells with cluster_alias not in supercluster map")
+    cell_to_supc = (
+        cell_meta.dropna(subset=["supercluster"])
+        .set_index("cell_label")["supercluster"]
+    )
+    superclusters = sorted(cell_to_supc.unique())
+    supc_to_code = {s: i for i, s in enumerate(superclusters)}
+    print(f"    {len(superclusters)} superclusters: {superclusters}")
+
+    # 3. Stream each log2 h5ad and accumulate.
+    matrices = [
+        ("WHB-10Xv3-Neurons-log2.h5ad", "WHB-10Xv3-Neurons"),
+        ("WHB-10Xv3-Nonneurons-log2.h5ad", "WHB-10Xv3-Nonneurons"),
+    ]
+
+    expr_sum = None
+    cell_count = np.zeros(len(superclusters), dtype=np.int64)
+    gene_names_ref: Optional[List[str]] = None
+
+    import h5py
+
+    for file_name, subset_label in matrices:
+        print(f"\n  Downloading {file_name} (resumable via abc cache) ...")
+        local = _get_expression_path(cache, hbca_key, f"{subset_label}/log2")
+        # _get_expression_path returns a directory or file depending on the
+        # abc cache impl; the actual file should be reachable by name.
+        local = Path(local)
+        if local.is_dir():
+            local = local / file_name
+        if not local.exists():
+            # Fallback: enumerate the directory.
+            cand = list(local.parent.glob(file_name)) if local.parent.exists() else []
+            if not cand:
+                raise FileNotFoundError(f"Could not locate {file_name} after download (tried {local})")
+            local = cand[0]
+        print(f"    -> {local} ({local.stat().st_size / 1e9:.1f} GB)")
+
+        with h5py.File(str(local), "r", rdcc_nbytes=32 * 1024 * 1024) as f:
+            # var/gene_symbol is a categorical group (cats + codes) carrying HGNC.
+            # Use HGNC symbols (not Ensembl gene_identifier) as the row label so
+            # the output matches the human kinase gene namespace.
+            gs = f["var/gene_symbol"]
+            if isinstance(gs, h5py.Group):
+                cats = gs["categories"][:]
+                code_arr = gs["codes"][:]
+                gene_arr = cats[code_arr]
+            else:
+                gene_arr = gs[:]
+            gene_names = [g.decode() if isinstance(g, bytes) else g for g in gene_arr]
+            n_genes = len(gene_names)
+            if gene_names_ref is None:
+                gene_names_ref = gene_names
+                expr_sum = np.zeros((n_genes, len(superclusters)), dtype=np.float64)
+            elif gene_names != gene_names_ref:
+                raise RuntimeError("Gene order mismatch between Neurons and Nonneurons matrices")
+
+            # obs/cell_label — string-array dataset of cell barcodes.
+            ol = f["obs/cell_label"]
+            if isinstance(ol, h5py.Group):
+                ol_cats = ol["categories"][:]
+                ol_codes = ol["codes"][:]
+                obs_labels = ol_cats[ol_codes]
+            else:
+                obs_labels = ol[:]
+            n_cells = len(obs_labels)
+            # Vectorized mapping cell_label -> supercluster code via pandas reindex.
+            codes_series = pd.Series(
+                [l.decode() if isinstance(l, bytes) else l for l in obs_labels]
+            ).map(cell_to_supc).map(supc_to_code)
+            codes = codes_series.fillna(-1).to_numpy(dtype=np.int32)
+            n_kept = int((codes >= 0).sum())
+            print(f"    Cells: {n_cells:,} | mapped to supercluster: {n_kept:,}")
+
+            # CSR streaming
+            if "X/indptr" not in f:
+                raise RuntimeError(f"{file_name}: X is not CSR-sparse")
+            indptr = f["X/indptr"][:]
+            data_ds = f["X/data"]
+            indices_ds = f["X/indices"]
+            print(f"    Genes: {n_genes:,}  Nonzeros: {int(indptr[-1]):,}")
+
+            for start in range(0, n_cells, chunk_size):
+                end = min(start + chunk_size, n_cells)
+                d_start = int(indptr[start])
+                d_end = int(indptr[end])
+                data_chunk = data_ds[d_start:d_end]
+                idx_chunk = indices_ds[d_start:d_end]
+                row_lens = np.diff(indptr[start:end + 1])
+                row_idx_per_entry = np.repeat(
+                    np.arange(end - start, dtype=np.int64), row_lens
+                )
+                code_per_entry = codes[start:end][row_idx_per_entry]
+                keep = code_per_entry >= 0
+                if not keep.any():
+                    continue
+                np.add.at(
+                    expr_sum,
+                    (idx_chunk[keep].astype(np.intp, copy=False),
+                     code_per_entry[keep].astype(np.intp, copy=False)),
+                    data_chunk[keep].astype(np.float64, copy=False),
+                )
+                # Per-supercluster cell count
+                vals, cnts = np.unique(codes[start:end][codes[start:end] >= 0],
+                                       return_counts=True)
+                cell_count[vals] += cnts
+                if (start // chunk_size) % 20 == 0:
+                    print(f"      slice {start:,}/{n_cells:,}")
+
+    # 4. Mean = sum / count, then collapse duplicate HGNC symbols by mean
+    # (Ensembl→symbol is many-to-one in WHB-10Xv3 var).
+    cc = cell_count.astype(np.float64)
+    cc[cc == 0] = 1.0  # avoid /0; columns with 0 cells will remain 0
+    mean = expr_sum / cc[None, :]
+    df = pd.DataFrame(mean, index=gene_names_ref, columns=superclusters)
+    df.index.name = "gene"
+    n_raw = len(df)
+    df = df.groupby(level=0).mean()
+    print(f"  collapsed duplicate HGNC symbols: {n_raw:,} -> {len(df):,}")
+    df.to_csv(out_path)
+    print(f"\n  Wrote {out_path}  ({df.shape[0]:,} genes × {df.shape[1]} superclusters)")
+    print(f"    Cells per supercluster: min={int(cell_count.min()):,} "
+          f"max={int(cell_count.max()):,} total={int(cell_count.sum()):,}")
+    return out_path
 
 
 # ---------------------------------------------------------------------------

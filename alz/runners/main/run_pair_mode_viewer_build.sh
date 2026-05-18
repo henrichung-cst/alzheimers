@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Reshape pair-mode Incytr output → unified viewer.
 #
-# Reads `bench/incytr_pair_19/output/ma_<age>_<geno>_ma_<age>_WTyp_incytr_output.parquet`
+# Reads `bench/incytr_pair_levy_t5/output/ma_<age>_<geno>_ma_<age>_WTyp_incytr_output.parquet`
 # (9 expected; --strict to enforce), reshapes into the long-form
 # `outputs/reports/incytr_factorial/receiver_cache/receiver=*/` layout, then
 # rebuilds the unified viewer (which picks up the SiK_score column and NULLs
@@ -15,11 +15,14 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$REPO_ROOT"
 
-INPUT_DIR="${PAIR_MODE_INPUT_DIR:-bench/incytr_pair_19/output}"
+INPUT_DIR="${PAIR_MODE_INPUT_DIR:-bench/incytr_pair_levy_t5/output}"
 STRICT_FLAG=""
 if [[ "${PAIR_MODE_STRICT:-0}" == "1" ]]; then
   STRICT_FLAG="--strict"
 fi
+
+export INCYTR_SOURCE="${INCYTR_SOURCE:-pair_mode}"
+export INCYTR_PAIR_MODE_INPUT_DIR="$INPUT_DIR"
 
 echo "=== $(date -Is) reshape pair-mode → receiver_cache ==="
 pixi run python alz/integration/pair_to_receiver_cache.py \

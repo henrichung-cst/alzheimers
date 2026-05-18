@@ -1,18 +1,69 @@
 "use strict";
 
 // ---------------------------------------------------------------------------
-// Payload
+// Payload — fetched lazily from payload.json.gz at boot. PAYLOAD and the
+// derived globals start as `null` / `undefined` and are populated by
+// `_loadPayload()` (called from boot.js) before any tab is rendered. All
+// downstream JS that references PAYLOAD does so inside function bodies, so
+// they read the populated globals at call time.
 // ---------------------------------------------------------------------------
-const PAYLOAD = JSON.parse(document.getElementById("payload-data").textContent);
-const META = PAYLOAD.meta;
-const CONTRASTS = META.contrasts;
-const RECEIVERS = PAYLOAD.celltypes.name;
-const DISEASE_COLORS = META.diseaseColors;
+let PAYLOAD = null;
+let META = null;
+let CONTRASTS = null;
+let RECEIVERS = null;
+let DISEASE_COLORS = null;
+
+async function _loadPayload() {
+  // 1) Inline payload (default for self-contained HTML): read from the
+  //    <script type="application/json" id="payload-data"> tag the build emits.
+  // 2) If the inline payload is empty/null/missing, fall back to fetching
+  //    the .json.gz / .json sidecars (kept for hosting modes where the build
+  //    intentionally writes a small index.html + separate payload file).
+  let text = null;
+  const inlineEl = document.getElementById("payload-data");
+  if (inlineEl && inlineEl.textContent && inlineEl.textContent.trim() !== "null"
+      && inlineEl.textContent.trim() !== "") {
+    text = inlineEl.textContent;
+  }
+  let gzErr = null;
+  if (text === null) {
+    try {
+      const resp = await fetch("unified_viewer.payload.json.gz");
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      const stream = blob.stream().pipeThrough(new DecompressionStream("gzip"));
+      text = await new Response(stream).text();
+    } catch (e) {
+      gzErr = e;
+    }
+  }
+  if (text === null) {
+    const resp2 = await fetch("unified_viewer.payload.json");
+    if (!resp2.ok) {
+      throw new Error(
+        `payload fetch failed (gzip: ${gzErr && gzErr.message ? gzErr.message : gzErr}; `
+        + `json: HTTP ${resp2.status})`);
+    }
+    text = await resp2.text();
+  }
+  PAYLOAD = JSON.parse(text);
+  META = PAYLOAD.meta;
+  CONTRASTS = META.contrasts;
+  RECEIVERS = PAYLOAD.celltypes.name;
+  DISEASE_COLORS = META.diseaseColors;
+  HAS_HUMAN = !!(PAYLOAD && PAYLOAD.human);
+  // Populate human-tab cached refs (declared in kinase_human.js).
+  if (typeof _KH_HAS !== "undefined") {
+    _KH_HAS = HAS_HUMAN;
+    _KH = HAS_HUMAN ? PAYLOAD.human : null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Store — reducer-style with {selection, filters, view} slices
 // ---------------------------------------------------------------------------
-const HAS_HUMAN = !!(PAYLOAD && PAYLOAD.human);
+// Populated after _loadPayload() resolves.
+let HAS_HUMAN = false;
 const INITIAL_STATE = {
   selection: { kinase:null, backbone:null, celltype:null, kinaseHuman:null },
   filters:   { contrast:"ALL", fdr:0.25 },

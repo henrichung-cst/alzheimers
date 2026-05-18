@@ -1,6 +1,6 @@
 """Generate spine-selection figure + summary table from cluster_spine.csv.
 
-Reads `data/incytr/v2_46clusters/cluster_spine.csv` and writes:
+Reads `data/incytr_frozen/v2_46clusters/cluster_spine.csv` and writes:
   outputs/reports/decomposition/levy19/cluster_spine_summary.csv
   outputs/reports/decomposition/levy19/cluster_spine_selection.png
 """
@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-SPINE_CSV = Path("data/incytr/v2_46clusters/cluster_spine.csv")
+SPINE_CSV = Path("data/incytr_frozen/v2_46clusters/cluster_spine.csv")
 OUT_DIR = Path("outputs/reports/decomposition/levy19")
 
 TIER_ORDER = ["full_rank", "partial", "severe", "unnamed", "fails_gate"]

@@ -314,7 +314,7 @@ function wireDrawerResizer() {
         const savedW = localStorage.getItem("kinaseTab.leftWidth");
         if (savedW) {
           const w = parseInt(savedW, 10);
-          if (w >= 280 && w <= 1200) leftPanel.style.width = w + "px";
+          if (w >= 420 && w <= 1600) leftPanel.style.width = w + "px";
         }
       } catch (_) {}
       let kStartX = 0, kStartW = 0;
@@ -325,7 +325,7 @@ function wireDrawerResizer() {
         document.body.style.cursor = "col-resize";
         document.body.style.userSelect = "none";
         function onMove(ev) {
-          const newW = Math.min(1200, Math.max(280, kStartW + (ev.clientX - kStartX)));
+          const newW = Math.min(1600, Math.max(420, kStartW + (ev.clientX - kStartX)));
           leftPanel.style.width = newW + "px";
         }
         function onUp() {

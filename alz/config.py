@@ -131,9 +131,11 @@ SEAAD_TO_WMB_CLASS_FILE = os.path.join(
     EXTERNAL_DATA_DIR, "sea_ad", "seaad_subclass_to_wmb_class.csv"
 )
 
-# Levy 19-cluster strict spine artifacts (snRNA pivot 2026-05).
-CLUSTER_SPINE_DIR = os.path.join(REPO_ROOT, "data", "incytr", "v2_46clusters")
-CLUSTER_SPINE_FILE = os.path.join(CLUSTER_SPINE_DIR, "cluster_spine.csv")
+# Levy 31-cluster spine (levy_t5) — pivoted from levy19 on 2026-05-16.
+CLUSTER_SPINE_DIR = os.path.join(REPO_ROOT, "data", "incytr_frozen", "v2_46clusters")
+CLUSTER_SPINE_FILE = os.path.join(
+    CLUSTER_SPINE_DIR, "spines", "levy_t5", "cluster_spine.csv"
+)
 BARCODE_TO_CLUSTER_FILE = os.path.join(CLUSTER_SPINE_DIR, "barcode_to_cluster.csv")
 CELL_METADATA_FILE = os.path.join(CLUSTER_SPINE_DIR, "cell_metadata.csv")
 KR_CLUSTER_ID_KEY_FILE = os.path.join(
@@ -155,7 +157,7 @@ def _load_cluster_spine() -> list[str]:
     return sorted(out)
 
 
-CLUSTER_SPINE = _load_cluster_spine()  # 19 named, full-rank subclasses
+CLUSTER_SPINE = _load_cluster_spine()  # 31 named clusters (levy_t5)
 
 # Coarse-level (cell-level) labels as carried by Seurat `obj@meta.data`.
 # Does NOT nest deterministically under CLUSTER_SPINE (per-cell labels, not
@@ -179,9 +181,9 @@ SEA_AD_PATHWAY_MAP = {
     "Tau":  "late",    # tau-driven → late/high-CPS human donors
     "ApTt": "full",    # combined pathology → full CPS range
 }
-N_CELL_TYPES = len(CLUSTER_SPINE)        # 19 — Levy strict spine
-SPECIFICITY_HIGH = 2.0 / N_CELL_TYPES    # ~0.105: ≥2× more specific than uniform across 19 clusters
-SPECIFICITY_LOW = 1.0 / N_CELL_TYPES     # ~0.053: ≥1× uniform across 19 clusters
+N_CELL_TYPES = len(CLUSTER_SPINE)        # 31 — Levy levy_t5 spine
+SPECIFICITY_HIGH = 2.0 / N_CELL_TYPES    # ≥2× uniform across 31 clusters
+SPECIFICITY_LOW = 1.0 / N_CELL_TYPES     # ≥1× uniform across 31 clusters
 COMBINED_SCORE_SPECIFICITY_BASE = 0.5    # baseline weight on concordance even at zero specificity
 
 CLASS_TO_TISSUE_CATEGORY = {
@@ -371,6 +373,15 @@ SEAAD_KINASE_SPECIFICITY_FILE = os.path.join(
 HBCA_KINASE_SPECIFICITY_FILE = os.path.join(
     HUMAN_REFERENCE_OUTPUT_DIR, "hbca_kinase_specificity.csv"
 )
+# Raw mean log2 expression matrices (kinase × celltype), emitted alongside the
+# specificity matrices. Consumed by the human Attribution sub-tab to surface
+# absolute expression as a sanity check (mirrors mouse wmb_mean_log2_expression).
+SEAAD_KINASE_EXPRESSION_FILE = os.path.join(
+    HUMAN_REFERENCE_OUTPUT_DIR, "seaad_kinase_expression.csv"
+)
+HBCA_KINASE_EXPRESSION_FILE = os.path.join(
+    HUMAN_REFERENCE_OUTPUT_DIR, "hbca_kinase_expression.csv"
+)
 
 # Final per-kinase cell-type attribution output
 HUMAN_CELLTYPE_ATTRIBUTION_OUTPUT_DIR = os.path.join(
@@ -389,12 +400,13 @@ HUMAN_CELLTYPE_TOP_N = 8
 # the expression CSV directly.
 SEAAD_MTG_SUPERTYPES: list[str] = []
 
-# Human reference taxonomy label for HBCA. Analogous to WMB "class".
-# Spec note: HBCA top-level taxonomy field is expected to be "class" — confirm
-# during phase-2 download by running:
-#   import anndata as ad; a = ad.read_h5ad(<hbca_sample.h5ad>, backed="r"); print(a.obs.columns.tolist())
-# If the field name differs, update this constant and human_reference_expression.py accordingly.
-HBCA_CLASS_FIELD = "class"
+# Human reference taxonomy label for HBCA (WHB-10Xv3, Siletti 2023).
+# Confirmed via WHB-taxonomy/cluster_annotation_term_set: the top-level taxon
+# is "supercluster" (term_set label CCN202210140_SUPC) — ~31 superclusters.
+# HBCA cell_metadata only carries cluster_alias; superculuster is derived by
+# joining cluster_to_cluster_annotation_membership filtered to supercluster.
+HBCA_CLASS_FIELD = "supercluster"
+HBCA_TAXONOMY_TERM_SET = "CCN202210140_SUPC"
 
 WMB_EXPRESSION_OUTPUT_DIR = os.path.join("outputs", "reports", "wmb_expression")
 WMB_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_kinase_expression.csv")

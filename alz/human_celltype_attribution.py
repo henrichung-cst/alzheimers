@@ -36,6 +36,185 @@ TOP_N = config.HUMAN_CELLTYPE_TOP_N
 SEAAD_SPEC_FILE = config.SEAAD_KINASE_SPECIFICITY_FILE
 HBCA_SPEC_FILE = config.HBCA_KINASE_SPECIFICITY_FILE
 
+HBCA_CORTEX_HIPPOCAMPUS_SUPERCLUSTERS = {
+    "Astrocyte",
+    "CGE interneuron",
+    "Committed oligodendrocyte precursor",
+    "Deep-layer corticothalamic and 6b",
+    "Deep-layer intratelencephalic",
+    "Deep-layer near-projecting",
+    "Ependymal",
+    "Fibroblast",
+    "Hippocampal CA1-3",
+    "Hippocampal CA4",
+    "Hippocampal dentate gyrus",
+    "LAMP5-LHX6 and Chandelier",
+    "MGE interneuron",
+    "Microglia",
+    "Oligodendrocyte",
+    "Oligodendrocyte precursor",
+    "Upper-layer intratelencephalic",
+    "Vascular",
+}
+
+HBCA_SUPERCLUSTER_TO_LEVY_T5 = {
+    "Astrocyte": [
+        "Astrocytes",
+        "Ptprz1-protoplasmic-astrocytes",
+    ],
+    "CGE interneuron": [
+        "Erbb4-VIP-inhibitory-neurons",
+        "Erbb4-inhibitory-neurons",
+        "VIP-positive-interneuron",
+        "Reln-neurons",
+        "Ndnf-positive-neurogliaform-inhibitory-interneurons-GABAergic",
+        "GABAergic-inhibitory-interneurons-VIP-positive",
+        "Inhibitory-Neurons",
+    ],
+    "Committed oligodendrocyte precursor": [
+        "OPC",
+    ],
+    "Deep-layer corticothalamic and 6b": [
+        "Foxp2-Excitatory-Neurons-layers-6-and-2-3",
+        "Excitatory-neurons-Cajal-Retzius-cells-layer-I-Reelin",
+    ],
+    "Deep-layer intratelencephalic": [
+        "Excitatory-Rorb",
+        "Excitatory-Pyramidal",
+    ],
+    "Deep-layer near-projecting": [
+        "Foxp2-Excitatory-Neurons-layers-6-and-2-3",
+    ],
+    "Ependymal": [
+        "Ependymal-cell",
+    ],
+    "Fibroblast": [
+        "Vascular-Leptomeningeal-Cells",
+    ],
+    "Hippocampal CA1-3": [
+        "Excitatory-Pyramidal",
+        "Excitatory-neurons",
+    ],
+    "Hippocampal CA4": [
+        "Excitatory-neurons",
+        "glutamatergic-excitatory-neurons",
+    ],
+    "Hippocampal dentate gyrus": [
+        "Excitatory principal neurons in the hippocampal dentate gyrus",
+    ],
+    "LAMP5-LHX6 and Chandelier": [
+        "Reln-neurons",
+        "Ndnf-positive-neurogliaform-inhibitory-interneurons-GABAergic",
+        "GABAergic-inhibitory-interneurons-Dlx6os1-Erbb4",
+    ],
+    "MGE interneuron": [
+        "GABAergic-inhibitory-interneurons-Dlx6os1-Erbb4",
+        "GABAergic inhibitory interneurons",
+    ],
+    "Microglia": [
+        "Microglia",
+    ],
+    "Oligodendrocyte": [
+        "Oligodendrocytes",
+    ],
+    "Oligodendrocyte precursor": [
+        "OPC",
+    ],
+    "Upper-layer intratelencephalic": [
+        "Excitatory-Pyramidal-Satb2-Cux2",
+        "Glutamatergic-excitatory-neurons-Cortical-layer-2-4-pyramidal-neurons",
+    ],
+    "Vascular": [
+        "Endothelial-cell",
+        "Pericyte",
+        "Vascular-Leptomeningeal-Cells",
+        "Choroid-Plexus-Epithelial-Cells",
+    ],
+}
+
+
+def _filter_hbca_cortex_hpc(df: pd.DataFrame) -> pd.DataFrame:
+    keep = [c for c in df.columns if c in HBCA_CORTEX_HIPPOCAMPUS_SUPERCLUSTERS]
+    if not keep:
+        raise RuntimeError("HBCA cortex/hippocampus filter removed all columns")
+    return df.loc[:, keep]
+
+
+def _cluster_source_map_for_reference(reference: str) -> dict[str, list[tuple[str, float]]]:
+    """Return Levy T5 cluster -> source cell type weights for a human reference."""
+    spine = set(config.CLUSTER_SPINE)
+    if reference == "seaad_mtg":
+        return {
+            cluster: [(ct, float(w)) for ct, w in entries]
+            for cluster, entries in config.load_cluster_to_seaad_supertype_map().items()
+            if cluster in spine and entries
+        }
+    if reference == "allen_hbca":
+        out: dict[str, list[tuple[str, float]]] = {}
+        for hbca_ct, clusters in HBCA_SUPERCLUSTER_TO_LEVY_T5.items():
+            for cluster in clusters:
+                if cluster in spine:
+                    out.setdefault(cluster, []).append((hbca_ct, 1.0))
+        return out
+    raise ValueError(f"unknown human reference: {reference!r}")
+
+
+def _rollup_matrix_to_levy_t5(
+    matrix_df: pd.DataFrame,
+    reference: str,
+) -> tuple[pd.DataFrame, dict[str, list[str]]]:
+    """Aggregate source cell-type columns onto Levy T5 cluster columns.
+
+    SEA-AD is many-supertypes -> one Levy T5 cluster via curated weights.
+    HBCA is coarser than Levy T5 for several lineages, so a broad HBCA class
+    can support multiple Levy T5 clusters, matching the lineage-level WMB
+    inheritance used by the mouse attribution view.
+    """
+    cluster_to_sources = _cluster_source_map_for_reference(reference)
+    rolled = pd.DataFrame(index=matrix_df.index)
+    source_labels: dict[str, list[str]] = {}
+
+    for cluster in config.CLUSTER_SPINE:
+        entries = cluster_to_sources.get(cluster, [])
+        present = [(src, weight) for src, weight in entries if src in matrix_df.columns]
+        if not present:
+            continue
+        cols = [src for src, _ in present]
+        weights = pd.Series([weight for _, weight in present], index=cols, dtype=float)
+        denom = weights.sum()
+        if denom <= 0:
+            continue
+        rolled[cluster] = matrix_df[cols].astype(float).mul(weights / denom, axis=1).sum(axis=1)
+        source_labels[cluster] = cols
+
+    if rolled.empty:
+        raise RuntimeError(f"{reference} → Levy T5 rollup produced no mapped columns")
+    return rolled, source_labels
+
+
+def _rollup_seaad_lfc_to_levy_t5(
+    seaad_lfc: dict[tuple[str, str], float] | None,
+    kinases: list[str],
+    source_labels: dict[str, list[str]],
+) -> dict[tuple[str, str], float] | None:
+    """Aggregate SEA-AD supertype LFC values onto Levy T5 clusters."""
+    if seaad_lfc is None:
+        return None
+    cluster_to_sources = _cluster_source_map_for_reference("seaad_mtg")
+    out: dict[tuple[str, str], float] = {}
+    for kinase in kinases:
+        for cluster, cols in source_labels.items():
+            entries = [(src, weight) for src, weight in cluster_to_sources.get(cluster, [])
+                       if src in cols and (kinase, src) in seaad_lfc]
+            if not entries:
+                continue
+            weights = np.asarray([weight for _, weight in entries], dtype=float)
+            vals = np.asarray([seaad_lfc[(kinase, src)] for src, _ in entries], dtype=float)
+            finite = np.isfinite(vals) & np.isfinite(weights)
+            if finite.any() and weights[finite].sum() > 0:
+                out[(kinase, cluster)] = float(np.average(vals[finite], weights=weights[finite]))
+    return out
+
 
 # ---------------------------------------------------------------------------
 # Core ranking
@@ -121,7 +300,13 @@ def compute_human_celltype_attribution(force: bool = False) -> pd.DataFrame:
 
         print(f"\n  Processing {ref_label} ...")
         spec_df = pd.read_csv(spec_path, index_col=0)
-        print(f"    Shape: {spec_df.shape} (kinases × celltypes)")
+        if ref_label == "allen_hbca":
+            before = spec_df.shape[1]
+            spec_df = _filter_hbca_cortex_hpc(spec_df)
+            print(f"    HBCA cortex/hippocampus filter: {before} → {spec_df.shape[1]} cell types")
+        spec_df, source_labels = _rollup_matrix_to_levy_t5(spec_df, ref_label)
+        print(f"    Levy T5 rollup: {len(source_labels)} clusters")
+        print(f"    Shape: {spec_df.shape} (kinases × Levy T5 clusters)")
 
         part = _top_n_for_reference(spec_df, ref_label, TOP_N)
         all_parts.append(part)
@@ -153,37 +338,68 @@ def compute_human_celltype_attribution(force: bool = False) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def build_celltype_specificity_payload(
-    top_n: int = TOP_N,
-) -> dict | None:
+def build_celltype_specificity_payload() -> dict | None:
     """Build the PAYLOAD.human.celltype_specificity block for the viewer.
+
+    Mirrors the mouse Attribution sub-tab — emits the full ranked cell-type
+    list per kinase with per-row absolute expression and (SEA-AD only)
+    AD-vs-control LFC from the full-CPS effect_sizes.h5ad.
 
     Returns None if neither specificity file exists (phase-2 data absent).
 
-    Schema:
+    Schema (per reference):
       {
-        "references": ["seaad_mtg", "allen_hbca"],
-        "seaad_mtg": {
-          "celltypes": [...],
-          "by_kinase": { kinase_id → [score per celltype] }
-        },
-        "allen_hbca": { ... }
+        "celltypes": [...],
+        "by_kinase": { kinase_id → [score per celltype] },
+        "ranked_by_kinase": { kinase_id → [
+            {celltype, rank, score, mean_log2_expression,
+             sea_ad_lfc (SEA-AD only) },
+        ...   # full ranked list, all Levy T5 clusters mapped from the reference
+        ]},
       }
     """
     ref_map = {
-        "seaad_mtg": SEAAD_SPEC_FILE,
-        "allen_hbca": HBCA_SPEC_FILE,
+        "seaad_mtg": (SEAAD_SPEC_FILE, config.SEAAD_KINASE_EXPRESSION_FILE),
+        "allen_hbca": (HBCA_SPEC_FILE, config.HBCA_KINASE_EXPRESSION_FILE),
     }
 
-    available = {ref: path for ref, path in ref_map.items() if os.path.exists(path)}
+    available = {ref: (sp, expr) for ref, (sp, expr) in ref_map.items()
+                 if os.path.exists(sp)}
     if not available:
         return None
 
-    payload: dict = {"references": list(available.keys())}
+    # SEA-AD per-supertype LFC from the full-CPS effect_sizes.h5ad. Mirrors the
+    # mouse Attribution "SEA-AD LFC" column after rolling supertype values onto
+    # the same Levy T5 cluster rows used for specificity. None if anndata or
+    # the h5ad is unavailable (degrades to no LFC column on the SEA-AD tab).
+    seaad_lfc = _load_seaad_full_lfc()
 
-    for ref, path in available.items():
-        spec_df = pd.read_csv(path, index_col=0)
+    payload: dict = {"references": list(available.keys())}
+    if seaad_lfc is not None:
+        payload["seaad_lfc_stratum"] = "full"  # CPS range used (App/Tau/ApTt analog)
+
+    for ref, (spec_path, expr_path) in available.items():
+        spec_df = pd.read_csv(spec_path, index_col=0)
+        if ref == "allen_hbca":
+            spec_df = _filter_hbca_cortex_hpc(spec_df)
+        expr_df = (
+            pd.read_csv(expr_path, index_col=0)
+            if os.path.exists(expr_path) else None
+        )
+        if expr_df is not None:
+            if ref == "allen_hbca":
+                expr_df = _filter_hbca_cortex_hpc(expr_df)
+            spec_df, source_labels = _rollup_matrix_to_levy_t5(spec_df, ref)
+            expr_df, _ = _rollup_matrix_to_levy_t5(expr_df, ref)
+            expr_df = expr_df.reindex(columns=spec_df.columns)
+        else:
+            spec_df, source_labels = _rollup_matrix_to_levy_t5(spec_df, ref)
         celltypes = list(spec_df.columns)
+        ref_lfc = (
+            _rollup_seaad_lfc_to_levy_t5(seaad_lfc, list(spec_df.index), source_labels)
+            if ref == "seaad_mtg" else None
+        )
+
         by_kinase: dict[str, list] = {}
         for kinase in spec_df.index:
             scores = spec_df.loc[kinase].tolist()
@@ -192,27 +408,69 @@ def build_celltype_specificity_payload(
                 for v in scores
             ]
 
-        # Precompute top-N convenience list per kinase.
-        top_n_by_kinase: dict[str, list[dict]] = {}
+        ranked_by_kinase: dict[str, list[dict]] = {}
         for kinase in spec_df.index:
             scores = spec_df.loc[kinase]
             ranked = scores.sort_values(ascending=False)
-            top_n_by_kinase[kinase] = [
-                {
+            rows = []
+            for i, (ct, sc) in enumerate(ranked.items()):
+                row = {
                     "celltype": ct,
-                    "score": round(float(sc), 4) if np.isfinite(sc) else 0.0,
                     "rank": i + 1,
+                    "score": round(float(sc), 4) if np.isfinite(sc) else 0.0,
                 }
-                for i, (ct, sc) in enumerate(ranked.iloc[:top_n].items())
-            ]
+                if expr_df is not None and kinase in expr_df.index and ct in expr_df.columns:
+                    val = expr_df.at[kinase, ct]
+                    row["mean_log2_expression"] = (
+                        round(float(val), 4) if np.isfinite(val) else None
+                    )
+                if ref == "seaad_mtg" and seaad_lfc is not None:
+                    lfc = ref_lfc.get((kinase, ct)) if ref_lfc is not None else None
+                    row["sea_ad_lfc"] = (
+                        round(float(lfc), 4) if lfc is not None and np.isfinite(lfc) else None
+                    )
+                if ct in source_labels:
+                    row["source_celltypes"] = source_labels[ct]
+                rows.append(row)
+            ranked_by_kinase[kinase] = rows
 
         payload[ref] = {
             "celltypes": celltypes,
             "by_kinase": by_kinase,
-            "top_n_by_kinase": top_n_by_kinase,
+            "ranked_by_kinase": ranked_by_kinase,
         }
 
     return payload
+
+
+def _load_seaad_full_lfc() -> dict[tuple[str, str], float] | None:
+    """Load SEA-AD full-CPS effect sizes as a (gene_upper, supertype) → LFC dict.
+
+    Returns None on ImportError or missing h5ad. Genes are upper-cased to match
+    the kinase_id index used by the specificity matrix.
+    """
+    path = config.SEA_AD_EFFECT_SIZES.get("full")
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        import anndata as ad
+    except ImportError:
+        return None
+    adata = ad.read_h5ad(path)
+    genes_upper = [g.upper() for g in adata.obs_names]
+    supertypes = list(adata.var_names)
+    X = adata.X
+    if hasattr(X, "toarray"):
+        X = X.toarray()
+    X = np.asarray(X)
+    out: dict[tuple[str, str], float] = {}
+    for gi, g in enumerate(genes_upper):
+        row = X[gi, :]
+        for si, st in enumerate(supertypes):
+            v = row[si]
+            if np.isfinite(v):
+                out[(g, st)] = float(v)
+    return out
 
 
 # ---------------------------------------------------------------------------

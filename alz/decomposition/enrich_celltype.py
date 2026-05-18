@@ -315,7 +315,8 @@ def main():
     track_cfg = _resolve_track(args.track)
     analysis_mode = args.analysis_mode or config.ANALYSIS_MODE
     out_dir = _spine_dir(args.spine)
-    phospho_path = out_dir / "phospho_per_cluster.parquet"
+    suffix = track_cfg["output_suffix"]
+    phospho_path = out_dir / f"phospho_per_cluster{suffix}.parquet"
     if not phospho_path.exists():
         raise FileNotFoundError(
             f"{phospho_path} missing — run Stage 6 "
@@ -377,7 +378,6 @@ def main():
             all_substrate.append(subs_df)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    suffix = track_cfg["output_suffix"]
 
     mea_out = out_dir / f"mea_per_cluster{suffix}.parquet"
     site_out = out_dir / f"site_level_ols_per_cluster{suffix}.parquet"

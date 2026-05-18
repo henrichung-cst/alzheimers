@@ -1,18 +1,21 @@
 // ---------------------------------------------------------------------------
 // IncytrFilter — shared filter state for the Incytr Heatmap + Pathways tabs.
 // Mirrors the KinaseFilter contract: localStorage-backed, get(k) / set(patch)
-// / reset() / subscribe(fn). Persistence key: incytrFilter.v2.
+// / reset() / subscribe(fn). Persistence key: incytrFilter.v3.
 //
-// v2 additions (CR-04):
-//   trajLabels     — coarse trajectory labels selected via chips ([] = any).
-//   recurContrasts — diseases that must each have a significant timepoint
+// v3 (per-disease trajectory chips):
+//   trajLabels     — object keyed by disease (App/Tau/ApTt), each value an
+//                    array of selected labels. AND within a disease (path
+//                    must carry every selected label) AND across diseases.
+//                    {App: [], Tau: [], ApTt: []} = no gate.
+//   recurContrasts — diseases that must each have a complete trajectory
 //                    (AND logic). [] = no recur gate. e.g. ["App","Tau"].
 //   detailRowKey   — row key whose expanded panel is currently showing the
 //                    Trajectory sub-tab (null = none).
 // ---------------------------------------------------------------------------
 
 window.IncytrFilter = (function() {
-  const _KEY = "incytrFilter.v2";
+  const _KEY = "incytrFilter.v3";
   const _defaults = {
     // Heatmap projection — single contrast picker, two ordinal selects, and
     // pvalue + |PDS| gates (snapped to heatmap_counts.thresholds /
@@ -40,12 +43,14 @@ window.IncytrFilter = (function() {
     sortDir:        -1,
 
     // CR-04 trajectory / recurrence filters.
-    trajLabels:     [],            // [] = any coarse label
+    trajLabels:     { App: [], Tau: [], ApTt: [] },   // per-disease chip sets
     recurContrasts: [],            // [] = no gate; ["App","Tau"] = AND both
     detailRowKey:   null,          // expanded detail row key (ephemeral)
   };
   const _arrKeys = new Set(["disease","timepoint","senderIn","receiverIn",
-                             "trajLabels","recurContrasts"]);
+                             "recurContrasts"]);
+  // Per-disease object — needs special merging in set() and on load.
+  const _objKeys = new Set(["trajLabels"]);
   let _state = Object.assign({}, _defaults);
   try {
     const saved = JSON.parse(localStorage.getItem(_KEY) || "null");
@@ -53,6 +58,16 @@ window.IncytrFilter = (function() {
       for (const k of Object.keys(_defaults)) {
         if (!(k in saved)) continue;
         if (_arrKeys.has(k)) _state[k] = Array.isArray(saved[k]) ? saved[k].slice() : [];
+        else if (_objKeys.has(k)) {
+          // Merge per-disease object, sanitising each value to an array.
+          const cur = Object.assign({}, _defaults[k]);
+          if (saved[k] && typeof saved[k] === "object") {
+            for (const d of Object.keys(cur)) {
+              cur[d] = Array.isArray(saved[k][d]) ? saved[k][d].slice() : [];
+            }
+          }
+          _state[k] = cur;
+        }
         else _state[k] = saved[k];
       }
     }
@@ -72,6 +87,18 @@ window.IncytrFilter = (function() {
           const a = Array.isArray(nv) ? nv.slice() : [];
           if (cur.length !== a.length || cur.some((v,i) => v !== a[i])) {
             _state[k] = a; changed = true;
+          }
+        } else if (_objKeys.has(k)) {
+          // Deep-equal compare via JSON; replace wholesale on diff.
+          const cur = _state[k] || {};
+          const merged = Object.assign({}, cur);
+          if (nv && typeof nv === "object") {
+            for (const d of Object.keys(nv)) {
+              merged[d] = Array.isArray(nv[d]) ? nv[d].slice() : [];
+            }
+          }
+          if (JSON.stringify(merged) !== JSON.stringify(cur)) {
+            _state[k] = merged; changed = true;
           }
         } else {
           // Deep-equal for object values (pair = {sender, receiver}).

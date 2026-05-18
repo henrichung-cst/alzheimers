@@ -1,14 +1,15 @@
-"""Integration-specific configuration for the thin Incytr factorial wrapper.
+"""Integration-specific configuration.
 
-Holds only the constants that load.R and export_factorial_inputs.py read:
-  - factorial filter values (sex, genotypes, timepoints)
+Holds the constants the active integration helpers read:
+  - sample filter values (sex, genotypes, timepoints)
   - design matrix columns + per-condition encodings
-  - factorial contrast vectors
+  - contrast vectors
   - input/output paths
+  - `load_cluster_spine()` (consumed by snrna_proportions, verify_decomposition,
+    and the viewer)
 
-The legacy materialized-derivations layer (KINASE_IMPUTATION_*, LAMBDA_*,
-N_PERMUTATIONS, resolve_universe_id, etc.) was retired with the wrapper
-rewrite. Recover from git history if anything reaches for it.
+The factorial Incytr path was archived 2026-05-18; see
+`archive/incytr_factorial_2026-05-18/` if you need the retired wrapper.
 """
 
 import os
@@ -84,17 +85,17 @@ assert set(FACTORIAL_CONTRAST_CONDITIONS) == set(FACTORIAL_CONTRASTS)
 # The transcript-side label vocabulary for Incytr senders/receivers. The Levy
 # 46-cluster taxonomy was reduced to 19 strict-spine clusters in
 # alz/integration/build_cluster_spine.py (rank-10 design × ≥1 animal with ≥20
-# nuclei). The single source of truth is data/incytr/v2_46clusters/
+# nuclei). The single source of truth is data/incytr_frozen/v2_46clusters/
 # cluster_spine.csv (in_spine == True); load_cluster_spine() below.
 CLUSTER_SPINE = "levy19"
 CLUSTER_SPINE_FILE = os.path.join(
-    REPO_ROOT, "data", "incytr", "v2_46clusters", "cluster_spine.csv"
+    REPO_ROOT, "data", "incytr_frozen", "v2_46clusters", "cluster_spine.csv"
 )
 BARCODE_TO_CLUSTER_FILE = os.path.join(
-    REPO_ROOT, "data", "incytr", "v2_46clusters", "barcode_to_cluster.csv"
+    REPO_ROOT, "data", "incytr_frozen", "v2_46clusters", "barcode_to_cluster.csv"
 )
 
-# Per-cluster decomposition outputs (Stage 6) consumed by export_factorial_inputs.
+# Per-cluster decomposition outputs (Stage 6).
 DECOMPOSITION_DIR = os.path.join(
     REPO_ROOT, "outputs", "reports", "decomposition", CLUSTER_SPINE
 )
@@ -105,12 +106,13 @@ PROTEIN_PER_CLUSTER_FILE = os.path.join(DECOMPOSITION_DIR, "protein_per_cluster.
 def resolve_cluster_spine_file(name: str = CLUSTER_SPINE) -> str:
     """Resolve cluster_spine.csv for spine `name`, with legacy fallback.
 
-    Prefer the new layout (data/incytr/v2_46clusters/spines/<name>/), fall
-    back to the legacy top-level cluster_spine.csv when the new file is
-    absent and `name == "levy19"`.
+    Prefer the per-spine layout
+    (data/incytr_frozen/v2_46clusters/spines/<name>/), fall back to the
+    legacy top-level cluster_spine.csv when the new file is absent and
+    `name == "levy19"`.
     """
     new = os.path.join(
-        REPO_ROOT, "data", "incytr", "v2_46clusters", "spines", name,
+        REPO_ROOT, "data", "incytr_frozen", "v2_46clusters", "spines", name,
         "cluster_spine.csv",
     )
     if os.path.exists(new):
@@ -132,9 +134,3 @@ def load_cluster_spine(name: str = CLUSTER_SPINE) -> list[str]:
 # Paths
 # ---------------------------------------------------------------------------
 H5AD_PATH = main_config.SONG_H5AD_FILE
-
-# Inputs to the R wrapper, written by export_factorial_inputs.py.
-FACTORIAL_INPUT_DIR = os.path.join(REPO_ROOT, "data", "incytr_factorial_inputs")
-
-# R wrapper output root (parquet + views.sql).
-FACTORIAL_OUTPUT_DIR = os.path.join(REPO_ROOT, "outputs", "reports", "incytr_factorial")

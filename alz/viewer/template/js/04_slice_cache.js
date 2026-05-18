@@ -5,8 +5,24 @@
 // LRU-capped to avoid unbounded memory.
 // ---------------------------------------------------------------------------
 const SliceCache = (function(){
-  const ESR = PAYLOAD.edge_slice_ref || {};
-  const BUCKET_SIZE = ESR.bucket_size || 256;
+  // PAYLOAD is async-loaded now; read it lazily on first method call.
+  let ESR = null;
+  let BUCKET_SIZE = 256;
+  let dPresent = null, sPresent = null, iPresent = null;
+  function _ensureInit() {
+    if (ESR !== null) return;
+    ESR = (typeof PAYLOAD !== "undefined" && PAYLOAD && PAYLOAD.edge_slice_ref) || {};
+    BUCKET_SIZE = ESR.bucket_size || 256;
+    dPresent = new Set((ESR.present_decomp_ols_kinase_ids || []).map(Number));
+    sPresent = new Set(
+      (ESR.present_song_concordance_genes || []).map(g => String(g).toUpperCase())
+    );
+    iPresent = new Set(
+      ((PAYLOAD && PAYLOAD.incytr_pathways && PAYLOAD.incytr_pathways.slice_index
+        && PAYLOAD.incytr_pathways.slice_index.present) || [])
+        .map(([s, r]) => s + "||" + r)
+    );
+  }
   const MAX = 16;                          // LRU cap (per side)
   const bCache = new Map();                // bucket_id -> rows[]
 
@@ -40,6 +56,7 @@ const SliceCache = (function(){
   }
 
   async function loadBackboneBucket(backbone_id){
+    _ensureInit();
     const bkt = Math.floor(backbone_id / BUCKET_SIZE);
     if (bCache.has(bkt)) {
       const v = bCache.get(bkt); _lruTouch(bCache, bkt, v); return v;
@@ -58,8 +75,8 @@ const SliceCache = (function(){
 
   // Decomp-OLS shards: per-kinase substrate-site OLS for every (contrast, wmb_class).
   const dCache = new Map();              // kinase_id -> rows[]
-  const dPresent = new Set((ESR.present_decomp_ols_kinase_ids || []).map(Number));
   async function loadDecompOls(kinase_id){
+    _ensureInit();
     if (!dPresent.has(Number(kinase_id))) return [];
     if (dCache.has(kinase_id)) {
       const v = dCache.get(kinase_id); _lruTouch(dCache, kinase_id, v); return v;
@@ -74,10 +91,8 @@ const SliceCache = (function(){
 
   // Song concordance shards: one parquet per uppercased gene symbol.
   const sCache = new Map();              // GENE_UPPER -> rows[]
-  const sPresent = new Set(
-    (ESR.present_song_concordance_genes || []).map(g => String(g).toUpperCase())
-  );
   async function loadSongConcordance(geneSymbol){
+    _ensureInit();
     const g = String(geneSymbol || "").toUpperCase();
     if (!g || !sPresent.has(g)) return [];
     if (sCache.has(g)) {
@@ -96,15 +111,11 @@ const SliceCache = (function(){
   // "/" with "-" and " " with "_". Sender raw, receiver display name (the
   // payload-side senders/receivers arrays already carry canonical display).
   const iCache = new Map();              // "sender||receiver" -> rows[]
-  const iPresent = new Set(
-    ((PAYLOAD.incytr_pathways && PAYLOAD.incytr_pathways.slice_index
-      && PAYLOAD.incytr_pathways.slice_index.present) || [])
-      .map(([s, r]) => s + "||" + r)
-  );
   function _incytrSanitize(name) {
     return String(name).replace(/\//g, "-").replace(/ /g, "_");
   }
   async function loadIncytrShard(sender, receiver) {
+    _ensureInit();
     const key = sender + "||" + receiver;
     if (!iPresent.has(key)) return [];
     if (iCache.has(key)) {

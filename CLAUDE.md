@@ -330,6 +330,7 @@ Docs under `docs/integrations/` and `docs/archive/` that reference paths under `
 - When auditing for performance or consolidation, produce the audit document FIRST and get approval before editing files — do not dive into exploratory Read/Bash loops.
 - For multi-phase work (audit → plan → implement → simplify), write the plan to a file the user can approve.
 - Do not enumerate options, methods, or alternatives as filler. Only list candidates that are genuinely under consideration. If one option is obviously correct, state it directly. Padding answers with inapplicable alternatives wastes the user's time and obscures the real decision.
+- **Never intentionally implement the wrong behavior because the right behavior would require deeper changes.** "Smaller diff" and "fewer files touched" are non-goals. If the correct implementation requires regenerating an upstream artifact, refactoring a schema, or changing several files, do that — do not propose a half-fix that ships known-incorrect output (e.g. nulls, stale joins, wrong vocabularies) and hide the breakage behind a follow-up note. Surface the full scope of the right change and execute it.
 
 ## Workflow rules
 

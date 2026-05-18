@@ -146,6 +146,21 @@ function boot() {
   });
 }
 
+async function _bootWithPayload() {
+  try {
+    await _loadPayload();
+  } catch (e) {
+    document.body.innerHTML =
+      '<div style="padding:24px;font-family:system-ui;color:#a23;">'
+      + '<h3>Failed to load payload</h3>'
+      + '<pre style="white-space:pre-wrap;">' + (e.message || e) + '</pre>'
+      + '<p>The viewer must be served over http (e.g. '
+      + '<code>npx http-server -g -p 8000</code>) — file:// is no longer '
+      + 'supported because PAYLOAD is now fetched asynchronously.</p></div>';
+    return;
+  }
+  boot();
+}
 if (document.readyState === "loading")
-  document.addEventListener("DOMContentLoaded", boot);
-else boot();
+  document.addEventListener("DOMContentLoaded", _bootWithPayload);
+else _bootWithPayload();
