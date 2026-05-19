@@ -8,7 +8,7 @@ rewritten in Steps 9–12.
 
 **What this directory will do:**
 1. Compute snRNA-derived per-gene cell-type proportions `f_c(G, A)`
-   on the Levy-19 spine (Stage 5).
+   on the Levy-t5 31-cluster spine (Stage 5).
 2. Project bulk phospho + protein onto those proportions in linear
    space: `P_c = f_c × P` (Stage 6, `build_celltype_decomposition.py`).
 3. Run per-cluster MEA on raw phospho (Stage 7, `enrich_celltype.py`).

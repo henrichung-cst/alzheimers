@@ -182,34 +182,39 @@ kinase_enrich.py / kinase_attribute.py + snrna_integration.py  ←  alz/integrat
 
 ### Integration Code (Incytr)
 
-`alz/integration/` is a thin AD-specific wrapper around the upstream `incytr` R package (`~/Projects/work/incytr/`). All math, scoring, and pathway construction live in the package; this directory only loads AD inputs, runs the engine, persists results to parquet, and defines aggregation views. See `docs/incytr_remediation_plan.md` for the rationale and `alz/integration/README.md` for the file-by-file layout.
+`alz/integration/` is a thin AD-specific wrapper around the upstream `incytr` R package (`~/Projects/work/incytr/`). All math, scoring, and pathway construction live in the package; this directory builds inputs (cluster spine, kldata) and reshapes outputs for the viewer. **Pair-mode on the levy_t5 spine is the active integration path.** Factorial Incytr was archived 2026-05-18 (`archive/incytr_factorial_2026-05-18/`); upstream `Incytr::construct_factorial_paths` / `score_factorial_paths` were deleted at commit `424119f`. The current production entry point is `Incytr::Cal_pairwise_grid` (`R/grid.R`). See `docs/integrations/kinase_incytr_integration.md` for the architecture and `alz/integration/README.md` for the file-by-file layout.
 
 In-tree files:
 
-- `export_factorial_inputs.py` — h5ad → on-disk contract (`expression_*.csv/.mtx`, `animal_metadata.csv`)
-- `factorial.R` — entry point; hard-fails if `Incytr::construct_factorial_paths` / `score_factorial_paths` are absent
-- `load.R`, `persist.R`, `views.sql`, `run_factorial.sh` — loader, parquet writer, DuckDB views, shell shim
-- `config_integration.py` — filter values, design columns, contrast vectors, paths
+- `config_integration.py` — filter values, design columns, contrast vectors, paths; `load_cluster_spine()` (single source of truth for the 31-cluster levy_t5 spine)
+- `build_cluster_spine.py` — run-once levy_t5 spine builder
+- `extract_cluster_assignments.R` — run-once barcode/metadata exporter from `incytr_obj.rds`
+- `plot_cluster_spine.py` — diagnostic plots
+- `build_seaad_bridge.py` — hand-curated `cluster_to_seaad_supertype.csv` (direct, no chained mappings)
+- `build_yuyu_kldata.py` — builds `kldata_pspy.csv` consumed by pair-mode
+- `pair_to_receiver_cache.py` — reshapes 9 wide pair-mode parquets into `receiver_cache/` for the viewer
 
-Run order: `pixi run install-incytr && pixi run export-factorial-inputs && pixi run incytr-factorial`.
+Entry points: `bash alz/runners/main/run_pair_mode_pipeline.sh` (end-to-end), `bash alz/runners/main/run_pair_mode_viewer_build.sh` (reshape only), `bash bench/run_pair_mode.sh` (bench wrapper). Invariants: **31² = 961 sender × receiver pairs per contrast**, 9 contrasts, rank-deficient clusters emit NaN, **pair pvalue is untrustworthy — filter/rank on `|PDS|`**.
 
-### Per-cluster proportional decomposition (Levy-19 spine)
+### Per-cluster proportional decomposition (Levy-t5 spine)
 
-Branch path active alongside the bulk live pipeline. Forward projection only — `P_c = f_c × bulk` — **not** statistical deconvolution (closed). See `docs/incytr_deconvolution_pivot.md`.
+Branch path active alongside the bulk live pipeline. Forward projection only — `P_c = f_c × bulk` — **not** statistical deconvolution (closed). See `docs/incytr_deconvolution_pivot.md` and `docs/plans/change_request_02_spine_rethreshold.md`.
+
+**Active spine: `levy_t5` (31 clusters, 94.5% nucleus coverage), built with `min_cells = 5` and no rank gate.** Built once by `alz/integration/build_cluster_spine.py --min-cells 5 --no-rank-gate --spine-name levy_t5`. Rank-deficient clusters are kept and emit NaN for contrasts the design can't identify. This spine supersedes the prior Levy-19 (rank-10 gate, `min_cells = 20`) and WMB-34 (`min_cells = 50`) spines, which are no longer reachable from code.
 
 Stages:
-1. `alz/snrna_proportions.py --spine levy19` — per-(animal, cluster, gene) weights `f_c = (expr_c / Σ expr) × (N_total / N_c)`
-2. `alz/decomposition/build_celltype_decomposition.py --spine levy19 --track both` — projects bulk phospho (IMAC + pY) and protein onto the 19-cluster spine
-3. `alz/decomposition/enrich_celltype.py --spine levy19 --track {st,py}` — per-cluster factorial OLS + MEA (9 contrasts)
-4. `alz/integration/export_factorial_inputs.py` + `pixi run incytr-factorial` — per-cluster Incytr scoring (`per_cluster/{pr,ps,py}/<cluster>.parquet`; upstream `Incytr::resolve_wide` list-dispatches)
+1. `alz/snrna_proportions.py --spine levy_t5` — per-(animal, cluster, gene) weights `f_c = (expr_c / Σ expr) × (N_total / N_c)`
+2. `alz/decomposition/build_celltype_decomposition.py --spine levy_t5 --track both` — projects bulk phospho (IMAC + pY) and protein onto the 31-cluster spine
+3. `alz/decomposition/enrich_celltype.py --spine levy_t5 --track {st,py}` — per-cluster factorial OLS + MEA (9 contrasts; NaN where rank-deficient)
+4. Pair-mode Incytr — `bench/incytr_pair_levy_t5/` produces `31² = 961` sender × receiver pairs per contrast (factorial Incytr archived 2026-05-18)
 
-End-to-end runner: `bash alz/runners/main/run_pivot_smoke.sh [--skip-normalize] [--skip-incytr]`.
+End-to-end smoke runner: `bash alz/runners/main/run_pivot_smoke.sh [--skip-normalize]` (defaults to `SPINE=levy_t5`).
 
-Verification harness (`alz/decomposition/verify_decomposition.py --spine levy19 --all`) writes `outputs/reports/decomposition/levy19/verification.json` and checks four contracts:
+Verification harness (`alz/decomposition/verify_decomposition.py --spine levy_t5 --all`) writes `outputs/reports/decomposition/levy_t5/verification.json` and checks four contracts:
 - Mass identity `Σ_c [P_c × (N_c / N_total)] ≈ bulk` (per-cell-rate, **not** `Σ_c P_c = bulk`)
-- Spine coverage (all 19 clusters present, no silent drops)
+- Spine coverage (all 31 clusters present, no silent drops)
 - Per-cluster vs bulk MEA agreement under `f_c`-weighting (Spearman ρ ≥ 0.7 per contrast)
-- Incytr produces 19² = 361 sender × receiver pairs
+- Incytr produces 31² = 961 sender × receiver pairs
 
 The legacy R wrappers / Python adapters / sidecars / orchestrator shell scripts were retired during the rewrite. They are preserved under `archive/incytr_integration/` (bulk gitignored per repo allowlist; on disk only — copy back if needed). R deps (`Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`) are still required.
 
@@ -278,8 +283,9 @@ The `docs/foundation/` directory contains authoritative design documents:
 - `repo_retention_policy.md` — Active-vs-archived boundaries
 
 Other documentation:
-- `docs/incytr_remediation_plan.md` — Authoritative architectural plan for the kinase ↔ Incytr integration rewrite (math moves into upstream `../incytr`; this repo retains a thin AD shell)
-- `docs/integrations/kinase_incytr_integration.md` — In-tree Phase 1 stub inventory + one-way handoff diagram (thin pointer to the remediation plan)
+- `docs/integrations/kinase_incytr_integration.md` — Current pair-mode integration architecture: in-tree file inventory, data-flow diagram, entry points, invariants
+- `docs/archive/incytr_remediation_plan.md` — Superseded plan that called for restoring factorial Incytr upstream; factorial was deleted instead. Historical context only
+- `docs/archive/kinase_incytr_integration_factorial_era.md` — Factorial-era version of the integration doc (historical reference only)
 - `docs/archive/kinase_incytr_integration_pre_remediation.md` — Legacy shadow-fork architecture (historical reference only)
 - `docs/archive/legacy.md` — Legacy proportional decomposition method (historical reference)
 - `archive/deconvolution/docs/deconvolution_infeasibility.md` — Archived synthetic validation proving direct deconvolution is infeasible on this dataset (closed path, frozen). Source script + figures alongside under `archive/deconvolution/`.
@@ -296,10 +302,11 @@ Other documentation:
 - **SEA-AD data required** — Unified attribution needs SEA-AD effect sizes under `config.SEA_AD_DIR`
 - **API caching** — delete files under `data/datasets/song/analysis_cache/` to force re-fetch
 - **WMB expression memory** — `wmb_expression.py --proteome` processes 6,308 genes across 13 regions; use `skip_regional=True` and `chunk_size=2000` to avoid OOM (~30GB RAM available)
-- **Do not reopen closed paths** — direct (statistical) deconvolution, per-cluster stoichiometry, factor model, two-compartment, and transcript-only rescue are all closed (see charter). Proportional decomposition on Levy-19 is **active** as a forward projection only
+- **Do not reopen closed paths** — direct (statistical) deconvolution, per-cluster stoichiometry, factor model, two-compartment, and transcript-only rescue are all closed (see charter). Proportional decomposition on the **Levy-t5** spine (31 clusters, min-cells ≥ 5, no rank gate) is **active** as a forward projection only. Earlier spines (WMB-34, Levy-19) are superseded — do not reintroduce them as flags or fallbacks (see the research-pivot rule below)
+- **Research pivots replace, they do not coexist** — this is an active research repo, not a product. When an analytical choice changes (cell-type spine, threshold, normalization, taxonomy), the new choice **replaces** the old one. Do not preserve the prior mode behind a CLI flag default, an `if name == "old"` branch, a legacy symlink, a renamed column for old readers, or an env-var escape hatch. A pivot means the prior mode was *wrong* in light of new evidence — keeping it reachable bloats the codebase and signals false equivalence between deprecated and current methods. Update docstrings, comments, README, and runner scripts in the same pass. Output artifacts from prior runs (e.g. `outputs/reports/decomposition/levy19/`) may stay on disk as historical record, but *code paths* referencing them must go. "We might switch back later" and "smaller diff" are explicit non-goals
 - **Per-cluster mass identity is per-cell-rate** — verification check is `Σ_c [P_c × (N_c / N_total)] ≈ bulk`, NOT `Σ_c P_c = bulk` (the `f_c` weights are per-cell rates × N_total/N_c, so literal summation overshoots)
 - **Stage 6 pY track gating** — `build_celltype_decomposition.py --track py` (or `both`) requires `raw_phospho_normalized_pY.csv` from Stage 1. Smoke runner tolerates missing pY; if you need it, re-run `pixi run normalize` first
-- **Integration is gated on upstream `incytr`** — `pixi run incytr-factorial` hard-fails before loading data unless `Incytr::construct_factorial_paths` and `Incytr::score_factorial_paths` are exported by the installed package. Until those land per `docs/incytr_remediation_plan.md` Phase 1, the wrapper refuses to start. R deps (`Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`) are still required. Integration config lives in `alz/integration/config_integration.py`, not `alz/config.py`
+- **Integration is pair-mode only** — production entry point is `Incytr::Cal_pairwise_grid` (`~/Projects/work/incytr/R/grid.R`); factorial Incytr was archived 2026-05-18 and the upstream factorial APIs (`construct_factorial_paths`, `score_factorial_paths`) were deleted at commit `424119f` — do not reintroduce them. R deps still required: `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`. Integration config lives in `alz/integration/config_integration.py`, not `alz/config.py`. **Pair pvalue is untrustworthy — filter/rank pathways on `|PDS|`**
 - **Unified-viewer payload is inlined into `index.html`** — `build_unified_viewer.py` ships PAYLOAD as `<script type="application/json" id="payload-data">` directly in the HTML, not as a separate fetch. After `pixi run viewer` rebuilds, reload the page with a hard refresh (Ctrl+Shift+R / Cmd+Shift+R) — a soft reload serves the cached HTML and the new data won't appear. Quick check from DevTools: `PAYLOAD.meta.generated_at` should match the latest build timestamp
 
 ## Tooling & Environment
