@@ -80,16 +80,16 @@ FACTORIAL_CONTRAST_CONDITIONS = {
 assert set(FACTORIAL_CONTRAST_CONDITIONS) == set(FACTORIAL_CONTRASTS)
 
 # ---------------------------------------------------------------------------
-# Cluster spine (per-cluster decomposition pivot, Step 8 of the pivot plan)
+# Cluster spine — Levy-t5 (31 clusters, min_cells=5, no rank gate)
 # ---------------------------------------------------------------------------
-# The transcript-side label vocabulary for Incytr senders/receivers. The Levy
-# 46-cluster taxonomy was reduced to 19 strict-spine clusters in
-# alz/integration/build_cluster_spine.py (rank-10 design × ≥1 animal with ≥20
-# nuclei). The single source of truth is data/incytr_frozen/v2_46clusters/
-# cluster_spine.csv (in_spine == True); load_cluster_spine() below.
-CLUSTER_SPINE = "levy19"
+# Transcript-side label vocabulary for Incytr senders/receivers. Built once by
+# alz/integration/build_cluster_spine.py. Single source of truth:
+# data/incytr_frozen/v2_46clusters/spines/levy_t5/cluster_spine.csv
+# (in_spine == True).
+CLUSTER_SPINE = "levy_t5"
 CLUSTER_SPINE_FILE = os.path.join(
-    REPO_ROOT, "data", "incytr_frozen", "v2_46clusters", "cluster_spine.csv"
+    REPO_ROOT, "data", "incytr_frozen", "v2_46clusters", "spines",
+    CLUSTER_SPINE, "cluster_spine.csv",
 )
 BARCODE_TO_CLUSTER_FILE = os.path.join(
     REPO_ROOT, "data", "incytr_frozen", "v2_46clusters", "barcode_to_cluster.csv"
@@ -104,22 +104,11 @@ PROTEIN_PER_CLUSTER_FILE = os.path.join(DECOMPOSITION_DIR, "protein_per_cluster.
 
 
 def resolve_cluster_spine_file(name: str = CLUSTER_SPINE) -> str:
-    """Resolve cluster_spine.csv for spine `name`, with legacy fallback.
-
-    Prefer the per-spine layout
-    (data/incytr_frozen/v2_46clusters/spines/<name>/), fall back to the
-    legacy top-level cluster_spine.csv when the new file is absent and
-    `name == "levy19"`.
-    """
-    new = os.path.join(
+    """Resolve cluster_spine.csv for spine `name` under spines/<name>/."""
+    return os.path.join(
         REPO_ROOT, "data", "incytr_frozen", "v2_46clusters", "spines", name,
         "cluster_spine.csv",
     )
-    if os.path.exists(new):
-        return new
-    if name == "levy19" and os.path.exists(CLUSTER_SPINE_FILE):
-        return CLUSTER_SPINE_FILE
-    return new
 
 
 def load_cluster_spine(name: str = CLUSTER_SPINE) -> list[str]:

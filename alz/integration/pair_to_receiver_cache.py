@@ -2,7 +2,7 @@
 `receiver_cache/` layout the unified viewer already consumes.
 
 Pair-mode emits one parquet per (genotype, age) comparison at
-``bench/incytr_pair_19/output/ma_<age>_<geno>_ma_<age>_WTyp_incytr_output.parquet``
+``bench/incytr_pair_levy_t5/output/ma_<age>_<geno>_ma_<age>_WTyp_incytr_output.parquet``
 with two-condition columns (``SigProb_<c1>``, ``p_value_<c1>``,
 ``SiK_score_<c1>``, plus the WTyp twin) and no ``contrast`` column. The
 factorial path the viewer was originally wired against is long-form with a
@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 from viewer.paths import INCYTR_FACTORIAL_OUTPUTS_DIR  # noqa: E402
 
 DEFAULT_INPUT_DIR = os.path.normpath(
-    os.path.join(HERE, "..", "..", "bench", "incytr_pair_19", "output")
+    os.path.join(HERE, "..", "..", "bench", "incytr_pair_levy_t5", "output")
 )
 
 # Pair-mode filename → factorial contrast. Pair-mode uses AppP/Ttau/ApTt;

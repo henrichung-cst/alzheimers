@@ -5,7 +5,7 @@ Computes per-cell-rate weights
 
     f_percell(gene, cluster, animal) = (expr_c / Σ_c' expr_c') × (N_total / N_c)
 
-on the Levy-19 spine (or any spine passed via --spine). Per-cell-rate
+on the active spine (default Levy-t5; pass --spine to switch). Per-cell-rate
 units are used because Incytr's pathway scoring operates on per-cell
 ligand/receptor levels, not cluster mass shares. See
 `docs/incytr_deconvolution_pivot.md` for the full decision rationale.
@@ -21,7 +21,7 @@ Outputs under `outputs/reports/decomposition/{spine}/`:
 
 Usage:
   pixi run python alz/snrna_proportions.py --run
-  pixi run python alz/snrna_proportions.py --run --spine levy19
+  pixi run python alz/snrna_proportions.py --run --spine levy_t5
   pixi run python alz/snrna_proportions.py --summary
 """
 from __future__ import annotations
@@ -38,8 +38,6 @@ from integration.config_integration import load_cluster_spine
 
 
 def _resolve_spine(name: str) -> list[str]:
-    if name == "levy19":
-        return config.CLUSTER_SPINE
     return load_cluster_spine(name)
 
 # Song snRNA sample-ID encoding → TMT metadata vocab.
@@ -302,8 +300,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--run", action="store_true", help="compute proportions")
     ap.add_argument("--summary", action="store_true", help="print cached summary")
-    ap.add_argument("--spine", default="levy19",
-                    help="cell-type spine name (default: levy19)")
+    ap.add_argument("--spine", default="levy_t5",
+                    help="cell-type spine name (default: levy_t5)")
     args = ap.parse_args()
     if not (args.run or args.summary):
         ap.print_help()

@@ -142,8 +142,8 @@ def _identity_audit(
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--spine", default="levy19",
-                    help="cluster-spine subdirectory under outputs/reports/decomposition/")
+    ap.add_argument("--spine", default="levy_t5",
+                    help="cluster-spine subdirectory under outputs/reports/decomposition/ (default: levy_t5)")
     ap.add_argument("--track", default="both", choices=["st", "py", "both"],
                     help="phospho track(s) to project: st (IMAC pS/pT), py, or both")
     args = ap.parse_args()

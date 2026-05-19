@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end smoke run for the Levy-19 per-cluster proportional decomposition pivot.
+# End-to-end smoke run for the Levy-t5 per-cluster proportional decomposition pivot.
 # See docs/incytr_deconvolution_pivot.md — Step 13.
 #
 # Sequential, no background polling. Fails loud on any stage error.
@@ -21,7 +21,7 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-SPINE="levy19"
+SPINE="levy_t5"
 NORM_FILE="outputs/reports/kinase_attribution/total_proteome_normalized.csv"
 SKIP_NORMALIZE=0
 

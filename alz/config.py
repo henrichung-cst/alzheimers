@@ -131,7 +131,8 @@ SEAAD_TO_WMB_CLASS_FILE = os.path.join(
     EXTERNAL_DATA_DIR, "sea_ad", "seaad_subclass_to_wmb_class.csv"
 )
 
-# Levy 31-cluster spine (levy_t5) — pivoted from levy19 on 2026-05-16.
+# Levy 31-cluster spine (levy_t5): min_cells=5, no rank gate. Built once by
+# alz/integration/build_cluster_spine.py; downstream stages read CLUSTER_SPINE.
 CLUSTER_SPINE_DIR = os.path.join(REPO_ROOT, "data", "incytr_frozen", "v2_46clusters")
 CLUSTER_SPINE_FILE = os.path.join(
     CLUSTER_SPINE_DIR, "spines", "levy_t5", "cluster_spine.csv"
@@ -141,9 +142,14 @@ CELL_METADATA_FILE = os.path.join(CLUSTER_SPINE_DIR, "cell_metadata.csv")
 KR_CLUSTER_ID_KEY_FILE = os.path.join(
     CLUSTER_SPINE_DIR, "provenance", "kr_cluster_id_key.csv"
 )
-CLUSTER_TO_WMB_CLASS_FILE = os.path.join(CLUSTER_SPINE_DIR, "cluster_to_wmb_class.csv")
+CLUSTER_TO_WMB_CLASS_FILE = os.path.join(
+    EXTERNAL_DATA_DIR, "allen_abc", "cluster_to_wmb_class.csv"
+)
 CLUSTER_TO_SEAAD_SUPERTYPE_FILE = os.path.join(
     EXTERNAL_DATA_DIR, "sea_ad", "cluster_to_seaad_supertype.csv"
+)
+CLUSTER_TO_HBCA_SUPERCLUSTER_FILE = os.path.join(
+    EXTERNAL_DATA_DIR, "allen_hbca", "cluster_to_hbca_supercluster.csv"
 )
 
 
@@ -161,9 +167,9 @@ CLUSTER_SPINE = _load_cluster_spine()  # 31 named clusters (levy_t5)
 
 # Coarse-level (cell-level) labels as carried by Seurat `obj@meta.data`.
 # Does NOT nest deterministically under CLUSTER_SPINE (per-cell labels, not
-# rollups). Exposed for forward flexibility — analyses default to the 19-
-# subclass spine; coarse can be opted-in by reading `cluster_coarse` from
-# barcode_to_cluster.csv.
+# rollups). Exposed for forward flexibility — analyses default to the
+# subclass spine (CLUSTER_SPINE); coarse can be opted-in by reading
+# `cluster_coarse` from barcode_to_cluster.csv.
 CLUSTER_COARSE_LEVELS = [
     "Astrocytes", "Endothelial cells", "Excitatory neurons", "High MT",
     "Interneurons", "Medium spiny neurons", "Microglia", "Oligodendrocytes",
@@ -315,8 +321,8 @@ WMB_CORTEX_REGION_KEYS = [
 # specificity score is a ratio whose denominator is the brain-wide reference:
 # restricting the cell pool to cortex+HPF shrinks both numerator and denominator
 # and only damages classes whose cells mostly live outside the cortical mask
-# (e.g. 09 CNU-LGE GABA, which one Levy-19 cluster — Striatal-MSN — legitimately
-# targets). cortex_hpf remains available as a sensitivity-check toggle.
+# (e.g. 09 CNU-LGE GABA, which the Striatal-MSN cluster legitimately targets).
+# cortex_hpf remains available as a sensitivity-check toggle.
 WMB_REGION_SCOPE = os.environ.get("WMB_REGION_SCOPE", "whole_brain").lower()
 if WMB_REGION_SCOPE not in {"cortex_hpf", "whole_brain"}:
     raise ValueError(
@@ -427,7 +433,7 @@ SONG_CONCORDANCE_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "song_concord
 SONG_LFC_MIN = 0.1       # minimum |song_lfc| for concordance (same as SEA_AD_LFC_MIN)
 SONG_CONCORDANCE_WEIGHT = 3.0
 SEA_AD_CONCORDANCE_WEIGHT = 1.0
-SONG_MIN_CELLS = 20       # minimum cells per animal×cluster for pseudobulk (Levy 19-spine gate)
+SONG_MIN_CELLS = 5        # minimum cells per animal×cluster for pseudobulk (Levy-t5 spine gate)
 SONG_MIN_ANIMALS = 10     # minimum animals per cluster for concordance DE
 
 
@@ -487,6 +493,25 @@ def load_cluster_to_seaad_supertype_map() -> dict[str, list[tuple[str, float]]]:
             if supertype != "n/a":
                 entries.append((supertype, float(row["weight"])))
     return out
+
+def load_cluster_to_hbca_supercluster_map() -> dict[str, list[tuple[str, float]]]:
+    """Spine-cluster → list of (HBCA supercluster, weight).
+
+    Weights are 1.0 per edge; `_rollup_matrix_to_levy_t5` normalizes by the
+    sum at rollup time, so equal-weight links average the source columns.
+    """
+    import csv
+    out: dict[str, list[tuple[str, float]]] = {}
+    with open(CLUSTER_TO_HBCA_SUPERCLUSTER_FILE, newline="") as f:
+        for row in csv.DictReader(f):
+            cluster = row["cluster_name"]
+            supercluster = row["hbca_supercluster"]
+            if supercluster == "n/a":
+                out.setdefault(cluster, [])
+                continue
+            out.setdefault(cluster, []).append((supercluster, float(row["weight"])))
+    return out
+
 
 SONG_PATHWAY_MAP = {"App": "App", "Tau": "Tau", "ApTt": "ApTt"}
 

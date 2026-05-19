@@ -7,8 +7,9 @@ within-cohort transcriptomic concordance from paired snRNA-seq data
 
 Cells are labeled by per-barcode join to the Levy 46-cluster taxonomy
 (`barcode_to_cluster.csv`) and filtered to `config.CLUSTER_SPINE` — the
-19 strict-spine subclasses that pass the SONG_MIN_CELLS gate and have
-full-rank factorial design coverage across all 9 contrasts.
+31 Levy-t5 clusters that pass the SONG_MIN_CELLS (=5) per-(cluster, animal)
+gate. Rank-deficient clusters are kept and emit NaN for unidentifiable
+contrasts.
 
 Inputs:
   data/datasets/song/transcriptomics/170_gex_celltypes_00.h5ad
@@ -69,13 +70,13 @@ def step_pseudobulk() -> None:
 
     For each (animal, spine cluster) pair, sums raw counts across nuclei
     whose barcode maps to a `config.CLUSTER_SPINE` subclass, then applies
-    CPM + log2 normalization. Cells outside the 19-cluster spine (rejected
-    or unnamed clusters) are dropped before aggregation.
+    CPM + log2 normalization. Cells outside the spine (rejected or unnamed
+    clusters) are dropped before aggregation.
     """
     import anndata as ad
 
     print("=" * 72)
-    print("S1  Pseudobulk computation from paired snRNA-seq (Levy 19-spine)")
+    print("S1  Pseudobulk computation from paired snRNA-seq (Levy-t5 spine)")
     print("=" * 72)
 
     h5ad_path = config.SONG_H5AD_FILE
@@ -192,7 +193,7 @@ def step_specificity() -> None:
     Pools all animals (males + females) to maximize power for a static
     property. Mirrors the WMB specificity formula:
         specificity = mean_in_cluster / sum(means_across_all_clusters)
-    Clusters are the 19 spine subclasses (config.CLUSTER_SPINE).
+    Clusters are the spine subclasses (config.CLUSTER_SPINE — Levy-t5, 31).
     """
     print("=" * 72)
     print("S2  Within-cohort expression specificity")

@@ -1,10 +1,10 @@
-"""Step 13 verification harness for the Levy-19 per-cluster decomposition pivot.
+"""Verification harness for the Levy-t5 per-cluster decomposition.
 
 Four contracts (see docs/incytr_deconvolution_pivot.md §Verification):
   1. Mass identity: Σ_c [P_c × (N_c / N_total)] ≈ bulk per (gene, animal)
   2. Coverage: all spine clusters present in Stage 6 outputs
   3. Per-cluster vs bulk MEA agreement under f_c-weighting
-  4. Incytr produces |spine|² scored sender × receiver pairs (here 19² = 361)
+  4. Incytr produces |spine|² scored sender × receiver pairs (31² = 961 on Levy-t5)
 
 Writes outputs/reports/decomposition/{spine}/verification.json.
 """
@@ -193,7 +193,7 @@ def check_incytr_pair_count() -> dict:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--spine", default="levy19")
+    ap.add_argument("--spine", default="levy_t5")
     ap.add_argument("--checks", nargs="+", choices=CHECKS, default=list(CHECKS),
                     help=f"Subset of checks to run (default: all of {CHECKS})")
     args = ap.parse_args()

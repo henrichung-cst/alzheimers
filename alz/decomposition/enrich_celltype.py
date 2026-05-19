@@ -306,7 +306,7 @@ def _ols_for_cluster(
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--spine", default="levy19")
+    ap.add_argument("--spine", default="levy_t5")
     ap.add_argument("--track", default="st", choices=list(config.PHOSPHO_TRACKS))
     ap.add_argument("--analysis-mode", default=None,
                     help="override config.ANALYSIS_MODE (males_only / full_cohort)")

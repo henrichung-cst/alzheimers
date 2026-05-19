@@ -1,8 +1,8 @@
 """Generate spine-selection figure + summary table from cluster_spine.csv.
 
-Reads `data/incytr_frozen/v2_46clusters/cluster_spine.csv` and writes:
-  outputs/reports/decomposition/levy19/cluster_spine_summary.csv
-  outputs/reports/decomposition/levy19/cluster_spine_selection.png
+Reads `data/incytr_frozen/v2_46clusters/spines/levy_t5/cluster_spine.csv` and writes:
+  outputs/reports/decomposition/levy_t5/cluster_spine_summary.csv
+  outputs/reports/decomposition/levy_t5/cluster_spine_selection.png
 """
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-SPINE_CSV = Path("data/incytr_frozen/v2_46clusters/cluster_spine.csv")
-OUT_DIR = Path("outputs/reports/decomposition/levy19")
+SPINE_CSV = Path("data/incytr_frozen/v2_46clusters/spines/levy_t5/cluster_spine.csv")
+OUT_DIR = Path("outputs/reports/decomposition/levy_t5")
 
 TIER_ORDER = ["full_rank", "partial", "severe", "unnamed", "fails_gate"]
 TIER_LABEL = {
@@ -59,7 +59,7 @@ def main() -> None:
     ax_bar.set_xticklabels(df_sorted["cluster_name"], rotation=90, fontsize=7)
     ax_bar.set_ylabel("Nuclei (n)")
     ax_bar.set_yscale("log")
-    ax_bar.set_title("46 Song clusters by nucleus count — Levy-19 spine selection")
+    ax_bar.set_title("46 Song clusters by nucleus count — Levy-t5 spine selection")
 
     handles = [
         plt.Rectangle((0, 0), 1, 1, color=TIER_COLOR[t]) for t in TIER_ORDER
@@ -70,9 +70,11 @@ def main() -> None:
         for t in TIER_ORDER
     ]
     ax_bar.legend(handles, labels, loc="upper right", fontsize=8, frameon=False)
-    ax_bar.axvline(18.5, color="black", linestyle="--", linewidth=0.8, alpha=0.6)
+    n_in_spine = int(df["in_spine"].sum())
+    boundary_x = n_in_spine - 0.5
+    ax_bar.axvline(boundary_x, color="black", linestyle="--", linewidth=0.8, alpha=0.6)
     ax_bar.text(
-        18.5, ax_bar.get_ylim()[1] * 0.7, "  spine boundary",
+        boundary_x, ax_bar.get_ylim()[1] * 0.7, "  spine boundary",
         fontsize=8, va="top", ha="left",
     )
 

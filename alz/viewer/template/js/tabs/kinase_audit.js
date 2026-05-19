@@ -771,7 +771,7 @@ function _renderAttributionVerdict(hostId, ctx) {
       `<thead>${superHead}<tr>${headCells}</tr></thead><tbody>${tbody}</tbody>` +
     `</table>` +
     (hiddenCount > 0
-      ? `<div class="attr-verdict-toggle"><label><input type="checkbox" id="${showAllId}"${showAll ? " checked" : ""}> Show all Levy-19 clusters <span class="muted">(${hiddenCount} hidden — low/none confidence)</span></label></div>`
+      ? `<div class="attr-verdict-toggle"><label><input type="checkbox" id="${showAllId}"${showAll ? " checked" : ""}> Show all Levy-t5 clusters <span class="muted">(${hiddenCount} hidden — low/none confidence)</span></label></div>`
       : (showAll && rows.length > 0
         ? `<div class="attr-verdict-toggle"><label><input type="checkbox" id="${showAllId}" checked> Showing all cell types</label></div>`
         : "")) +
@@ -788,7 +788,7 @@ function _renderAttributionVerdict(hostId, ctx) {
       `<p><strong>Confidence tier</strong> grades <em>which sources agree</em>, not how strong any one signal is:</p>` +
       `<ul>` +
         `<li><strong><span class="attr-conf attr-conf-very-high">very high</span></strong> — a <em>high</em> attribution row that is also corroborated by the decomposition layer: Decomp FDR < 0.25 with the same sign as the bulk MEA NES. Both evidence streams reinforce one another.</li>` +
-        `<li><strong><span class="badge hi">high</span></strong> — all three of these hold: <em>(a)</em> within-cohort Song supports the direction, <em>(b)</em> the gene is clearly cell-type-specific in WMB (specificity ≥ 2× uniform on the 34-WMB-class reference scale, i.e. ≈ 0.059; inherited by the Levy-19 cluster from its mapped WMB class), and <em>(c)</em> at least one reference shows real movement (|Song LFC| or |SEA-AD LFC| > 0.1).</li>` +
+        `<li><strong><span class="badge hi">high</span></strong> — all three of these hold: <em>(a)</em> within-cohort Song supports the direction, <em>(b)</em> the gene is clearly cell-type-specific in WMB (specificity ≥ 2× uniform on the 34-WMB-class reference scale, i.e. ≈ 0.059; inherited by the Levy-t5 cluster from its mapped WMB class), and <em>(c)</em> at least one reference shows real movement (|Song LFC| or |SEA-AD LFC| > 0.1).</li>` +
         `<li><strong><span class="badge mid">moderate</span></strong> — meaningful evidence but missing one strict gate. Two ways to land here: Song-supported but WMB specificity falls below the high threshold, <em>or</em> only SEA-AD reached concordance (no Song). SEA-AD-only is <strong>always</strong> capped at moderate — we won't promote a cross-species call to high.</li>` +
         `<li><strong><span class="badge lo">low</span></strong> — concordance is positive but the gene isn't expression-specific in WMB and no reference LFC clears the magnitude bar.</li>` +
         `<li><strong>none</strong> — concordance ≤ 0 (signs disagree). Row is excluded from <code>unified_attribution.csv</code> entirely.</li>` +
@@ -844,7 +844,7 @@ function _renderAttributionDrawer(hostId, ctx, cellType) {
         `<div id="attr-song-table"></div></section>` +
     `</div>` +
     `<section class="attr-section attr-section-wide"><h5>Per-cell substrate-site OLS <span class="muted">(deconvolution/per_animal/site_level_ols.parquet)</span></h5>` +
-      `<p class="muted attr-caption">Per-(site, contrast, cell type) β / SE / p from the CTM-native pseudo-deconvolution OLS, restricted to ${_escapeHtml(ctx.name || "")}'s substrate set in ${_escapeHtml(cellType)}. Shows what is driving the Decomp NES in the row above. Bulk β is the same site's stoichiometry β before share-reweighting; |Δβ| measures how much the per-cell estimate diverges from bulk. <strong>Note:</strong> not yet available for Levy-19 clusters (shards still keyed on WMB-34).</p>` +
+      `<p class="muted attr-caption">Per-(site, contrast, cell type) β / SE / p from the CTM-native pseudo-deconvolution OLS, restricted to ${_escapeHtml(ctx.name || "")}'s substrate set in ${_escapeHtml(cellType)}. Shows what is driving the Decomp NES in the row above. Bulk β is the same site's stoichiometry β before share-reweighting; |Δβ| measures how much the per-cell estimate diverges from bulk. <strong>Note:</strong> not yet available for Levy-t5 clusters (shards still keyed on WMB-34).</p>` +
       `<div id="attr-decomp-ols-table" class="audit-scroll"></div></section>`;
   _renderWMBDotPlot("attr-wmb-dotplot", ctx, cellType);
   _renderSEAADHeatmap("attr-seaad-heatmap", ctx, cellType);

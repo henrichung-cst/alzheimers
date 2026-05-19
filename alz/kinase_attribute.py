@@ -1,6 +1,6 @@
 """Stage 3 of kinase attribution: unified cell-type attribution.
 
-Analysis spine is the Levy 19-cluster strict spine (`config.CLUSTER_SPINE`),
+Analysis spine is the Levy-t5 31-cluster spine (`config.CLUSTER_SPINE`),
 not WMB-34. Evidence sources merge via single-hop crosswalks:
   - SEA-AD per-supertype effect sizes (pathway-matched: App→early CPS,
     Tau→late CPS, ApTt→full CPS), joined direct cluster → SEA-AD supertype(s)

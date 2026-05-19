@@ -127,12 +127,12 @@ run_step_softfail() {
   fi
 }
 
-# Pair-mode Incytr: bench/run_pair_mode_19.sh loops the 9 contrasts internally.
+# Pair-mode Incytr: bench/run_pair_mode.sh loops the 9 contrasts internally.
 # Worker parallelism is set via CHUNK_PARALLEL (subprocess fan-out within each
-# contrast's 361 sender×receiver chunks); contrast-level parallel launches share
+# contrast's sender×receiver chunks); contrast-level parallel launches share
 # output/ and would race, so we keep that loop sequential.
 run_pair_incytr() {
-  CHUNK_PARALLEL="$WORKERS" bash bench/run_pair_mode_19.sh --spine "$SPINE"
+  CHUNK_PARALLEL="$WORKERS" bash bench/run_pair_mode.sh --spine "$SPINE"
 }
 
 # ---------- pipeline ----------
@@ -159,24 +159,23 @@ run_step_softfail D-py "per-cluster MEA (py)" \
   pixi run python -m alz.decomposition.enrich_celltype --spine "$SPINE" --track py
 
 if [[ $SKIP_INCYTR -eq 0 ]]; then
-  if [[ "$SPINE" == "levy19" ]]; then
-    bench_suffix="19"
-  else
-    bench_suffix="$SPINE"
-  fi
-  bench_dir="bench/incytr_pair_${bench_suffix}"
+  bench_dir="bench/incytr_pair_${SPINE}"
   bench_input_dir="$bench_dir/incytr input"
   mkdir -p "$bench_input_dir"
   if [[ ! -e "$bench_input_dir/kldata.csv" ]]; then
     ln -sf ../../../data/datasets/song/kinase/kldata_pspy.csv "$bench_input_dir/kldata.csv"
     echo "  seeded $bench_input_dir/kldata.csv"
   fi
-  # Driver scripts cloned from the levy19 bench tree. The mouse ligand-receptor
-  # DB layers ship as package data in `../incytr` (loaded via
-  # `Incytr::DB_Layer*_mouse_filtered`); the legacy frozen Database/ + source/
-  # symlinks are no longer needed since the driver switched to library(Incytr).
+  # Mouse ligand-receptor DB layers ship as package data in `../incytr`
+  # (loaded via `Incytr::DB_Layer*_mouse_filtered`); the legacy frozen
+  # Database/ + source/ symlinks are no longer needed since the driver
+  # switched to library(Incytr).
   for f in incytr_commandline.R reconstruct_labels.R reconstruct_node_fc.R; do
-    [[ -e "$bench_dir/$f" ]] || ln -sf "../incytr_pair_19/$f" "$bench_dir/$f"
+    if [[ ! -e "$bench_dir/$f" ]]; then
+      echo "ERROR: required driver script $bench_dir/$f missing" >&2
+      echo "       check bench/incytr_pair_${SPINE}/ — driver scripts must live alongside the spine." >&2
+      exit 1
+    fi
   done
   run_step E1 "pair-mode inputs (bench/build_pair_inputs.sh)" \
     bash bench/build_pair_inputs.sh --spine "$SPINE"

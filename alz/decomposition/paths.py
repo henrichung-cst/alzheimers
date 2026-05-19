@@ -8,17 +8,9 @@ import config  # noqa: E402 — repo-level config, available because callers run
 REPO_ROOT = config.REPO_ROOT
 
 # ---------------------------------------------------------------------------
-# Spine path resolution
+# Spine path resolution — data/incytr_frozen/v2_46clusters/spines/<name>/
 # ---------------------------------------------------------------------------
-# New layout (per CR-02 spine re-threshold):
-#   data/incytr_frozen/v2_46clusters/spines/<name>/cluster_spine.csv
-# Legacy layout (still present for levy19 via a symlink written by
-# build_cluster_spine.py):
-#   data/incytr_frozen/v2_46clusters/cluster_spine.csv
 SPINES_ROOT = os.path.join(REPO_ROOT, "data", "incytr_frozen", "v2_46clusters", "spines")
-LEGACY_SPINE_CSV = os.path.join(
-    REPO_ROOT, "data", "incytr_frozen", "v2_46clusters", "cluster_spine.csv"
-)
 
 
 def spine_dir(name: str) -> str:
@@ -27,19 +19,8 @@ def spine_dir(name: str) -> str:
 
 
 def resolve_spine_csv(name: str) -> str:
-    """Resolve the cluster_spine.csv path for `name`.
-
-    Prefer the new spines/<name>/ layout; fall back to the legacy top-level
-    path so existing levy19 caches continue to resolve when callers haven't
-    re-run build_cluster_spine.py yet.
-    """
-    new = os.path.join(spine_dir(name), "cluster_spine.csv")
-    if os.path.exists(new):
-        return new
-    if name == "levy19" and os.path.exists(LEGACY_SPINE_CSV):
-        return LEGACY_SPINE_CSV
-    # Default to the new path even if missing — callers get a clean error.
-    return new
+    """Resolve the cluster_spine.csv path for `name`."""
+    return os.path.join(spine_dir(name), "cluster_spine.csv")
 
 
 def load_spine_clusters(name: str) -> list[str]:
