@@ -364,6 +364,13 @@ const TAB_MANIFEST = {
     render: () => renderTemporalV2(),
     rerenderOn: { filters: true, selection: [] },
   },
+  crosstable: {
+    group: "landscape", label: "Crosstable",
+    filters: ["fdr"], requires: [], modes: ["mouse", "human"],
+    wire: () => { if (typeof wireKinaseCrosstable === "function") wireKinaseCrosstable(); },
+    render: () => { if (typeof renderKinaseCrosstable === "function") renderKinaseCrosstable(); },
+    rerenderOn: { filters: true, selection: [] },
+  },
   kinasehuman: {
     group: "drilldown", label: "Kinase",
     filters: ["fdr"], requires: [], modes: ["human"],

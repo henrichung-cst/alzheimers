@@ -2087,11 +2087,11 @@ def _write_incytr_pathways() -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Pair-mode source (bench/incytr_pair_19/output/)
+# Pair-mode source (bench/incytr_pair_levy_t5/output/)
 # ---------------------------------------------------------------------------
 # Switch via INCYTR_SOURCE=pair_mode; input dir via INCYTR_PAIR_MODE_INPUT_DIR
-# (default bench/incytr_pair_19/output). Emits the same shard layout as the
-# factorial branch so the JS tabs (incytr_pathways.js, incytr_heatmap.js)
+# (default bench/incytr_pair_levy_t5/output). Emits the same shard layout as
+# the factorial branch so the JS tabs (incytr_pathways.js, incytr_heatmap.js)
 # render unchanged. Pair-mode parquets carry path-level pr_up/down, ps_up/down,
 # py_up/down direction flags but no per-node log2FC or per-node DEG/prG labels
 # — those columns are NULL-filled to preserve the shard schema.
@@ -2121,8 +2121,8 @@ def _pair_mode_contrast_from_filename(fname: str) -> str | None:
 def _write_incytr_pair_pathways() -> dict | None:
     """Pair-mode equivalent of `_write_incytr_pathways`.
 
-    Reads `bench/incytr_pair_19/output/*.parquet` (one file per contrast,
-    Levy-19 spine) and emits the same shard layout + `incytr_pathways`
+    Reads `bench/incytr_pair_levy_t5/output/*.parquet` (one file per contrast,
+    Levy-t5 spine) and emits the same shard layout + `incytr_pathways`
     payload block as the factorial branch. Per-node `*_log2FC` and
     `*_label` columns are NULL-filled (pair-mode does not compute them).
     """
@@ -2264,7 +2264,7 @@ def _write_incytr_pair_pathways() -> dict | None:
           f"{len(file_to_contrast)} contrast(s) (pre-filtered |PDS|>=0.30 AND p<=0.75)",
           flush=True)
 
-    # Sender/receiver canonical lists from the data itself (Levy-19, already
+    # Sender/receiver canonical lists from the data itself (Levy-t5, already
     # sanitized — no display↔sanitized indirection).
     senders_canonical = sorted({r[0] for r in con.execute(
         "SELECT DISTINCT sender FROM src").fetchall()})

@@ -70,6 +70,7 @@
             <thead><tr>
               <th data-col="name" data-metric="kinaseName" title="Display label: Kinase&#10;Raw column: name&#10;Definition: Kinase identifier from the MEA / integration tables.">Kinase</th>
               <th data-col="gene_symbol" data-metric="kinaseGene" title="Display label: Gene&#10;Raw column: gene_symbol&#10;Definition: Gene symbol associated with the kinase.">Gene</th>
+              <th data-col="family" data-metric="kinaseFamily" title="Display label: Family&#10;Raw column: family&#10;Definition: Kinase family from kinase-library metadata. Click to sort.">Family</th>
               <th data-col="nes_profile" data-metric="nesProfile" title="NES profile across 9 contrasts (3 diseases × 3 timepoints). Color = direction (red up, blue down), saturation = |NES|, black outline = FDR < threshold. Click to sort by max |NES| in scope.">NES Profile</th>
               <th data-col="agreement_profile" data-metric="agreementProfile" title="Bulk-vs-decomp agreement across 9 contrasts. Green = both pipelines significant, same direction; orange = disagreement (decomp_only / bulk_only / mixed / pure disagreement); empty = neither significant. Click to sort by count of disagreement contrasts (in scope).">Agreement</th>
               <th data-col="peak_NES" data-metric="peakNes" title="Peak |NES| — max absolute NES across the active disease/timepoint scope (or all 9 contrasts if no scope). Click to sort.">|NES|</th>
@@ -170,6 +171,7 @@
             <thead><tr>
               <th data-col="name" title="Kinase identifier from MEA.">Kinase</th>
               <th data-col="gene_symbol" title="Gene symbol associated with the kinase.">Gene</th>
+              <th data-col="family" title="Kinase family from kinase-library metadata. Click to sort.">Family</th>
               <th data-col="residue_type" title="Phospho-residue track (ST or Y).">Res</th>
               <th data-col="nes_profile" title="Per-donor NES strip. Color = direction (red up, blue down), saturation = |NES|, black outline = FDR &lt; threshold.">NES Profile</th>
               <th data-col="median_nes_sig_only" title="Median NES across donors significant at the active FDR.">median NES (sig)</th>
@@ -288,6 +290,32 @@
         = proteomics-significant gene
       </div>
       <div id="ip-table-wrap"></div>
+    </div>
+  </div>
+  <div id="tab-crosstable" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-crosstable" hidden>
+    <div class="card">
+      <div class="ke-toolbar ke-toolbar-multi" id="kx-toolbar">
+        <label class="ke-filter-label" title="Levy-T5 cluster used as the cell-type pivot. Drives the M-decomp NES, WMB/SEA-AD/HBCA specificity, and SEA-AD cell LFC columns.">Cluster
+          <select id="kx-cluster" aria-label="Levy-T5 cluster"></select>
+        </label>
+        <label class="ke-filter-label" title="Phospho-residue track.">Track
+          <select id="kx-track" aria-label="Residue track">
+            <option value="">Any</option>
+            <option value="ST">ST</option>
+            <option value="Y">Y</option>
+          </select>
+        </label>
+        <label class="ke-filter-label">
+          <input id="kx-search" aria-label="Search kinase or gene" placeholder="Search kinase or gene…" style="width:160px;"/>
+        </label>
+        <button id="kx-reset" class="ke-filter-reset" title="Reset cluster, search, sort, and column visibility">Reset</button>
+        <span class="muted" id="kx-count"></span>
+      </div>
+      <details style="margin:4px 0 8px;">
+        <summary style="cursor:pointer;font-size:12px;"><b>Columns</b> <span class="muted">(toggle which contrasts, donors, and specificity sources to show)</span></summary>
+        <div id="kx-cols-panel" style="border:1px solid #ddd;border-radius:4px;padding:6px 8px;margin-top:4px;background:#fafafa;"></div>
+      </details>
+      <div id="kx-table-wrap"></div>
     </div>
   </div>
   <div id="tab-methods" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-methods" hidden>

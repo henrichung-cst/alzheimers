@@ -139,6 +139,7 @@ function _khRows() {
   const ctrlDonors = _KH.ctrl_donors || [];
   const n = K.id.length;
   const out = [];
+  const famMap = (typeof META !== "undefined" && META && META.familyMap) || {};
   const _pick = (d, prefix, i) => {
     const v = K[prefix + d + "_vs_CTRLmean"];
     return v ? v[i] : null;
@@ -169,6 +170,7 @@ function _khRows() {
       id: K.id[i],
       name: K.name[i],
       gene_symbol: K.gene_symbol[i],
+      family: famMap[K.name[i]] || "",
       residue_type: K.residue_type[i],
       n_donors_sig: K.n_donors_sig[i],
       n_donors_up: K.n_donors_up[i],
@@ -364,6 +366,7 @@ function renderKinaseHuman() {
     return `<tr data-khid="${r.id}" class="${sigCls}" tabindex="0">`
       + `<td>${_escapeHtml(r.name)}</td>`
       + `<td>${_escapeHtml(r.gene_symbol || "")}</td>`
+      + `<td>${_escapeHtml(r.family || "")}</td>`
       + `<td>${_escapeHtml(r.residue_type || "")}</td>`
       + `<td>${_khRenderProfile(r, fdrThresh, donors, donorMask, maxAbs)}</td>`
       + `<td>${mStr}</td>`

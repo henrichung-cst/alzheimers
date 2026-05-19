@@ -709,6 +709,7 @@ function renderKinaseExplorer() {
       `tabindex="0" aria-label="Kinase ${r.name}; ${scopedSig} sig contrasts in scope">` +
       `<td>${r.name}${residueBadge}</td>` +
       `<td>${r.gene_symbol}</td>` +
+      `<td>${_escapeHtml(r.family || "")}</td>` +
       `<td>${profile}</td>` +
       `<td>${agreementProfile}</td>` +
       `<td class="attr-num">${peakAbsNes != null ? peakAbsNes.toFixed(2) : '<span class="muted">—</span>'}</td>` +
