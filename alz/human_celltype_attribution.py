@@ -36,105 +36,18 @@ TOP_N = config.HUMAN_CELLTYPE_TOP_N
 SEAAD_SPEC_FILE = config.SEAAD_KINASE_SPECIFICITY_FILE
 HBCA_SPEC_FILE = config.HBCA_KINASE_SPECIFICITY_FILE
 
-HBCA_CORTEX_HIPPOCAMPUS_SUPERCLUSTERS = {
-    "Astrocyte",
-    "CGE interneuron",
-    "Committed oligodendrocyte precursor",
-    "Deep-layer corticothalamic and 6b",
-    "Deep-layer intratelencephalic",
-    "Deep-layer near-projecting",
-    "Ependymal",
-    "Fibroblast",
-    "Hippocampal CA1-3",
-    "Hippocampal CA4",
-    "Hippocampal dentate gyrus",
-    "LAMP5-LHX6 and Chandelier",
-    "MGE interneuron",
-    "Microglia",
-    "Oligodendrocyte",
-    "Oligodendrocyte precursor",
-    "Upper-layer intratelencephalic",
-    "Vascular",
-}
-
-HBCA_SUPERCLUSTER_TO_LEVY_T5 = {
-    "Astrocyte": [
-        "Astrocytes",
-        "Ptprz1-protoplasmic-astrocytes",
-    ],
-    "CGE interneuron": [
-        "Erbb4-VIP-inhibitory-neurons",
-        "Erbb4-inhibitory-neurons",
-        "VIP-positive-interneuron",
-        "Reln-neurons",
-        "Ndnf-positive-neurogliaform-inhibitory-interneurons-GABAergic",
-        "GABAergic-inhibitory-interneurons-VIP-positive",
-        "Inhibitory-Neurons",
-    ],
-    "Committed oligodendrocyte precursor": [
-        "OPC",
-    ],
-    "Deep-layer corticothalamic and 6b": [
-        "Foxp2-Excitatory-Neurons-layers-6-and-2-3",
-        "Excitatory-neurons-Cajal-Retzius-cells-layer-I-Reelin",
-    ],
-    "Deep-layer intratelencephalic": [
-        "Excitatory-Rorb",
-        "Excitatory-Pyramidal",
-    ],
-    "Deep-layer near-projecting": [
-        "Foxp2-Excitatory-Neurons-layers-6-and-2-3",
-    ],
-    "Ependymal": [
-        "Ependymal-cell",
-    ],
-    "Fibroblast": [
-        "Vascular-Leptomeningeal-Cells",
-    ],
-    "Hippocampal CA1-3": [
-        "Excitatory-Pyramidal",
-        "Excitatory-neurons",
-    ],
-    "Hippocampal CA4": [
-        "Excitatory-neurons",
-        "glutamatergic-excitatory-neurons",
-    ],
-    "Hippocampal dentate gyrus": [
-        "Excitatory principal neurons in the hippocampal dentate gyrus",
-    ],
-    "LAMP5-LHX6 and Chandelier": [
-        "Reln-neurons",
-        "Ndnf-positive-neurogliaform-inhibitory-interneurons-GABAergic",
-        "GABAergic-inhibitory-interneurons-Dlx6os1-Erbb4",
-    ],
-    "MGE interneuron": [
-        "GABAergic-inhibitory-interneurons-Dlx6os1-Erbb4",
-        "GABAergic inhibitory interneurons",
-    ],
-    "Microglia": [
-        "Microglia",
-    ],
-    "Oligodendrocyte": [
-        "Oligodendrocytes",
-    ],
-    "Oligodendrocyte precursor": [
-        "OPC",
-    ],
-    "Upper-layer intratelencephalic": [
-        "Excitatory-Pyramidal-Satb2-Cux2",
-        "Glutamatergic-excitatory-neurons-Cortical-layer-2-4-pyramidal-neurons",
-    ],
-    "Vascular": [
-        "Endothelial-cell",
-        "Pericyte",
-        "Vascular-Leptomeningeal-Cells",
-        "Choroid-Plexus-Epithelial-Cells",
-    ],
-}
+def _hbca_allowed_superclusters() -> set[str]:
+    """HBCA superclusters reachable from the Levy-t5 spine via the on-disk crosswalk."""
+    return {
+        sc
+        for entries in config.load_cluster_to_hbca_supercluster_map().values()
+        for sc, _ in entries
+    }
 
 
 def _filter_hbca_cortex_hpc(df: pd.DataFrame) -> pd.DataFrame:
-    keep = [c for c in df.columns if c in HBCA_CORTEX_HIPPOCAMPUS_SUPERCLUSTERS]
+    allowed = _hbca_allowed_superclusters()
+    keep = [c for c in df.columns if c in allowed]
     if not keep:
         raise RuntimeError("HBCA cortex/hippocampus filter removed all columns")
     return df.loc[:, keep]
@@ -144,19 +57,16 @@ def _cluster_source_map_for_reference(reference: str) -> dict[str, list[tuple[st
     """Return Levy T5 cluster -> source cell type weights for a human reference."""
     spine = set(config.CLUSTER_SPINE)
     if reference == "seaad_mtg":
-        return {
-            cluster: [(ct, float(w)) for ct, w in entries]
-            for cluster, entries in config.load_cluster_to_seaad_supertype_map().items()
-            if cluster in spine and entries
-        }
-    if reference == "allen_hbca":
-        out: dict[str, list[tuple[str, float]]] = {}
-        for hbca_ct, clusters in HBCA_SUPERCLUSTER_TO_LEVY_T5.items():
-            for cluster in clusters:
-                if cluster in spine:
-                    out.setdefault(cluster, []).append((hbca_ct, 1.0))
-        return out
-    raise ValueError(f"unknown human reference: {reference!r}")
+        loader = config.load_cluster_to_seaad_supertype_map
+    elif reference == "allen_hbca":
+        loader = config.load_cluster_to_hbca_supercluster_map
+    else:
+        raise ValueError(f"unknown human reference: {reference!r}")
+    return {
+        cluster: [(ct, float(w)) for ct, w in entries]
+        for cluster, entries in loader().items()
+        if cluster in spine and entries
+    }
 
 
 def _rollup_matrix_to_levy_t5(
