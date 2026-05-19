@@ -13,15 +13,15 @@ Outputs (under data/incytr_frozen/v2_46clusters/spines/<spine-name>/):
 Gate logic:
   - Drop unnamed `cluster-NN`.
   - For each named cluster, count animals with >= min_cells cells.
-  - If --no-rank-gate (default): in_spine == (not is_unnamed) and
+  - Default (no --rank-gate): in_spine == (not is_unnamed) and
     n_animals_ge_min >= 1.
-  - If rank gate is enabled: additionally require the 10-parameter
-    design matrix over qualifying animals to have rank 10.
+  - With --rank-gate: additionally require the 10-parameter design matrix
+    over qualifying animals to have rank 10.
   - tier annotation records the rank regardless, so callers can post-hoc
     see how rank-deficient a kept cluster is.
 
-Active production spine: --spine-name levy_t5 --min-cells 5 --no-rank-gate
-(31 clusters, 94.5% nucleus coverage).
+Active production spine: --spine-name levy_t5 --min-cells 5 (rank gate off).
+31 clusters, 94.5% nucleus coverage.
 """
 
 from __future__ import annotations

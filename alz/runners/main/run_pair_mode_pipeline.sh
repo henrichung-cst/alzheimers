@@ -143,7 +143,7 @@ echo "state_dir=$STATE_DIR  planned steps: $N_STEPS"
 
 run_step A "cluster spine (CR02)" \
   pixi run python alz/integration/build_cluster_spine.py \
-    --min-cells "$MIN_CELLS" --no-rank-gate --spine-name "$SPINE"
+    --min-cells "$MIN_CELLS" --spine-name "$SPINE"
 
 run_step B "snRNA proportions" \
   pixi run python alz/snrna_proportions.py --run --spine "$SPINE"
