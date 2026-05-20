@@ -76,6 +76,8 @@ from viewer.paths import (  # noqa: E402
     MEASUREMENT_TRACE_DIR,
     MEASUREMENT_TRACE_INDEX,
     MEASUREMENT_TRACE_SCHEMA_VERSION,
+    TRANSCRIPT_TRACE_INDEX,
+    TRANSCRIPT_TRACE_SCHEMA_VERSION,
     PAYLOAD_JSON,
     PAYLOAD_JSON_GZ,
     PIPELINE_OVERVIEW_DEST,
@@ -475,6 +477,36 @@ def ensure_measurement_trace_sources() -> dict:
     with open(MEASUREMENT_TRACE_INDEX, "w") as f:
         json.dump(index, f)
     return index
+
+
+def ensure_transcript_trace_sources() -> dict:
+    """Build (or reuse) per-cluster transcript pseudobulk shards backing the
+    Incytr Pathways "Measurement Trace" panel. Hard-fails on missing substrate
+    — no silent skip, no empty panel."""
+    # Local import to keep the heavy aggexp loader out of import-time.
+    from integration import build_transcript_trace as btt  # noqa: E402
+
+    rebuild = True
+    if os.path.exists(TRANSCRIPT_TRACE_INDEX):
+        with open(TRANSCRIPT_TRACE_INDEX) as f:
+            existing = json.load(f)
+        if existing.get("trace_schema_version") == TRANSCRIPT_TRACE_SCHEMA_VERSION:
+            rebuild = False
+            index = existing
+    if rebuild:
+        index = btt.build(force=True)
+    return {
+        "schema_version": TRANSCRIPT_TRACE_SCHEMA_VERSION,
+        "relative_path": index.get("relative_path"),
+        "clusters": index.get("clusters", []),
+        "sample_groups": index.get("groups", []),
+        "n_libraries_per_arm": index.get("n_libraries_per_arm", 1),
+        "note": index.get("note", ""),
+        "filename_template": index.get("filename_template",
+                                       "{cluster}.parquet"),
+        "sanitize_rule": index.get("sanitize_rule",
+                                   "replace('/', '-'); replace(' ', '_')"),
+    }
 
 
 def build_audit_manifest() -> dict:
@@ -2647,6 +2679,7 @@ def build_payload(data: UnifiedData) -> dict:
         "timepoints": list(config.TIMEPOINTS),
         "diseaseColors": dict(config.DISEASE_COLORS),
         "familyMap": fam,
+        "transcript_trace": ensure_transcript_trace_sources(),
     }
 
     kid = {k: i for i, k in enumerate(data.edge_metadata["kinases"])}

@@ -885,14 +885,20 @@ function _ipRenderTable() {
       if (tdEl) tdEl.innerHTML = _ipRenderDetailPanel(r, rk, tab);
       // Re-wire Plotly if we switched to trajectory.
       if (tab === "trajectory") _ipRenderTrajChart(rk, r);
+      if (tab === "trace") _ipRenderTranscriptTrace(rk, r);
       return;
     }
   });
-  // After render, draw Plotly charts for any open trajectory panels.
+  // After render, draw Plotly charts for any open trajectory panels, and
+  // populate any open transcript-trace panels.
   for (const rk of _ipRuntime.openKeys) {
-    if ((_ipRuntime.detailTab[rk] || "fc") === "trajectory") {
+    const tab = _ipRuntime.detailTab[rk] || "fc";
+    if (tab === "trajectory") {
       const idx = visible.findIndex(r => _ipRowKey(r) === rk);
       if (idx >= 0) _ipRenderTrajChart(rk, visible[idx]);
+    } else if (tab === "trace") {
+      const idx = visible.findIndex(r => _ipRowKey(r) === rk);
+      if (idx >= 0) _ipRenderTranscriptTrace(rk, visible[idx]);
     }
   }
 }
@@ -903,29 +909,109 @@ function _ipRenderTable() {
 
 function _ipRenderDetailPanel(r, rk, activeTab) {
   const hasTrajIdx = _ipHasTraj();
-  // Sub-tab switcher buttons.
-  const tabBar = `<div style="display:flex;gap:6px;margin-bottom:8px;">` +
-    `<button type="button" data-ip-detail-tab="fc" data-ip-detail-rk="${_escapeHtml(rk)}"
+  const hasTT = (typeof TranscriptTraceStore !== "undefined")
+    && TranscriptTraceStore.isAvailable();
+  const btn = (tab, label) =>
+    `<button type="button" data-ip-detail-tab="${tab}" data-ip-detail-rk="${_escapeHtml(rk)}"
        style="padding:2px 12px;border-radius:4px;font-size:12px;cursor:pointer;
               border:1px solid #c0c0c0;
-              background:${activeTab === "fc" ? "#1f4ea3" : "#f4f4f4"};
-              color:${activeTab === "fc" ? "#fff" : "#444"};"
-    >Fold-change</button>` +
-    (hasTrajIdx
-      ? `<button type="button" data-ip-detail-tab="trajectory" data-ip-detail-rk="${_escapeHtml(rk)}"
-           style="padding:2px 12px;border-radius:4px;font-size:12px;cursor:pointer;
-                  border:1px solid #c0c0c0;
-                  background:${activeTab === "trajectory" ? "#1f4ea3" : "#f4f4f4"};
-                  color:${activeTab === "trajectory" ? "#fff" : "#444"};"
-         >Trajectory</button>`
-      : "") +
-    `</div>`;
+              background:${activeTab === tab ? "#1f4ea3" : "#f4f4f4"};
+              color:${activeTab === tab ? "#fff" : "#444"};"
+     >${label}</button>`;
+  const tabBar = `<div style="display:flex;gap:6px;margin-bottom:8px;">`
+    + btn("fc", "Fold-change")
+    + (hasTrajIdx ? btn("trajectory", "Trajectory") : "")
+    + (hasTT ? btn("trace", "Measurement trace") : "")
+    + `</div>`;
   if (activeTab === "trajectory" && hasTrajIdx) {
     const chartId = `ip-traj-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
     return tabBar
       + `<div id="${_escapeHtml(chartId)}" style="width:100%;min-height:220px;"></div>`;
   }
+  if (activeTab === "trace" && hasTT) {
+    return tabBar + _ipRenderTranscriptTraceHost(r, rk);
+  }
   return tabBar + _ipRenderFcMatrix(r);
+}
+
+// Render the empty host for the transcript-trace panel; populated
+// asynchronously by _ipRenderTranscriptTrace once the cluster shards load.
+function _ipRenderTranscriptTraceHost(r, rk) {
+  const hostId = `ip-tt-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  const headerNote = `Transcript pseudobulk · 1 library per arm · males-only`;
+  return `<div class="audit-measurement-trace tt-panel-host" id="${_escapeHtml(hostId)}">`
+       + `<div class="tt-panel-note muted" style="font-size:11px;margin-bottom:6px;">`
+       + _escapeHtml(headerNote) + `</div>`
+       + `<div class="tt-panel-loading muted">Loading transcript trace…</div>`
+       + `</div>`;
+}
+
+// Populate the 4 element-panels (L, R, EM, T) for a row's transcript trace.
+// Sender cluster routes L/EM; receiver cluster routes R/T.
+async function _ipRenderTranscriptTrace(rk, r) {
+  const hostId = `ip-tt-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  if (typeof TranscriptTraceStore === "undefined"
+      || !TranscriptTraceStore.isAvailable()) {
+    host.innerHTML = `<div class="muted">Transcript trace not available in this build.</div>`;
+    return;
+  }
+  const contrast = r.contrast;
+  const sender = r._sender, receiver = r._receiver;
+  // 4 element panels in path order.
+  const elements = [
+    { node: "Ligand",   gene: r.Ligand,   cluster: sender,   side: "sender" },
+    { node: "Receptor", gene: r.Receptor, cluster: receiver, side: "receiver" },
+    { node: "EM",       gene: r.EM,       cluster: sender,   side: "sender" },
+    { node: "Target",   gene: r.Target,   cluster: receiver, side: "receiver" },
+  ];
+  const arms = TranscriptTraceStore.contrastToArms(contrast);
+  const note = `Transcript pseudobulk · 1 library per arm · males-only`
+    + (arms ? ` · ${arms[0].arm} vs ${arms[1].arm} @ ${contrast.split("_")[1] || ""}` : "");
+  // Build placeholder grid first so it's responsive even before async fetches.
+  const cellHtml = elements.map((el, i) => {
+    const slotId = `${hostId}-${i}`;
+    const headerSub = `${el.node} · ${el.cluster || "—"}`;
+    return `<div class="tt-cell" id="${_escapeHtml(slotId)}">`
+         + `<div class="tt-cell-head muted" style="font-size:10px;">${_escapeHtml(headerSub)}</div>`
+         + `<div class="tt-cell-body muted">…</div>`
+         + `</div>`;
+  }).join("");
+  host.innerHTML =
+    `<div class="tt-panel-note muted" style="font-size:11px;margin-bottom:6px;">`
+    + _escapeHtml(note) + `</div>`
+    + `<div class="tt-grid">${cellHtml}</div>`;
+
+  await Promise.all(elements.map(async (el, i) => {
+    const slot = document.getElementById(`${hostId}-${i}`);
+    if (!slot) return;
+    const body = slot.querySelector(".tt-cell-body");
+    if (!el.cluster) {
+      if (body) body.innerHTML = `<div class="muted">no cluster on row</div>`;
+      return;
+    }
+    if (!TranscriptTraceStore.hasCluster(el.cluster)) {
+      if (body) body.innerHTML =
+        `<div class="muted">no transcript trace for this cluster in this build.</div>`;
+      return;
+    }
+    if (!el.gene) {
+      if (body) body.innerHTML = `<div class="muted">no gene on this slot</div>`;
+      return;
+    }
+    try {
+      const armVals = await TranscriptTraceStore.values(
+        el.cluster, el.gene, contrast);
+      if (!armVals) {
+        body.innerHTML = `<div class="muted">no contrast mapping for ${_escapeHtml(contrast)}</div>`;
+        return;
+      }
+      TranscriptTraceStore.renderTwoBarPanel(body, el.gene, armVals);
+    } catch (err) {
+      body.innerHTML = `<div class="muted">load error: ${_escapeHtml(err.message || err)}</div>`;
+    }
+  }));
 }
 
 function _ipRenderFcMatrix(r) {
