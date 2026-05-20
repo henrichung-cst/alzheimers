@@ -1,6 +1,6 @@
 # Epic: Adopt `feat/cr03-human-celltype-specificity` as the new main
 
-**Status:** done — pending Phase 7/8 verification + push
+**Status:** done
 **Owner:** hchung
 **Created:** 2026-05-20
 
@@ -333,3 +333,34 @@ Live in-browser interaction smoke (pager controls, chip toggle, Recur-in AND-gat
 - The Phase 6 footnote about pushing to `public` (not `origin`) remains the operating instruction.
 - No new safety tag needed for Phase 7; the existing `pre-cr03-adopt-main` / `pre-cr03-adopt-branch` tags from Phase 0 still cover the rollback story.
 - Untracked planning drafts (`incytr_mea_seed_list_expansion_plan.md`, `incytr_pathway_measurement_trace_plan.md`) still present; Phase 8 should not stage them.
+
+### Phase 8 — Cleanup: push, delete branch, retain tags
+**Agent:** Opus 4.7 (1M) · 2026-05-20
+**Commits produced:**
+- `73110df` docs(plan): record Phase 7 verification log + mark phase done — committed Phase 7's dirty doc trail (Phase 7 had ended without committing; this brings it under version control before publishing).
+- (this commit, docs-only) — Phase 8 status `done`, epic status flipped from "done — pending Phase 7/8 verification + push" to plain `done`, Phase 8 log entry appended.
+
+**Pushed main SHA (force-with-lease):** `73110df` (the Phase 7 docs commit). The Phase 8 docs commit produced by this entry will be pushed as a follow-up.
+
+**Divergence from plan — push was non-fast-forward, required `--force-with-lease`:**
+- The phase doc asserted "This is **not** a force-push — origin's main is an ancestor of the new main." That premise was wrong. Public `main` carried `a152c52` (Measurement Trace), which Phase 1's `git reset --hard` removed from new main's history. Phase 5 reapplied the same diff as cherry-pick `8046a2d` (new SHA, same content), so the *work* is preserved, but the *history* is rewritten — push had to overwrite, not append.
+- `git push public main` rejected as non-fast-forward (as expected post-reset). Used `git push --force-with-lease public main` after user confirmation. Lease check passed; push succeeded.
+- Per `[[project_solo_dev_repo]]` (saved this phase) the usual collaborator/CI caveats around force-push do not apply here — only user + Claude contribute, no downstream consumers. Recovery anchors (`pre-cr03-adopt-main`, `pre-cr03-adopt-branch`) still on public.
+
+**Branch deletion:** `git branch -d feat/cr03-human-celltype-specificity` succeeded with plain `-d` (no `-D` needed) because every commit on the CR-03 branch is reachable from new main's history — the cleanest possible deletion. The branch did not exist on `public` (verified via `git ls-remote --heads public feat/cr03-human-celltype-specificity` → empty), so no remote delete was needed.
+
+**Safety tags retained (verified on public):**
+- `pre-cr03-adopt-main` → `02f0b64b1be1188bbad7381824f5bd894759a79a`
+- `pre-cr03-adopt-branch` → `0cb721f4ad2af05e86581db646ba6f13a7af140b`
+
+**Verification:**
+- `git tag --list 'pre-cr03-*'` → both present locally.
+- `git ls-remote --tags public 'pre-cr03-*'` → both present on public.
+- `git branch -a | grep -i cr03` → no `feat/cr03-*` anywhere (the lingering `cr03-work` ref is an unrelated worktree-locked branch, not part of this epic).
+- `git ls-remote --heads public feat/cr03-human-celltype-specificity` → empty.
+- Browser hard-refresh check of the published viewer was **not** performed from this CLI session; the phase doc lists this as the final tick. User to verify `PAYLOAD.meta.generated_at` matches the Phase 7 build timestamp (`2026-05-20T20:10:56.749182+00:00`) on next browser session.
+
+**Notes for the user:**
+- Memory file `[[project_solo_dev_repo]]` was added this phase to capture the "no collaborators, no public consumers" context so future destructive-op caveats are appropriately scoped.
+- Untracked planning drafts (`incytr_mea_seed_list_expansion_plan.md`, `incytr_pathway_measurement_trace_plan.md`) remain untracked — they are unrelated future-work drafts and were intentionally left alone through every phase.
+- Epic is closed. The two worktree-locked branches (`cr03-work`, `feat/cr04-incytr-viewer`) and their associated worktrees under `.claude/worktrees/` are out of scope for this epic but visible in `git branch -a` / `git worktree list` if cleanup is desired separately.

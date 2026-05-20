@@ -1,6 +1,6 @@
 # Phase 8 — Cleanup: push, delete branch, retain tags
 
-**Status:** todo
+**Status:** done
 **Depends on:** Phase 7 (must end with an explicit go).
 **Reversible:** push is partially reversible; branch deletion is reversible only via the `pre-cr03-adopt-branch` tag.
 
