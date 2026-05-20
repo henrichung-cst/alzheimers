@@ -1,6 +1,6 @@
 # Phase 6 — Forward-port audit + epic docs
 
-**Status:** todo
+**Status:** done
 **Depends on:** Phase 5
 **Reversible:** yes.
 

@@ -112,9 +112,11 @@ Scope: `alz/build_unified_viewer.py`, `alz/integration/build_transcript_trace.py
 
 ---
 
-## 3. Regressions / Lost Features
+## 3. Features adopted from CR-03 branch via the reconcile epic
 
-### 3.1 Kinase Evidence Crosstable tab — **DELETED** in HEAD (`a152c52`)
+> **Reframed 2026-05-20 after the CR-03 adoption.** This section originally documented features as "regressions / lost in HEAD `a152c52`." That framing was correct relative to the pre-adoption main, but main has since been hard-reset onto `feat/cr03-human-celltype-specificity` and the four cherry-picks landed in Phases 2–5 of [`docs/plans/epic_reconcile_cr03_branch.md`](epic_reconcile_cr03_branch.md). Final Phase 5 SHA: `534f98e` (per-cluster slicing for transcript trace builder). The items below are now **features adopted from the CR-03 branch**, not regressions. The historical detail is retained because the §4 punch list still references them and the diff narrative is useful audit context.
+
+### 3.1 Kinase Evidence Crosstable tab — restored on the branch; needs final TAB_MANIFEST wiring (see Phase 7)
 
 - **Introduced**: commit `175c85b` (2026-05-19) — "feat(viewer): add Kinase Evidence Crosstable + Family column on mouse/human tabs"
 - **Deleted**: commit `a152c52` (2026-05-20, HEAD) — "feat(viewer): Incytr pathways Measurement Trace panel (transcript v1)"

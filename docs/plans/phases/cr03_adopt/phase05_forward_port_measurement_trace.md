@@ -1,6 +1,6 @@
 # Phase 5 — Forward-port `a152c52` (Measurement Trace panel)
 
-**Status:** todo
+**Status:** done
 **Depends on:** Phase 4
 **Reversible:** yes via `git reset --hard HEAD~1`.
 

@@ -1,6 +1,6 @@
 # Phase 2 — Forward-port `56fd2bf` (trajectory_index, builder side)
 
-**Status:** todo
+**Status:** done (skipped — superseded; see Implementation Log)
 **Depends on:** Phase 1
 **Reversible:** yes via `git reset --hard HEAD~1` if the cherry-pick is the only commit since Phase 1.
 

@@ -1,6 +1,6 @@
 # Phase 1 — Reset main onto branch tip
 
-**Status:** todo
+**Status:** done
 **Depends on:** Phase 0 (both safety tags must exist on origin)
 **Reversible:** yes via `git reset --hard pre-cr03-adopt-main`, but only locally — do NOT push until Phase 7 verify passes.
 

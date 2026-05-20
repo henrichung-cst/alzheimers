@@ -1,6 +1,6 @@
 # Phase 3 — Forward-port `5609eab` (trajectory chips + Recur-in filter, viewer side)
 
-**Status:** todo
+**Status:** done (no-op — features already present and redesigned on branch)
 **Depends on:** Phase 2
 **Reversible:** yes via `git reset --hard HEAD~1` (cherry-pick is local-only at this point).
 

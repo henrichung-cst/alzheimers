@@ -1,6 +1,6 @@
 # Phase 4 — Forward-port per-shard pagination commit
 
-**Status:** todo
+**Status:** done
 **Depends on:** Phase 3
 **Reversible:** yes via `git reset --hard HEAD~1`.
 
