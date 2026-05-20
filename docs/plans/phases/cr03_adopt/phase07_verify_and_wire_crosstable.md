@@ -1,6 +1,6 @@
 # Phase 7 — Verify + wire Crosstable tab into TAB_MANIFEST
 
-**Status:** todo
+**Status:** done
 **Depends on:** Phase 6
 **Reversible:** the wiring change is a small fixup commit; verification is read-only.
 

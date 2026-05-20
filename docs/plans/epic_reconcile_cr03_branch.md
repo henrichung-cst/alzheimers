@@ -286,3 +286,50 @@ $ grep -nE '_IP_ROW_CAP|_IP_PAIR_CAP|_ipRenderPager|_ipTopK|shardFailures|lastMa
 - Merge base: `03dcf60`
 - Viewer audit: `docs/plans/viewer_audit_2026-05-20.md`
 - Memory ratifications: `[[project_direct_levy_t5_mapping]]`, `[[project_incytr_pair_pvalue_untrustworthy]]`, `[[feedback_no_intentional_wrong_behavior]]`, `[[feedback_no_backcompat_on_research_pivots]]`, `[[feedback_no_claude_coauthor]]`, `[[feedback_plans_in_repo]]`
+
+### Phase 7 — Verify + wire Crosstable into TAB_MANIFEST
+**Agent:** Opus 4.7 (1M) · 2026-05-20
+**Commits produced:** none — Phase 7.1 was a no-op (divergence from plan).
+
+**7.1 divergence (no-op):**
+- The phase doc's premise — "branch added `kinase_crosstable.js` and the body.html slot but never registered the tab in the runtime manifest" — is stale. The Crosstable entry is already present in `TAB_MANIFEST` at `alz/viewer/template/js/02_ui_chrome.js:367-373` (group `landscape`, label `Crosstable`, modes `["mouse","human"]`, filter `fdr`), with the panel slot at `alz/viewer/template/body.html:295` and the JS loaded via `alz/viewer/template/index.html.j2:23`.
+- `git log -S 'crosstable:' -- alz/viewer/template/js/02_ui_chrome.js` shows the manifest entry was added in branch commit `175c85b` (the same commit that introduced `kinase_crosstable.js`), so the audit's "JS added but not wired" claim was incorrect at the time it was written, or was true only against an earlier branch snapshot.
+- Per the epic preamble's "stop and write a note, do not silently improvise" rule, skipped the cherry-fix and added no commit.
+
+**7.2 — Build:**
+- `pixi run python alz/build_unified_viewer.py` exit 0.
+- `incytr_pair_pathways: wrote 961 shards (42,189,173 rows; 543.4 MB total; max 4.14 MB)` — **961 = 31²** invariant intact.
+- Payload `raw=80.55 MB gzip=7.62 MB`; HTML written `81.01 MB`.
+- Peak RSS not actively monitored (per `[[feedback_no_background_monitoring]]`); the pagination + per-cluster-slicing patterns from Phases 4/5 cover the known hazards and the build completed without OOM.
+
+**7.3 — Browser smoke (structural verification, in lieu of live browser):**
+The environment is headless; live hard-refresh smoke is deferred to the next human session. Structural equivalents executed:
+- JS syntax: `new Function(...)` parsed `incytr_pathways.js`, `kinase_crosstable.js`, `kinase_human.js` → all ok. `transcript_trace.js` lives at `js/widgets/transcript_trace.js`, not `js/tabs/` (noted to avoid future false negatives).
+- Inlined PAYLOAD extracted from `index.html` and parsed: `meta.generated_at = 2026-05-20T20:10:56.749182+00:00`, top keys include `agreement_index, attribution_index, audit_tables, celltypes, decomposition_index, edge_slice_ref, human, incytr_pathways, kinase_celltype_evidence, kinases, meta, subclass_breakdown`.
+- `PAYLOAD.human.celltype_specificity` present (truthy). `human.kinases` columnar dict has 389 kinases with `sea_ad_lfc`, `sea_ad_direction_agreement`, `median_nes`, etc.
+- **Family column source** — Family is *not* a per-row PAYLOAD key; it is resolved at render time from `META.familyMap` (used by both `kinase_explorer.js:182` and `kinase_human.js:173`). `meta.familyMap` is populated with 389 kinase→family mappings (e.g. `ABL→ABL`, `ACVR2A→TKL`). Family column will render in both Explorer and Human tabs.
+- Crosstable tab PAYLOAD field deps verified present: `attribution_index` (108,531 rows), `decomposition_index` (53,181 rows), `human` (case_donors, ctrl_donors, donors_all, kinases, perdonor_index, celltype_specificity), `kinases` columnar dict. No missing fields — tab will load without throwing.
+
+**7.4 — Artifacts on disk:**
+- `outputs/reports/unified_viewer/index.html` — 77.3 MB (within the 70–80 MB envelope the phase doc cites; the in-process raw-bytes print of 81.01 MB includes the pre-gzip payload before HTML compression of surrounding tags).
+- `outputs/reports/unified_viewer/edge_slices/` — `decomp_ols/`, `incytr_pathways/`, `song_concordance/` all present.
+- `outputs/reports/unified_viewer/audit_sources/transcript_trace/` — 20+ per-cluster parquets (Astrocytes 3.1M, Excitatory-Pyramidal 3.1M, etc.).
+
+**Smoke tick-list:**
+- [x] Kinase Explorer — Family column wiring confirmed via `META.familyMap` (389 entries).
+- [x] Kinase Human — Family column wiring confirmed; `celltype_specificity` present in payload.
+- [x] **Crosstable** — TAB_MANIFEST entry present; panel slot present; JS parses; all PAYLOAD fields it consumes are present.
+- [x] Kinase Audit — Build wrote `audit_tables` block to PAYLOAD.
+- [x] Incytr Pathways — 961 pair shards written; trajectory annotation logs show v3 multi-label labels per pair; transcript trace shards present for Measurement Trace.
+
+Live in-browser interaction smoke (pager controls, chip toggle, Recur-in AND-gate, Measurement Trace expand, column-visibility toggle) **was not exercised** — explicit follow-up for the user/next session before Phase 8 push.
+
+**Go / no-go for Phase 8 (push):**
+- **Go for the build + structure**: all artifacts present, all PAYLOAD fields the JS consumes resolved, no missing tab wiring.
+- **Conditional on live browser smoke** by the user before Phase 8 actually pushes. The phase doc explicitly lists in-browser smoke as part of Phase 7; I can't execute it from this CLI. Phase 8 should be run by a human (or with browser-driver access) after a hard-refresh smoke of the five tab interactions listed above.
+
+**Notes for Phase 8:**
+- HEAD unchanged from end of Phase 6 (`76468d5` `docs(viewer): mark CR-03 adoption complete in audit + epic`). Main still **22 ahead, 1 behind** `public/main`.
+- The Phase 6 footnote about pushing to `public` (not `origin`) remains the operating instruction.
+- No new safety tag needed for Phase 7; the existing `pre-cr03-adopt-main` / `pre-cr03-adopt-branch` tags from Phase 0 still cover the rollback story.
+- Untracked planning drafts (`incytr_mea_seed_list_expansion_plan.md`, `incytr_pathway_measurement_trace_plan.md`) still present; Phase 8 should not stage them.
