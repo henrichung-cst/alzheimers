@@ -1790,7 +1790,8 @@ def _write_incytr_pathways() -> dict | None:
               f"emitting NULL for {missing_label_dsts}", flush=True)
 
     con = duckdb.connect()
-    con.execute("PRAGMA threads=8; PRAGMA memory_limit='12GB';")
+    _duckdb_mem = os.environ.get("VIEWER_DUCKDB_MEMORY_LIMIT", "4GB")
+    con.execute(f"PRAGMA threads=8; PRAGMA memory_limit='{_duckdb_mem}';")
     con.execute("SET temp_directory='/home/hchung/.cache/duckdb';")
     # SiK_score only exists in the pair-mode reshape (alz/integration/
     # pair_to_receiver_cache.py); the legacy factorial cache does not carry
@@ -1968,42 +1969,18 @@ def _write_incytr_pathways() -> dict | None:
         if f.endswith(".parquet") or f == "index.json":
             os.remove(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, f))
 
-    # Materialize all rows once, then groupby+write per pair. The per-node
-    # seed-list labels (`<Node>.label` upstream → `<Node>_label` in the shard,
-    # vocab = {"DEG","prG"}) returned with the seed-list rerun and surface in
-    # the table as evidence-source badges next to each gene name.
+    # Per-pair streaming: enumerate (sender, receiver) pairs from DuckDB, then
+    # fetch + annotate + write one pair at a time. The previous version did a
+    # single `fetchdf()` of the entire 10.6M-row receiver_cache, peaking at
+    # 5-8 GB pandas. Per-pair fetches keep RSS bounded (~30k rows/pair avg).
     extra_cols = list(_INCYTR_SCORE_COLS) + list(_INCYTR_FC_COLS)
     extra_select = ", ".join(extra_cols)
     label_cols = list(_INCYTR_LABEL_COLS)
     label_select = ", ".join(label_cols)
-    df = con.execute(f"""
-        SELECT sender, receiver, Path, Ligand, Receptor, EM, Target,
-               contrast, pvalue, PDS,
-               {extra_select},
-               {label_select}
-        FROM src
-    """).fetchdf()
-    con.close()
 
-    # Receivers arrive sanitized (hive partition); senders raw.
-    df["receiver"] = df["receiver"].map(lambda r: sanitized_to_display.get(r, r))
-    float_cols = ["pvalue", "PDS"] + extra_cols
-    for col in float_cols:
-        df[col] = df[col].astype("float32")
-    # Labels are categoricals with a tiny fixed vocab — shrink to category for
-    # ~1/4 the parquet bytes vs raw strings.
-    for col in label_cols:
-        df[col] = df[col].astype("category")
-
-    # CR-04: annotate each shard row with traj_label + sign_vec columns.
-    # Also build small summary dicts (recur_index, trajectory_summary) for
-    # the payload. Full trajectory_index is NOT inlined in the payload —
-    # JS reads traj_label/sign_vec directly from the loaded shard rows.
-    # Phase-1 mock: uses factorial OLS PDS/pvalue in place of pair-mode values.
-    # Swap point for phase 2: just replace df with pair-mode table.
-    df, recur_index, traj_summary = _annotate_trajectory_columns(
-        df, source_label="factorial",
-    )
+    pair_rows = con.execute(
+        "SELECT DISTINCT sender, receiver FROM src ORDER BY sender, receiver"
+    ).fetchall()
 
     shard_cols = [
         "Path", "Ligand", "Receptor", "EM", "Target",
@@ -2017,23 +1994,52 @@ def _write_incytr_pathways() -> dict | None:
     total_rows = 0
     max_shard_bytes = 0
     max_shard_name = ""
-    for (s, r), g in df.groupby(["sender", "receiver"], sort=True):
-        sub = g[shard_cols].sort_values(
+    recur_index: dict = {}
+    traj_summary: dict = {}
+    n_paths_total = 0
+    for s_raw, r_raw in pair_rows:
+        sub = con.execute(f"""
+            SELECT sender, receiver, Path, Ligand, Receptor, EM, Target,
+                   contrast, pvalue, PDS,
+                   {extra_select},
+                   {label_select}
+            FROM src
+            WHERE sender = ? AND receiver = ?
+        """, [s_raw, r_raw]).fetchdf()
+        if sub.empty:
+            continue
+        r_display = sanitized_to_display.get(r_raw, r_raw)
+        sub["receiver"] = r_display
+        for col in ["pvalue", "PDS"] + extra_cols:
+            sub[col] = sub[col].astype("float32")
+        for col in label_cols:
+            sub[col] = sub[col].astype("category")
+
+        sub, pair_recur, pair_summary = _annotate_trajectory_columns(
+            sub, source_label="factorial",
+        )
+        recur_index.update(pair_recur)
+        for label, count in pair_summary.items():
+            traj_summary[label] = traj_summary.get(label, 0) + count
+
+        sub = sub[shard_cols].sort_values(
             ["contrast", "pvalue"], kind="mergesort", na_position="last",
         )
-        fname = f"{_incytr_sanitize(s)}__{_incytr_sanitize(r)}.parquet"
+        fname = f"{_incytr_sanitize(s_raw)}__{_incytr_sanitize(r_display)}.parquet"
         path = os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, fname)
         pq.write_table(
             pa.Table.from_pandas(sub, preserve_index=False),
             path, compression="zstd",
         )
-        present_pairs.append([s, r])
+        present_pairs.append([s_raw, r_display])
         pair_row_counts[fname] = len(sub)
         total_rows += len(sub)
         sz = os.path.getsize(path)
         if sz > max_shard_bytes:
             max_shard_bytes = sz
             max_shard_name = fname
+        del sub
+    con.close()
 
     index = {
         "schema_version": SCHEMA_VERSION,
@@ -2157,7 +2163,8 @@ def _write_incytr_pair_pathways() -> dict | None:
           f"contrasts = {present_contrasts}", flush=True)
 
     con = duckdb.connect()
-    con.execute("PRAGMA threads=8; PRAGMA memory_limit='12GB';")
+    _duckdb_mem = os.environ.get("VIEWER_DUCKDB_MEMORY_LIMIT", "4GB")
+    con.execute(f"PRAGMA threads=8; PRAGMA memory_limit='{_duckdb_mem}';")
     con.execute("SET temp_directory='/home/hchung/.cache/duckdb';")
 
     # Detect optional path-level direction-flag columns once.

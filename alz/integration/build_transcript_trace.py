@@ -82,9 +82,14 @@ def _resolve_canonical(name: str, canonical: set[str], sorted_canonical: list[st
     return None
 
 
-def _load_aggexp_long(pseudobulk_path: str) -> tuple[pd.DataFrame, list[str], list[str]]:
-    """Return (long_df, canonical_clusters, groups) where long_df has columns
-    ``cluster, group, gene, value``.
+def _load_aggexp_wide(pseudobulk_path: str):
+    """Return (values, row_clusters, row_groups, gene_cols, canonical_names,
+    unique_groups) — the wide float32 matrix plus resolved metadata.
+
+    Kept wide so the per-cluster loop in ``build()`` can slice a small subset
+    and explode only that cluster's ~24 rows × n_genes into long form. The
+    previous "explode-the-whole-thing" version peaked at multi-GB on a 1078 ×
+    25k input.
     """
     if not os.path.exists(pseudobulk_path):
         raise FileNotFoundError(
@@ -118,10 +123,8 @@ def _load_aggexp_long(pseudobulk_path: str) -> tuple[pd.DataFrame, list[str], li
           f"{len(canonical_names)} names (from Group={first_group!r})",
           flush=True)
 
-    # Pre-sort canonical names by descending length for longest-match lookup.
     sorted_canonical = sorted(canonical_set, key=len, reverse=True)
 
-    # Resolve every row's cluster.
     resolved: list[str] = []
     for i, raw in enumerate(row_names):
         c = _resolve_canonical(raw, canonical_set, sorted_canonical)
@@ -133,10 +136,7 @@ def _load_aggexp_long(pseudobulk_path: str) -> tuple[pd.DataFrame, list[str], li
             )
         resolved.append(c)
 
-    # Per-(cluster, group) uniqueness check: each cluster should appear at
-    # most once per group (rbind dedup means a literal-name collision would
-    # produce a different suffixed name — same canonical + same group is the
-    # genuine error).
+    # Per-(cluster, group) uniqueness check.
     df_key = pd.DataFrame({"cluster": resolved, "group": groups_col})
     dup_mask = df_key.duplicated(keep=False)
     if dup_mask.any():
@@ -146,27 +146,13 @@ def _load_aggexp_long(pseudobulk_path: str) -> tuple[pd.DataFrame, list[str], li
             f"resolution: e.g. {sample}"
         )
 
-    # Pivot to long form: gene columns are everything except Group.
     gene_cols = [c for c in df.columns if c != "Group"]
-    print(f"  transcript_trace: melting {len(df):,} rows × {len(gene_cols):,} "
-          f"genes → long form", flush=True)
     values = df[gene_cols].to_numpy(dtype="float32")
-    # Build the long table column-wise to avoid pandas' expensive melt for
-    # 1078 × 25k.
-    n_rows, n_genes = values.shape
-    long_cluster = np.repeat(resolved, n_genes)
-    long_group = np.repeat(groups_col, n_genes)
-    long_gene = np.tile(gene_cols, n_rows)
-    long_value = values.ravel()
-    # Drop NaN/zero-only at write time (gene-by-gene); keep all here.
-    long_df = pd.DataFrame({
-        "cluster": pd.Categorical(long_cluster, categories=canonical_names),
-        "group": pd.Categorical(long_group),
-        "gene": long_gene,
-        "value": long_value,
-    })
+    # Release the original wide DataFrame; we only need the float32 matrix +
+    # parallel metadata lists from here on.
+    del df
     unique_groups = sorted(set(groups_col))
-    return long_df, canonical_names, unique_groups
+    return values, resolved, groups_col, gene_cols, canonical_names, unique_groups
 
 
 def _load_pathway_clusters(index_path: str) -> set[str]:
@@ -237,8 +223,8 @@ def build(force: bool = False) -> dict:
     os.makedirs(TRANSCRIPT_TRACE_DIR, exist_ok=True)
 
     t0 = time.time()
-    long_df, canonical_names, unique_groups = _load_aggexp_long(
-        TRANSCRIPT_TRACE_PSEUDOBULK
+    values, row_clusters, row_groups, gene_cols, canonical_names, unique_groups = (
+        _load_aggexp_wide(TRANSCRIPT_TRACE_PSEUDOBULK)
     )
 
     # Sample-key validation.
@@ -269,33 +255,53 @@ def build(force: bool = False) -> dict:
     print(f"  transcript_trace: {len(pathway_clusters)} pathway clusters "
           f"(all present in pseudobulk)", flush=True)
 
-    # Per-cluster shard write.
-    # Decoder lookup → arrays parallel to the group categorical for fast join.
-    group_to_meta = {
-        g: samplekey[g] if g in samplekey else _decode_group(g)
-        for g in unique_groups
-    }
+    # Per-cluster shard write — stream one cluster at a time. Each cluster has
+    # ~24 rows (sex × tp × genotype groups), so the per-iteration long frame is
+    # ~24 × n_genes ≈ 600k rows. Holding only one cluster at a time keeps peak
+    # RSS ~50 MB instead of multi-GB.
+    row_clusters_arr = np.asarray(row_clusters)
+    row_groups_arr = np.asarray(row_groups)
+    n_genes = len(gene_cols)
+    gene_cols_arr = np.asarray(gene_cols)
 
     shards_written: dict[str, str] = {}
     for cluster in sorted(pathway_clusters):
-        sub = long_df[long_df["cluster"] == cluster].copy()
-        if sub.empty:
+        idx = np.flatnonzero(row_clusters_arr == cluster)
+        if idx.size == 0:
             raise ValueError(
                 f"transcript_trace: cluster {cluster!r} resolved zero rows "
                 f"in pseudobulk; substrate is inconsistent."
             )
-        sub = sub.drop(columns=["cluster"])
-        sub["group"] = sub["group"].astype(str)
-        meta_rows = sub["group"].map(samplekey)
-        sub["sex"] = meta_rows.map(lambda m: m["sex"])
-        sub["timepoint"] = meta_rows.map(lambda m: m["timepoint"])
-        sub["genotype"] = meta_rows.map(lambda m: m["genotype"])
-        sub = sub[["gene", "group", "sex", "timepoint", "genotype", "value"]]
+        sub_groups = row_groups_arr[idx]
+        sub_values = values[idx]  # (n_rows_in_cluster, n_genes)
+        n_rows = sub_values.shape[0]
+
+        long_gene = np.tile(gene_cols_arr, n_rows)
+        long_group = np.repeat(sub_groups, n_genes)
+        long_value = sub_values.ravel()
+
+        # Vectorize sex/tp/geno via per-group lookup table → cheap repeat.
+        sex_per_row = np.array([samplekey[g]["sex"] for g in sub_groups])
+        tp_per_row = np.array([samplekey[g]["timepoint"] for g in sub_groups])
+        geno_per_row = np.array([samplekey[g]["genotype"] for g in sub_groups])
+        long_sex = np.repeat(sex_per_row, n_genes)
+        long_tp = np.repeat(tp_per_row, n_genes)
+        long_geno = np.repeat(geno_per_row, n_genes)
+
+        sub = pd.DataFrame({
+            "gene": long_gene,
+            "group": long_group,
+            "sex": long_sex,
+            "timepoint": long_tp,
+            "genotype": long_geno,
+            "value": long_value,
+        })
 
         slug = _sanitize_celltype(cluster)
         out_path = os.path.join(TRANSCRIPT_TRACE_DIR, f"{slug}.parquet")
         sub.to_parquet(out_path, index=False, compression="zstd")
         shards_written[cluster] = os.path.relpath(out_path, UNIFIED_VIEWER_DIR)
+        del sub, long_gene, long_group, long_value, long_sex, long_tp, long_geno
 
     # Index.
     index = {
