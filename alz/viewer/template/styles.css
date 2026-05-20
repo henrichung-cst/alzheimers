@@ -538,3 +538,21 @@ main#app-main { padding:14px; }
 .kh-vbar-val { font-family:var(--font-mono); font-size:10px; color:#37474f; }
 .kh-vbar-donor { font-family:var(--font-mono); font-size:10px; color:#546e7a;
   white-space:nowrap; }
+
+/* Incytr Pathways — Measurement Trace panel (transcript pseudobulk). */
+.tt-panel-host { padding:4px 0; }
+.tt-panel-note { font-style:italic; }
+.tt-grid { display:grid; grid-template-columns:repeat(4, minmax(150px, 1fr));
+  gap:10px; align-items:start; }
+.tt-cell { background:#ffffff; border:1px solid #e0e0e0; border-radius:3px;
+  padding:6px 8px; min-width:150px; }
+.tt-cell-head { font-family:var(--font-mono); font-size:10px; color:#546e7a;
+  margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tt-cell-body { min-height:90px; }
+.tt-panel-head { font-family:var(--font-mono); font-size:10px; color:#37474f;
+  margin-bottom:2px; }
+.tt-panel-svg { display:block; }
+.tt-panel-empty { font-size:11px; padding:10px 0; }
+@media (max-width: 1100px) {
+  .tt-grid { grid-template-columns:repeat(2, minmax(150px, 1fr)); }
+}

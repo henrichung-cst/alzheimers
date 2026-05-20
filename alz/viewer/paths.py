@@ -50,6 +50,20 @@ INCYTR_FACTORIAL_INPUTS_DIR = os.path.join(
 AUDIT_SOURCES_DIR = os.path.join(UNIFIED_VIEWER_DIR, "audit_sources")
 MEASUREMENT_TRACE_DIR = os.path.join(AUDIT_SOURCES_DIR, "measurement_trace")
 MEASUREMENT_TRACE_INDEX = os.path.join(MEASUREMENT_TRACE_DIR, "index.json")
+
+# Per-cluster transcript pseudobulk shards backing the Incytr Pathways
+# "Measurement Trace" panel. Substrate is the aggexp.csv produced by
+# aggregate_expression.R over 24 (sex × timepoint × genotype) groups.
+TRANSCRIPT_TRACE_DIR = os.path.join(AUDIT_SOURCES_DIR, "transcript_trace")
+TRANSCRIPT_TRACE_INDEX = os.path.join(TRANSCRIPT_TRACE_DIR, "index.json")
+TRANSCRIPT_TRACE_PSEUDOBULK = os.path.join(
+    config.REPO_ROOT, "data", "incytr_frozen", "v2_46clusters",
+    "provenance", "aggexp.csv",
+)
+TRANSCRIPT_TRACE_SAMPLEKEY = os.path.join(
+    config.REPO_ROOT, "data", "incytr_frozen", "v2_46clusters",
+    "provenance", "yuyu_samplekey.csv",
+)
 PIPELINE_OVERVIEW_SRC = os.path.join(config.REPO_ROOT, "docs", "pipeline_overview.html")
 PIPELINE_OVERVIEW_DEST = os.path.join(UNIFIED_VIEWER_DIR, "pipeline_overview.html")
 REPORT_MD = os.path.join(config.REPO_ROOT, "pipeline_notes", "phase2_payload_report.md")
@@ -61,3 +75,4 @@ SCHEMA_VERSION = 1
 TOP_N_KINASES = 5                  # per-kinase preview rows in JSON
 AUDIT_PREVIEW_ROWS = 25
 MEASUREMENT_TRACE_SCHEMA_VERSION = 3
+TRANSCRIPT_TRACE_SCHEMA_VERSION = 1
