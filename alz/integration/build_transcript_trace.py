@@ -2,28 +2,21 @@
 """Build per-cluster transcript pseudobulk shards for the Incytr Pathways
 "Measurement Trace" panel.
 
-Substrate is the wide aggexp.csv produced by aggregate_expression.R:
-``do.call(rbind, datalist)`` over 24 ``AggregateExpression`` frames (one per
-sex × timepoint × genotype group). Each frame contributes the per-cluster row
-for that Group; R deduplicates colliding row names by appending integer
-suffixes with no separator (``Astrocytes`` → ``Astrocytes1`` → ``Astrocytes2``
-…).  Some cluster names already end in digits (``cluster-27``,
-``Excitatory-Pyramidal-Satb2-Cux2``, ``Foxp2-Excitatory-Neurons-layers-6-and-2-3``),
-so trailing-integer parsing is ambiguous. The reliable approach used here:
-
-  1. Treat rows whose ``Group`` matches the file's first row as the *canonical*
-     vocabulary (those rows are guaranteed to carry unsuffixed names — they
-     were the first occurrence in the rbind).
-  2. For every subsequent row, resolve to a canonical cluster by *longest
-     canonical-prefix match*: the row's name equals ``C`` or ``C + <digits>``
-     where ``C`` is a canonical name. Prefer the longest ``C`` so
-     ``cluster-271`` resolves to canonical ``cluster-27`` rather than failing
-     because no ``cluster-2`` exists.
+Substrate is the long-form parquet at
+``outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet``,
+emitted by ``bench/incytr_pair_levy_t5/emit_expr_bygroup.R``:
+per-(cluster, Group) mean of ``Data.input@assays$originalexp@data`` — bit-for-
+bit the matrix Incytr's ``Cal_scFC`` consumes via
+``Expr_bygroup(..., mean_method = "mean")``. The panel therefore matches the
+FC tab's ``*_sclog2FC`` values: any user can recover
+``log2((WT_arm + 1e-5) / (disease_arm + 1e-5))`` by hand from the shard,
+modulo the sign flip applied in ``pair_to_receiver_cache.py`` so the viewer's
+"positive = up in disease" tooltip stays correct.
 
 Pathway-side cluster discovery reads the existing
 ``edge_slices/incytr_pathways/index.json`` (unsanitized sender/receiver names
-already there). Each pathway cluster must be present in the canonical set or
-the build hard-fails.
+already there). Each pathway cluster must be present in the parquet's
+``cluster`` column or the build hard-fails.
 
 Filename slugging uses ``sanitize_celltype`` from
 ``alz.integration.pair_to_receiver_cache`` — imported, not re-implemented.
@@ -34,12 +27,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import sys
 import time
 
-import numpy as np
 import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -61,98 +52,6 @@ from viewer.paths import (  # noqa: E402
 # Pair-mode sample-key column → (sex, timepoint, genotype). SCRNA_ID looks
 # like "ma_4mo_AppP" / "fe_2mo_WTyp". Sex prefix `ma` → M, `fe` → F.
 _SEX_MAP = {"ma": "M", "fe": "F"}
-_DIGIT_SUFFIX = re.compile(r"(\d+)$")
-
-
-def _resolve_canonical(name: str, canonical: set[str], sorted_canonical: list[str]) -> str | None:
-    """Map a (possibly dedup-suffixed) row name to its canonical cluster.
-
-    Strategy: exact match first; otherwise longest canonical prefix where the
-    trailing remainder is all-digits.
-    """
-    if name in canonical:
-        return name
-    # sorted_canonical is pre-sorted by descending length so the first match
-    # is the longest valid prefix.
-    for c in sorted_canonical:
-        if len(c) >= len(name):
-            continue
-        if name.startswith(c) and name[len(c):].isdigit():
-            return c
-    return None
-
-
-def _load_aggexp_wide(pseudobulk_path: str):
-    """Return (values, row_clusters, row_groups, gene_cols, canonical_names,
-    unique_groups) — the wide float32 matrix plus resolved metadata.
-
-    Kept wide so the per-cluster loop in ``build()`` can slice a small subset
-    and explode only that cluster's ~24 rows × n_genes into long form. The
-    previous "explode-the-whole-thing" version peaked at multi-GB on a 1078 ×
-    25k input.
-    """
-    if not os.path.exists(pseudobulk_path):
-        raise FileNotFoundError(
-            f"transcript-trace substrate missing: {pseudobulk_path}. "
-            f"Pull data/incytr_frozen/v2_46clusters/provenance/aggexp.csv "
-            f"before rebuilding the viewer."
-        )
-    print(f"  transcript_trace: reading {pseudobulk_path}", flush=True)
-    df = pd.read_csv(pseudobulk_path, index_col=0)
-    if "Group" not in df.columns:
-        raise ValueError(
-            f"aggexp substrate missing required `Group` column "
-            f"(found: {list(df.columns)[:5]}...)"
-        )
-    row_names = list(df.index.astype(str))
-    groups_col = df["Group"].astype(str).tolist()
-
-    # Canonical = rows whose Group equals the FIRST row's Group. Those are
-    # guaranteed to carry unsuffixed names (rbind dedup hadn't kicked in yet).
-    first_group = groups_col[0]
-    canonical_names: list[str] = [
-        row_names[i] for i, g in enumerate(groups_col) if g == first_group
-    ]
-    if len(set(canonical_names)) != len(canonical_names):
-        raise ValueError(
-            "aggexp first-Group block has duplicate row names; cannot derive "
-            "canonical cluster vocabulary."
-        )
-    canonical_set = set(canonical_names)
-    print(f"  transcript_trace: canonical cluster vocabulary = "
-          f"{len(canonical_names)} names (from Group={first_group!r})",
-          flush=True)
-
-    sorted_canonical = sorted(canonical_set, key=len, reverse=True)
-
-    resolved: list[str] = []
-    for i, raw in enumerate(row_names):
-        c = _resolve_canonical(raw, canonical_set, sorted_canonical)
-        if c is None:
-            raise ValueError(
-                f"aggexp row {i} name {raw!r} (Group={groups_col[i]!r}) does "
-                f"not resolve to any canonical cluster. Canonical vocab size "
-                f"= {len(canonical_set)}."
-            )
-        resolved.append(c)
-
-    # Per-(cluster, group) uniqueness check.
-    df_key = pd.DataFrame({"cluster": resolved, "group": groups_col})
-    dup_mask = df_key.duplicated(keep=False)
-    if dup_mask.any():
-        sample = df_key[dup_mask].head(5).to_dict("records")
-        raise ValueError(
-            f"transcript_trace: duplicate (cluster, group) keys after "
-            f"resolution: e.g. {sample}"
-        )
-
-    gene_cols = [c for c in df.columns if c != "Group"]
-    values = df[gene_cols].to_numpy(dtype="float32")
-    # Release the original wide DataFrame; we only need the float32 matrix +
-    # parallel metadata lists from here on.
-    del df
-    unique_groups = sorted(set(groups_col))
-    return values, resolved, groups_col, gene_cols, canonical_names, unique_groups
 
 
 def _load_pathway_clusters(index_path: str) -> set[str]:
@@ -223,18 +122,41 @@ def build(force: bool = False) -> dict:
     os.makedirs(TRANSCRIPT_TRACE_DIR, exist_ok=True)
 
     t0 = time.time()
-    values, row_clusters, row_groups, gene_cols, canonical_names, unique_groups = (
-        _load_aggexp_wide(TRANSCRIPT_TRACE_PSEUDOBULK)
-    )
+    if not os.path.exists(TRANSCRIPT_TRACE_PSEUDOBULK):
+        raise FileNotFoundError(
+            f"transcript-trace substrate missing: {TRANSCRIPT_TRACE_PSEUDOBULK}. "
+            f"Run bench/incytr_pair_levy_t5/emit_expr_bygroup.R (step E3 in "
+            f"alz/runners/main/run_pair_mode_pipeline.sh) from any directory "
+            f"before rebuilding the viewer."
+        )
+
+    print(f"  transcript_trace: reading {TRANSCRIPT_TRACE_PSEUDOBULK}", flush=True)
+    df = pd.read_parquet(TRANSCRIPT_TRACE_PSEUDOBULK)
+    needed = {"cluster", "group", "gene", "value"}
+    if not needed.issubset(df.columns):
+        raise ValueError(
+            f"expr_bygroup parquet missing required columns "
+            f"{needed - set(df.columns)} (found {list(df.columns)})"
+        )
+    df["cluster"] = df["cluster"].astype(str)
+    df["group"] = df["group"].astype(str)
+    df["gene"] = df["gene"].astype(str)
+    df["value"] = df["value"].astype("float32")
+
+    unique_clusters = sorted(df["cluster"].unique().tolist())
+    unique_groups = sorted(df["group"].unique().tolist())
+    print(f"  transcript_trace: substrate has {len(unique_clusters)} clusters × "
+          f"{len(unique_groups)} groups × {df['gene'].nunique()} genes",
+          flush=True)
 
     # Sample-key validation.
     samplekey = _load_samplekey(TRANSCRIPT_TRACE_SAMPLEKEY)
     sk_groups = set(samplekey.keys())
-    agg_groups = set(unique_groups)
-    missing_in_sk = agg_groups - sk_groups
+    sub_groups = set(unique_groups)
+    missing_in_sk = sub_groups - sk_groups
     if missing_in_sk:
         raise ValueError(
-            f"transcript_trace: aggexp Group values {sorted(missing_in_sk)[:5]} "
+            f"transcript_trace: substrate Group values {sorted(missing_in_sk)[:5]} "
             f"absent from sample-key SCRNA_ID column at "
             f"{TRANSCRIPT_TRACE_SAMPLEKEY}"
         )
@@ -242,66 +164,34 @@ def build(force: bool = False) -> dict:
     # Pathway-side cluster discovery + coverage check.
     incytr_idx = os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, "index.json")
     pathway_clusters = _load_pathway_clusters(incytr_idx)
-    canonical_set = set(canonical_names)
-    missing = pathway_clusters - canonical_set
+    cluster_set = set(unique_clusters)
+    missing = pathway_clusters - cluster_set
     if missing:
         raise ValueError(
             f"transcript_trace: pathway output references cluster(s) "
             f"{sorted(missing)} that are absent from the pseudobulk at "
             f"{TRANSCRIPT_TRACE_PSEUDOBULK}. Substrate drift — regenerate "
-            f"aggexp.csv with the active cluster vocabulary or restrict the "
-            f"pathway run."
+            f"expr_bygroup.parquet with the active cluster vocabulary."
         )
     print(f"  transcript_trace: {len(pathway_clusters)} pathway clusters "
           f"(all present in pseudobulk)", flush=True)
 
-    # Per-cluster shard write — stream one cluster at a time. Each cluster has
-    # ~24 rows (sex × tp × genotype groups), so the per-iteration long frame is
-    # ~24 × n_genes ≈ 600k rows. Holding only one cluster at a time keeps peak
-    # RSS ~50 MB instead of multi-GB.
-    row_clusters_arr = np.asarray(row_clusters)
-    row_groups_arr = np.asarray(row_groups)
-    n_genes = len(gene_cols)
-    gene_cols_arr = np.asarray(gene_cols)
-
+    # Per-cluster shard write. The long-form parquet already groups by cluster;
+    # we just project the per-row metadata (sex/timepoint/genotype) and emit.
     shards_written: dict[str, str] = {}
-    for cluster in sorted(pathway_clusters):
-        idx = np.flatnonzero(row_clusters_arr == cluster)
-        if idx.size == 0:
-            raise ValueError(
-                f"transcript_trace: cluster {cluster!r} resolved zero rows "
-                f"in pseudobulk; substrate is inconsistent."
-            )
-        sub_groups = row_groups_arr[idx]
-        sub_values = values[idx]  # (n_rows_in_cluster, n_genes)
-        n_rows = sub_values.shape[0]
-
-        long_gene = np.tile(gene_cols_arr, n_rows)
-        long_group = np.repeat(sub_groups, n_genes)
-        long_value = sub_values.ravel()
-
-        # Vectorize sex/tp/geno via per-group lookup table → cheap repeat.
-        sex_per_row = np.array([samplekey[g]["sex"] for g in sub_groups])
-        tp_per_row = np.array([samplekey[g]["timepoint"] for g in sub_groups])
-        geno_per_row = np.array([samplekey[g]["genotype"] for g in sub_groups])
-        long_sex = np.repeat(sex_per_row, n_genes)
-        long_tp = np.repeat(tp_per_row, n_genes)
-        long_geno = np.repeat(geno_per_row, n_genes)
-
-        sub = pd.DataFrame({
-            "gene": long_gene,
-            "group": long_group,
-            "sex": long_sex,
-            "timepoint": long_tp,
-            "genotype": long_geno,
-            "value": long_value,
-        })
-
+    for cluster, sub in df.groupby("cluster", sort=True):
+        if cluster not in pathway_clusters:
+            continue
+        sub = sub.copy()
+        meta = sub["group"].map(samplekey)
+        sub["sex"] = [m["sex"] for m in meta]
+        sub["timepoint"] = [m["timepoint"] for m in meta]
+        sub["genotype"] = [m["genotype"] for m in meta]
+        out = sub[["gene", "group", "sex", "timepoint", "genotype", "value"]]
         slug = _sanitize_celltype(cluster)
         out_path = os.path.join(TRANSCRIPT_TRACE_DIR, f"{slug}.parquet")
-        sub.to_parquet(out_path, index=False, compression="zstd")
+        out.to_parquet(out_path, index=False, compression="zstd")
         shards_written[cluster] = os.path.relpath(out_path, UNIFIED_VIEWER_DIR)
-        del sub, long_gene, long_group, long_value, long_sex, long_tp, long_geno
 
     # Index.
     index = {
@@ -313,6 +203,11 @@ def build(force: bool = False) -> dict:
         ),
         "source_samplekey": os.path.relpath(
             TRANSCRIPT_TRACE_SAMPLEKEY, config.REPO_ROOT
+        ),
+        "substrate_note": (
+            "Per-(cluster, Group) mean of Data.input@assays$originalexp@data "
+            "(LogNormalize log1p-CP10K) — the same matrix Incytr's Cal_scFC "
+            "consumes via Expr_bygroup(mean_method='mean')."
         ),
         "sanitize_rule": "replace('/', '-'); replace(' ', '_')",
         "filename_template": "{cluster}.parquet",
