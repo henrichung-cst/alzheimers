@@ -307,7 +307,7 @@ Resolve paths relative to repo root via `system("git rev-parse --show-toplevel",
 
 ### Item 2.7 — Update Python path constants
 
-**Status:** pending
+**Status:** done
 **Depends on:** 2.5, 2.6
 **Files:** `alz/integration/pair_to_receiver_cache.py`, `alz/integration/config_integration.py`
 
@@ -317,7 +317,10 @@ Resolve paths relative to repo root via `system("git rev-parse --show-toplevel",
 
 **Done when:** `pixi run python alz/integration/pair_to_receiver_cache.py` reshapes the wide parquets from the new location without manual --input-dir override.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+- `pair_to_receiver_cache.py`: `DEFAULT_INPUT_DIR` changed from `bench/incytr_pair_levy_t5/output` to `outputs/reports/incytr_pair_mode/wide/` (relative to repo root via `HERE/../../`). Module docstring path reference on line 5 updated to the new location. Inline comment on line 60 updated from `bench/incytr_pair_levy_t5/incytr_commandline.R` → `alz/incytr/incytr_commandline.R`. No other `bench/` references existed in the file.
+- `config_integration.py`: zero `bench/` references found — no edits needed.
+- Done-condition verified: `pixi run python alz/integration/pair_to_receiver_cache.py` (no `--input-dir`) read 9 parquets from `outputs/reports/incytr_pair_mode/wide/`, staged 57,214,116 rows across 9 contrasts, wrote `pair_metadata.parquet` (961 pairs), and wrote `receiver_cache/` (31 receiver partitions).
 
 ### Item 2.8 — Update runner shell
 
