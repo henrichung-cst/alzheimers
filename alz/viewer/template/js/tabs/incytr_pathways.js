@@ -42,34 +42,9 @@ const _IP_TRAJ_TIPS = {
   "mixed":          "Sign of PDS changes across timepoints (e.g. udu, ddu).",
 };
 
-// Score and per-node FC columns are advertised on the payload block but kept
-// in module-local fallbacks so the JS stays usable against an older payload.
+// Score columns are advertised on the payload block but kept in a module-local
+// fallback so the JS stays usable against an older payload.
 const _IP_SCORE_COLS_FALLBACK = ["TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "SiK_score"];
-const _IP_FC_NODES_FALLBACK = ["Ligand", "Receptor", "EM", "Target"];
-const _IP_FC_METRICS_FALLBACK = [
-  "sclog2FC",
-  "pr_log2FC",
-  "ps_log2FC",
-  "py_log2FC",
-];
-const _IP_FC_METRIC_LABELS = {
-  "sclog2FC":  "sc",
-  "pr_log2FC": "pr",
-  "ps_log2FC": "ps",
-  "py_log2FC": "py",
-};
-const _IP_FC_METRIC_TIPS = {
-  "sclog2FC":  "Single-cell expression log₂ fold-change for this gene.",
-  "pr_log2FC": "Bulk-proteomics log₂ fold-change for this gene.",
-  "ps_log2FC": "Phosphoserine log₂ fold-change for this site/gene.",
-  "py_log2FC": "Phosphotyrosine log₂ fold-change for this site/gene.",
-};
-const _IP_FC_NODE_TIPS = {
-  "Ligand":   "Per-omics fold-changes for the ligand gene.",
-  "Receptor": "Per-omics fold-changes for the receptor gene.",
-  "EM":       "Per-omics fold-changes for the effector molecule.",
-  "Target":   "Per-omics fold-changes for the target gene.",
-};
 
 // Per-node evidence-source labels. Each of Ligand/Receptor/EM/Target carries a
 // {DEG, prG} tag indicating which seed list admitted the gene:
@@ -203,14 +178,6 @@ function _ipTrajCounts() {
 function _ipScoreCols() {
   const block = _ipBlock();
   return (block && block.score_columns) || _IP_SCORE_COLS_FALLBACK;
-}
-function _ipFcNodes() {
-  const block = _ipBlock();
-  return (block && block.fc_nodes) || _IP_FC_NODES_FALLBACK;
-}
-function _ipFcMetrics() {
-  const block = _ipBlock();
-  return (block && block.fc_metrics) || _IP_FC_METRICS_FALLBACK;
 }
 function _ipRowKey(r) {
   return `${r._sender}||${r._receiver}||${r.Path}||${r.contrast}`;
@@ -905,13 +872,9 @@ function _ipRenderTable() {
 
 // ---------------------------------------------------------------------------
 // Detail panel: "Evidence" tab (default) + "Trajectory" sub-tab (when
-// trajectory_index is present in the payload).
-//
-// The old "Fold-change" tab (_ipRenderFcMatrix) and "Measurement trace" tab
-// (_ipRenderTranscriptTrace) were removed in Item 3.3 and replaced by the
-// Evidence tab, which renders all 4 nodes × 4 layers from the per-cluster
-// omics + transcript shards. Cluster routing per evaluation.R:227-230 is
-// enforced in EvidencePanel.render().
+// trajectory_index is present in the payload). The Evidence tab renders all
+// 4 nodes × 4 omics layers from the per-cluster omics + transcript shards.
+// Cluster routing per evaluation.R:227-230 is enforced in EvidencePanel.render().
 // ---------------------------------------------------------------------------
 
 function _ipRenderDetailPanel(r, rk, activeTab) {

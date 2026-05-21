@@ -576,6 +576,78 @@ def ensure_omics_trace_normalized_sources() -> dict:
     }
 
 
+def assert_pathway_fc_round_trips() -> None:
+    """Default-mode round-trip assertion: spot-check ~100 rows per contrast.
+
+    Recomputes every node's ``*_log2FC`` from the canonical per-cluster
+    substrates and asserts agreement with stored values in the
+    ``edge_slices/incytr_pathways/`` shards to within 1e-4. Catches:
+      - Cluster-routing bugs (the original EM→sender bug).
+      - Substrate drift (Incytr ran against an older decomposition).
+      - Sign-flip drift (pair_to_receiver_cache.py sign re-introduced).
+      - Aggregation mismatch (phospho per-gene rule divergence).
+
+    Hard-fails with a named (contrast, sender, receiver, node, layer, gene,
+    stored, recomputed, delta) message on any drift. See
+    ``alz/integration/verify_pathway_round_trip.py`` for the full verifier
+    including ``--strict`` mode.
+
+    Skipped gracefully when the edge_slices or substrate dirs do not yet exist
+    (first build or partial build — the build itself will create them).
+    """
+    from integration import verify_pathway_round_trip as vpr  # noqa: E402
+
+    from viewer.paths import (  # noqa: E402
+        EDGE_SLICES_INCYTR_PATHWAYS_DIR,
+        OMICS_TRACE_NORMALIZED_DIR,
+    )
+    transcript_dir = os.path.join(UNIFIED_VIEWER_DIR, "audit_sources", "transcript_trace")
+
+    if (
+        not os.path.exists(EDGE_SLICES_INCYTR_PATHWAYS_DIR)
+        or not glob.glob(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, "*.parquet"))
+    ):
+        print(
+            "  assert_pathway_fc_round_trips: SKIP — edge_slices/incytr_pathways/ "
+            "not yet built (will be created this run)",
+            flush=True,
+        )
+        return
+    if not os.path.exists(OMICS_TRACE_NORMALIZED_DIR):
+        print(
+            "  assert_pathway_fc_round_trips: SKIP — omics_trace_normalized/ "
+            "not yet built",
+            flush=True,
+        )
+        return
+    if not os.path.exists(transcript_dir):
+        print(
+            "  assert_pathway_fc_round_trips: SKIP — transcript_trace/ "
+            "not yet built",
+            flush=True,
+        )
+        return
+
+    print("  assert_pathway_fc_round_trips: running default-mode spot-check …",
+          flush=True)
+    result = vpr.verify(strict=False)
+    print(
+        f"  assert_pathway_fc_round_trips: "
+        f"slices={result['slices_checked']} "
+        f"rows={result['rows_checked']:,} "
+        f"failures={result['failures']} "
+        f"runtime={result['runtime_s']:.1f}s",
+        flush=True,
+    )
+    if result["failures"]:
+        msgs = "\n  ".join(result["failure_msgs"][:20])
+        raise RuntimeError(
+            f"assert_pathway_fc_round_trips: {result['failures']} "
+            f"round-trip failure(s) exceed tol=1e-4. "
+            f"First {min(20, result['failures'])} failures:\n  {msgs}"
+        )
+
+
 def build_audit_manifest() -> dict:
     """Metadata + small previews for full audit tables copied beside HTML."""
     tables = {}
@@ -2233,8 +2305,6 @@ def _write_incytr_pathways() -> dict | None:
         "pathway_counts": pathway_counts,
         "slice_index": index,
         "score_columns": list(_INCYTR_SCORE_COLS),
-        "fc_nodes": list(_INCYTR_FC_NODES),
-        "fc_metrics": list(_INCYTR_FC_METRICS),
         "label_columns": list(_INCYTR_LABEL_COLS),
         "label_nodes": list(_INCYTR_LABEL_NODES),
         "label_vocab": list(_INCYTR_LABEL_VOCAB),
@@ -2715,8 +2785,6 @@ def _write_incytr_pair_pathways() -> dict | None:
         "pathway_counts": pathway_counts,
         "slice_index": index,
         "score_columns": list(_INCYTR_SCORE_COLS),
-        "fc_nodes": list(_INCYTR_FC_NODES),
-        "fc_metrics": list(_INCYTR_FC_METRICS),
         "label_columns": list(_INCYTR_LABEL_COLS),
         "label_nodes": list(_INCYTR_LABEL_NODES),
         "label_vocab": list(_INCYTR_LABEL_VOCAB),
@@ -2809,6 +2877,11 @@ def build_payload(data: UnifiedData) -> dict:
         "omics_trace": ensure_omics_trace_sources(),
         "omics_trace_normalized": ensure_omics_trace_normalized_sources(),
     }
+    # Build-time round-trip assertion: recompute stored *_log2FC from substrate
+    # and verify agreement to <=1e-4. Catches routing bugs, substrate drift,
+    # sign flips, and aggregation mismatches. Skipped gracefully on first build
+    # (before edge_slices/incytr_pathways/ exists). See Item 3.5.
+    assert_pathway_fc_round_trips()
 
     kid = {k: i for i, k in enumerate(data.edge_metadata["kinases"])}
     ev = data.celltype_evidence[
