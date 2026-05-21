@@ -41,31 +41,14 @@ Stable docs that aren't authoritative specs but aren't plans either.
 
 ## Active Plans
 
-Live plans in `docs/plans/`. Each is open work or a deferred decision with
-durable context. Completed plans are moved to `docs/archive/plans/` (see
-Archive below).
+Live plans in `docs/plans/`. Only the **currently-executing** master plan
+lives here; everything else has been moved to `docs/archive/plans/` (see
+Archive below). Plans graduate back to active status by explicit user
+decision — the absence of an "active" plan does not imply the work is done.
 
 | File | Status |
 |:---|:---|
 | [`plans/repo_organization_2026-05-21.md`](./plans/repo_organization_2026-05-21.md) | Master plan: two-layer architecture (bespoke ingest → canonical artifacts → shared analyses); methodical sequencing |
-| [`plans/data_layout_consolidation_2026-05-21.md`](./plans/data_layout_consolidation_2026-05-21.md) | Data-layout consolidation (8/9 phases done; Lucie FUSE-mount blocker remains) |
-| [`plans/aptt_late_tpds_collapse_investigation.md`](./plans/aptt_late_tpds_collapse_investigation.md) | Investigation: global late-timepoint SigProb collapse (open) |
-| [`plans/kinase_mapping_rerun_plan.md`](./plans/kinase_mapping_rerun_plan.md) | Post-kinase-mapping full rerun audit; cortex_hpf sensitivity addendum |
-| [`plans/plex_covariate_plan.md`](./plans/plex_covariate_plan.md) | TMT plex covariate addition for males-only OLS (diagnostic complete; activation pending) |
-| [`plans/unified_viewer_human_mode_plan.md`](./plans/unified_viewer_human_mode_plan.md) | Human (Mukesh/NBB) mode for the unified viewer |
-| [`plans/evidence_tab_redesign_2026-05-21.md`](./plans/evidence_tab_redesign_2026-05-21.md) | Viewer evidence-tab redesign |
-| [`plans/kinase_motif_logo_2026-05-21.md`](./plans/kinase_motif_logo_2026-05-21.md) | Kinase motif-logo viewer feature |
-| [`plans/viewer_input_audit_2026-05-21.md`](./plans/viewer_input_audit_2026-05-21.md) | Viewer input audit |
-| [`plans/viewer_input_audit_remediation_2026-05-21.md`](./plans/viewer_input_audit_remediation_2026-05-21.md) | Viewer input audit — remediation tasks |
-| [`plans/incytr_mea_seed_list_expansion_plan.md`](./plans/incytr_mea_seed_list_expansion_plan.md) | Incytr seed list expansion |
-| [`plans/incytr_pathway_measurement_trace_plan.md`](./plans/incytr_pathway_measurement_trace_plan.md) | Incytr pathway measurement trace |
-| [`plans/levy_t5_attribution_pivot.md`](./plans/levy_t5_attribution_pivot.md) | levy_t5 spine attribution pivot |
-| [`plans/human_attribution_mirror.md`](./plans/human_attribution_mirror.md) | Human-cohort attribution mirroring the mouse pipeline |
-| [`plans/merged_evidence_panel.md`](./plans/merged_evidence_panel.md) | Merged evidence panel design |
-| [`plans/change_requests_sequencing.md`](./plans/change_requests_sequencing.md) | CR sequencing meta-plan |
-| [`plans/change_request_01_human_control_mea.md`](./plans/change_request_01_human_control_mea.md) | CR-01: human control MEA |
-| [`plans/change_request_03_human_celltype_specificity.md`](./plans/change_request_03_human_celltype_specificity.md) | CR-03: human cell-type specificity (epic adopted; see archive for phase docs) |
-| [`plans/change_request_04_incytr_viewer.md`](./plans/change_request_04_incytr_viewer.md) | CR-04: Incytr viewer |
 
 ## Archive
 
