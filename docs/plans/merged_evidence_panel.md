@@ -552,17 +552,51 @@ The site→gene aggregation in the driver:
 
 ### Item 3.4 — JS-side LFC computation + Incytr cross-check
 
-**Status:** pending
+**Status:** done
 **Depends on:** 3.3
-**Files:** same JS files as 3.3
+**Files:** `alz/viewer/template/js/widgets/evidence_row.js`, `alz/viewer/template/styles.css`, `alz/integration/build_normalized_substrate.py` (epsilon_note fix only)
 
-**Scope:** For each sub-row, compute `log2((D + ε)/(W + ε))` in JS (`ε = 1e-5` matching `Cal_foldchange`'s default correction) from the raw shard values. Display this as the canonical LFC. Show Incytr's stored value (`Ligand_sclog2FC`, `Receptor_pr_log2FC`, etc) from the existing receiver-cache shard as a faint check-mark "✓" when the two agree within 1e-4, or a loud red "FAIL <stored vs recomputed>" when they don't.
+**Scope:** For each sub-row, compute `log2((D + ε)/(W + ε))` in JS (`ε = 1e-3` for protein/phospho matching `incytr_commandline.R`'s explicit `correction = 0.001`; `ε = 1e-5` for transcript matching `Cal_scFC`'s default `correction = 0.00001`, `analysis.R:248`) from the normalized substrate shard. Display this as the canonical LFC. Show Incytr's stored value (`Ligand_sclog2FC`, `Receptor_pr_log2FC`, etc) from the existing receiver-cache shard as a faint check-mark "✓" when the two agree within 1e-4, or a loud red "FAIL <stored vs recomputed>" when they don't.
 
-For phospho rows, the JS-side LFC must mirror Item 3.1's aggregation rule exactly.
+For phospho rows, the JS-side LFC is per-gene aggregated (from the normalized substrate, which already applies the driver's site→gene mean before normalization) — not per-site. Per-site dot strips render their own raw values, but all sites of a gene share the single per-gene LFC display. Matches Item 3.1's aggregation rule.
 
 **Done when:** all four nodes × four layers show ✓ for the reference pathway; if any cell shows FAIL, the bug is real (substrate drift, routing mistake, or aggregation mismatch) and must be diagnosed before this item is closed.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+
+**Transcript-layer investigation (open question resolved):** `Cal_scFC` (`incytr/R/analysis.R:246-300`) calls `Cal_foldchange` **directly** on `expr.bygroup` data — it does **not** call `normalizeBetweenArrays`. The `normalizeBetweenArrays` call at `analysis.R:385,391` is inside `integrate_omics_layer` which handles only protein/phospho layers. Conclusion: transcript `sclog2FC` can be recomputed from the existing transcript-trace substrate (per-cluster pseudobulk means) using naive `log2((D+ε)/(W+ε))` with `ε = 1e-5` (Cal_scFC's default correction, `analysis.R:248`). **No extension of `build_normalized_substrate.py` was needed for transcript; `OMICS_TRACE_NORMALIZED_SCHEMA_VERSION` stays at 1.**
+
+**ε values:**
+- Protein/phospho: `ε = 1e-3` — matches `incytr_commandline.R:376,381,385,389` (`correction = 0.001` passed to all four `Cal_foldchange` calls). The Item 3.4 scope paragraph erroneously cited `ε = 1e-5`; corrected here and in the fixed scope text above.
+- Transcript: `ε = 1e-5` — matches `Cal_scFC` default at `analysis.R:248`. Not in the normalized substrate; computed directly in JS from `ttRows` (TranscriptTraceStore data already loaded per cluster).
+
+**New JS globals:**
+- `NormalizedSubstrateStore` (new IIFE in `evidence_row.js`): mirrors `OmicsTraceStore` but fetches from `audit_sources/omics_trace_normalized/`. Exposes `epsilon()` (from `PAYLOAD.meta.omics_trace_normalized.epsilon`), `contrastToNormKey(contrast)` (maps `"ApTt_2mo"` → `"ma_2mo_ApTt_ma_2mo_WTyp"`), and `computeLfc(normRows, layer, gene, contrastKey)`.
+- New helpers inside `EvidencePanel`: `_computeTranscriptLfc(ttRows, gene, arms)`, `_renderLfcSlot(recomputed, stored)`, `_fillLfcSlot(containerEl, recomputed, stored)`.
+- New CSS classes in `styles.css`: `ev-lfc-na`, `ev-lfc-value`, `ev-lfc-ok`, `ev-lfc-check`, `ev-lfc-fail`.
+
+**LFC slot behavior:**
+- Gene absent from substrate → `LFC —` (na class, no comparison).
+- Gene present, no stored value (gene absent from Incytr output, e.g. stored=0.0 or NaN) → `LFC <value>` (value class, no comparison).
+- |recomputed − stored| ≤ 1e-4 → `LFC <value> ✓` (ok class, green tick).
+- |recomputed − stored| > 1e-4 → `FAIL stored=<x> recomputed=<y> Δ=<z>` (fail class, red bold).
+
+**Phospho slot placement:** The `_fillLfcSlot` call operates at layer-block level (replaces all `[data-lfc-placeholder]` within the block). Each site sub-row rendered by `_renderDotBarSvg` gets one placeholder; all are replaced with the same per-gene LFC. This is correct — Incytr stores one `*_ps_log2FC` per gene, not per site.
+
+**Reference pathway verification (Python, pre-viewer-load):**
+- `Apoe|App|Stk11|Cttnbp2` / Astrocytes→Basal-Ganglia-GABAergic-Neurons / ApTt_2mo:
+  - All 4 transcript nodes: ✓ (diff ≤ 6.67e-7)
+  - Ligand protein: ✓ (diff = 0.0e+00)
+  - Receptor/EM/Target protein: ✓ (stored=0.0, recomputed=0.0 — genes absent from receiver cluster)
+  - Ligand phospho_ps: ✓ (diff = 0.0e+00)
+  - Ligand phospho_py: n/a (Apoe absent from pY substrate; stored=NaN)
+
+**Second cross-check pathway (`Lsamp|Negr1|Gfap|Abcd2` / Astrocytes→Astrocytes / App_4mo):**
+- 16 cells exercised (4 nodes × 4 layers), all ✓. Transcript diffs ≤ 2.0e-5, protein/phospho diffs = 0.0e+00. Three n/a cells where gene has no phospho data (expected).
+
+**epsilon_note in build_normalized_substrate.py** was fixed (had stale `1e-5` text; now correctly documents `0.001` for pr/ps/py and `1e-5` for transcript separately).
+
+**Note for Item 3.5:** The Python-side round-trip (build time) is already covered by `build_normalized_substrate.py`'s existing `ROUNDTRIP_TOL = 1e-4` assertion over 31×9×3×5 = 4185 cells. Item 3.5 can extend this to the full receiver-cache grid or add the transcript layer.
 
 ### Item 3.5 — Build-time round-trip assertion
 

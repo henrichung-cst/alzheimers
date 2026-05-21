@@ -464,8 +464,11 @@ def build(force: bool = False) -> dict:
         "epsilon": EPSILON,
         "epsilon_note": (
             "JS-side LFC reconstruction: "
-            "log2((D + epsilon) / (W + epsilon)). Epsilon matches "
-            "Cal_foldchange's driver-passed `correction = 1e-5`."
+            "log2((D + epsilon) / (W + epsilon)). Epsilon = 1e-3 matches "
+            "incytr_commandline.R's explicit `correction = 0.001` passed to "
+            "Cal_foldchange for all three omics layers (pr/ps/py). "
+            "Transcript uses a separate epsilon = 1e-5 (Cal_scFC default, "
+            "analysis.R:248) applied directly in the JS without this substrate."
         ),
         "normalization": "limma::normalizeQuantiles (ties=TRUE)",
         "aggregation_note": (

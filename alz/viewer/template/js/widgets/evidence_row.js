@@ -26,6 +26,24 @@
 //   EM → receiver cluster
 //   Target → receiver cluster
 // ---------------------------------------------------------------------------
+// NormalizedSubstrateStore — per-cluster limma-normalized condition means
+// backing the right-edge LFC recomputation in the Evidence tab.
+//
+// Shard layout: audit_sources/omics_trace_normalized/<slug>.parquet
+//
+// Schema per shard row (from build_normalized_substrate.py, schema_version=1):
+//   layer               : "protein" | "phospho_ps" | "phospho_py"
+//   gene_symbol         : string
+//   contrast            : string  (e.g. "ma_2mo_ApTt_ma_2mo_WTyp")
+//   group               : string  (e.g. "ma_2mo_ApTt" | "ma_2mo_WTyp")
+//   mean_value_normalized : float
+//
+// Epsilon for LFC: PAYLOAD.meta.omics_trace_normalized.epsilon (= 0.001).
+// log2((D_norm + ε) / (W_norm + ε)) agrees with stored *_pr/_ps/_py_log2FC
+// to ≤1e-4 (validated by build_normalized_substrate.py round-trip check).
+//
+// Transcript LFC uses ε = 1e-5 (Cal_scFC default, analysis.R:248).
+// ---------------------------------------------------------------------------
 
 const OmicsTraceStore = (() => {
   const cache = new Map();        // cluster -> rows[]
@@ -148,6 +166,130 @@ window.OmicsTraceStore = OmicsTraceStore;
 
 
 // ---------------------------------------------------------------------------
+// NormalizedSubstrateStore — per-cluster limma-normalized condition means.
+// Used only for right-edge LFC computation; not for dot/bar display.
+// ---------------------------------------------------------------------------
+const NormalizedSubstrateStore = (() => {
+  const cache = new Map();     // cluster -> rows[]
+  const inflight = new Map();  // cluster -> Promise<rows>
+
+  function _sanitize(name) {
+    return String(name).replaceAll("/", "-").replaceAll(" ", "_");
+  }
+
+  function _meta() {
+    return (typeof PAYLOAD !== "undefined"
+            && PAYLOAD.meta
+            && PAYLOAD.meta.omics_trace_normalized) || null;
+  }
+
+  function isAvailable() {
+    const m = _meta();
+    return !!(m && Array.isArray(m.clusters) && m.clusters.length);
+  }
+
+  function hasCluster(cluster) {
+    const m = _meta();
+    if (!m || !cluster) return false;
+    return (m.clusters || []).includes(cluster);
+  }
+
+  // Epsilon from PAYLOAD meta, defaulting to 1e-3 (Item 3.2b validated value).
+  function epsilon() {
+    const m = _meta();
+    return (m && typeof m.epsilon === "number") ? m.epsilon : 0.001;
+  }
+
+  async function _fetchParquet(url) {
+    let resp;
+    try {
+      resp = await fetch(url);
+    } catch (e) {
+      if (window.location.protocol === "file:") {
+        throw new Error(
+          "Browser blocked local sidecar fetches under file://. " +
+          "Serve outputs/reports/unified_viewer over HTTP and open that URL."
+        );
+      }
+      throw e;
+    }
+    if (!resp.ok) throw new Error(`fetch ${url} → ${resp.status}`);
+    const buf = await resp.arrayBuffer();
+    if (typeof hyparquet === "undefined") {
+      throw new Error("parquet reader not loaded (hyparquet missing)");
+    }
+    return await hyparquet.parquetReadObjects({
+      file: buf, compressors: hyparquet.compressors,
+    });
+  }
+
+  async function loadCluster(cluster) {
+    if (!hasCluster(cluster)) return [];
+    if (cache.has(cluster)) return cache.get(cluster);
+    if (inflight.has(cluster)) return inflight.get(cluster);
+    const m = _meta();
+    const base = (m && m.relative_path) ? `${m.relative_path}/` : "audit_sources/omics_trace_normalized/";
+    const url = `${base}${_sanitize(cluster)}.parquet`;
+    const p = _fetchParquet(url).then(rows => {
+      cache.set(cluster, rows);
+      inflight.delete(cluster);
+      return rows;
+    }).catch(err => {
+      inflight.delete(cluster);
+      throw err;
+    });
+    inflight.set(cluster, p);
+    return p;
+  }
+
+  // Convert viewer contrast string ("ApTt_2mo") to the normalized-shard contrast
+  // key ("ma_2mo_ApTt_ma_2mo_WTyp").
+  // Returns null if contrast is unrecognised.
+  const _GENO_DECODE = { App: "AppP", Tau: "Ttau", ApTt: "ApTt" };
+  function contrastToNormKey(contrast) {
+    if (!contrast) return null;
+    const parts = String(contrast).split("_");
+    if (parts.length !== 2) return null;
+    const [geno, age] = parts;
+    const genoCode = _GENO_DECODE[geno];
+    if (!genoCode) return null;
+    return `ma_${age}_${genoCode}_ma_${age}_WTyp`;
+  }
+
+  // Compute LFC from normalized shard rows for (layer, gene, contrast).
+  // Returns { lfc: number | null, diseaseVal: number | null, wtVal: number | null }.
+  function computeLfc(normRows, layer, gene, contrastKey) {
+    if (!normRows || !contrastKey) return { lfc: null, diseaseVal: null, wtVal: null };
+    const eps = epsilon();
+    const layerGeneRows = normRows.filter(r =>
+      String(r.layer) === layer
+      && String(r.gene_symbol) === String(gene)
+      && String(r.contrast) === contrastKey
+    );
+    // Disease group: the one that doesn't end with _WTyp.
+    let D = null, W = null;
+    for (const row of layerGeneRows) {
+      const g = String(row.group);
+      const v = row.mean_value_normalized;
+      if (v == null || !isFinite(v)) continue;
+      if (g.endsWith("_WTyp")) {
+        W = Number(v);
+      } else {
+        D = Number(v);
+      }
+    }
+    if (D === null || W === null) return { lfc: null, diseaseVal: D, wtVal: W };
+    const lfc = Math.log2((D + eps) / (W + eps));
+    return { lfc, diseaseVal: D, wtVal: W };
+  }
+
+  return { isAvailable, hasCluster, loadCluster, epsilon,
+           contrastToNormKey, computeLfc, _sanitize };
+})();
+window.NormalizedSubstrateStore = NormalizedSubstrateStore;
+
+
+// ---------------------------------------------------------------------------
 // EvidencePanel — renders a 4-node × 4-layer evidence grid for a single
 // Incytr pathway row. Replaces the old "Fold Change" and "Measurement Trace"
 // tabs from Phase 3 Item 3.3.
@@ -181,6 +323,74 @@ const EvidencePanel = (() => {
     phospho_ps:  "Phospho (pS/pT)",
     phospho_py:  "Phospho (pY)",
   };
+
+  // Map layer → stored LFC column suffix in the receiver-cache row.
+  // e.g. "protein" → "pr_log2FC" so node="Ligand" → "Ligand_pr_log2FC".
+  const _LAYER_LFC_KEY = {
+    transcript:  "sclog2FC",
+    protein:     "pr_log2FC",
+    phospho_ps:  "ps_log2FC",
+    phospho_py:  "py_log2FC",
+  };
+
+  // Epsilon for transcript LFC (Cal_scFC default, analysis.R:248).
+  const _TRANSCRIPT_EPS = 1e-5;
+
+  // ---------------------------------------------------------------------------
+  // Compute transcript LFC from ttRows (pseudobulk per-(gene, group) means).
+  // Returns null if gene not found in both arms.
+  // ---------------------------------------------------------------------------
+  function _computeTranscriptLfc(ttRows, gene, arms) {
+    if (!ttRows || !arms || arms.length < 2) return null;
+    const [diseaseArm, wtArm] = arms; // arms[0]=disease, arms[1]=WT
+    let D = null, W = null;
+    for (const row of ttRows) {
+      if (String(row.gene) !== String(gene)) continue;
+      const g = String(row.group);
+      if (g === diseaseArm.group) D = (row.value != null && isFinite(row.value)) ? Number(row.value) : null;
+      if (g === wtArm.group)      W = (row.value != null && isFinite(row.value)) ? Number(row.value) : null;
+    }
+    if (D === null || W === null) return null;
+    return Math.log2((D + _TRANSCRIPT_EPS) / (W + _TRANSCRIPT_EPS));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Render the right-edge LFC slot content.
+  // recomputed : number | null
+  // stored     : number | null (from receiver-cache shard column)
+  // Returns an HTML string to replace the ev-lfc-slot placeholder.
+  // ---------------------------------------------------------------------------
+  function _renderLfcSlot(recomputed, stored) {
+    if (recomputed === null) {
+      return `<div class="ev-lfc-slot ev-lfc-na" title="LFC not available (gene absent from substrate)">LFC —</div>`;
+    }
+    const recomputedStr = recomputed.toFixed(3);
+    if (stored === null || stored === undefined || !isFinite(stored)) {
+      // No stored value to compare (gene absent from Incytr output).
+      return `<div class="ev-lfc-slot ev-lfc-value" title="Recomputed LFC (no stored value to compare)">LFC ${recomputedStr}</div>`;
+    }
+    const diff = Math.abs(recomputed - stored);
+    const storedStr = stored.toFixed(3);
+    if (diff <= 1e-4) {
+      return `<div class="ev-lfc-slot ev-lfc-ok" title="Recomputed: ${recomputedStr} | Stored: ${storedStr} | Δ: ${diff.toExponential(1)}">`
+        + `LFC ${recomputedStr} <span class="ev-lfc-check" style="color:#2a7a2a;font-size:9px;">✓</span></div>`;
+    }
+    return `<div class="ev-lfc-slot ev-lfc-fail" style="color:#cc0000;font-weight:bold;" `
+      + `title="LFC mismatch — recomputed: ${recomputedStr} stored: ${storedStr} Δ: ${diff.toExponential(2)}">`
+      + `FAIL stored=${storedStr} recomputed=${recomputedStr} Δ=${diff.toExponential(2)}</div>`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Fill all ev-lfc-slot placeholders inside a container element.
+  // Finds [data-lfc-placeholder] divs and replaces their innerHTML.
+  // ---------------------------------------------------------------------------
+  function _fillLfcSlot(containerEl, recomputed, stored) {
+    const slots = containerEl.querySelectorAll("[data-lfc-placeholder]");
+    const html = _renderLfcSlot(recomputed, stored);
+    for (const slot of slots) {
+      slot.outerHTML = html;
+    }
+  }
 
   // Arm colours: disease arm red, WT arm grey.
   const _ARM_COLOR = {
@@ -324,10 +534,15 @@ const EvidencePanel = (() => {
   // ---------------------------------------------------------------------------
   // Render one node column (Ligand/Receptor/EM/Target) into a DOM element.
   // Handles all 4 layers sequentially.
+  //
+  // normShard    : rows from NormalizedSubstrateStore for this cluster
+  // storedLfcRow : the receiver-cache shard row (r) for this pathway,
+  //                used to look up stored Ligand/Receptor/EM/Target_*_log2FC
   // ---------------------------------------------------------------------------
   async function _renderNodeColumn(
     colEl, nodeLabel, gene, cluster,
-    contrast, ttRows, omicsShard
+    contrast, ttRows, omicsShard,
+    normShard, storedLfcRow
   ) {
     if (!gene || !cluster) {
       colEl.innerHTML = `<div class="ev-node-head">${_esc(nodeLabel)} · <em>${_esc(gene || "—")}</em></div>`
@@ -371,6 +586,16 @@ const EvidencePanel = (() => {
         }
         ttDiv.innerHTML = `<div class="ev-layer-label">${_esc(_LAYER_LABELS.transcript)}</div>`
           + _renderDotBarSvg(ttArms, rawMap, gene, false);
+
+        // Fill transcript LFC slot.
+        // Cal_scFC (analysis.R:246) calls Cal_foldchange directly — no
+        // normalizeBetweenArrays — so naive log2((D+ε)/(W+ε)) with ε=1e-5
+        // (Cal_scFC default correction, analysis.R:248) agrees to ≤1e-4.
+        const ttLfc = _computeTranscriptLfc(ttRows, gene, ttArms);
+        const storedScKey = `${nodeLabel}_sclog2FC`;
+        const storedScVal = (storedLfcRow && storedLfcRow[storedScKey] != null)
+          ? Number(storedLfcRow[storedScKey]) : null;
+        _fillLfcSlot(ttDiv, ttLfc, storedScVal);
       }
     }
 
@@ -392,18 +617,36 @@ const EvidencePanel = (() => {
         String(r.layer) === layer && String(r.gene_symbol) === String(gene)
       );
 
+      // Compute normalized-substrate LFC and stored value for this (node, layer).
+      // Both protein and phospho use NormalizedSubstrateStore (ε from meta).
+      const normContrastKey = NormalizedSubstrateStore.contrastToNormKey(contrast);
+      const { lfc: normLfc } = NormalizedSubstrateStore.computeLfc(
+        normShard, layer, gene, normContrastKey
+      );
+      const lkKey = _LAYER_LFC_KEY[layer];
+      const storedNormKey = lkKey ? `${nodeLabel}_${lkKey}` : null;
+      const storedNormVal = (storedLfcRow && storedNormKey && storedLfcRow[storedNormKey] != null)
+        ? Number(storedLfcRow[storedNormKey]) : null;
+
       if (layer === "protein") {
         // Single sub-row (no site_id dimension).
         if (layerRows.length === 0) {
           layerDiv.innerHTML = `<div class="ev-layer-label">${_esc(_LAYER_LABELS[layer])}</div>`
             + `<div class="ev-na muted" style="font-size:10px;">n/a</div>`;
+          // Still render LFC if normalized substrate has the gene.
+          if (normLfc !== null) {
+            layerDiv.innerHTML += _renderLfcSlot(normLfc, storedNormVal);
+          }
           continue;
         }
         const armRows = _groupByArm(layerRows, arms);
         layerDiv.innerHTML = `<div class="ev-layer-label">${_esc(_LAYER_LABELS[layer])}</div>`
           + _renderDotBarSvg(arms, armRows, gene, false);
+        _fillLfcSlot(layerDiv, normLfc, storedNormVal);
       } else {
         // Phospho: one sub-row per site_id.
+        // The right-edge LFC is per-gene aggregated (same as Incytr's stored value),
+        // not per-site. Individual site sub-rows each show the per-gene LFC.
         const bySite = new Map();
         for (const r of layerRows) {
           const sid = r.site_id == null ? "__null__" : String(r.site_id);
@@ -423,6 +666,8 @@ const EvidencePanel = (() => {
             + `</div>`;
         }
         layerDiv.innerHTML = layerHtml;
+        // Fill per-gene LFC into all placeholder slots in this layer block.
+        _fillLfcSlot(layerDiv, normLfc, storedNormVal);
       }
     }
   }
@@ -510,6 +755,21 @@ const EvidencePanel = (() => {
       }));
     }
 
+    // Load normalized substrate shards for LFC recomputation (Item 3.4).
+    const normShardMap = new Map(); // cluster -> rows[]
+    const hasNorm = (typeof NormalizedSubstrateStore !== "undefined")
+      && NormalizedSubstrateStore.isAvailable();
+    if (hasNorm) {
+      await Promise.all([...clusterSet].map(async cl => {
+        if (!NormalizedSubstrateStore.hasCluster(cl)) { normShardMap.set(cl, []); return; }
+        try {
+          normShardMap.set(cl, await NormalizedSubstrateStore.loadCluster(cl));
+        } catch (e) {
+          normShardMap.set(cl, []);
+        }
+      }));
+    }
+
     // Render each node column.
     const gridEl = document.getElementById(gridId);
     if (!gridEl) return;   // panel was replaced before load completed
@@ -519,9 +779,11 @@ const EvidencePanel = (() => {
       if (!colEl) return;
       const omicsShard = shardMap.get(nd.cluster) || [];
       const ttRows     = ttShardMap.get(nd.cluster) || [];
+      const normShard  = normShardMap.get(nd.cluster) || [];
       await _renderNodeColumn(
         colEl, nd.node, nd.gene, nd.cluster,
-        contrast, ttRows, omicsShard
+        contrast, ttRows, omicsShard,
+        normShard, r   // r is the pathway row with all stored LFC columns
       );
     }));
   }
