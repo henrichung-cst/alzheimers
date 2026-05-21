@@ -500,9 +500,9 @@ The site→gene aggregation in the driver:
 
 ### Item 3.3 — Evidence tab JS (replace FC + Measurement Trace tabs)
 
-**Status:** pending
+**Status:** done
 **Depends on:** 3.2 (3.2b is required for Item 3.4's round-trip check, not for 3.3 itself; 3.3 and 3.2b can run in parallel)
-**Files:** `alz/viewer/template/js/tabs/incytr_pathways.js`, `alz/viewer/template/js/widgets/transcript_trace.js` (or new `widgets/evidence_row.js`)
+**Files:** `alz/viewer/template/js/tabs/incytr_pathways.js`, `alz/viewer/template/js/widgets/evidence_row.js` (new), `alz/viewer/template/index.html.j2`, `alz/viewer/template/styles.css`, `alz/viewer/template/MANIFEST.md`
 
 **Scope:**
 - Delete the FC tab renderer and the Measurement Trace tab renderer (`_ipRenderFoldChange*`, `_ipRenderTranscriptTrace`).
@@ -517,7 +517,27 @@ The site→gene aggregation in the driver:
 
 **Done when:** for the reference pathway `Apoe|App|Stk11|Cttnbp2` / Astrocytes→Basal-Ganglia-GABAergic-Neurons / ApTt_2mo, all four nodes × four layers render. Stk11 (EM) shows receiver-cluster values across all layers.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+
+**Design choice: new `widgets/evidence_row.js` sibling, not a generalized `transcript_trace.js`.** The two widgets serve different audiences: `transcript_trace.js` backs the kinase-audit drawer (N=1 pseudobulk means, two-bar SVG, retained as-is) and `evidence_row.js` backs the Incytr Pathways Evidence tab (per-animal dots + mean bars, all 4 omics layers). Generalizing `transcript_trace.js` would have required deep API changes that break the kinase audit. Instead, `evidence_row.js` exposes two globals: `OmicsTraceStore` (mirrors `TranscriptTraceStore` for the omics_trace shards) and `EvidencePanel` (4-node × 4-layer grid renderer). `transcript_trace.js` is left unchanged.
+
+**EM routing bug fixed.** The old `_ipRenderTranscriptTrace` routed EM to sender (`cluster: sender`). This is now corrected to receiver in `EvidencePanel.render()` per `evaluation.R:227-230`.
+
+**Renderers deleted in this item (per scope note):** `_ipRenderFcMatrix`, `_ipRenderTranscriptTrace`, `_ipRenderTranscriptTraceHost`. The `_IP_FC_*` constants and `_ipFcNodes()`/`_ipFcMetrics()` helpers are dead code but left for Item 4.1 cleanup per the task note.
+
+**Default detail sub-tab changed from `"fc"` to `"evidence"`.** All three places in `incytr_pathways.js` that defaulted to `"fc"` (runtime init, toggle open, post-render loop) now default to `"evidence"`. The Trajectory sub-tab remains available when `block.version >= 3`.
+
+**LFC slot:** Each sub-cell renders `<div class="ev-lfc-slot" data-lfc-placeholder="1">LFC —</div>` as a placeholder. Item 3.4 should query `[data-lfc-placeholder]` elements (or re-render by re-calling the column renderer with LFC data) to fill in computed values.
+
+**Transcript sub-row for Evidence panel:** `TranscriptTraceStore.loadCluster()` is called to get transcript rows; the existing schema `{gene, group, value}` is used. Since transcript has one pseudobulk mean per group (not per-animal), the dot-bar SVG renders one dot per group (coincident with the bar). This is correct — N=1 per arm for transcript.
+
+**CSS:** New classes added to `styles.css` under "Evidence panel" comment block: `ev-note`, `ev-grid`, `ev-col`, `ev-node-head`, `ev-layer-block`, `ev-site-block`, `ev-cell-label`, `ev-cell-loading`, `ev-col-loading`, `ev-cell-empty`, `ev-na`, `ev-dot-svg`, `ev-lfc-slot`. Old `.tt-*` classes retained with updated comment (kinase-audit drawer still uses them).
+
+**MANIFEST.md:** Added a "JS — widgets" section listing `multiselect.js`, `transcript_trace.js`, and `evidence_row.js`.
+
+**Scope was slightly larger than declared:** `index.html.j2`, `styles.css`, and `MANIFEST.md` required edits not listed in the Files field. All were mechanical includes/CSS additions.
+
+**Worktree/rebuild note:** The code changes live on `worktree-agent-a12d957e84dac8350` branch (commit `9ada558`). The viewer rebuild must run from the main repo directory (which has data files) after merging this branch into `main`. Running the build from the worktree dir fails with `FileNotFoundError` for `cluster_spine.csv` — data files are not present in the worktree. After merging, run `pixi run python alz/build_unified_viewer.py` from the main repo root, then hard-reload the viewer (Ctrl+Shift+R) to verify all 4 nodes × 4 layers render for the reference pathway.
 
 ### Item 3.4 — JS-side LFC computation + Incytr cross-check
 
