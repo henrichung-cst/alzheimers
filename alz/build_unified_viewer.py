@@ -77,6 +77,8 @@ from viewer.paths import (  # noqa: E402
     MEASUREMENT_TRACE_DIR,
     MEASUREMENT_TRACE_INDEX,
     MEASUREMENT_TRACE_SCHEMA_VERSION,
+    OMICS_TRACE_INDEX,
+    OMICS_TRACE_SCHEMA_VERSION,
     TRANSCRIPT_TRACE_INDEX,
     TRANSCRIPT_TRACE_SCHEMA_VERSION,
     PAYLOAD_JSON,
@@ -513,6 +515,33 @@ def ensure_transcript_trace_sources() -> dict:
                                        "{cluster}.parquet"),
         "sanitize_rule": index.get("sanitize_rule",
                                    "replace('/', '-'); replace(' ', '_')"),
+    }
+
+
+def ensure_omics_trace_sources() -> dict:
+    """Build (or reuse) per-cluster protein + phospho raw-value shards for the
+    Incytr Pathways Evidence tab. Hard-fails on missing substrate — no silent
+    skip, no empty panel."""
+    from integration import build_omics_trace as bot  # noqa: E402
+
+    rebuild = True
+    if os.path.exists(OMICS_TRACE_INDEX):
+        with open(OMICS_TRACE_INDEX) as f:
+            existing = json.load(f)
+        if existing.get("omics_schema_version") == OMICS_TRACE_SCHEMA_VERSION:
+            rebuild = False
+            index = existing
+    if rebuild:
+        index = bot.build(force=True)
+    return {
+        "schema_version": OMICS_TRACE_SCHEMA_VERSION,
+        "relative_path": index.get("relative_path"),
+        "clusters": index.get("clusters", []),
+        "layers": index.get("layers", ["protein", "phospho_ps", "phospho_py"]),
+        "filename_template": index.get("filename_template", "{cluster}.parquet"),
+        "sanitize_rule": index.get("sanitize_rule",
+                                   "replace('/', '-'); replace(' ', '_')"),
+        "log2_value_note": index.get("log2_value_note", ""),
     }
 
 
@@ -2746,6 +2775,7 @@ def build_payload(data: UnifiedData) -> dict:
         "diseaseColors": dict(config.DISEASE_COLORS),
         "familyMap": fam,
         "transcript_trace": ensure_transcript_trace_sources(),
+        "omics_trace": ensure_omics_trace_sources(),
     }
 
     kid = {k: i for i, k in enumerate(data.edge_metadata["kinases"])}
