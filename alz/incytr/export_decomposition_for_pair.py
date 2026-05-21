@@ -32,30 +32,24 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
 
 import pandas as pd
 import pyarrow.parquet as pq
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(REPO_ROOT, "alz"))
+import config  # noqa: E402
 
 DEC_DIR = os.path.join(REPO_ROOT, "outputs", "reports", "decomposition", "levy_t5")
 OUT_DIR = os.path.join(REPO_ROOT, "data", "derived", "incytr_inputs")
 
-GENO_DECODE = {"WT": "WTyp", "APP": "AppP", "T22": "Ttau", "T22/APP": "ApTt"}
-ANIMAL_RE = re.compile(r"^(\d+)_[^_]+_([MF])_(\dmo)_(.+)$")
-
 
 def _parse_animal(animal_id: str) -> tuple[str, str, str] | None:
-    m = ANIMAL_RE.match(animal_id)
-    if not m:
+    parsed = config.parse_animal_id(animal_id)
+    if parsed is None:
         return None
-    sex, age, geno_raw = m.group(2), m.group(3), m.group(4)
-    geno = GENO_DECODE.get(geno_raw)
-    if geno is None:
-        return None
-    return sex, age, geno
+    return parsed["sex"], parsed["timepoint"], parsed["genotype"]
 
 
 def _animal_to_condition(animal_id: str) -> str | None:

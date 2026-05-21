@@ -145,9 +145,9 @@ def _build_factorial_design(rows):
     """Full-cohort design: const + App + Tau + Int + female + t4 + t6 + interactions."""
     X = pd.DataFrame(index=rows.index)
     X["const"] = 1.0
-    X["App"] = rows["genotype"].isin(["APP", "T22/APP"]).astype(float)
-    X["Tau"] = rows["genotype"].isin(["T22", "T22/APP"]).astype(float)
-    X["Int"] = (rows["genotype"] == "T22/APP").astype(float)
+    X["App"] = rows["genotype"].isin(["AppP", "ApTt"]).astype(float)
+    X["Tau"] = rows["genotype"].isin(["Ttau", "ApTt"]).astype(float)
+    X["Int"] = (rows["genotype"] == "ApTt").astype(float)
     X["female"] = (rows["sex"] == "F").astype(float)
     X["t4"] = (rows["timepoint"] == "4mo").astype(float)
     X["t6"] = (rows["timepoint"] == "6mo").astype(float)

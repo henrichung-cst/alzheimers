@@ -41,13 +41,14 @@ def _resolve_spine(name: str) -> list[str]:
     return load_cluster_spine(name)
 
 # Song snRNA sample-ID encoding → TMT metadata vocab.
-# Sample IDs look like `{id}_{sex}_{timepoint}_{genotype}`.
+# Sample IDs look like `{id}_{sex}_{timepoint}_{genotype}`. Genotype is
+# already long-form (matches sample_mapping after data_ingest normalizes
+# at write time); only sex needs translation (ma/fe → M/F).
 SEX_DECODE = {"ma": "M", "fe": "F"}
-GENO_DECODE = {"WTyp": "WT", "AppP": "APP", "Ttau": "T22", "ApTt": "T22/APP"}
 
 
 def _decode_snrna_sample(sample_id: str) -> tuple[str, str, str]:
-    """Returns (sex, timepoint, genotype) in TMT-mapping vocab.
+    """Returns (sex, timepoint, genotype) matching sample_mapping vocab.
 
     Raises if the sample ID doesn't parse — better to fail loud than to
     silently mis-stratify donors.
@@ -55,10 +56,10 @@ def _decode_snrna_sample(sample_id: str) -> tuple[str, str, str]:
     parts = sample_id.split("_")
     if len(parts) < 4:
         raise ValueError(f"Unparseable snRNA sample id: {sample_id!r}")
-    sex_raw, timepoint, geno_raw = parts[-3], parts[-2], parts[-1]
-    if sex_raw not in SEX_DECODE or geno_raw not in GENO_DECODE:
+    sex_raw, timepoint, genotype = parts[-3], parts[-2], parts[-1]
+    if sex_raw not in SEX_DECODE or genotype not in config.SAP_FACTORIAL:
         raise ValueError(f"Unknown sex/genotype tokens in {sample_id!r}")
-    return SEX_DECODE[sex_raw], timepoint, GENO_DECODE[geno_raw]
+    return SEX_DECODE[sex_raw], timepoint, genotype
 
 
 def _output_dir(spine: str) -> str:
@@ -70,9 +71,19 @@ def _load_pseudobulk(spine_clusters: list[str]) -> tuple[pd.DataFrame, pd.DataFr
 
     expr_df: MultiIndex (sample, cell_type) × gene columns, CPM units.
     counts_df: MultiIndex (sample, cell_type) × column n_cells.
-    Filtered to spine_clusters only.
+    Filtered to spine_clusters only. Hardfails if any spine cluster is
+    absent from the pseudobulk — that means the pseudobulk file predates
+    the active spine and needs regenerating.
     """
     expr = pd.read_csv(config.SONG_PSEUDOBULK_FILE)
+    pb_classes = set(expr["cell_type"].unique())
+    missing = sorted(set(spine_clusters) - pb_classes)
+    if missing:
+        raise RuntimeError(
+            f"{len(missing)} spine clusters missing from pseudobulk: "
+            f"{missing}. Re-run `snrna_integration.py --pseudobulk` "
+            f"against the active Levy-t5 spine."
+        )
     expr = expr[expr["cell_type"].isin(spine_clusters)]
     expr = expr.set_index(["sample", "cell_type"])
 
@@ -300,8 +311,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--run", action="store_true", help="compute proportions")
     ap.add_argument("--summary", action="store_true", help="print cached summary")
-    ap.add_argument("--spine", default="levy_t5",
-                    help="cell-type spine name (default: levy_t5)")
+    ap.add_argument("--spine", default=config.CLUSTER_SPINE_NAME,
+                    help=f"cell-type spine name (default: {config.CLUSTER_SPINE_NAME})")
     args = ap.parse_args()
     if not (args.run or args.summary):
         ap.print_help()

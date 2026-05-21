@@ -16,6 +16,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+import config
 from deconvolution import paths
 from deconvolution.load_deconvoluted import (
     DeconvoluatedTrack, load_track, safe_log2,
@@ -23,13 +24,6 @@ from deconvolution.load_deconvoluted import (
 from deconvolution.factorial_ols import (
     PARAM_NAMES, _ols_batch, _contrast_lfc_se, _contrast_vector,
 )
-
-GENOTYPE_PER_ANIMAL_CODING = {
-    "WT":      {"App": 0, "Tau": 0, "Int": 0},
-    "APP":     {"App": 1, "Tau": 0, "Int": 0},
-    "T22":     {"App": 0, "Tau": 1, "Int": 0},
-    "T22/APP": {"App": 1, "Tau": 1, "Int": 1},
-}
 
 
 def compute_site_fractions(track: DeconvoluatedTrack,
@@ -104,12 +98,12 @@ def _build_design_matrix_per_animal(mapping_subset: pd.DataFrame) -> np.ndarray:
     X[:, 0] = 1.0  # const
     geno = mapping_subset["genotype"].values
     for i, g in enumerate(geno):
-        if g not in GENOTYPE_PER_ANIMAL_CODING:
+        if g not in config.SAP_FACTORIAL:
             raise KeyError(f"Unknown genotype: {g!r}")
-        c = GENOTYPE_PER_ANIMAL_CODING[g]
-        X[i, 1] = c["App"]
-        X[i, 2] = c["Tau"]
-        X[i, 3] = c["Int"]
+        app, tau, intr = config.SAP_FACTORIAL[g]
+        X[i, 1] = app
+        X[i, 2] = tau
+        X[i, 3] = intr
     times = mapping_subset["timepoint"].values
     X[:, 4] = (times == "4mo").astype(float)
     X[:, 5] = (times == "6mo").astype(float)

@@ -473,7 +473,7 @@ def step_normalize(track, mapping, tp, sq):
         site_pos = sq.get("site_position", sq.get("site_pos", pd.Series()))
         pos_str = site_pos.iloc[site_idx] if len(site_pos) > site_idx else "?"
 
-        for geno in ["WT", "APP", "T22", "T22/APP"]:
+        for geno in ["WTyp", "AppP", "Ttau", "ApTt"]:
             geno_mask = mapping["genotype"] == geno
             geno_cols = mapping.loc[geno_mask, "column_name"].tolist()
             geno_idx = [bio_cols.index(c) for c in geno_cols if c in bio_cols]
@@ -497,6 +497,9 @@ def step_normalize(track, mapping, tp, sq):
 
     qc_df = pd.DataFrame(qc_rows)
 
+    # Normalize always uses all 72 samples; analysis_mode is stamped only so
+    # downstream consumers can confirm the cohort intended for OLS/MEA agrees
+    # with the normalize-time view.
     norm_summary = {
         "track": track_cfg["name"],
         "normalization_method": norm_method,
@@ -509,6 +512,7 @@ def step_normalize(track, mapping, tp, sq):
         "plex_medians_after": plex_medians_after,
         "pca_before": pca_before,
         "pca_after": pca_after,
+        **config.provenance_stamp(),
     }
     return stoich_df, raw_phospho_df, total_proteome_df, qc_df, norm_summary
 

@@ -40,26 +40,10 @@ from alz import config
 OUTPUT_DIR = config.KINASE_ATTRIBUTION_OUTPUT_DIR
 DATA_INGEST_DIR = config.DATA_INGEST_OUTPUT_DIR
 
-# Factorial genotype coding for OLS
-GENOTYPE_CODING = {
-    "WT":      {"App": 0, "Tau": 0, "Int": 0},
-    "APP":     {"App": 1, "Tau": 0, "Int": 0},
-    "T22":     {"App": 0, "Tau": 1, "Int": 0},
-    "T22/APP": {"App": 1, "Tau": 1, "Int": 1},
-}
-
-# Contrast definitions: how to derive effective LFC from OLS coefficients
-CONTRAST_COEFS = {
-    "App_2mo":  {"App": 1},
-    "App_4mo":  {"App": 1, "App_x_time4": 1},
-    "App_6mo":  {"App": 1, "App_x_time6": 1},
-    "Tau_2mo":  {"Tau": 1},
-    "Tau_4mo":  {"Tau": 1, "Tau_x_time4": 1},
-    "Tau_6mo":  {"Tau": 1, "Tau_x_time6": 1},
-    "ApTt_2mo": {"App": 1, "Tau": 1, "Int": 1},
-    "ApTt_4mo": {"App": 1, "Tau": 1, "Int": 1, "App_x_time4": 1, "Tau_x_time4": 1},
-    "ApTt_6mo": {"App": 1, "Tau": 1, "Int": 1, "App_x_time6": 1, "Tau_x_time6": 1},
-}
+# Canonical factorial coding + contrasts live in config. Re-export
+# CONTRAST_COEFS so existing import sites (e.g. decomposition/enrich_celltype)
+# keep working.
+CONTRAST_COEFS = config.CONTRAST_COEFS
 
 
 # ---------------------------------------------------------------------------
@@ -151,9 +135,9 @@ def _build_design_matrix(mapping, bio_cols, analysis_mode=None):
 
     X = pd.DataFrame(index=range(len(bio_cols)))
     X["const"] = 1.0
-    for factor, val in [("App", None), ("Tau", None), ("Int", None)]:
+    for idx, factor in enumerate(("App", "Tau", "Int")):
         X[factor] = meta["genotype"].map(
-            lambda g, f=factor: GENOTYPE_CODING[g][f]).astype(float)
+            lambda g, i=idx: config.SAP_FACTORIAL[g][i]).astype(float)
 
     if analysis_mode != "males_only":
         X["female"] = (meta["sex"] == "F").astype(float)
@@ -341,6 +325,14 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
             rpd.data_kl_values, threshold=track_cfg["kl_thresh"],
             comp_direction=kl_comp_direction,
         )
+        # `data_kl_values` carries `*_percentile_ranks` (1-K substrate ranks);
+        # we want the underlying `*_percentiles` (0-100 substrate-vs-kinase
+        # match strength), which is set in parallel on dp_data_pps.
+        pct_attr = f"{track_cfg['kin_type']}_percentiles"
+        pct_values = getattr(rpd.dp_data_pps, pct_attr)
+        # Same motif can appear at multiple sites; all duplicates carry the
+        # same percentile (deterministic from the PSSM), so take the first.
+        pct_by_motif = pct_values[~pct_values.index.duplicated(keep="first")]
         for kinase_name, motifs in kin_sub_sets.items():
             for motif in motifs:
                 substrate_records.append({
@@ -349,6 +341,7 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
                     "motif": motif,
                     "residue_type": track_cfg["residue"],
                     "track": track_cfg["name"],
+                    "kl_percentile": float(pct_by_motif.at[motif, kinase_name]),
                 })
 
     outlier_df = pd.DataFrame(outlier_records)

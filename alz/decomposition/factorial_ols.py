@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats as sp_stats
 
+import config
 from deconvolution import paths
 from deconvolution.load_deconvoluted import (
     DeconvoluatedTrack, males_only, parse_sample_metadata, safe_log2,
@@ -28,9 +29,9 @@ def build_design(samples: list[str]) -> tuple[np.ndarray, list[str]]:
 
     X = pd.DataFrame(index=range(len(samples)))
     X["const"] = 1.0
-    for factor in ("App", "Tau", "Int"):
+    for idx, factor in enumerate(("App", "Tau", "Int")):
         X[factor] = meta["genotype"].map(
-            lambda g, f=factor: paths.GENOTYPE_CODING[g][f]
+            lambda g, i=idx: config.SAP_FACTORIAL[g][i]
         ).astype(float).values
     X["time_4mo"] = (meta["timepoint"].values == "4mo").astype(float)
     X["time_6mo"] = (meta["timepoint"].values == "6mo").astype(float)

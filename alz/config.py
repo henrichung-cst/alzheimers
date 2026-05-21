@@ -1,4 +1,5 @@
 import os
+import re
 
 import numpy as np
 
@@ -72,9 +73,12 @@ SONG_SNRNA_SAMPLE_MANIFEST = os.path.join(
 SONG_ANALYSIS_CACHE_DIR = os.path.join(SONG_WORKSPACE_DIR, "analysis_cache")
 
 EXTERNAL_DATA_DIR = os.path.join(REPO_ROOT, "data", "external")
+DERIVED_DATA_DIR = os.path.join(REPO_ROOT, "data", "derived")
+DERIVED_BRIDGES_DIR = os.path.join(DERIVED_DATA_DIR, "bridges")
+DERIVED_AGGREGATES_DIR = os.path.join(DERIVED_DATA_DIR, "aggregates")
+DERIVED_CACHES_DIR = os.path.join(DERIVED_DATA_DIR, "caches")
 
 KL_METHOD = "percentile_rank"
-KL_THRESH = 15  # legacy ST default; tracks read kl_thresh from PHOSPHO_TRACKS
 MEA_FDR_THRESH = 0.25           # standard GSEA FDR threshold
 SITE_FDR_DIAGNOSTIC_THRESH = 0.05  # per-site OLS FDR cutoff for log-only diagnostic counts
 
@@ -131,6 +135,24 @@ WMB_CLASS_MANIFEST_FILE = os.path.join(
 # Levy 31-cluster spine (levy_t5): min_cells=5, no rank gate. Built once by
 # alz/integration/build_cluster_spine.py; downstream stages read CLUSTER_SPINE.
 CLUSTER_SPINE_NAME = "levy_t5"
+
+
+def provenance_stamp(**extras) -> dict:
+    """`{analysis_mode, spine, produced_at}` for summary/audit JSON sidecars.
+
+    Stamped on every artifact the viewer cross-checks so a mismatched analysis
+    mode or spine causes a hardfail at `build_unified_viewer` time instead of
+    silent vocabulary drift.
+    """
+    import datetime as _dt
+
+    stamp = {
+        "analysis_mode": ANALYSIS_MODE,
+        "spine": CLUSTER_SPINE_NAME,
+        "produced_at": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+    stamp.update(extras)
+    return stamp
 CLUSTER_SPINE_DIR = os.path.join(REPO_ROOT, "data", "incytr_frozen", "v2_46clusters")
 CLUSTER_SPINE_FILE = os.path.join(
     CLUSTER_SPINE_DIR, "spines", CLUSTER_SPINE_NAME, "cluster_spine.csv"
@@ -140,15 +162,9 @@ CELL_METADATA_FILE = os.path.join(CLUSTER_SPINE_DIR, "cell_metadata.csv")
 KR_CLUSTER_ID_KEY_FILE = os.path.join(
     CLUSTER_SPINE_DIR, "provenance", "kr_cluster_id_key.csv"
 )
-CLUSTER_TO_WMB_CLASS_FILE = os.path.join(
-    EXTERNAL_DATA_DIR, "allen_abc", "cluster_to_wmb_class.csv"
-)
-CLUSTER_TO_SEAAD_SUPERTYPE_FILE = os.path.join(
-    EXTERNAL_DATA_DIR, "sea_ad", "cluster_to_seaad_supertype.csv"
-)
-CLUSTER_TO_HBCA_SUPERCLUSTER_FILE = os.path.join(
-    EXTERNAL_DATA_DIR, "allen_hbca", "cluster_to_hbca_supercluster.csv"
-)
+CLUSTER_TO_WMB_CLASS_FILE = os.path.join(DERIVED_BRIDGES_DIR, "cluster_to_wmb_class.csv")
+CLUSTER_TO_SEAAD_SUPERTYPE_FILE = os.path.join(DERIVED_BRIDGES_DIR, "cluster_to_seaad_supertype.csv")
+CLUSTER_TO_HBCA_SUPERCLUSTER_FILE = os.path.join(DERIVED_BRIDGES_DIR, "cluster_to_hbca_supercluster.csv")
 
 
 def _load_cluster_spine() -> list[str]:
@@ -358,7 +374,7 @@ SEA_AD_S3_BUCKET = "sea-ad-single-cell-profiling"
 # the canonical object name is expected to match "SEAAD_MTG_RNAseq_final-nuclei.2024-02-13.h5ad"
 # (the same file targeted by _sea_ad_download_main_h5ad). Confirm with:
 #   aws s3 ls s3://sea-ad-single-cell-profiling/MTG/RNAseq/ --no-sign-request
-SEA_AD_EXPRESSION_FILE = os.path.join(SEA_AD_DIR, "expression_by_supertype.csv")
+SEA_AD_EXPRESSION_FILE = os.path.join(DERIVED_AGGREGATES_DIR, "seaad", "expression_by_supertype.csv")
 
 # Allen Human Brain Cell Atlas (HBCA) via abc_atlas_access.
 # Phase-2 download: atlas_reference.py --hbca-download
@@ -367,7 +383,7 @@ SEA_AD_EXPRESSION_FILE = os.path.join(SEA_AD_DIR, "expression_by_supertype.csv")
 # Top-level taxonomy field: HBCA uses "class" (analogous to WMB "class") — confirm
 # during phase 2 by inspecting the cell_metadata CSV.
 HBCA_CACHE_DIR = os.path.join(EXTERNAL_DATA_DIR, "allen_hbca")
-HBCA_EXPRESSION_FILE = os.path.join(HBCA_CACHE_DIR, "expression_by_class.csv")
+HBCA_EXPRESSION_FILE = os.path.join(DERIVED_AGGREGATES_DIR, "hbca", "expression_by_class.csv")
 
 # Human reference output files consumed by human_celltype_attribution.py
 HUMAN_REFERENCE_OUTPUT_DIR = os.path.join("outputs", "reports", "human_reference_expression")
@@ -415,7 +431,7 @@ HBCA_TAXONOMY_TERM_SET = "CCN202210140_SUPC"
 WMB_EXPRESSION_OUTPUT_DIR = os.path.join("outputs", "reports", "wmb_expression")
 WMB_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_kinase_expression.csv")
 WMB_EXPRESSION_SUBCLASS_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_kinase_expression_subclass.csv")
-WMB_SUBCLASS_TO_CLASS_FILE = os.path.join(EXTERNAL_DATA_DIR, "allen_abc", "wmb_subclass_to_class.csv")
+WMB_SUBCLASS_TO_CLASS_FILE = os.path.join(DERIVED_BRIDGES_DIR, "wmb_subclass_to_class.csv")
 WMB_REGIONAL_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_regional_kinase_expression.csv")
 WMB_PROTEOME_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_proteome_expression.csv")
 PROTEOME_GENE_LIST_FILE = os.path.join(DATA_INGEST_OUTPUT_DIR, "total_proteome_genes.txt")
@@ -520,7 +536,65 @@ SAP_FACTORIAL = {
     "ApTt": (1, 1, 1),
 }
 
-KLDATA_FILE = os.path.join(SONG_WORKSPACE_DIR, "kinase", "kldata.csv")
+# Raw-TMT-label genotype tokens → SAP canonical condition names.
+# Boundary normalizer used at ingest time (data_ingest) and inside
+# `parse_animal_id` (anywhere an animal_id string is parsed downstream).
+GENOTYPE_TO_SAP = {
+    "WT": "WTyp",
+    "APP": "AppP",
+    "T22": "Ttau",
+    "T22/APP": "ApTt",
+}
+
+# Disease × time contrast linear combinations on the factorial OLS coefficients
+# (const, App, Tau, Int, time_4mo, time_6mo, App_x_time4, App_x_time6,
+# Tau_x_time4, Tau_x_time6). 9 contrasts total.
+CONTRAST_COEFS = {
+    "App_2mo":  {"App": 1},
+    "App_4mo":  {"App": 1, "App_x_time4": 1},
+    "App_6mo":  {"App": 1, "App_x_time6": 1},
+    "Tau_2mo":  {"Tau": 1},
+    "Tau_4mo":  {"Tau": 1, "Tau_x_time4": 1},
+    "Tau_6mo":  {"Tau": 1, "Tau_x_time6": 1},
+    "ApTt_2mo": {"App": 1, "Tau": 1, "Int": 1},
+    "ApTt_4mo": {"App": 1, "Tau": 1, "Int": 1, "App_x_time4": 1, "Tau_x_time4": 1},
+    "ApTt_6mo": {"App": 1, "Tau": 1, "Int": 1, "App_x_time6": 1, "Tau_x_time6": 1},
+}
+
+# Animal-ID regex. Two flavors of input occur:
+#   - Full TMT label:        "1_C198(L)_M_2mo_WT"
+#   - Decomposition variant: "1_M_2mo_WT"  (no mouse_id segment)
+# `parse_animal_id` accepts either, returns long-form genotype.
+_ANIMAL_ID_FULL_RE = re.compile(
+    r"^(?P<sample_num>\d+)_(?P<mouse_id_raw>.+?)_(?P<sex>M|F)_"
+    r"(?P<timepoint>2mo|4mo|6mo)_(?P<genotype>WT|T22|APP|T22/APP)$"
+)
+_ANIMAL_ID_SHORT_RE = re.compile(
+    r"^(?P<sample_num>\d+)_(?P<sex>M|F)_"
+    r"(?P<timepoint>\dmo)_(?P<genotype>WT|T22|APP|T22/APP)$"
+)
+
+
+def parse_animal_id(animal_str: str) -> dict | None:
+    """Parse a TMT animal ID string, returning long-form genotype.
+
+    Returns a dict with keys sample_num, mouse_id_raw (None for short form),
+    sex, timepoint, genotype (long form: WTyp/AppP/Ttau/ApTt). Returns None
+    if the string doesn't match either expected format.
+    """
+    m = _ANIMAL_ID_FULL_RE.match(animal_str)
+    if m is not None:
+        d = m.groupdict()
+        d["sample_num"] = int(d["sample_num"])
+    else:
+        m = _ANIMAL_ID_SHORT_RE.match(animal_str)
+        if m is None:
+            return None
+        d = m.groupdict()
+        d["sample_num"] = int(d["sample_num"])
+        d["mouse_id_raw"] = None
+    d["genotype"] = GENOTYPE_TO_SAP[d["genotype"]]
+    return d
 
 PHOSPHATASE_GENE_PREFIXES = [
     "Ppp", "Ptpn", "Ptpr", "Dusp", "Ppm", "Ssh", "Ctdsp", "Ctds",
@@ -530,4 +604,4 @@ PHOSPHATASE_GENES_EXTRA = [
     "Inpp4a", "Inpp4b", "Synj1", "Synj2", "Mtmr1", "Mtmr2",
 ]
 
-MAPPING_CACHE_FILE = os.path.join(SONG_ANALYSIS_CACHE_DIR, "kinase_to_gene_mapping.csv")
+MAPPING_CACHE_FILE = os.path.join(DERIVED_CACHES_DIR, "kinase_to_gene_mapping.csv")

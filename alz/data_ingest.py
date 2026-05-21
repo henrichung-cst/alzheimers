@@ -80,8 +80,8 @@ IMAC_SITEQUANT_FILE = os.path.join(
     config.SONG_PRIMARY_PHOSPHO_DIR,
     "song_IMAC_sitequant_merged_labeled (2).xlsx",
 )
-# TMT genotype labels → SAP canonical condition names
-GENOTYPE_TO_SAP = {"WT": "WTyp", "APP": "AppP", "T22": "Ttau", "T22/APP": "ApTt"}
+# Re-export from config for backward-compat references within this module.
+GENOTYPE_TO_SAP = config.GENOTYPE_TO_SAP
 SEX_TO_SAP = {"M": "ma", "F": "fe"}
 
 
@@ -135,22 +135,14 @@ def _parse_animal_id(animal_str):
     """Parse a TMT animal ID string like '1_C198(L)_M_2mo_WT'.
 
     Returns dict with keys: sample_num, mouse_id_raw, mouse_id, sex,
-    timepoint, genotype.  Returns None if the string doesn't match.
+    timepoint, genotype (long-form: WTyp/AppP/Ttau/ApTt). Returns None if
+    the string doesn't match.
     """
-    pat = re.compile(
-        r"^(\d+)_(.+?)_(M|F)_(2mo|4mo|6mo)_(WT|T22|APP|T22/APP)$"
-    )
-    m = pat.match(animal_str)
-    if not m:
+    parsed = config.parse_animal_id(animal_str)
+    if parsed is None:
         return None
-    return {
-        "sample_num": int(m.group(1)),
-        "mouse_id_raw": m.group(2),
-        "mouse_id": _normalize_mouse_id(m.group(2)),
-        "sex": m.group(3),
-        "timepoint": m.group(4),
-        "genotype": m.group(5),
-    }
+    parsed["mouse_id"] = _normalize_mouse_id(parsed["mouse_id_raw"])
+    return parsed
 
 
 def _plex_channel_to_colname(plex, channel):
@@ -278,7 +270,7 @@ def step_sample_mapping():
     df["phospho_group_id"] = df.apply(
         lambda r: (
             f"{SEX_TO_SAP[r['sex']]}_{r['timepoint']}"
-            f"_{GENOTYPE_TO_SAP[r['genotype']]}"
+            f"_{r['genotype']}"
         ),
         axis=1,
     )

@@ -31,6 +31,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from typing import Tuple
@@ -167,8 +168,28 @@ def step_pseudobulk() -> None:
           f"min {config.SONG_MIN_CELLS} cells gate) → {PSEUDOBULK_FILE}")
     missing_spine = sorted(spine - set(pseudobulk["cell_type"].unique()))
     if missing_spine:
-        print(f"  WARNING: {len(missing_spine)} spine clusters missing from "
-              f"pseudobulk after gate: {missing_spine}")
+        raise RuntimeError(
+            f"{len(missing_spine)} spine clusters absent from pseudobulk "
+            f"after {config.SONG_MIN_CELLS}-cell gate: {missing_spine}. "
+            f"Either the spine vocabulary drifted from barcode_to_cluster.csv "
+            f"or this output predates the active spine — re-run "
+            f"`snrna_integration.py --pseudobulk` against the current spine."
+        )
+
+    # Provenance stamp: lets downstream consumers (snrna_proportions,
+    # build_celltype_decomposition, viewer) detect stale pseudobulk relative
+    # to the active spine.
+    spine_path = config.CLUSTER_SPINE_FILE
+    scope = config.provenance_stamp(
+        spine_mtime=os.path.getmtime(spine_path) if os.path.exists(spine_path) else None,
+        n_spine_clusters=len(spine),
+        min_cells=int(config.SONG_MIN_CELLS),
+        n_pseudobulk_classes=int(n_classes),
+    )
+    scope_path = os.path.join(OUTPUT_DIR, "pseudobulk.scope.json")
+    with open(scope_path, "w") as fh:
+        json.dump(scope, fh, indent=2)
+    print(f"  Provenance: {scope_path}")
 
     # Summary stats
     gated = cell_counts[cell_counts["n_cells"] >= config.SONG_MIN_CELLS]
@@ -324,25 +345,14 @@ def step_concordance() -> None:
     n_males = pb_male["sample"].nunique()
     print(f"  Males-only pseudobulk: {len(pb_male)} rows from {n_males} animals")
 
-    # Same contrast coefficient definitions as the bulk pipeline. Param order:
+    # Param order matches the bulk pipeline design matrix:
     # 0:const 1:App 2:Tau 3:Int 4:time_4mo 5:time_6mo
     # 6:App_x_time4 7:App_x_time6 8:Tau_x_time4 9:Tau_x_time6
     PARAM_NAMES = ["const", "App", "Tau", "Int", "time_4mo", "time_6mo",
                    "App_x_time4", "App_x_time6", "Tau_x_time4", "Tau_x_time6"]
     P = {n: i for i, n in enumerate(PARAM_NAMES)}
-    CONTRAST_COEFS = {
-        "App_2mo":  {"App": 1},
-        "App_4mo":  {"App": 1, "App_x_time4": 1},
-        "App_6mo":  {"App": 1, "App_x_time6": 1},
-        "Tau_2mo":  {"Tau": 1},
-        "Tau_4mo":  {"Tau": 1, "Tau_x_time4": 1},
-        "Tau_6mo":  {"Tau": 1, "Tau_x_time6": 1},
-        "ApTt_2mo": {"App": 1, "Tau": 1, "Int": 1},
-        "ApTt_4mo": {"App": 1, "Tau": 1, "Int": 1, "App_x_time4": 1, "Tau_x_time4": 1},
-        "ApTt_6mo": {"App": 1, "Tau": 1, "Int": 1, "App_x_time6": 1, "Tau_x_time6": 1},
-    }
     CONTRAST_VECS = {}
-    for cn, terms in CONTRAST_COEFS.items():
+    for cn, terms in config.CONTRAST_COEFS.items():
         v = np.zeros(len(PARAM_NAMES))
         for k, w in terms.items():
             v[P[k]] = w

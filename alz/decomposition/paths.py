@@ -38,7 +38,6 @@ PR_DECONVOLUTED_FILE = os.path.join(DECON_INPUT_DIR, "pr_wmb_decomposition.csv")
 WMB_CLASS_SIZE_FILE = os.path.join(DECON_INPUT_DIR, "wmb_class_size.csv")
 
 OUTPUT_DIR = os.path.join(REPO_ROOT, "outputs", "reports", "deconvolution")
-SITE_OLS_FILE = os.path.join(OUTPUT_DIR, "site_level_ols.parquet")
 MEA_FILE = os.path.join(OUTPUT_DIR, "kinase_enrichment_raw.csv")
 PRIMARY_TABLE = os.path.join(OUTPUT_DIR, "kinase_enrichment_wmb.csv")
 SUMMARY_JSON = os.path.join(OUTPUT_DIR, "summary.json")
@@ -68,23 +67,7 @@ EXPR_PRESENCE_FLOOR = 0.5
 # Deconvolution-side significance threshold (matches live MEA gate).
 DECON_FDR_THRESH = 0.25
 
-# Genotype × time factorial coding — same as live config.
-GENOTYPE_CODING = {
-    "WTyp": {"App": 0, "Tau": 0, "Int": 0},
-    "AppP": {"App": 1, "Tau": 0, "Int": 0},
-    "Ttau": {"App": 0, "Tau": 1, "Int": 0},
-    "ApTt": {"App": 1, "Tau": 1, "Int": 1},
-}
-
-CONTRASTS = {
-    "App_2mo":  {"App": 1},
-    "App_4mo":  {"App": 1, "App_x_time4": 1},
-    "App_6mo":  {"App": 1, "App_x_time6": 1},
-    "Tau_2mo":  {"Tau": 1},
-    "Tau_4mo":  {"Tau": 1, "Tau_x_time4": 1},
-    "Tau_6mo":  {"Tau": 1, "Tau_x_time6": 1},
-    "ApTt_2mo": {"App": 1, "Tau": 1, "Int": 1},
-    "ApTt_4mo": {"App": 1, "Tau": 1, "Int": 1, "App_x_time4": 1, "Tau_x_time4": 1},
-    "ApTt_6mo": {"App": 1, "Tau": 1, "Int": 1, "App_x_time6": 1, "Tau_x_time6": 1},
-}
+# Re-export contrast definitions from the live config so the deconvolution
+# sub-package shares the single source of truth.
+CONTRASTS = config.CONTRAST_COEFS
 

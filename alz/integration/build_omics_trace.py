@@ -14,7 +14,9 @@ Output: per-cluster parquet shards under ``audit_sources/omics_trace/`` with
 uniform schema:
   layer        : str, one of {protein, phospho_ps, phospho_py}
   gene_symbol  : str
-  site_id      : str or null (null for protein rows; composite ID for phospho)
+  site_id      : str or null (null for protein rows; row-index id for phospho)
+  motif        : str or null (null for protein rows; 13-mer with central S/T/Y
+                 at position 7, sourced from raw_phospho_normalized{,_pY}.csv)
   animal_id    : str  (raw animal identifier, e.g. "37_E50(L)_M_4mo_WT")
   sex          : str  (M or F)
   timepoint    : str  (2mo / 4mo / 6mo)
@@ -44,12 +46,10 @@ Pathway-cluster coverage hard-fail:
 Animal-level metadata decoding:
   ``animal_id`` encodes sex / timepoint / genotype:
       ``<n>_<lab>_<sex>_<age>_<geno>``  e.g. "37_E50(L)_M_4mo_WT"
-  Regex ``ANIMAL_RE`` (mirrors ``alz/incytr/export_decomposition_for_pair.py``)
-  decodes these fields without a samplekey join.  Genotype token is mapped via
-  ``GENO_DECODE`` to the canonical condition vocabulary (WTyp/AppP/Ttau/ApTt).
-  Animals whose ``animal_id`` does not match the regex or whose genotype token
-  is not in GENO_DECODE are silently dropped (they are the 72 − 33 = 39
-  females + outliers not used by the Incytr pipeline).
+  Parsing + short→long genotype normalization is centralized in
+  ``config.parse_animal_id``; animals whose ``animal_id`` does not match
+  the regex are silently dropped (they are the 72 − 33 = 39 females +
+  outliers not used by the Incytr pipeline).
 
 Schema version: 1.  Bump OMICS_TRACE_SCHEMA_VERSION in alz/viewer/paths.py on
 any schema change; the viewer rebuild will invalidate existing shards.
@@ -60,7 +60,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import sys
 import time
@@ -93,26 +92,32 @@ PROTEIN_PARQUET = os.path.join(_DEC_DIR, "protein_per_cluster.parquet")
 PHOSPHO_PS_PARQUET = os.path.join(_DEC_DIR, "phospho_per_cluster.parquet")
 PHOSPHO_PY_PARQUET = os.path.join(_DEC_DIR, "phospho_per_cluster_pY.parquet")
 
-# ---------------------------------------------------------------------------
-# Animal-id decoding (mirrors alz/incytr/export_decomposition_for_pair.py).
-# ---------------------------------------------------------------------------
-GENO_DECODE = {"WT": "WTyp", "APP": "AppP", "T22": "Ttau", "T22/APP": "ApTt"}
-_SEX_MAP = {"M": "M", "F": "F"}
-ANIMAL_RE = re.compile(r"^(\d+)_[^_]+_([MF])_(\dmo)_(.+)$")
+# Site-level motif (13-mer with central S/T/Y at position 7) lives only in the
+# upstream IRS-normalized phospho CSV; the per-cluster decomposition drops it.
+# We rejoin on site_id at shard build time so the Evidence tab popover can
+# label rows by their phosphosite motif instead of opaque integer ids.
+_KIN_DIR = os.path.join(config.REPO_ROOT, "outputs", "reports", "kinase_attribution")
+PHOSPHO_PS_MOTIF_CSV = os.path.join(_KIN_DIR, "raw_phospho_normalized.csv")
+PHOSPHO_PY_MOTIF_CSV = os.path.join(_KIN_DIR, "raw_phospho_normalized_pY.csv")
 
+
+def _load_site_motif(csv_path: str) -> pd.DataFrame:
+    """Return DataFrame with columns (site_id:str, motif:str)."""
+    df = pd.read_csv(csv_path, usecols=["site_id", "motif"])
+    df["site_id"] = df["site_id"].astype(str)
+    df["motif"] = df["motif"].astype(str)
+    return df.drop_duplicates(subset=["site_id"])
+
+# ---------------------------------------------------------------------------
+# Animal-id decoding — delegates to config.parse_animal_id (long-form genotype).
+# ---------------------------------------------------------------------------
 
 def _parse_animal(animal_id: str) -> tuple[str, str, str] | None:
     """Return (sex, timepoint, genotype) for a valid animal_id, else None."""
-    m = ANIMAL_RE.match(animal_id)
-    if not m:
+    parsed = config.parse_animal_id(animal_id)
+    if parsed is None:
         return None
-    sex = m.group(2)
-    age = m.group(3)
-    geno_raw = m.group(4)
-    geno = GENO_DECODE.get(geno_raw)
-    if geno is None:
-        return None
-    return sex, age, geno
+    return parsed["sex"], parsed["timepoint"], parsed["genotype"]
 
 
 def _add_metadata_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -154,7 +159,7 @@ def _load_pathway_clusters(index_path: str) -> set[str]:
 # ---------------------------------------------------------------------------
 
 def _load_protein(cluster_filter: set[str] | None = None) -> pd.DataFrame:
-    """Load protein substrate; add layer='protein' and site_id=None."""
+    """Load protein substrate; add layer='protein', site_id=None, motif=None."""
     print(f"  omics_trace: reading {PROTEIN_PARQUET}", flush=True)
     df = pq.ParquetFile(PROTEIN_PARQUET).read(
         columns=["gene_symbol", "animal_id", "cluster", "value", "log2_value"]
@@ -163,35 +168,44 @@ def _load_protein(cluster_filter: set[str] | None = None) -> pd.DataFrame:
         df = df[df["cluster"].isin(cluster_filter)]
     df["layer"] = "protein"
     df["site_id"] = None
+    df["motif"] = None
+    return df
+
+
+def _load_phospho(parquet_path: str, motif_csv: str, layer: str,
+                  cluster_filter: set[str] | None = None) -> pd.DataFrame:
+    """Load phospho substrate and join motif from the upstream IRS-normalized
+    CSV. site_id→motif is a 1:1 lookup (~13K rows for pS, ~1.5K for pY)."""
+    print(f"  omics_trace: reading {parquet_path}", flush=True)
+    df = pq.ParquetFile(parquet_path).read(
+        columns=["site_id", "gene_symbol", "animal_id", "cluster", "value",
+                 "log2_value"]
+    ).to_pandas()
+    if cluster_filter is not None:
+        df = df[df["cluster"].isin(cluster_filter)]
+    df["site_id"] = df["site_id"].astype(str)
+    motif = _load_site_motif(motif_csv)
+    df = df.merge(motif, on="site_id", how="left")
+    n_missing = int(df["motif"].isna().sum())
+    if n_missing:
+        miss_sites = df.loc[df["motif"].isna(), "site_id"].unique()[:5]
+        raise ValueError(
+            f"omics_trace: {n_missing} {layer} rows have no motif lookup "
+            f"(examples: {list(miss_sites)}). Substrate drift between "
+            f"{parquet_path} and {motif_csv}."
+        )
+    df["layer"] = layer
     return df
 
 
 def _load_phospho_ps(cluster_filter: set[str] | None = None) -> pd.DataFrame:
-    """Load pS/pT phospho substrate; add layer='phospho_ps'; cast site_id→str."""
-    print(f"  omics_trace: reading {PHOSPHO_PS_PARQUET}", flush=True)
-    df = pq.ParquetFile(PHOSPHO_PS_PARQUET).read(
-        columns=["site_id", "gene_symbol", "animal_id", "cluster", "value",
-                 "log2_value"]
-    ).to_pandas()
-    if cluster_filter is not None:
-        df = df[df["cluster"].isin(cluster_filter)]
-    df["layer"] = "phospho_ps"
-    df["site_id"] = df["site_id"].astype(str)
-    return df
+    return _load_phospho(PHOSPHO_PS_PARQUET, PHOSPHO_PS_MOTIF_CSV,
+                         "phospho_ps", cluster_filter)
 
 
 def _load_phospho_py(cluster_filter: set[str] | None = None) -> pd.DataFrame:
-    """Load pY phospho substrate; add layer='phospho_py'."""
-    print(f"  omics_trace: reading {PHOSPHO_PY_PARQUET}", flush=True)
-    df = pq.ParquetFile(PHOSPHO_PY_PARQUET).read(
-        columns=["site_id", "gene_symbol", "animal_id", "cluster", "value",
-                 "log2_value"]
-    ).to_pandas()
-    if cluster_filter is not None:
-        df = df[df["cluster"].isin(cluster_filter)]
-    df["layer"] = "phospho_py"
-    df["site_id"] = df["site_id"].astype(str)
-    return df
+    return _load_phospho(PHOSPHO_PY_PARQUET, PHOSPHO_PY_MOTIF_CSV,
+                         "phospho_py", cluster_filter)
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +213,7 @@ def _load_phospho_py(cluster_filter: set[str] | None = None) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 _SHARD_COLS = [
-    "layer", "gene_symbol", "site_id", "animal_id",
+    "layer", "gene_symbol", "site_id", "motif", "animal_id",
     "sex", "timepoint", "genotype", "value", "log2_value",
 ]
 

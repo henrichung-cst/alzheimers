@@ -79,7 +79,7 @@ def build_tmt_channel_mapping(
     df["snrna_sample_id"] = df["mouse_id"].map(lambda mid: snrna_samples.get(mid, ""))
 
     df["phospho_group_id"] = df.apply(
-        lambda r: f"{SEX_TO_SAP[r['sex']]}_{r['timepoint']}_{GENOTYPE_TO_SAP[r['genotype']]}",
+        lambda r: f"{SEX_TO_SAP[r['sex']]}_{r['timepoint']}_{r['genotype']}",
         axis=1,
     )
 
