@@ -389,7 +389,7 @@ def _canonical_cluster_names() -> dict[str, str]:
     Falls back to an empty dict (heuristic unsanitize used instead).
     """
     pm_path = os.path.join(
-        config.REPO_ROOT, "outputs", "reports", "incytr_factorial", "pair_metadata.parquet"
+        config.REPO_ROOT, "outputs", "reports", "incytr_pair_mode", "pair_metadata.parquet"
     )
     if not os.path.exists(pm_path):
         return {}

@@ -22,7 +22,7 @@ Inputs:
 
 Outputs (under outputs/reports/kinase_attribution/):
   unified_attribution.csv         — confidence != "none" rows (sorted)
-  unified_attribution_full.csv    — full sig × cluster grid (n_kinases × 9 × 19)
+  unified_attribution_full.csv    — full sig × cluster grid (n_kinases × 9 × 31)
   sea_ad_supertype_lfc.csv        — per-(gene, stratum, supertype) audit
   attribution_summary.json
 """

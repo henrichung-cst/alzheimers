@@ -99,34 +99,6 @@ run_step() {
   echo "[$STEP_IDX/$N_STEPS] ($key) $label  DONE in $(fmt_elapsed $((t1 - t0)))"
 }
 
-run_step_softfail() {
-  local key="$1"; shift
-  local label="$1"; shift
-  local sentinel="$STATE_DIR/${key}.done"
-  STEP_IDX=$((STEP_IDX + 1))
-  local t0=$(date +%s)
-  local total_elapsed=$((t0 - T_TOTAL_START))
-  echo
-  echo "================================================================"
-  echo "[$STEP_IDX/$N_STEPS] ($key) $label  (soft-fail)"
-  echo "  started:        $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  echo "  total elapsed:  $(fmt_elapsed $total_elapsed)"
-  if [[ -f "$sentinel" ]]; then
-    echo "  SKIP — cached: $(cat "$sentinel")"
-    echo "================================================================"
-    return 0
-  fi
-  echo "================================================================"
-  if "$@"; then
-    local t1=$(date +%s)
-    date -u +%Y-%m-%dT%H:%M:%SZ > "$sentinel"
-    echo "[$STEP_IDX/$N_STEPS] ($key) $label  DONE in $(fmt_elapsed $((t1 - t0)))"
-  else
-    local t1=$(date +%s)
-    echo "[$STEP_IDX/$N_STEPS] ($key) $label  WARNING: nonzero exit, continuing (elapsed $(fmt_elapsed $((t1 - t0))))"
-  fi
-}
-
 # Pair-mode Incytr: alz/incytr/run_pair_mode.sh loops the 9 contrasts
 # internally. Worker parallelism is set via CHUNK_PARALLEL (subprocess fan-out
 # within each contrast's sender×receiver chunks); contrast-level parallel
@@ -155,7 +127,7 @@ run_step C "cell-type decomposition (st + py)" \
 run_step D-st "per-cluster MEA (st)" \
   pixi run python -m alz.decomposition.enrich_celltype --spine "$SPINE" --track st
 
-run_step_softfail D-py "per-cluster MEA (py)" \
+run_step D-py "per-cluster MEA (py)" \
   pixi run python -m alz.decomposition.enrich_celltype --spine "$SPINE" --track py
 
 if [[ $SKIP_INCYTR -eq 0 ]]; then
@@ -209,7 +181,7 @@ run_step H2 "human cell-type attribution (CR03)" \
 run_step I "rebuild unified viewer" \
   pixi run python alz/build_unified_viewer.py
 
-run_step_softfail V "verification" \
+run_step V "verification" \
   pixi run python alz/decomposition/verify_decomposition.py --spine "$SPINE"
 
 T_TOTAL_END=$(date +%s)

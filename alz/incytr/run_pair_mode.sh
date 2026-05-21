@@ -59,11 +59,6 @@ run_one() {
   local c2="ma_${age}_WTyp"
   local out_parquet="$out_subdir/${c1}_${c2}_incytr_output.parquet"
 
-  if [[ -s "$out_parquet" ]]; then
-    echo "  [skip] $c1 vs $c2 — output exists ($(du -h "$out_parquet" | cut -f1))"
-    return 0
-  fi
-
   echo "=== $(date -Is) $c1 vs $c2 (nboot=$nboot) ==="
   # Subprocess-per-chunk mode (driver default SUBPROCESS_CHUNKS=1):
   # the orchestrator spawns one Rscript per chunk so the OS reclaims the

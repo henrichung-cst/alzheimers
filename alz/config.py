@@ -109,8 +109,10 @@ def _load_analysis_mode() -> str:
 
 ANALYSIS_MODE = _load_analysis_mode()  # "males_only" or "full_cohort"
 
-# WMB-34 class list. Retained for atlas helpers (wmb_expression.py) that
-# still emit WMB-class-level expression. Analysis spine is CLUSTER_SPINE below.
+# Allen WMB published taxonomy (34 classes). Used by atlas helpers
+# (wmb_expression.py) that emit per-class expression for the WMB specificity
+# branch of attribution. Analysis spine is CLUSTER_SPINE (Levy-t5) below;
+# clusters crosswalk to WMB classes via CLUSTER_TO_WMB_CLASS_FILE.
 WMB_CLASSES = [
     "01 IT-ET Glut", "02 NP-CT-L6b Glut", "03 OB-CR Glut", "04 DG-IMN Glut",
     "05 OB-IMN GABA", "06 CTX-CGE GABA", "07 CTX-MGE GABA", "08 CNU-MGE GABA",
@@ -125,17 +127,13 @@ WMB_CLASSES = [
 WMB_CLASS_MANIFEST_FILE = os.path.join(
     EXTERNAL_DATA_DIR, "allen_abc", "wmb_class_manifest.csv"
 )
-# Deprecated: replaced by CLUSTER_TO_SEAAD_SUPERTYPE_FILE in the spine pivot.
-# Kept until kinase_attribute.py is rewired in step 7.
-SEAAD_TO_WMB_CLASS_FILE = os.path.join(
-    EXTERNAL_DATA_DIR, "sea_ad", "seaad_subclass_to_wmb_class.csv"
-)
 
 # Levy 31-cluster spine (levy_t5): min_cells=5, no rank gate. Built once by
 # alz/integration/build_cluster_spine.py; downstream stages read CLUSTER_SPINE.
+CLUSTER_SPINE_NAME = "levy_t5"
 CLUSTER_SPINE_DIR = os.path.join(REPO_ROOT, "data", "incytr_frozen", "v2_46clusters")
 CLUSTER_SPINE_FILE = os.path.join(
-    CLUSTER_SPINE_DIR, "spines", "levy_t5", "cluster_spine.csv"
+    CLUSTER_SPINE_DIR, "spines", CLUSTER_SPINE_NAME, "cluster_spine.csv"
 )
 BARCODE_TO_CLUSTER_FILE = os.path.join(CLUSTER_SPINE_DIR, "barcode_to_cluster.csv")
 CELL_METADATA_FILE = os.path.join(CLUSTER_SPINE_DIR, "cell_metadata.csv")
@@ -468,7 +466,7 @@ def load_barcode_to_cluster_map() -> dict[str, str]:
 
 
 def load_cluster_to_wmb_class_map() -> dict[str, str]:
-    """Spine-cluster → WMB-class (1:1, hand-curated). 19 entries."""
+    """Spine-cluster → WMB-class (1:1, hand-curated). 31 entries."""
     import csv
     out: dict[str, str] = {}
     with open(CLUSTER_TO_WMB_CLASS_FILE, newline="") as f:
@@ -478,7 +476,7 @@ def load_cluster_to_wmb_class_map() -> dict[str, str]:
 
 
 def load_cluster_to_seaad_supertype_map() -> dict[str, list[tuple[str, float]]]:
-    """Spine-cluster → list of (SEA-AD supertype, weight). 19 entries.
+    """Spine-cluster → list of (SEA-AD supertype, weight). 31 entries.
 
     `n/a` rows return an empty list so callers can drop those clusters from
     SEA-AD evidence cleanly. Weights within a mapped cluster sum to 1.0.

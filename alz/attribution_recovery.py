@@ -86,7 +86,7 @@ def _build_celltype_evidence(uaf_full):
     combined_score (ties broken by wmb_specificity), so the surviving row
     reflects the contrast where the joint attribution evidence is
     strongest. Filter to pairs where wmb_specificity >= SPECIFICITY_LOW
-    (1 / N_CELL_TYPES; 1/34 ≈ 0.029 under the WMB-class spine).
+    (1 / N_CELL_TYPES; 1/31 ≈ 0.0323 under the Levy-t5 spine).
     """
     if "combined_score" in uaf_full.columns:
         idx = (uaf_full

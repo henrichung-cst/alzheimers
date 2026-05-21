@@ -3,13 +3,10 @@
 #
 # Reads `outputs/reports/incytr_pair_mode/wide/ma_<age>_<geno>_ma_<age>_WTyp_incytr_output.parquet`
 # (9 expected; --strict to enforce), reshapes into the long-form
-# `outputs/reports/incytr_factorial/receiver_cache/receiver=*/` layout, then
-# rebuilds the unified viewer (which picks up the SiK_score column and NULLs
-# out the per-node FC columns pair-mode does not emit).
+# `outputs/reports/incytr_pair_mode/receiver_cache/receiver=*/` layout, then
+# rebuilds the unified viewer.
 #
-# Resets receiver_cache/ so old partitions (e.g. from the prior factorial run)
-# don't leak into the new build. The replaced cache lives at the path the
-# viewer already reads — no flags needed downstream.
+# Resets receiver_cache/ each run so stale partitions don't leak into the build.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -21,7 +18,6 @@ if [[ "${PAIR_MODE_STRICT:-0}" == "1" ]]; then
   STRICT_FLAG="--strict"
 fi
 
-export INCYTR_SOURCE="${INCYTR_SOURCE:-pair_mode}"
 export INCYTR_PAIR_MODE_INPUT_DIR="$INPUT_DIR"
 
 echo "=== $(date -Is) reshape pair-mode → receiver_cache ==="

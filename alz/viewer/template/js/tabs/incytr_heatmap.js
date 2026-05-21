@@ -308,7 +308,7 @@ function renderIncytrHeatmap() {
     if (el) el.innerHTML =
       '<div class="muted" style="padding:24px;">No <code>incytr_pathways</code> '
       + 'block in the payload. Rebuild with <code>pixi run viewer</code> after '
-      + 'producing <code>outputs/reports/incytr_factorial/receiver_cache/</code>.</div>';
+      + 'producing <code>outputs/reports/incytr_pair_mode/receiver_cache/</code>.</div>';
     return;
   }
   _ihSyncControls();

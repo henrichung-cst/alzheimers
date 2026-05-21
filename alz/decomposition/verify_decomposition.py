@@ -30,7 +30,7 @@ import config_integration as icfg  # noqa: E402
 
 REPO = Path(config.REPO_ROOT)
 BULK_DIR = REPO / "outputs/reports/kinase_attribution"
-INCYTR_PAIRS = REPO / "outputs/reports/incytr_factorial/pair_metadata.parquet"
+INCYTR_PAIRS = REPO / "outputs/reports/incytr_pair_mode/pair_metadata.parquet"
 CELL_COUNTS_FILE = REPO / "outputs/reports/snrna_integration/pseudobulk_cell_counts.csv"
 SAMPLE_MAPPING_FILE = REPO / "outputs/reports/data_ingest/sample_mapping.csv"
 

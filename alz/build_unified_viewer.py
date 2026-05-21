@@ -1,19 +1,13 @@
 #!/usr/bin/env python3
-"""Unified viewer builder: single entry point for kinase + pathway views.
+"""Unified viewer builder: single-file HTML deliverable for the kinase pipeline.
 
-Phase 3 adds the HTML shell (template + CSS + JS Store + Overview tab).
-Phase 2 artifacts produced:
-
-  - kinase_backbone_edges_sig.parquet  — edges filtered to backbones that
-    pass both null permutation tests (significant_both). Sidecar artifact
-    (not embedded in HTML; fetched by future tabs only if needed).
-  - unified_viewer.payload.json (+ .gz) — columnar JSON payload with
-    stable integer IDs for kinases, celltypes, and backbones. Embedded
-    inline in the HTML via a <script type="application/json"> tag so the
-    viewer is a single-file deliverable usable over file://.
-
-The full 7.14 GB / 2.23B-row edge parquet is streamed via
-ParquetFile.iter_batches — it is never materialized in memory.
+Reads the unified attribution + recovery tables (mouse), the Levy-t5 decomposition
+shards (per-cluster MEA + per-animal site OLS), the pair-mode Incytr output
+(`outputs/reports/incytr_pair_mode/`), and the human per-donor MEA + SEA-AD
+agreement chain. Emits `outputs/reports/unified_viewer/index.html` with the
+columnar payload inlined as `<script type="application/json" id="payload-data">`
+plus per-entity shards under `edge_slices/{human_perdonor,decomp_ols,
+song_concordance,incytr_pathways}/` fetched on demand by the JS tabs.
 
 Usage:
     python alz/build_unified_viewer.py              # payload + html (default)
@@ -72,8 +66,7 @@ from viewer.paths import (  # noqa: E402
     EDGE_SLICES_HUMAN_PERDONOR_DIR,
     EDGE_SLICES_INCYTR_PATHWAYS_DIR,
     EDGE_SLICES_SONG_CONCORDANCE_DIR,
-    INCYTR_FACTORIAL_INPUTS_DIR,
-    INCYTR_FACTORIAL_OUTPUTS_DIR,
+    INCYTR_PAIR_MODE_OUTPUTS_DIR,
     MEASUREMENT_TRACE_DIR,
     MEASUREMENT_TRACE_INDEX,
     MEASUREMENT_TRACE_SCHEMA_VERSION,
@@ -149,7 +142,7 @@ def _audit_specs() -> list[tuple[str, str, str]]:
     specs.extend([
         ("unified_attribution", "Unified attribution",
          os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "unified_attribution.csv")),
-        ("unified_attribution_full", "Unified attribution (all 34 WMB classes)",
+        ("unified_attribution_full", "Unified attribution (31 Levy-t5 clusters)",
          os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "unified_attribution_full.csv")),
         ("wmb_kinase_expression", "WMB kinase expression",
          config.WMB_EXPRESSION_FILE),
@@ -1948,382 +1941,6 @@ def _incytr_sanitize(name: str) -> str:
     return name.replace("/", "-").replace(" ", "_")
 
 
-def _write_incytr_pathways() -> dict | None:
-    """Shard the long-form factorial output by (sender, receiver) — unfiltered.
-
-    Reads `outputs/reports/incytr_factorial/receiver_cache/receiver=*/*.parquet`
-    (WMB-labelled run, 4.76M rows, 164 cols, 9 contrasts × 528,790 paths) and
-    emits one parquet per (sender, receiver) pair under
-    `edge_slices/incytr_pathways/` plus the `incytr_pathways` payload block.
-    No build-time significance gate is applied — the shards carry raw metrics
-    so the UI can threshold live.
-
-    `heatmap_counts` is a sender × receiver × contrast × pvalue × |PDS| grid
-    (no significance gate at build time — client picks the threshold pair).
-    Filter axes are pvalue (Wald t on the factorial OLS β for SigProb) and
-    |PDS| (composite multimodel effect-size magnitude). The legacy
-    `sigprob_max` mean-ratio filter was retired 2026-05-12.
-    """
-    import duckdb  # local to keep top-of-file imports lean
-
-    cache_glob = os.path.join(
-        INCYTR_FACTORIAL_OUTPUTS_DIR,
-        "receiver_cache", "receiver=*", "*.parquet",
-    )
-    if not glob.glob(cache_glob):
-        print(f"  (warn) receiver_cache empty under "
-              f"{INCYTR_FACTORIAL_OUTPUTS_DIR}; skipping incytr_pathways",
-              flush=True)
-        return None
-
-    pm_path = os.path.join(INCYTR_FACTORIAL_OUTPUTS_DIR, "pair_metadata.parquet")
-    if not os.path.exists(pm_path):
-        print(f"  (warn) {pm_path} missing; cannot resolve cell-type names",
-              flush=True)
-        return None
-    pm = pd.read_parquet(pm_path, columns=["sender", "receiver"])
-    senders_canonical = sorted(set(pm["sender"].tolist()))
-    receivers_canonical = sorted(set(pm["receiver"].tolist()))
-    sanitized_to_display = {_incytr_sanitize(n): n for n in receivers_canonical}
-
-    # Detect which optional columns the upstream parquet actually carries.
-    # Per-node `.label` columns were dropped in the incytr_cleanup rerun;
-    # we SELECT them only when present and synthesize NULLs otherwise so the
-    # shard schema (and JS contract) stays stable across runs.
-    sample_schema = pq.read_schema(sorted(glob.glob(cache_glob))[0])
-    src_cols = {f.name for f in sample_schema}
-    available_label_pairs = [
-        (src, dst) for src, dst in zip(_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS)
-        if src in src_cols
-    ]
-    missing_label_dsts = [
-        dst for src, dst in zip(_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS)
-        if src not in src_cols
-    ]
-    if missing_label_dsts:
-        print(f"  (warn) incytr_pathways: source parquet missing label columns "
-              f"{[s for s, _ in zip(_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS) if s not in src_cols]}; "
-              f"emitting NULL for {missing_label_dsts}", flush=True)
-
-    con = duckdb.connect()
-    con.execute("PRAGMA threads=8; PRAGMA memory_limit='12GB';")
-    _configure_duckdb_tempdir(con)
-    # SiK_score only exists in the pair-mode reshape (alz/integration/
-    # pair_to_receiver_cache.py); the legacy factorial cache does not carry
-    # it. NULL-fill when absent so the JS shard contract stays stable.
-    missing_score_cols = [c for c in _INCYTR_SCORE_COLS if c not in src_cols]
-    if missing_score_cols:
-        print(f"  (warn) incytr_pathways: source parquet missing score columns "
-              f"{missing_score_cols}; emitting NULL", flush=True)
-    extra_score_select = ",\n          ".join(
-        f"CAST({c} AS DOUBLE) AS {c}" if c in src_cols
-        else f"CAST(NULL AS DOUBLE) AS {c}"
-        for c in _INCYTR_SCORE_COLS
-    )
-    extra_fc_select = ",\n          ".join(
-        f"CAST({c} AS DOUBLE) AS {c}" if c in src_cols
-        else f"CAST(NULL AS DOUBLE) AS {c}"
-        for c in _INCYTR_FC_COLS
-    )
-    label_clauses = [
-        f'CAST("{src}" AS VARCHAR) AS {dst}' for src, dst in available_label_pairs
-    ] + [f"CAST(NULL AS VARCHAR) AS {dst}" for dst in missing_label_dsts]
-    label_select = ",\n          ".join(label_clauses) if label_clauses else "CAST(NULL AS VARCHAR) AS _no_labels"
-    con.execute(f"""
-        CREATE TEMP TABLE src AS
-        SELECT
-          sender, receiver, Path, Ligand, Receptor, EM, Target,
-          contrast,
-          CAST(pvalue   AS DOUBLE) AS pvalue,
-          CAST(PDS      AS DOUBLE) AS PDS,
-          {extra_score_select},
-          {extra_fc_select},
-          {label_select}
-        FROM read_parquet('{cache_glob}', hive_partitioning = true, union_by_name = true)
-    """)
-    n_src = con.execute("SELECT COUNT(*) FROM src").fetchone()[0]
-    print(f"  incytr_pathways: loaded receiver_cache ({n_src:,} rows)", flush=True)
-    sender_to_idx = {s: i for i, s in enumerate(senders_canonical)}
-    receiver_to_idx = {r: i for i, r in enumerate(receivers_canonical)}
-    contrast_to_idx = {c: i for i, c in enumerate(_INCYTR_CONTRASTS)}
-    n_s, n_r, n_c = len(senders_canonical), len(receivers_canonical), len(_INCYTR_CONTRASTS)
-
-    # Heatmap counts: (sender × receiver × contrast × pvalue × |PDS|). Every
-    # path is replicated across all 9 contrasts in the long-form schema, so
-    # *unfiltered* counts are identical across contrasts — only pvalue / |PDS|
-    # gating makes the per-contrast view differ. We pre-compute the same
-    # 8 pvalue × 8 |PDS| cutoff grid used by the pathway-count cube so the
-    # heatmap can re-threshold client-side without re-fetching shards.
-    # NULL PDS rows count as |PDS|=0 (kept by the 0 threshold, dropped by all
-    # others) — same convention as the sign bucket fall-through.
-    n_thr_hm = len(_INCYTR_PATHWAY_PVALUES)
-    n_ap_hm = len(_INCYTR_PATHWAY_ABS_PDS)
-    hm_thr_clauses_list = []
-    for ip, tp in enumerate(_INCYTR_PATHWAY_PVALUES):
-        for iap, tap in enumerate(_INCYTR_PATHWAY_ABS_PDS):
-            hm_thr_clauses_list.append(
-                f"COUNT(*) FILTER (WHERE pvalue < {tp} "
-                f"AND COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
-            )
-    hm_thr_clauses = ", ".join(hm_thr_clauses_list)
-    hm_rows = con.execute(f"""
-        SELECT sender, receiver, contrast, {hm_thr_clauses}
-        FROM src
-        WHERE pvalue IS NOT NULL
-        GROUP BY sender, receiver, contrast
-    """).fetchall()
-    grid = np.zeros((n_s, n_r, n_c, n_thr_hm, n_ap_hm), dtype=np.uint32)
-    skipped_pairs: set[tuple[str, str]] = set()
-    for row in hm_rows:
-        s_raw, r_raw, c = row[0], row[1], row[2]
-        r_disp = sanitized_to_display.get(r_raw, r_raw)
-        if s_raw not in sender_to_idx or r_disp not in receiver_to_idx:
-            skipped_pairs.add((s_raw, r_raw))
-            continue
-        if c not in contrast_to_idx:
-            continue
-        s_i = sender_to_idx[s_raw]
-        r_i = receiver_to_idx[r_disp]
-        c_i = contrast_to_idx[c]
-        offset = 3
-        for ip in range(n_thr_hm):
-            for iap in range(n_ap_hm):
-                grid[s_i, r_i, c_i, ip, iap] = int(row[offset])
-                offset += 1
-    # total_by_threshold becomes 2D [n_pvalues × n_abs_pds] so the client can
-    # show "X paths across all contrasts at this (pvalue, |PDS|) pair".
-    totals = np.zeros((n_thr_hm, n_ap_hm), dtype=np.uint64)
-    for ip in range(n_thr_hm):
-        for iap in range(n_ap_hm):
-            totals[ip, iap] = int(grid[:, :, :, ip, iap].sum())
-    heatmap_counts = {
-        "thresholds": list(_INCYTR_PATHWAY_PVALUES),
-        "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
-        "shape": [n_s, n_r, n_c, n_thr_hm, n_ap_hm],
-        "counts": grid.flatten().tolist(),
-        "total_by_threshold": totals.tolist(),
-    }
-    if skipped_pairs:
-        print(f"    (warn) heatmap_counts: skipped unknown pairs "
-              f"{sorted(skipped_pairs)[:5]}{'...' if len(skipped_pairs) > 5 else ''}",
-              flush=True)
-    # Diagnostic: report total at the default (pvalue<0.05, |PDS|>=0) and at
-    # the typical filter (pvalue<0.05, |PDS|>=0.01).
-    ap_zero_idx = _INCYTR_PATHWAY_ABS_PDS.index(0.0)
-    ap_001_idx = _INCYTR_PATHWAY_ABS_PDS.index(0.01)
-    p_005_idx = _INCYTR_PATHWAY_PVALUES.index(0.05)
-    print(f"    heatmap_counts: total at pvalue<0.05 & |PDS|>=0  = "
-          f"{int(totals[p_005_idx, ap_zero_idx]):>9,}; "
-          f"at pvalue<0.05 & |PDS|>=0.01 = {int(totals[p_005_idx, ap_001_idx]):>9,}", flush=True)
-
-    # Pathway counts indexed by (contrast, sign(PDS), pvalue_threshold,
-    # abs_pds_threshold) for the Temporal v2 pathway layer. Sign source is
-    # the composite Pathway Disturbance Score (multimodel β across all omics
-    # layers). Sign bucket: 0=down, 1=zero/NA, 2=up. NULL PDS falls through
-    # to bucket 1 ("zero/NA"). |PDS| bucket: counts include rows with
-    # |PDS| >= threshold (so threshold=0 keeps all rows; NULL PDS treated
-    # as |PDS|=0 via COALESCE).
-    n_thr = len(_INCYTR_PATHWAY_PVALUES)
-    n_ap = len(_INCYTR_PATHWAY_ABS_PDS)
-    thr_clauses = []
-    for ip, tp in enumerate(_INCYTR_PATHWAY_PVALUES):
-        for iap, tap in enumerate(_INCYTR_PATHWAY_ABS_PDS):
-            thr_clauses.append(
-                f"COUNT(*) FILTER (WHERE pvalue < {tp} "
-                f"AND COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
-            )
-    pathway_rows = con.execute(f"""
-        SELECT contrast,
-               CASE WHEN PDS > 0 THEN 2
-                    WHEN PDS < 0 THEN 0
-                    ELSE 1 END AS s,
-               {", ".join(thr_clauses)}
-        FROM src
-        WHERE pvalue IS NOT NULL
-        GROUP BY contrast, s
-    """).fetchall()
-    pathway_arr = np.zeros((n_c, 3, n_thr, n_ap), dtype=np.uint32)
-    for row in pathway_rows:
-        contrast, s_idx = row[0], int(row[1])
-        if contrast not in contrast_to_idx:
-            continue
-        c_idx = contrast_to_idx[contrast]
-        # Cells laid out as (p_threshold × abs_pds_threshold) in row-major order.
-        for ip in range(n_thr):
-            for iap in range(n_ap):
-                pathway_arr[c_idx, s_idx, ip, iap] = int(row[2 + ip * n_ap + iap])
-    pathway_counts = {
-        "thresholds": list(_INCYTR_PATHWAY_PVALUES),
-        "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
-        "contrasts": list(_INCYTR_CONTRASTS),
-        "counts": pathway_arr.flatten().tolist(),
-        "shape": [n_c, 3, n_thr, n_ap],
-        "sign_source": "PDS",
-    }
-    # Diagnostic prints: total at pvalue<1.0, |PDS|>=0 (all rows) and a
-    # meaningful gate (pvalue<0.05, |PDS|>=0.01). Also report the share of
-    # paths landing in the "zero/NA" sign bucket (PDS = 0 or PDS IS NULL).
-    p05_idx = _INCYTR_PATHWAY_PVALUES.index(0.05)
-    ap01_idx = _INCYTR_PATHWAY_ABS_PDS.index(0.01)
-    pds_na_pct = con.execute(
-        "SELECT 100.0 * COUNT(*) FILTER (WHERE PDS IS NULL) / NULLIF(COUNT(*), 0) FROM src"
-    ).fetchone()[0] or 0.0
-    pds_zero_pct = con.execute(
-        "SELECT 100.0 * COUNT(*) FILTER (WHERE PDS = 0) / NULLIF(COUNT(*), 0) FROM src"
-    ).fetchone()[0] or 0.0
-    print(f"    pathway_counts: {int(pathway_arr[:, :, -1, 0].sum()):>9,} rows "
-          f"at pvalue<1.0 (all signs, no |PDS| gate); "
-          f"{int(pathway_arr[:, :, p05_idx, ap01_idx].sum()):>6,} "
-          f"at pvalue<0.05 & |PDS|>=0.01 · sign source = PDS "
-          f"(NULL: {pds_na_pct:.1f}%, =0: {pds_zero_pct:.1f}% — these land in "
-          f"the 'neither' bucket)", flush=True)
-
-    # Wipe-and-recreate to avoid mixing old/new shards on an aborted run.
-    shutil.rmtree(EDGE_SLICES_INCYTR_PATHWAYS_DIR, ignore_errors=True)
-    os.makedirs(EDGE_SLICES_INCYTR_PATHWAYS_DIR, exist_ok=True)
-
-    # Materialize all rows once, then groupby+write per pair. The per-node
-    # seed-list labels (`<Node>.label` upstream → `<Node>_label` in the shard,
-    # vocab = {"DEG","prG"}) returned with the seed-list rerun and surface in
-    # the table as evidence-source badges next to each gene name.
-    extra_cols = list(_INCYTR_SCORE_COLS) + list(_INCYTR_FC_COLS)
-    label_cols = list(_INCYTR_LABEL_COLS)
-
-    # Stream pair-by-pair via DuckDB COPY to avoid materializing the entire
-    # receiver_cache (~10M rows × 14 cols on levy_t5 — OOMs as a single
-    # pandas DataFrame). Receivers are stored sanitized (hive partition) in
-    # src, so we register the display-name map and join inline.
-    map_df = pd.DataFrame(
-        sanitized_to_display.items(), columns=["sanitized", "display"],
-    )
-    con.register("recv_map", map_df)
-
-    pair_rows = con.execute("""
-        SELECT sender, COALESCE(m.display, src.receiver) AS receiver, COUNT(*) AS n
-        FROM src
-        LEFT JOIN recv_map m ON src.receiver = m.sanitized
-        GROUP BY sender, COALESCE(m.display, src.receiver)
-        ORDER BY sender, receiver
-    """).fetchall()
-
-    select_cols = ["Path", "Ligand", "Receptor", "EM", "Target",
-                   "contrast",
-                   "CAST(pvalue AS FLOAT) AS pvalue",
-                   "CAST(PDS AS FLOAT) AS PDS",
-                   *[f"CAST({c} AS FLOAT) AS {c}" for c in extra_cols],
-                   *label_cols]
-    select_sql = ",\n               ".join(select_cols)
-
-    present_pairs: list[list[str]] = []
-    pair_row_counts: dict[str, int] = {}
-    total_rows = 0
-    max_shard_bytes = 0
-    max_shard_name = ""
-    # CR-04: trajectory annotation runs per-pair inside the streaming loop
-    # (the full receiver_cache OOMs as a single DataFrame on levy_t5). Each
-    # path_string is unique to one (sender, receiver) pair, so per-pair
-    # recur dicts and traj label counts compose by simple union / sum.
-    recur_index: dict = {}
-    traj_summary: dict = {}
-    for s, r_display, n in pair_rows:
-        fname = f"{_incytr_sanitize(s)}__{_incytr_sanitize(r_display)}.parquet"
-        path = os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, fname)
-        # Re-derive the sanitized receiver(s) that map to this display name
-        # (there's typically one but the map is many-to-one in principle).
-        sanitized = [k for k, v in sanitized_to_display.items() if v == r_display]
-        if not sanitized:
-            sanitized = [r_display]
-        in_list = ", ".join(f"'{x.replace(chr(39), chr(39)+chr(39))}'" for x in sanitized)
-        s_lit = s.replace("'", "''")
-        # Materialize this pair's rows (small — thousands of rows) so we can
-        # annotate trajectory columns before writing parquet. Sender/receiver
-        # are added as constants so _annotate_trajectory_columns can key its
-        # path_string on the (sender, receiver, Path) triple.
-        pair_df = con.execute(f"""
-            SELECT {select_sql}
-            FROM src
-            WHERE sender = '{s_lit}' AND receiver IN ({in_list})
-            ORDER BY contrast, pvalue NULLS LAST
-        """).fetchdf()
-        if pair_df.empty:
-            continue
-        pair_df["sender"] = s
-        pair_df["receiver"] = r_display
-        for col in label_cols:
-            pair_df[col] = pair_df[col].astype("category")
-        pair_df, pair_recur, pair_traj = _annotate_trajectory_columns(
-            pair_df, source_label="factorial",
-        )
-        # path_strings are globally unique across pairs → safe to union.
-        recur_index.update(pair_recur)
-        for label, count in pair_traj.items():
-            traj_summary[label] = traj_summary.get(label, 0) + int(count)
-        # Drop sender/receiver before write (constant within a shard, kept
-        # only for trajectory keying).
-        pair_df = pair_df.drop(columns=["sender", "receiver"])
-        pair_df.to_parquet(path, compression="zstd", index=False)
-        present_pairs.append([s, r_display])
-        pair_row_counts[fname] = len(pair_df)
-        total_rows += len(pair_df)
-        sz = os.path.getsize(path)
-        if sz > max_shard_bytes:
-            max_shard_bytes = sz
-            max_shard_name = fname
-    con.close()
-
-    index = {
-        "schema_version": SCHEMA_VERSION,
-        "filename_template": "{sender}__{receiver}.parquet",
-        "sanitize_rule": "replace('/', '-'); replace(' ', '_')",
-        "present": sorted(present_pairs),
-        "n_total_rows": total_rows,
-        "pair_row_counts": pair_row_counts,
-    }
-    with open(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, "index.json"), "w") as f:
-        json.dump(index, f)
-
-    total_bytes = sum(
-        os.path.getsize(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, fn))
-        for fn in os.listdir(EDGE_SLICES_INCYTR_PATHWAYS_DIR)
-        if fn.endswith(".parquet")
-    )
-    print(f"  incytr_pathways: wrote {len(present_pairs)} shards "
-          f"({total_rows:,} rows; {total_bytes/1e6:.1f} MB total; "
-          f"max {max_shard_bytes/1e6:.2f} MB → {max_shard_name})",
-          flush=True)
-
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "version": 3,           # CR-04: v3 = multi-label traj_labels (semicolon-joined)
-        "source": "receiver_cache/ (unfiltered)",
-        "source_mode": "factorial",  # phase-2 swap: becomes "pair_mode"
-        "contrasts": list(_INCYTR_CONTRASTS),
-        "senders": senders_canonical,
-        "receivers": receivers_canonical,
-        "empty_deg_celltypes": _read_empty_deg_celltypes(),
-        "heatmap_counts": heatmap_counts,
-        "pathway_counts": pathway_counts,
-        "slice_index": index,
-        "score_columns": list(_INCYTR_SCORE_COLS),
-        "label_columns": list(_INCYTR_LABEL_COLS),
-        "label_nodes": list(_INCYTR_LABEL_NODES),
-        "label_vocab": list(_INCYTR_LABEL_VOCAB),
-        # CR-04: traj_labels/sign_vec live in shard rows (not here).
-        # recur_index is omitted from the payload — too large for 3M paths.
-        # The JS derives recur membership client-side from loaded shard rows.
-        "trajectory_summary": traj_summary,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Pair-mode source (outputs/reports/incytr_pair_mode/wide/)
-# ---------------------------------------------------------------------------
-# Switch via INCYTR_SOURCE=pair_mode; input dir via INCYTR_PAIR_MODE_INPUT_DIR
-# (default outputs/reports/incytr_pair_mode/wide). Emits the same shard layout as
-# the factorial branch so the JS tabs (incytr_pathways.js, incytr_heatmap.js)
-# render unchanged. Pair-mode parquets carry path-level pr_up/down, ps_up/down,
-# py_up/down direction flags but no per-node log2FC or per-node DEG/prG labels
-# — those columns are NULL-filled to preserve the shard schema.
 _INCYTR_PAIR_GENO_NORMALIZE = {
     "AppP": "App", "App": "App",
     "Ttau": "Tau", "Tau": "Tau", "TtauP": "Tau",
@@ -2348,12 +1965,13 @@ def _pair_mode_contrast_from_filename(fname: str) -> str | None:
 
 
 def _write_incytr_pair_pathways() -> dict | None:
-    """Pair-mode equivalent of `_write_incytr_pathways`.
+    """Shard the pair-mode Incytr output by (sender, receiver) — unfiltered.
 
-    Reads `outputs/reports/incytr_pair_mode/wide/*.parquet` (one file per contrast,
-    Levy-t5 spine) and emits the same shard layout + `incytr_pathways`
-    payload block as the factorial branch. Per-node `*_log2FC` and
-    `*_label` columns are NULL-filled (pair-mode does not compute them).
+    Reads `outputs/reports/incytr_pair_mode/wide/*.parquet` (one file per
+    contrast, Levy-t5 spine, 31² = 961 sender×receiver pairs) and emits one
+    parquet per pair under `edge_slices/incytr_pathways/` plus the
+    `incytr_pathways` payload block. No build-time significance gate; the
+    UI thresholds live.
     """
     import duckdb
 
@@ -2796,16 +2414,16 @@ def _write_incytr_pair_pathways() -> dict | None:
 
 
 def _read_empty_deg_celltypes() -> list[str]:
-    """Read the list of WMB classes with no DEGs from the upstream MANIFEST.
+    """Read the list of cell types with no DEGs from the upstream MANIFEST.
 
     `compute_seed_lists.R` writes `deg_cell_type_status` into
-    `<INCYTR_FACTORIAL_OUTPUTS_DIR>/MANIFEST.json`. Cell types whose status
+    `<INCYTR_PAIR_MODE_OUTPUTS_DIR>/MANIFEST.json`. Cell types whose status
     indicates an empty DEG set are surfaced in the heatmap as hatched cells
     (visually distinct from "0 candidates pass the gate"). Returns `[]` if
     the manifest is absent or doesn't carry the field — the heatmap will
     just not render the hatched overlay in that case.
     """
-    manifest_path = os.path.join(INCYTR_FACTORIAL_OUTPUTS_DIR, "MANIFEST.json")
+    manifest_path = os.path.join(INCYTR_PAIR_MODE_OUTPUTS_DIR, "MANIFEST.json")
     if not os.path.exists(manifest_path):
         return []
     try:
@@ -2855,15 +2473,9 @@ def build_payload(data: UnifiedData) -> dict:
     song_concordance_slice_index = _write_song_concordance_slices(_kinase_genes)
 
     # Incytr pathway shards: one parquet per (sender, receiver), backing the
-    # significant-pathway heatmap + table tabs. Source selectable via
-    # INCYTR_SOURCE env var: 'pair_mode' (default, levy_t5) or 'factorial'.
-    _incytr_source = os.environ.get("INCYTR_SOURCE", "pair_mode").lower()
-    if _incytr_source == "pair_mode":
-        print(f"  incytr source = pair_mode (INCYTR_SOURCE={_incytr_source})",
-              flush=True)
-        incytr_pathways_block = _write_incytr_pair_pathways()
-    else:
-        incytr_pathways_block = _write_incytr_pathways()
+    # significant-pathway heatmap + table tabs. Pair-mode (Levy-t5) is the
+    # only active source — factorial Incytr was archived 2026-05-18.
+    incytr_pathways_block = _write_incytr_pair_pathways()
 
     meta = {
         "schema_version": SCHEMA_VERSION,
@@ -3213,6 +2825,62 @@ def validate(data: UnifiedData) -> str:
 # CLI
 # ---------------------------------------------------------------------------
 
+def _assert_input_provenance() -> None:
+    """Hardfail if upstream artifacts disagree on scope/spine/cohort.
+
+    Reads sidecar JSONs from the WMB expression, decomposition, and enrichment
+    stages and aborts the viewer build if any of them disagree with the
+    expected scope (`config.WMB_REGION_SCOPE`), spine (`levy_t5`), or analysis
+    mode (`config.ANALYSIS_MODE`). Aborts cleanly before any HTML is written.
+    """
+    wmb_scope_path = os.path.join(
+        config.REPO_ROOT, "outputs", "reports", "wmb_expression",
+        "wmb_kinase_expression.scope.json",
+    )
+    if os.path.exists(wmb_scope_path):
+        with open(wmb_scope_path) as f:
+            wmb_meta = json.load(f)
+        wmb_scope = wmb_meta.get("scope")
+        if wmb_scope and wmb_scope != config.WMB_REGION_SCOPE:
+            raise SystemExit(
+                f"WMB expression scope mismatch: file says {wmb_scope!r}, "
+                f"config.WMB_REGION_SCOPE is {config.WMB_REGION_SCOPE!r}. "
+                f"Re-run alz/wmb_expression.py with the expected scope."
+            )
+
+    decomp_dir = os.path.join(
+        config.REPO_ROOT, "outputs", "reports", "decomposition", config.CLUSTER_SPINE_NAME,
+    )
+    enrich_audit_path = os.path.join(decomp_dir, "enrich_audit.json")
+    if os.path.exists(enrich_audit_path):
+        with open(enrich_audit_path) as f:
+            ea = json.load(f)
+        spine = ea.get("spine")
+        if spine and spine != config.CLUSTER_SPINE_NAME:
+            raise SystemExit(
+                f"Decomposition spine mismatch: enrich_audit.json reports "
+                f"{spine!r}, expected {config.CLUSTER_SPINE_NAME!r}."
+            )
+        amode = ea.get("analysis_mode")
+        if amode and amode != config.ANALYSIS_MODE:
+            raise SystemExit(
+                f"Decomposition analysis_mode mismatch: enrich_audit.json "
+                f"reports {amode!r}, expected {config.ANALYSIS_MODE!r}."
+            )
+
+    verify_path = os.path.join(decomp_dir, "verification.json")
+    if os.path.exists(verify_path):
+        with open(verify_path) as f:
+            verif = json.load(f)
+        if verif.get("all_pass") is False:
+            failed = [c.get("check") for c in (verif.get("checks") or [])
+                      if isinstance(c, dict) and not c.get("pass", False)]
+            raise SystemExit(
+                f"Decomposition verification did not pass: failed checks = "
+                f"{failed}. See {verify_path}."
+            )
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--summary", action="store_true", help="Print input counts (Unit 2.1 smoke test)")
@@ -3231,6 +2899,8 @@ def main(argv: list[str] | None = None) -> int:
     if not any([args.summary, args.payload, args.html, args.validate]):
         args.payload = True
         args.html = True
+
+    _assert_input_provenance()
 
     data = load_all_data()
 

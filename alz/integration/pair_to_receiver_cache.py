@@ -28,7 +28,7 @@ import duckdb
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
-from viewer.paths import INCYTR_FACTORIAL_OUTPUTS_DIR  # noqa: E402
+from viewer.paths import INCYTR_PAIR_MODE_OUTPUTS_DIR  # noqa: E402
 
 DEFAULT_INPUT_DIR = os.path.normpath(
     os.path.join(HERE, "..", "..", "outputs", "reports", "incytr_pair_mode", "wide")
@@ -191,8 +191,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--input-dir", default=DEFAULT_INPUT_DIR,
                     help=f"pair-mode parquet directory (default: {DEFAULT_INPUT_DIR})")
-    ap.add_argument("--out-dir", default=INCYTR_FACTORIAL_OUTPUTS_DIR,
-                    help=f"output root (default: {INCYTR_FACTORIAL_OUTPUTS_DIR})")
+    ap.add_argument("--out-dir", default=INCYTR_PAIR_MODE_OUTPUTS_DIR,
+                    help=f"output root (default: {INCYTR_PAIR_MODE_OUTPUTS_DIR})")
     ap.add_argument("--strict", action="store_true",
                     help="require all 9 (genotype × age) comparisons present")
     args = ap.parse_args()
