@@ -350,7 +350,7 @@ The driver-script existence check at lines 173-179 should verify files under `al
 
 ### Item 2.9 — Hash-equality verification
 
-**Status:** pending
+**Status:** done
 **Depends on:** 2.8 (and all prior Phase 2 items)
 **Files:** test/verification only
 
@@ -358,7 +358,20 @@ The driver-script existence check at lines 173-179 should verify files under `al
 
 **Done when:** all 9 SHA-256 hashes match, recorded in Implementation notes.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+- Baseline: `/tmp/wave3_baseline_hashes.txt` (produced during Item 2.6, also recorded in Item 2.6's implementation notes). Baseline paths were `bench/incytr_pair_levy_t5/output/*_incytr_output.parquet`.
+- Post-Items-2.7/2.8 hashes (computed 2026-05-20) against `outputs/reports/incytr_pair_mode/wide/`:
+  - `5d2be8fcebffaf8d8419347db536109bc6a51f5bead99968b3c2e093218defa0` ma_2mo_AppP ✓
+  - `6cb26c017615dbdf4f87030abbf64d5a0d28afd9085150286c582c759c3993f1` ma_2mo_ApTt ✓
+  - `d02e380c628662b55f0f69e6732e6f4493fc5bf2bb55ee034f5cb0fdb492f661` ma_2mo_Ttau ✓
+  - `b40cbb83a35c3777ae04f7494ddb0295f988c8df6cf164ccba4c489652223140` ma_4mo_AppP ✓
+  - `c3550c79998be1819c903fcfc999ab482c041f351abe5bae394628b98618defd` ma_4mo_ApTt ✓
+  - `b7e75b33babaaf0d224b5aea88df4baf74458cad605494c0b14374e899110056` ma_4mo_Ttau ✓
+  - `2b4b6839c866e08fb4c7487ed596ce88dd2dca3c22202ec33d1488f442c1e087` ma_6mo_AppP ✓
+  - `fe751da77691fabd579793d42218a366d7735feeeaf79874c02a560cf3c9e948` ma_6mo_ApTt ✓
+  - `d1486844a9f0f9e743a42dfdc96916475fdc69b2afab558338c71e84eaec8a7b` ma_6mo_Ttau ✓
+- **Result: 9/9 bit-equal.** Items 2.7 and 2.8 touched only Python/shell wrappers around the parquets and did not regenerate the R driver outputs. Zero drift confirmed.
+- No regression introduced by the path-constant and runner changes.
 
 ### Item 2.10 — Documentation updates
 
