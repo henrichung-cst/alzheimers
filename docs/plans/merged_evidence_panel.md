@@ -670,7 +670,7 @@ Goal: remove dead code, obsolete constants, and stale documentation references. 
 
 ### Item 4.2 — Remove obsolete path constants
 
-**Status:** pending
+**Status:** done
 **Depends on:** 4.1
 **Files:** `alz/viewer/paths.py`
 
@@ -678,7 +678,15 @@ Goal: remove dead code, obsolete constants, and stale documentation references. 
 
 **Done when:** `git grep MEASUREMENT_TRACE_` returns only references inside `paths.py` itself, or zero if the kinase Measurement Trace also migrated.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+
+- **`MEASUREMENT_TRACE_*` constants kept.** `git grep -n "MEASUREMENT_TRACE_"` confirmed the constants are actively used by `ensure_measurement_trace_sources()` in `alz/build_unified_viewer.py` (lines 332–488) which builds the kinase-side raw→IRS→stoichiometry audit CSVs consumed by `kinase_audit.js`. The kinase-side Measurement Trace is an independent feature from the Incytr Pathways Measurement Trace that was replaced by the Evidence tab. No deletion is correct here.
+- **`TRANSCRIPT_TRACE_PSEUDOBULK` kept.** Still used at 7 call sites in `alz/integration/build_transcript_trace.py` (reading, path-checking, error messages). Its path (`outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet`) is already the canonical post-Phase-1 location — no rename needed.
+- **No bench/ references in `paths.py`.** Confirmed clean before starting; no edits needed on that front.
+- **Two stale comments corrected:**
+  1. Lines 61-66: comment on `TRANSCRIPT_TRACE_DIR`/`TRANSCRIPT_TRACE_PSEUDOBULK` previously said "backing the Incytr Pathways 'Measurement Trace' panel" and "agrees numerically with the FC tab's `*_sclog2FC` columns" — both old tab names. Updated to "Evidence tab's transcript sub-row" and "JS-side LFC recomputation in `evidence_row.js`".
+  2. Lines 97-102: comment on `OMICS_TRACE_NORMALIZED_*` had stale `ε = 1e-5` (was the Item 3.4 spec's original value, later corrected in Item 3.2b to `1e-3`). Updated to `ε = 1e-3` with explicit reference to `correction = 0.001` in the R driver.
+- **Done condition satisfied:** `git grep MEASUREMENT_TRACE_ -- ':!docs/plans/'` returns only `alz/viewer/paths.py` (definitions) + `alz/build_unified_viewer.py` (live kinase-audit consumer) — no dead references.
 
 ### Item 4.3 — Final docs sweep
 

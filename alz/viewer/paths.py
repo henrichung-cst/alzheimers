@@ -59,11 +59,11 @@ MEASUREMENT_TRACE_DIR = os.path.join(AUDIT_SOURCES_DIR, "measurement_trace")
 MEASUREMENT_TRACE_INDEX = os.path.join(MEASUREMENT_TRACE_DIR, "index.json")
 
 # Per-cluster transcript pseudobulk shards backing the Incytr Pathways
-# "Measurement Trace" panel. Substrate is the per-(cluster, Group) mean of
-# `Data.input@assays$originalexp@data` emitted by
+# Evidence tab's transcript sub-row. Substrate is the per-(cluster, Group)
+# mean of `Data.input@assays$originalexp@data` emitted by
 # alz/incytr/emit_expr_bygroup.R — bit-for-bit the same matrix
-# Incytr's `Cal_scFC` consumes, so the panel agrees numerically with the FC
-# tab's `*_sclog2FC` columns.
+# Incytr's `Cal_scFC` consumes, so the JS-side LFC recomputation in
+# evidence_row.js agrees numerically with the stored `*_sclog2FC` columns.
 TRANSCRIPT_TRACE_DIR = os.path.join(AUDIT_SOURCES_DIR, "transcript_trace")
 TRANSCRIPT_TRACE_INDEX = os.path.join(TRANSCRIPT_TRACE_DIR, "index.json")
 TRANSCRIPT_TRACE_PSEUDOBULK = os.path.join(
@@ -97,8 +97,9 @@ OMICS_TRACE_SCHEMA_VERSION = 1
 # Companion limma-normalized condition means (per cluster × contrast × layer)
 # backing the Evidence tab's right-edge LFC recomputation. Mirrors Incytr's
 # `normalizeBetweenArrays` step pre-`Cal_foldchange` so a JS-side
-# `log2((D + 1e-5) / (W + 1e-5))` agrees with stored `*_pr/_ps/_py_log2FC`
-# to <= 1e-4. Built by alz/integration/build_normalized_substrate.py.
+# `log2((D + 1e-3) / (W + 1e-3))` (ε = 1e-3 matching the driver's
+# `correction = 0.001`) agrees with stored `*_pr/_ps/_py_log2FC` to <= 1e-4.
+# Built by alz/integration/build_normalized_substrate.py.
 OMICS_TRACE_NORMALIZED_DIR = os.path.join(
     AUDIT_SOURCES_DIR, "omics_trace_normalized"
 )
