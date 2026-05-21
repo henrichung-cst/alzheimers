@@ -443,7 +443,7 @@ The site→gene aggregation in the driver:
 
 ### Item 3.2 — Build `omics_trace` shard writer
 
-**Status:** pending
+**Status:** done
 **Depends on:** Phase 2 complete (substrate paths stable), 3.1 (aggregation rule known)
 **Files:** `alz/integration/build_omics_trace.py` (new), `alz/viewer/paths.py` (constants), `alz/build_unified_viewer.py` (wire in)
 
@@ -454,7 +454,27 @@ The site→gene aggregation in the driver:
 
 **Done when:** `audit_sources/omics_trace/` contains one shard per cluster present in the pathway index; each shard has the expected schema.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+
+**Schema decisions:**
+
+- **`site_id` encoding:** `site_id` is `None` (null) for protein rows. For phospho_ps rows it is the integer site key from the parquet cast to string (e.g. `"13375"`); for phospho_py rows it is already a string composite ID. Storing as string avoids a mixed-type column in the shard (int64 for pS/pT, string for pY). Item 3.3 should treat `site_id` as an opaque string label for display — do not attempt arithmetic on it.
+
+- **`log2_value` semantics:** `log2_value` in the substrate parquets is `log2(value)` with no ε (NaN when value == 0), as confirmed in `alz/decomposition/build_celltype_decomposition.py:101-103`. **This is NOT suitable for LFC computation.** Item 3.4's JS-side LFC must use `log2((D + 1e-5) / (W + 1e-5))` from the raw `value` column, using ε=1e-5 to match `Cal_foldchange`'s driver-passed correction. The stored `log2_value` is present only as a convenience for display purposes (e.g. log-axis scatter dots).
+
+- **Shard structure:** one shard per cluster (matching transcript_trace), multi-layer rows in one file, `layer` column discriminates. Spot-checked Astrocytes shard: shape (1,159,751, 9); layer distribution protein=384,613 / phospho_ps=734,604 / phospho_py=40,534. Shard count = 31 = pathway cluster count.
+
+- **No samplekey join needed:** `animal_id` in the parquet encodes sex/timepoint/genotype as `<n>_<lab>_<sex>_<age>_<geno>` (e.g. `"37_E50(L)_M_4mo_WT"`). Decoded via `ANIMAL_RE` regex + `GENO_DECODE` dict, mirroring `alz/incytr/export_decomposition_for_pair.py`. Animals that don't parse (females + outliers not in the Incytr pipeline) are silently dropped — this is correct behavior since the Evidence tab displays the same males-only subset that Incytr consumed. The spec said "joins per-(gene, animal) with the samplekey" but a direct decode avoids an extra join and is more robust; noted here for Item 3.3.
+
+- **Full proteome in shards, no pathway gene filtering at write time:** shards include all genes in the substrate (same pattern as transcript_trace). Item 3.3's JS should filter to the 4-node pathway gene set at render time. This keeps the builder simple and avoids needing to re-shard when a new pathway is added.
+
+- **Memory footprint:** loading all three parquets filtered to 31 clusters yields ~35.9 M rows combined; peak RSS was ~8 GB. If this becomes a constraint later, shards could be written one layer at a time. Not an issue in the current build environment.
+
+- **`ensure_omics_trace_sources()` return dict:** returns `{schema_version, relative_path, clusters, layers, filename_template, sanitize_rule, log2_value_note}`. Item 3.3 should read `PAYLOAD.meta.omics_trace.relative_path` to construct the fetch URL (same pattern as `transcript_trace`).
+
+- **Cross-check note for Item 3.4:** the `limma::normalizeBetweenArrays` gap (Cross-phase Note #1) applies to protein and phospho stored `*_log2FC` values. A JS-side `log2((D+ε)/(W+ε))` from raw substrate will differ from Incytr's stored LFC by ~0.01-0.04 on typical rows. This is expected and documented — see Note #1 for the recommended fix (precomputed normalized parquet).
+
+- Committed as `feat(viewer): add omics_trace shard writer for Evidence tab (Item 3.2)`, `alz/build_unified_viewer.py` import list and `ensure_omics_trace_sources()` function are the wiring points.
 
 ### Item 3.3 — Evidence tab JS (replace FC + Measurement Trace tabs)
 
