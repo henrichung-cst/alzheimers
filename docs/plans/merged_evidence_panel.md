@@ -682,7 +682,7 @@ Goal: remove dead code, obsolete constants, and stale documentation references. 
 
 ### Item 4.3 — Final docs sweep
 
-**Status:** pending
+**Status:** done
 **Depends on:** all prior items
 **Files:** any doc that mentions the old tab names, bench/ data paths, or `incytr_pair_levy_t5/`
 
@@ -690,7 +690,12 @@ Goal: remove dead code, obsolete constants, and stale documentation references. 
 
 **Done when:** the grep is clean; CLAUDE.md is internally consistent.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+
+- **Grep clean on arrival.** `git grep -nE 'Fold Change tab|Measurement Trace tab|incytr_pair_levy_t5|bench/incytr' -- ':!docs/archive/' ':!docs/plans/'` returns exit 1 (zero matches) — Item 2.10 (documentation updates) had already cleaned all tracked files outside `docs/archive/` and `docs/plans/`.
+- **Residual hits in excluded paths only.** Running the grep without path exclusions shows hits in `docs/plans/change_request_02_spine_rethreshold.md` and `docs/plans/incytr_mea_seed_list_expansion_plan.md`. Both are inside `docs/plans/` and are therefore explicitly outside this item's scope. Those plan files are historical scaffolding documents; the bench/-era paths they cite are implementation notes documenting what the codebase looked like before Phase 2. They do not need updating — a later agent working the seed-list expansion plan should refresh `incytr_mea_seed_list_expansion_plan.md` to use `alz/incytr/` paths when that work is picked up.
+- **CLAUDE.md verified clean.** Zero matches for `bench/`, `Fold Change`, `Measurement Trace`, or `Evidence tab`. The Integration Code section (alz/incytr/ = run-time drivers, alz/integration/ = output consumers), Key Data Files (Pair-mode Incytr subsection), and Gotchas read naturally with no leftover sentences referencing the old layout. No edits required.
+- No file changes were made; this item was a verification-only sweep.
 
 ---
 
