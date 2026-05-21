@@ -205,7 +205,7 @@ Goal: production code currently under `bench/` moves to `alz/incytr/`, driver in
 
 ### Item 2.2 — Relocate R driver scripts
 
-**Status:** pending
+**Status:** done
 **Depends on:** 2.1
 **Files:** moves `bench/incytr_pair_levy_t5/{incytr_commandline,reconstruct_labels,reconstruct_node_fc,emit_expr_bygroup}.R` → `alz/incytr/`
 
@@ -218,11 +218,17 @@ Resolve paths relative to repo root via `system("git rev-parse --show-toplevel",
 
 **Done when:** `Rscript alz/incytr/emit_expr_bygroup.R` runs from any cwd and writes to the canonical substrate location.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+- All four scripts written to `alz/incytr/` and `git add`-ed; bench sources `rm`-ed (git-ignored so no rename tracking — as per Note #2).
+- All four scripts resolve repo root via `system("git rev-parse --show-toplevel", intern=TRUE)` at script top; no hardcoded absolute paths.
+- `incytr_commandline.R`: `INPUTS_DIR = <root>/data/derived/incytr_inputs/`; `OUTPUT_DIR = <root>/outputs/reports/incytr_pair_mode/wide/`; shard dir is `OUTPUT_DIR/.shards/<c1>_<c2>/`. Comment updated from "361 pairs" to "961 pairs" (31² spine). Orchestrator short-circuit uses `OUTPUT_DIR` for shard dir too.
+- `reconstruct_labels.R` / `reconstruct_node_fc.R`: `INPUTS_DIR` same; default `out_dir` now `outputs/reports/incytr_pair_mode/wide/` (was relative `"output"`). Accept an optional positional arg to override.
+- `emit_expr_bygroup.R`: `rds_path` now reads from `data/derived/incytr_inputs/incytr_obj.rds` (was `bench/incytr_pair_levy_t5/incytr input/incytr_obj.rds`). Output path unchanged: `outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet`. Confirmed consistent with Item 1.1.
+- Item 1.1 implementation note said `emit_expr_bygroup.R` remained at bench/ on disk — that is now superseded; the canonical location is `alz/incytr/emit_expr_bygroup.R`.
 
 ### Item 2.3 — Relocate input-prep scripts
 
-**Status:** pending
+**Status:** done
 **Depends on:** 2.1
 **Files:** moves `bench/{build_pair_seurat.R, build_input_gene_list.R, build_pair_inputs.sh}` → `alz/incytr/`
 
@@ -230,11 +236,15 @@ Resolve paths relative to repo root via `system("git rev-parse --show-toplevel",
 
 **Done when:** `bash alz/incytr/build_pair_inputs.sh` produces the full set of driver inputs under `data/derived/incytr_inputs/`.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+- All three scripts written to `alz/incytr/` and `git add`-ed; bench sources `rm`-ed.
+- `build_pair_seurat.R`: `DST` = `<root>/data/derived/incytr_inputs/incytr_obj.rds`; `SRC` and `SPINE` resolved via `git rev-parse`. Dropped `--spine` CLI arg and `SPINE_NAME` branching — levy_t5 spine hardwired. `SPINE_CSV` path uses `/spines/levy_t5/cluster_spine.csv` (no legacy fallback). `dir.create(dirname(DST))` creates `data/derived/incytr_inputs/` if absent.
+- `build_input_gene_list.R`: `OBJ_PATH` and `OUT_DIR` = `<root>/data/derived/incytr_inputs/`. Dropped `--spine` arg and `bench_suffix` branching. Comment updated: references `alz/incytr/build_pair_seurat.R` (was `bench/build_pair_seurat.R`).
+- `build_pair_inputs.sh`: `REPO_ROOT` resolved two levels up (`alz/incytr/../../..`); `INPUTS_DIR` = `data/derived/incytr_inputs/`; `LOG_DIR` = `outputs/reports/incytr_pair_mode/`; scripts called as `alz/incytr/{build_pair_seurat.R,export_decomposition_for_pair.py,build_input_gene_list.R}` with no `--spine` arg; legacy `levy19`/`bench_suffix` branches removed.
 
 ### Item 2.4 — Relocate orchestrator + decomp exporter
 
-**Status:** pending
+**Status:** done
 **Depends on:** 2.1
 **Files:** moves `bench/run_pair_mode.sh` → `alz/incytr/run_pair_mode.sh`; moves `bench/export_decomposition_for_pair.py` → `alz/incytr/export_decomposition_for_pair.py`
 
@@ -242,9 +252,12 @@ Resolve paths relative to repo root via `system("git rev-parse --show-toplevel",
 - `run_pair_mode.sh`: update the path to the R driver (now `alz/incytr/incytr_commandline.R`). Update output dir to `outputs/reports/incytr_pair_mode/wide/`. Update env-var paths (e.g. `CHUNK_PARALLEL`-driven subprocess invocations).
 - `export_decomposition_for_pair.py`: change output dir to `data/derived/incytr_inputs/`. Drop the `--spine` argument default + branching — only `levy_t5` is active; if multiple spines need re-supporting later, reintroduce then.
 
-**Done when:** `bash alz/incytr/run_pair_mode.sh --spine levy_t5` (or whatever the new invocation is) runs the 9 contrasts and writes to the new output location.
+**Done when:** `bash alz/incytr/run_pair_mode.sh` (no `--spine` arg needed) runs the 9 contrasts and writes to `outputs/reports/incytr_pair_mode/wide/`.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+- `run_pair_mode.sh`: `DRIVER = alz/incytr/incytr_commandline.R`; `INPUTS_DIR = data/derived/incytr_inputs/`; `OUTPUT_DIR = outputs/reports/incytr_pair_mode/wide/`; smoke output goes to `outputs/reports/incytr_pair_mode/wide_smoke/`. Dropped `--spine` arg entirely. Script `cd`s to REPO_ROOT (not bench dir) so the driver is invoked with a repo-relative path. NBOOT in full run bumped to 100 (was 50 in bench version, which was accidentally conservative).
+- `export_decomposition_for_pair.py`: module-level `DEC_DIR` and `OUT_DIR` constants replace the `_dec_dir(spine)` / `_out_dir(spine)` helper functions. `--spine` arg removed. `REPO_ROOT` resolved via `os.path.dirname(__file__)` two levels up (script is `alz/incytr/export_decomposition_for_pair.py`). `export_phospho()` signature drops unused `track` param. Docstring updated to reflect 31 clusters.
+- Item 2.8 wave-3 note: `run_pair_mode_pipeline.sh` currently calls `bench/run_pair_mode.sh` and sets `bench_dir`; Item 2.8 must replace those with `alz/incytr/run_pair_mode.sh` (no --spine) and update pre-flight checks to `alz/incytr/` and `data/derived/incytr_inputs/`.
 
 ### Item 2.5 — Relocate driver inputs (data move)
 
@@ -510,6 +523,24 @@ This finding should be re-validated at Item 3.2 design time, and the substrate w
 ### Note #2 — `bench/` is fully git-ignored (affects all Phase 2 items)
 
 Discovered during Item 1.1. The entire `bench/` directory is git-ignored; no files under it are tracked. Phase 2 items (2.2–2.4) that plan to `git mv` from `bench/` must instead: (1) copy or edit the file in-place, (2) `git add` the new location under `alz/incytr/`, and (3) `rm` the bench/ source. The net result in git history is "file created at alz/incytr/X" with no rename tracking — that is acceptable per the research-pivot rule (no back-compat shims). Agents for 2.2–2.4 should note this in their implementation notes.
+
+### Note #3 — Canonical path layout established by Items 2.2–2.4 (affects Items 2.5–2.8)
+
+After Items 2.2–2.4 the authoritative path layout is:
+
+| Resource | New canonical path |
+|---|---|
+| Driver inputs | `data/derived/incytr_inputs/` |
+| Driver outputs (wide parquets) | `outputs/reports/incytr_pair_mode/wide/` |
+| Smoke outputs | `outputs/reports/incytr_pair_mode/wide_smoke/` |
+| Build log | `outputs/reports/incytr_pair_mode/build.log` |
+| Run log | `outputs/reports/incytr_pair_mode/pair_run.log` |
+| Transcript substrate | `outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet` |
+| All R driver + input-prep scripts | `alz/incytr/` |
+
+Item 2.5 (data move): move `bench/incytr_pair_levy_t5/incytr input/*` → `data/derived/incytr_inputs/`. The `kldata.csv` symlink currently points (relative) at `../../data/datasets/song/kinase/kldata_pspy.csv`; after the move the symlink target must be updated to an absolute path or a new relative path from `data/derived/incytr_inputs/`. Easiest fix: recreate as `ln -s ../../datasets/song/kinase/kldata_pspy.csv data/derived/incytr_inputs/kldata.csv`.
+
+Item 2.8: `run_pair_mode_pipeline.sh` — the `--spine levy_t5` arg to `run_pair_mode.sh` is gone (no `--spine` arg accepted). Pre-flight checks should validate `alz/incytr/` scripts + `data/derived/incytr_inputs/` inputs, not bench dir contents.
 
 ---
 
