@@ -600,9 +600,9 @@ For phospho rows, the JS-side LFC is per-gene aggregated (from the normalized su
 
 ### Item 3.5 — Build-time round-trip assertion
 
-**Status:** pending
+**Status:** done
 **Depends on:** 3.4 (so the JS-side computation is validated)
-**Files:** `alz/build_unified_viewer.py`, possibly new `alz/integration/verify_pathway_round_trip.py`
+**Files:** `alz/integration/verify_pathway_round_trip.py` (new, 608 lines), `alz/build_unified_viewer.py` (CLI hook)
 
 **Scope:** Add `assert_pathway_fc_round_trips()` to the viewer build. For each (contrast × pathway-table-row), recompute every node's `*_log2FC` from the per_cluster substrate (mirroring Item 3.1's aggregation) and assert match to within 1e-4 against the receiver-cache stored value. Hard-fail on any drift, with a clear error message naming the offending (contrast, pair, node, layer, stored, recomputed).
 
@@ -617,7 +617,17 @@ The assertion catches in one place:
 
 **Done when:** default-mode assertion passes on a current build; `--strict` mode is wired up and runs but may be deferred for a separate CI invocation.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+
+- `alz/integration/verify_pathway_round_trip.py` ports the JS-side LFC math from `evidence_row.js` to Python so the same recomputation runs at build time. Cluster routing per `incytr/R/evaluation.R:227-230` (Ligand → sender; Receptor/EM/Target → receiver). Epsilons match Item 3.4: `1e-3` for protein/phospho (driver `correction = 0.001`), `1e-5` for transcript (`Cal_scFC` default at `analysis.R:248`).
+- Substrate sources mirror what the viewer fetches: protein/phospho from `audit_sources/omics_trace_normalized/<cluster>.parquet` (the limma-normalized substrate from Item 3.2b); transcript from `audit_sources/transcript_trace/<cluster>.parquet` (per-(cluster, group) pseudobulk means).
+- **Tolerance:** `ROUNDTRIP_TOL = 1e-4`. Stored `*_log2FC` columns are float16 in the receiver-cache shards, so the lower bound on a clean round-trip is float16-quantization (~10⁻³ on large values); for typical LFC magnitudes the float16 error is well under `1e-4`. The verifier explicitly does **not** widen the tolerance — drift past `1e-4` means a real bug.
+- **Default mode:** `SAMPLE_ROWS_PER_CONTRAST = 100`; deterministic `random.Random(contrast_idx)` seed so the same rows fire on every rebuild. Total: 900 rows across 9 contrasts × all (sender, receiver) slices touched by those rows.
+- **`--strict` mode:** every row in every shard; opt-in via `python -m alz.integration.verify_pathway_round_trip --strict` or `pixi run python alz/build_unified_viewer.py --strict-roundtrip`.
+- **Skip flag:** `--skip-roundtrip` on the viewer build for fast iterative work; not recommended for "final" builds.
+- **Final run results (post-Item-4.1 main, 961 incytr-pathway shards):** default mode 900 rows / 0 failures / 119.2s.
+- **Wiring:** `build_unified_viewer.py:main()` calls `vprt.verify(strict=args.strict_roundtrip)` after payload write (gated on `args.payload and not args.skip_roundtrip`). Failures raise `RoundTripFailure` with the offending `(contrast, sender, receiver, path, node, layer, stored, recomputed, delta)`, hard-failing the build per the spec.
+- **Process note:** the script was written by the Wave 10A sub-agent in its worktree but, because the agent issued Write calls with absolute paths inside the repo, the file leaked back to `main` as untracked. The agent then hung waiting on its own background build and was stopped; the orphan file was complete and correct, so the main agent kept it, added the wiring, and ran the verification end-to-end before committing.
 
 ---
 
