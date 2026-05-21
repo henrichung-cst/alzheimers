@@ -3219,6 +3219,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--payload", action="store_true", help="Write JSON payload")
     ap.add_argument("--html", action="store_true", help="Write unified_viewer.html (requires payload)")
     ap.add_argument("--validate", action="store_true", help="Write Phase 2 validation report")
+    ap.add_argument("--skip-roundtrip", action="store_true",
+                    help="Skip the Item 3.5 build-time LFC round-trip assertion "
+                         "(default mode, ~60s). Use only for fast iteration.")
+    ap.add_argument("--strict-roundtrip", action="store_true",
+                    help="Run the Item 3.5 round-trip in full-grid strict mode "
+                         "(checks every (contrast, pair, node, layer) cell). "
+                         "Intended for pre-publish / CI builds.")
     args = ap.parse_args(argv)
 
     if not any([args.summary, args.payload, args.html, args.validate]):
@@ -3253,6 +3260,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.validate:
         validate(data)
+
+    if args.payload and not args.skip_roundtrip:
+        from integration import verify_pathway_round_trip as vprt  # noqa: E402
+        vprt.verify(strict=args.strict_roundtrip)
 
     return 0
 
