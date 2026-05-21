@@ -261,7 +261,7 @@ Resolve paths relative to repo root via `system("git rev-parse --show-toplevel",
 
 ### Item 2.5 — Relocate driver inputs (data move)
 
-**Status:** pending
+**Status:** done
 **Depends on:** 2.2, 2.3, 2.4
 **Files:** moves `bench/incytr_pair_levy_t5/incytr input/*` → `data/derived/incytr_inputs/`
 
@@ -269,11 +269,17 @@ Resolve paths relative to repo root via `system("git rev-parse --show-toplevel",
 
 **Done when:** `find bench/ -name '*.rds' -o -name '*_yuyu_*' -o -name 'allmarkers.csv'` returns empty.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+- `data/derived/incytr_inputs/` created. All 7 regular files (`incytr_obj.rds`, `pr/ps/py_yuyu_deconvoluted.csv`, `allmarkers.csv`, `HEG_df.csv`, `input_gene_list.csv`) copied via `cp` then `rm`-ed from bench (git-ignored, per Note #2 — no rename tracking).
+- `kldata.csv` symlink recreated at new location with relative target `../../datasets/song/kinase/kldata_pspy.csv`; `readlink -f` confirms it resolves to `data/datasets/song/kinase/kldata_pspy.csv` (target exists).
+- `data/` is git-ignored (`.gitignore` uses `*` then selectively allows `/alz/`); no `git add` needed — this is a pure on-disk move.
+- `bench/incytr_pair_levy_t5/incytr input/` is now an empty directory (can be removed by a cleanup pass).
+- Done-condition `find bench/ -name '*.rds' -o -name '*_yuyu_*' -o -name 'allmarkers.csv'` returns empty.
+- Item 2.7 note: `pair_to_receiver_cache.py` `DEFAULT_INPUT_DIR` should be changed to `outputs/reports/incytr_pair_mode/wide/` (wide parquets, not driver inputs); `config_integration.py` should be scanned for any remaining `bench/` references.
 
 ### Item 2.6 — Relocate driver outputs (data move)
 
-**Status:** pending
+**Status:** done
 **Depends on:** 2.2, 2.4
 **Files:** moves `bench/incytr_pair_levy_t5/output/*_incytr_output.parquet` → `outputs/reports/incytr_pair_mode/wide/`
 
@@ -281,7 +287,23 @@ Resolve paths relative to repo root via `system("git rev-parse --show-toplevel",
 
 **Done when:** `outputs/reports/incytr_pair_mode/wide/` contains 9 parquets, `bench/incytr_pair_levy_t5/output/` is empty (or only contains the no-longer-needed `expr_bygroup.parquet` that Item 1.1 should have already removed).
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+- Pre-move: confirmed 154 GB free on `/dev/mapper/fedora-root` (outputs filesystem).
+- `outputs/reports/incytr_pair_mode/wide/` created. All 9 parquets moved via `mv` (same filesystem — rename, no byte copy); `.shards/` subdirectory (empty) moved alongside.
+- `bench/incytr_pair_levy_t5/output/` is now empty; `expr_bygroup.parquet` was already removed by Item 1.1.
+- **SHA-256 hash verification (9/9 passed, bit-equal):**
+  - `5d2be8fc...` ma_2mo_AppP ✓
+  - `6cb26c01...` ma_2mo_ApTt ✓
+  - `d02e380c...` ma_2mo_Ttau ✓
+  - `b40cbb83...` ma_4mo_AppP ✓
+  - `c3550c79...` ma_4mo_ApTt ✓
+  - `b7e75b33...` ma_4mo_Ttau ✓
+  - `2b4b6839...` ma_6mo_AppP ✓
+  - `fe751da7...` ma_6mo_ApTt ✓
+  - `d1486844...` ma_6mo_Ttau ✓
+  - All match `/tmp/wave3_baseline_hashes.txt`. Zero drift.
+- `outputs/` is git-ignored; no `git add` needed. On-disk move only.
+- Item 2.9 baseline: the hashes recorded here (and in `/tmp/wave3_baseline_hashes.txt`) are the authoritative pre-relocation baseline. Item 2.9 should re-verify these same hashes post end-to-end run to confirm no logic regression was introduced by path updates in Items 2.7/2.8.
 
 ### Item 2.7 — Update Python path constants
 
