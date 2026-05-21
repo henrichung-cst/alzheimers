@@ -27,23 +27,24 @@ Full end-to-end (inputs → R driver → viewer reshape):
 bash alz/runners/main/run_pair_mode_pipeline.sh
 ```
 
+Build driver inputs only:
+```bash
+bash alz/incytr/build_pair_inputs.sh
+```
+
 ## File inventory
 
-Files are relocated here from `bench/` as Phase 2 of the Merged Evidence
-Panel epic (`docs/plans/merged_evidence_panel.md`) completes. Placeholders
-below are filled in by the corresponding phase items.
-
-| File | Role | Phase item |
-|---|---|---|
-| `run_pair_mode.sh` | Per-contrast loop driver; calls `incytr_commandline.R` for each of 9 contrasts | 2.4 |
-| `incytr_commandline.R` | R driver: calls `Incytr::Cal_pairwise_grid`; writes one wide parquet per contrast | 2.2 |
-| `reconstruct_labels.R` | Post-processing helper: re-attaches cluster labels to driver output | 2.2 |
-| `reconstruct_node_fc.R` | Post-processing helper: adds node LFC columns to driver output | 2.2 |
-| `emit_expr_bygroup.R` | Transcript-substrate emitter: per-(cluster, Group) mean of `originalexp@data`; writes `outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet` | 2.2 |
-| `build_pair_inputs.sh` | Input-prep orchestrator: calls `build_pair_seurat.R` and `build_input_gene_list.R`; writes to `data/derived/incytr_inputs/` | 2.3 |
-| `build_pair_seurat.R` | Builds `incytr_obj.rds` from the snRNA-seq data | 2.3 |
-| `build_input_gene_list.R` | Builds `input_gene_list.csv` for the driver | 2.3 |
-| `export_decomposition_for_pair.py` | Reshapes per_cluster parquets into yuyu CSV format for the R driver; writes to `data/derived/incytr_inputs/` | 2.4 |
+| File | Role |
+|---|---|
+| `run_pair_mode.sh` | Per-contrast loop driver; calls `incytr_commandline.R` for each of 9 contrasts. Reads from `data/derived/incytr_inputs/`; writes to `outputs/reports/incytr_pair_mode/wide/`. |
+| `incytr_commandline.R` | R driver: calls `Incytr::Cal_pairwise_grid`; writes one wide parquet per contrast to `outputs/reports/incytr_pair_mode/wide/`. |
+| `reconstruct_labels.R` | Post-processing helper: re-attaches cluster labels to driver output. |
+| `reconstruct_node_fc.R` | Post-processing helper: adds node LFC columns to driver output. |
+| `emit_expr_bygroup.R` | Transcript-substrate emitter: per-(cluster, Group) mean of `originalexp@data`; writes `outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet`. Run once per spine build, not per contrast. |
+| `build_pair_inputs.sh` | Input-prep orchestrator: calls `build_pair_seurat.R`, `export_decomposition_for_pair.py`, and `build_input_gene_list.R`; writes to `data/derived/incytr_inputs/`. |
+| `build_pair_seurat.R` | Builds `incytr_obj.rds` from the snRNA-seq data. Writes to `data/derived/incytr_inputs/incytr_obj.rds`. |
+| `build_input_gene_list.R` | Builds `input_gene_list.csv` for the driver. Writes to `data/derived/incytr_inputs/`. |
+| `export_decomposition_for_pair.py` | Reshapes `{protein,phospho,phospho_pY}_per_cluster.parquet` into yuyu CSV format for the R driver. Writes `{pr,ps,py}_yuyu_deconvoluted.csv` to `data/derived/incytr_inputs/`. |
 
 ## Data layout
 
@@ -82,9 +83,3 @@ outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet
 - **Pair pvalue is untrustworthy** — filter/rank on `|PDS|`, not pvalue.
 - **Transcript substrate is contrast-invariant.** `emit_expr_bygroup.R` runs once per spine build, not per contrast.
 - **Paths are resolved from repo root** via `git rev-parse --show-toplevel`; scripts can be invoked from any cwd.
-
-## Status
-
-As of 2026-05-20 (Merged Evidence Panel epic, Phase 2 in progress):
-- `emit_expr_bygroup.R` output relocated to canonical substrate path (Item 1.1 done).
-- Remaining files pending relocation from `bench/` (Items 2.2–2.4 pending).

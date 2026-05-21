@@ -182,19 +182,33 @@ kinase_enrich.py / kinase_attribute.py + snrna_integration.py  ←  alz/integrat
 
 ### Integration Code (Incytr)
 
-`alz/integration/` is a thin AD-specific wrapper around the upstream `incytr` R package (`~/Projects/work/incytr/`). All math, scoring, and pathway construction live in the package; this directory builds inputs (cluster spine, kldata) and reshapes outputs for the viewer. **Pair-mode on the levy_t5 spine is the active integration path.** Factorial Incytr was archived 2026-05-18 (`archive/incytr_factorial_2026-05-18/`); upstream `Incytr::construct_factorial_paths` / `score_factorial_paths` were deleted at commit `424119f`. The current production entry point is `Incytr::Cal_pairwise_grid` (`R/grid.R`). See `docs/integrations/kinase_incytr_integration.md` for the architecture and `alz/integration/README.md` for the file-by-file layout.
+The Incytr integration is split across two directories:
 
-In-tree files:
+- **`alz/incytr/`** — run-time drivers: build Seurat inputs, run `Incytr::Cal_pairwise_grid`, emit transcript substrate, orchestrate the per-contrast loop. Reads from `data/derived/incytr_inputs/`; writes wide parquets to `outputs/reports/incytr_pair_mode/wide/`.
+- **`alz/integration/`** — consume outputs: reshape wide parquets into `receiver_cache/` for the viewer; build transcript-trace shards; manage config and cluster-spine loading.
+
+All math, scoring, and pathway construction live in the upstream `incytr` R package (`~/Projects/work/incytr/`). **Pair-mode on the levy_t5 spine is the active integration path.** Factorial Incytr was archived 2026-05-18 (`archive/incytr_factorial_2026-05-18/`); upstream `Incytr::construct_factorial_paths` / `score_factorial_paths` were deleted at commit `424119f`. The current production entry point is `Incytr::Cal_pairwise_grid` (`R/grid.R`). See `docs/integrations/kinase_incytr_integration.md` for the architecture; `alz/incytr/README.md` and `alz/integration/README.md` for file-by-file layouts.
+
+`alz/incytr/` files:
+
+- `incytr_commandline.R` — R driver: calls `Incytr::Cal_pairwise_grid`; writes one wide parquet per contrast to `outputs/reports/incytr_pair_mode/wide/`
+- `reconstruct_labels.R` / `reconstruct_node_fc.R` — post-processing helpers
+- `emit_expr_bygroup.R` — transcript-substrate emitter; writes `outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet`
+- `build_pair_inputs.sh` / `build_pair_seurat.R` / `build_input_gene_list.R` — input-prep (writes to `data/derived/incytr_inputs/`)
+- `export_decomposition_for_pair.py` — reshapes per_cluster parquets into yuyu CSV format for the R driver
+- `run_pair_mode.sh` — per-contrast loop driver
+
+`alz/integration/` files:
 
 - `config_integration.py` — filter values, design columns, contrast vectors, paths; `load_cluster_spine()` (single source of truth for the 31-cluster levy_t5 spine)
 - `build_cluster_spine.py` — run-once levy_t5 spine builder
 - `extract_cluster_assignments.R` — run-once barcode/metadata exporter from `incytr_obj.rds`
 - `plot_cluster_spine.py` — diagnostic plots
 - `build_seaad_bridge.py` — hand-curated `cluster_to_seaad_supertype.csv` (direct, no chained mappings)
-- `build_yuyu_kldata.py` — builds `kldata_pspy.csv` consumed by pair-mode
-- `pair_to_receiver_cache.py` — reshapes 9 wide pair-mode parquets into `receiver_cache/` for the viewer
+- `build_yuyu_kldata.py` — builds `kldata_pspy.csv` (symlinked into `data/derived/incytr_inputs/kldata.csv`)
+- `pair_to_receiver_cache.py` — reshapes 9 wide pair-mode parquets from `outputs/reports/incytr_pair_mode/wide/` into `receiver_cache/` for the viewer
 
-Entry points: `bash alz/runners/main/run_pair_mode_pipeline.sh` (end-to-end), `bash alz/runners/main/run_pair_mode_viewer_build.sh` (reshape only), `bash bench/run_pair_mode.sh` (bench wrapper). Invariants: **31² = 961 sender × receiver pairs per contrast**, 9 contrasts, rank-deficient clusters emit NaN, **pair pvalue is untrustworthy — filter/rank on `|PDS|`**.
+Entry points: `bash alz/runners/main/run_pair_mode_pipeline.sh` (end-to-end), `bash alz/runners/main/run_pair_mode_viewer_build.sh` (reshape only), `bash alz/incytr/run_pair_mode.sh` (Incytr invocation in isolation). Invariants: **31² = 961 sender × receiver pairs per contrast**, 9 contrasts, rank-deficient clusters emit NaN, **pair pvalue is untrustworthy — filter/rank on `|PDS|`**.
 
 ### Per-cluster proportional decomposition (Levy-t5 spine)
 
@@ -206,7 +220,7 @@ Stages:
 1. `alz/snrna_proportions.py --spine levy_t5` — per-(animal, cluster, gene) weights `f_c = (expr_c / Σ expr) × (N_total / N_c)`
 2. `alz/decomposition/build_celltype_decomposition.py --spine levy_t5 --track both` — projects bulk phospho (IMAC + pY) and protein onto the 31-cluster spine
 3. `alz/decomposition/enrich_celltype.py --spine levy_t5 --track {st,py}` — per-cluster factorial OLS + MEA (9 contrasts; NaN where rank-deficient)
-4. Pair-mode Incytr — `bench/incytr_pair_levy_t5/` produces `31² = 961` sender × receiver pairs per contrast (factorial Incytr archived 2026-05-18)
+4. Pair-mode Incytr — `alz/incytr/run_pair_mode.sh` produces `31² = 961` sender × receiver pairs per contrast; outputs to `outputs/reports/incytr_pair_mode/wide/` (factorial Incytr archived 2026-05-18)
 
 End-to-end smoke runner: `bash alz/runners/main/run_pivot_smoke.sh [--skip-normalize]` (defaults to `SPINE=levy_t5`).
 
@@ -245,6 +259,10 @@ Operational shell wrappers under `alz/runners/`:
 ### Supporting/Cached Data
 - `data/datasets/song/analysis_cache/kinase_to_gene_mapping.csv` — Cached kinase→gene symbol mappings
 - `outputs/reports/wmb_expression/wmb_kinase_expression.csv` — WMB expression matrix (required for unified attribution)
+
+### Pair-mode Incytr Inputs/Outputs
+- `data/derived/incytr_inputs/` — R driver inputs: `incytr_obj.rds`, `{pr,ps,py}_yuyu_deconvoluted.csv`, `kldata.csv` (symlink), `allmarkers.csv`, `HEG_df.csv`, `input_gene_list.csv`
+- `outputs/reports/incytr_pair_mode/wide/` — 9 wide parquets (one per contrast, 31² = 961 rows each): `ma_{2,4,6}mo_{AppP,Ttau,ApTt}_ma_{2,4,6}mo_WTyp_incytr_output.parquet`
 
 ### Decomposition (CTM-native, branch-only — not in live pipeline)
 `alz/deconvolution/build_wmb_decomposition.py` consumes per-(site, group) bulk medians (`imac_median.csv`, `py_median.csv`, `pr_median.csv`) and the `yuyu_samplekey.csv` MS\_ID↔SCRNA bridge. These were deleted from `data/datasets/song/proteomics/source/` on 2026-05-07; re-pull from Google Drive via `pixi run ingest-gdrive-shared` before running the branch. Outputs: `outputs/reports/deconvolution/wmb_decomposition/{ps,py,pr}_wmb_decomposition.csv` + `wmb_class_size.csv`.

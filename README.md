@@ -107,7 +107,8 @@ pixi run snrna        # Song within-cohort snRNA-seq pseudobulk + concordance
 
 ```bash
 bash alz/runners/main/run_pivot_smoke.sh     # per-cluster decomposition + verification (Levy-t5 spine)
-# Pair-mode bench scripts under bench/incytr_pair_levy_t5/ + bench/run_pair_mode.sh
+bash alz/runners/main/run_pair_mode_pipeline.sh   # full pair-mode pipeline (inputs → Incytr → viewer reshape)
+bash alz/incytr/run_pair_mode.sh             # Incytr invocation only (9 contrasts)
 ```
 
 ### Human cross-species cohort (NBB / Mukesh)

@@ -4,7 +4,7 @@
 
 Substrate is the long-form parquet at
 ``outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet``,
-emitted by ``bench/incytr_pair_levy_t5/emit_expr_bygroup.R``:
+emitted by ``alz/incytr/emit_expr_bygroup.R``:
 per-(cluster, Group) mean of ``Data.input@assays$originalexp@data`` — bit-for-
 bit the matrix Incytr's ``Cal_scFC`` consumes via
 ``Expr_bygroup(..., mean_method = "mean")``. The panel therefore matches the
@@ -125,7 +125,7 @@ def build(force: bool = False) -> dict:
     if not os.path.exists(TRANSCRIPT_TRACE_PSEUDOBULK):
         raise FileNotFoundError(
             f"transcript-trace substrate missing: {TRANSCRIPT_TRACE_PSEUDOBULK}. "
-            f"Run bench/incytr_pair_levy_t5/emit_expr_bygroup.R (step E3 in "
+            f"Run alz/incytr/emit_expr_bygroup.R (step E3 in "
             f"alz/runners/main/run_pair_mode_pipeline.sh) from any directory "
             f"before rebuilding the viewer."
         )

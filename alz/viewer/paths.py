@@ -61,7 +61,7 @@ MEASUREMENT_TRACE_INDEX = os.path.join(MEASUREMENT_TRACE_DIR, "index.json")
 # Per-cluster transcript pseudobulk shards backing the Incytr Pathways
 # "Measurement Trace" panel. Substrate is the per-(cluster, Group) mean of
 # `Data.input@assays$originalexp@data` emitted by
-# bench/incytr_pair_levy_t5/emit_expr_bygroup.R — bit-for-bit the same matrix
+# alz/incytr/emit_expr_bygroup.R — bit-for-bit the same matrix
 # Incytr's `Cal_scFC` consumes, so the panel agrees numerically with the FC
 # tab's `*_sclog2FC` columns.
 TRANSCRIPT_TRACE_DIR = os.path.join(AUDIT_SOURCES_DIR, "transcript_trace")

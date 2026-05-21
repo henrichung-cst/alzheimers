@@ -18,13 +18,16 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
                   │   MEA, 9 contrasts, NaN where           │
                   │   rank-deficient)                       │
                   ▼                                        ▼
-    bench/incytr_pair_levy_t5/incytr_input/  ◄── alz/integration/build_yuyu_kldata.py
-                  │                          ◄── alz/integration/build_cluster_spine.py
+    data/derived/incytr_inputs/      ◄── alz/incytr/export_decomposition_for_pair.py
+                  │                  ◄── alz/incytr/build_pair_seurat.R
+                  │                  ◄── alz/integration/build_yuyu_kldata.py
+                  │                  ◄── alz/integration/build_cluster_spine.py
                   ▼
     Incytr::Cal_pairwise_grid   (upstream, ~/Projects/work/incytr/R/grid.R)
+    driven by alz/incytr/incytr_commandline.R
                   │
                   ▼
-    bench/incytr_pair_levy_t5/output/contrast=<C>/data.parquet
+    outputs/reports/incytr_pair_mode/wide/<contrast>_incytr_output.parquet
                   │  (9 wide parquets, 31² = 961 rows each)
                   ▼
     alz/integration/pair_to_receiver_cache.py
@@ -33,7 +36,23 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
     outputs/reports/unified_viewer/  (consumed by alz/build_unified_viewer.py)
 ```
 
-## In-tree files (`alz/integration/`)
+## In-tree files
+
+### `alz/incytr/` — run-time drivers
+
+| File | Role |
+|---|---|
+| `incytr_commandline.R` | R driver: calls `Incytr::Cal_pairwise_grid`; writes one wide parquet per contrast to `outputs/reports/incytr_pair_mode/wide/`. |
+| `reconstruct_labels.R` | Post-processing helper: re-attaches cluster labels to driver output. |
+| `reconstruct_node_fc.R` | Post-processing helper: adds node LFC columns to driver output. |
+| `emit_expr_bygroup.R` | Transcript-substrate emitter: per-(cluster, Group) mean of `originalexp@data`; writes `outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet`. |
+| `build_pair_inputs.sh` | Input-prep orchestrator: calls `build_pair_seurat.R`, `export_decomposition_for_pair.py`, and `build_input_gene_list.R`; writes to `data/derived/incytr_inputs/`. |
+| `build_pair_seurat.R` | Builds `incytr_obj.rds` from the snRNA-seq data. Writes to `data/derived/incytr_inputs/`. |
+| `build_input_gene_list.R` | Builds `input_gene_list.csv` for the driver. Writes to `data/derived/incytr_inputs/`. |
+| `export_decomposition_for_pair.py` | Reshapes `{protein,phospho,phospho_pY}_per_cluster.parquet` into yuyu CSV format for the R driver. Writes to `data/derived/incytr_inputs/`. |
+| `run_pair_mode.sh` | Per-contrast loop driver; calls `incytr_commandline.R` for each of the 9 contrasts. |
+
+### `alz/integration/` — output consumers + config
 
 | File | Role |
 |---|---|
@@ -42,8 +61,8 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
 | `extract_cluster_assignments.R` | Run-once generator: emits `barcode_to_cluster.csv` and `cell_metadata.csv` from the legacy `incytr_obj.rds`. |
 | `plot_cluster_spine.py` | Diagnostic plots over `cluster_spine.csv`. |
 | `build_seaad_bridge.py` | One-shot: hand-curated `cluster_to_seaad_supertype.csv` (levy_t5 cluster → SEA-AD supertype). Direct crosswalks only — no chained mappings through intermediate vocabularies. |
-| `build_yuyu_kldata.py` | Builds the `kldata_pspy.csv` consumed by pair-mode (`bench/incytr_pair_levy_t5/incytr_input/kldata.csv`). |
-| `pair_to_receiver_cache.py` | Reshapes pair-mode wide outputs (9 contrasts × 961 rows) into the long-form `receiver_cache/` layout the unified viewer consumes. Invoked by `alz/runners/main/run_pair_mode_viewer_build.sh`. |
+| `build_yuyu_kldata.py` | Builds `kldata_pspy.csv`; symlinked into `data/derived/incytr_inputs/kldata.csv` for the R driver. |
+| `pair_to_receiver_cache.py` | Reshapes pair-mode wide outputs from `outputs/reports/incytr_pair_mode/wide/` (9 contrasts × 961 rows) into the long-form `receiver_cache/` layout the unified viewer consumes. Invoked by `alz/runners/main/run_pair_mode_viewer_build.sh`. |
 
 ## Entry points
 
@@ -51,7 +70,7 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
 |---|---|
 | `bash alz/runners/main/run_pair_mode_pipeline.sh` | End-to-end: per-cluster decomposition → enrich → pair-mode inputs → `Cal_pairwise_grid` → reshape. |
 | `bash alz/runners/main/run_pair_mode_viewer_build.sh` | Reshape only: pair-mode parquet → `receiver_cache/`. |
-| `bash bench/run_pair_mode.sh` | Bench wrapper for `bench/incytr_pair_levy_t5/` (Incytr invocation in isolation). |
+| `bash alz/incytr/run_pair_mode.sh` | Incytr invocation in isolation (9 contrasts, reads from `data/derived/incytr_inputs/`). |
 | `pixi run install-incytr` | Reinstall upstream `Incytr` after changes in `~/Projects/work/incytr/`. |
 
 R dependencies still required: `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`. Integration config lives in `alz/integration/config_integration.py`, not `alz/config.py`.

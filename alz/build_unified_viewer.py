@@ -69,6 +69,7 @@ from viewer.paths import (  # noqa: E402
     AUDIT_SOURCES_DIR,
     DECOMP_OLS_PARQUET,
     EDGE_SLICES_DECOMP_OLS_DIR,
+    EDGE_SLICES_HUMAN_PERDONOR_DIR,
     EDGE_SLICES_INCYTR_PATHWAYS_DIR,
     EDGE_SLICES_SONG_CONCORDANCE_DIR,
     INCYTR_FACTORIAL_INPUTS_DIR,
@@ -171,7 +172,7 @@ COLUMN_DEFINITIONS = {
     "gene_symbol": "Gene symbol associated with the site, kinase, or evidence row.",
     "contrast": "Disease genotype and timepoint comparison versus matched WT control.",
     "ES": "Raw enrichment score from motif enrichment analysis.",
-    "NES": "Normalized enrichment score from motif enrichment analysis.",
+    "NES": "Normalized enrichment score from motif enrichment analysis. Sign: + NES = kinase substrates concentrated at the high-stoichiometry end of the ranked β list = kinase more active in disease vs WT. Matches the Incytr convention (+ sclog2FC / + PDS = up in disease).",
     "p-value": "Nominal enrichment p-value.",
     "FDR": "False discovery rate for the enrichment result.",
     "Subs fraction": "Number of kinase substrates contributing to the enrichment divided by the substrate universe.",
@@ -306,6 +307,12 @@ def _log2_series(values: pd.Series) -> pd.Series:
     positive = vals > 0
     out.loc[positive] = np.log2(vals.loc[positive])
     return out
+
+
+def _configure_duckdb_tempdir(con) -> None:
+    d = os.environ.get("DUCKDB_TEMP_DIR", os.path.expanduser("~/.cache/duckdb"))
+    os.makedirs(d, exist_ok=True)
+    con.execute(f"SET temp_directory='{d}';")
 
 
 def _measurement_trace_columns() -> list[str]:
@@ -771,6 +778,64 @@ HUMAN_PERDONOR_DIR = os.path.join(
 HUMAN_TRACK_SUFFIXES = [("", "ST"), ("_pY", "Y")]
 
 
+def _write_human_perdonor_substrate_slices(
+    perdonor_rows: list[tuple],
+) -> dict:
+    """Per-kinase shards for `leading_substrates` + `substrate_motifs`.
+
+    Together these two columns added ~50 MB to the inlined PAYLOAD; they are
+    only consumed by the human Audit drawer (Trace + Running Enrichment sub-
+    tabs) when a specific kinase is selected. Shard format: one parquet per
+    kinase id with rows (donor, leading_substrates, substrate_motifs). Rows
+    with both fields empty are skipped — the JS treats a missing row as
+    "no leading edge" the same way it used to treat an empty string.
+    """
+    shutil.rmtree(EDGE_SLICES_HUMAN_PERDONOR_DIR, ignore_errors=True)
+    os.makedirs(EDGE_SLICES_HUMAN_PERDONOR_DIR, exist_ok=True)
+
+    by_kid: dict[int, list[tuple[str, str, str]]] = {}
+    for r in perdonor_rows:
+        kid = int(r[0])
+        donor = str(r[1])
+        leading = str(r[4]) if r[4] is not None else ""
+        motifs = str(r[11]) if r[11] is not None else ""
+        if not leading and not motifs:
+            continue
+        by_kid.setdefault(kid, []).append((donor, leading, motifs))
+
+    template = "{kinase_id:03d}.parquet"
+    present: list[int] = []
+    total_rows = 0
+    for kid in sorted(by_kid):
+        df = pd.DataFrame(
+            by_kid[kid],
+            columns=["donor", "leading_substrates", "substrate_motifs"],
+        )
+        path = os.path.join(
+            EDGE_SLICES_HUMAN_PERDONOR_DIR,
+            template.format(kinase_id=kid),
+        )
+        pq.write_table(
+            pa.Table.from_pandas(df, preserve_index=False),
+            path, compression="zstd",
+        )
+        present.append(kid)
+        total_rows += len(df)
+
+    index = {
+        "schema_version": SCHEMA_VERSION,
+        "slice_count": len(present),
+        "present_kinase_ids": present,
+        "filename_template": template,
+        "n_total_rows": total_rows,
+    }
+    with open(os.path.join(EDGE_SLICES_HUMAN_PERDONOR_DIR, "index.json"), "w") as f:
+        json.dump(index, f)
+    print(f"  human_perdonor_substrate: wrote {len(present)} shards "
+          f"({total_rows:,} total rows)", flush=True)
+    return index
+
+
 def _human_track_load(suffix: str, residue: str) -> dict | None:
     """Load all per-donor CSVs for one track. Returns None if missing.
 
@@ -822,21 +887,22 @@ def _human_track_load(suffix: str, residue: str) -> dict | None:
     }
 
 
-def build_human_slice() -> dict | None:
+def build_human_slice() -> tuple[dict, dict] | tuple[None, None]:
     """Per-donor human (NBB / Mukesh) kinase slice.
 
-    Returns None when the perdonor outputs are absent — caller omits the
-    PAYLOAD.human block so the mouse-only artifact stays byte-equivalent.
+    Returns (human_slice, substrate_slice_index). Both are None when the
+    perdonor outputs are absent — caller omits the PAYLOAD.human block so
+    the mouse-only artifact stays byte-equivalent.
     """
     if not os.path.isdir(HUMAN_PERDONOR_DIR):
-        return None
+        return None, None
     tracks: list[dict] = []
     for suffix, residue in HUMAN_TRACK_SUFFIXES:
         t = _human_track_load(suffix, residue)
         if t is not None:
             tracks.append(t)
     if not tracks:
-        return None
+        return None, None
 
     # Donor membership — prefer the explicit donor_groups.json sidecar
     # (written by ingest_mukesh_perdonor.py); fall back to name-prefix
@@ -1013,21 +1079,25 @@ def build_human_slice() -> dict | None:
                     motifs = ";".join(subs_lookup.get((k, d), []))
                     perdonor_rows.append((kid, d, n_, f_, lead, es_, subs_, p_, rn_, rf_, rp_, motifs))
 
-    # Per-donor leading-substrate index (long, sparse).
+    # Per-donor scalar index (one row per (kinase, donor) with an MEA record).
+    # `leading_substrates` and `substrate_motifs` are sharded out to
+    # edge_slices/human_perdonor/ and loaded on demand via
+    # SliceCache.loadHumanPerdonorSubstrate.
     perdonor_index = {
         "kinase_id":   [r[0] for r in perdonor_rows],
         "donor":       [r[1] for r in perdonor_rows],
         "NES":         [round(r[2], 4) if pd.notna(r[2]) else None for r in perdonor_rows],
         "FDR":         [round(r[3], 4) if pd.notna(r[3]) else None for r in perdonor_rows],
-        "leading_substrates": [r[4] for r in perdonor_rows],
         "ES":          [round(r[5], 4) if pd.notna(r[5]) else None for r in perdonor_rows],
         "subs_fraction": [r[6] for r in perdonor_rows],
         "p_value":     [round(r[7], 6) if pd.notna(r[7]) else None for r in perdonor_rows],
         "raw_NES":     [round(r[8], 4) if pd.notna(r[8]) else None for r in perdonor_rows],
         "raw_FDR":     [round(r[9], 4) if pd.notna(r[9]) else None for r in perdonor_rows],
         "raw_p_value": [round(r[10], 6) if pd.notna(r[10]) else None for r in perdonor_rows],
-        "substrate_motifs": [r[11] for r in perdonor_rows],
     }
+    human_perdonor_substrate_slice_index = (
+        _write_human_perdonor_substrate_slices(perdonor_rows)
+    )
 
     # Global-shift diagnostics (track-tagged).
     shift_rows: list[dict] = []
@@ -1174,7 +1244,7 @@ def build_human_slice() -> dict | None:
     }
     if celltype_specificity is not None:
         human_slice["celltype_specificity"] = celltype_specificity
-    return human_slice
+    return human_slice, human_perdonor_substrate_slice_index
 
 
 def _build_celltypes_slice(data: UnifiedData) -> dict:
@@ -1367,12 +1437,11 @@ def _write_decomp_ols_slices(kid: dict, contrast_to_id: dict) -> dict:
         return {"slice_count": 0, "present_kinase_ids": [], "filename_template":
                 "{kinase_id:03d}.parquet"}
 
+    # Wipe-and-recreate so an aborted previous run can't leave partial
+    # shards alongside the new ones (mismatched slice_count vs.
+    # present_kinase_ids in index.json).
+    shutil.rmtree(EDGE_SLICES_DECOMP_OLS_DIR, ignore_errors=True)
     os.makedirs(EDGE_SLICES_DECOMP_OLS_DIR, exist_ok=True)
-    # Clear stale shards so an aborted previous run doesn't leave a mismatched
-    # slice_count vs. present_kinase_ids.
-    for f in os.listdir(EDGE_SLICES_DECOMP_OLS_DIR):
-        if f.endswith(".parquet"):
-            os.remove(os.path.join(EDGE_SLICES_DECOMP_OLS_DIR, f))
 
     # Substrate sets — st + py tracks. Both files share schema.
     ss_paths = [
@@ -1806,7 +1875,7 @@ def _write_incytr_pathways() -> dict | None:
 
     con = duckdb.connect()
     con.execute("PRAGMA threads=8; PRAGMA memory_limit='12GB';")
-    con.execute("SET temp_directory='/home/hchung/.cache/duckdb';")
+    _configure_duckdb_tempdir(con)
     # SiK_score only exists in the pair-mode reshape (alz/integration/
     # pair_to_receiver_cache.py); the legacy factorial cache does not carry
     # it. NULL-fill when absent so the JS shard contract stays stable.
@@ -1977,11 +2046,9 @@ def _write_incytr_pathways() -> dict | None:
           f"(NULL: {pds_na_pct:.1f}%, =0: {pds_zero_pct:.1f}% — these land in "
           f"the 'neither' bucket)", flush=True)
 
-    # Reset / re-create the shard directory.
+    # Wipe-and-recreate to avoid mixing old/new shards on an aborted run.
+    shutil.rmtree(EDGE_SLICES_INCYTR_PATHWAYS_DIR, ignore_errors=True)
     os.makedirs(EDGE_SLICES_INCYTR_PATHWAYS_DIR, exist_ok=True)
-    for f in os.listdir(EDGE_SLICES_INCYTR_PATHWAYS_DIR):
-        if f.endswith(".parquet") or f == "index.json":
-            os.remove(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, f))
 
     # Materialize all rows once, then groupby+write per pair. The per-node
     # seed-list labels (`<Node>.label` upstream → `<Node>_label` in the shard,
@@ -2119,10 +2186,10 @@ def _write_incytr_pathways() -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Pair-mode source (bench/incytr_pair_levy_t5/output/)
+# Pair-mode source (outputs/reports/incytr_pair_mode/wide/)
 # ---------------------------------------------------------------------------
 # Switch via INCYTR_SOURCE=pair_mode; input dir via INCYTR_PAIR_MODE_INPUT_DIR
-# (default bench/incytr_pair_levy_t5/output). Emits the same shard layout as
+# (default outputs/reports/incytr_pair_mode/wide). Emits the same shard layout as
 # the factorial branch so the JS tabs (incytr_pathways.js, incytr_heatmap.js)
 # render unchanged. Pair-mode parquets carry path-level pr_up/down, ps_up/down,
 # py_up/down direction flags but no per-node log2FC or per-node DEG/prG labels
@@ -2153,7 +2220,7 @@ def _pair_mode_contrast_from_filename(fname: str) -> str | None:
 def _write_incytr_pair_pathways() -> dict | None:
     """Pair-mode equivalent of `_write_incytr_pathways`.
 
-    Reads `bench/incytr_pair_levy_t5/output/*.parquet` (one file per contrast,
+    Reads `outputs/reports/incytr_pair_mode/wide/*.parquet` (one file per contrast,
     Levy-t5 spine) and emits the same shard layout + `incytr_pathways`
     payload block as the factorial branch. Per-node `*_log2FC` and
     `*_label` columns are NULL-filled (pair-mode does not compute them).
@@ -2162,7 +2229,7 @@ def _write_incytr_pair_pathways() -> dict | None:
 
     input_dir = os.environ.get(
         "INCYTR_PAIR_MODE_INPUT_DIR",
-        os.path.join(config.REPO_ROOT, "bench", "incytr_pair_levy_t5", "output"),
+        os.path.join(config.REPO_ROOT, "outputs", "reports", "incytr_pair_mode", "wide"),
     )
     if not os.path.isdir(input_dir):
         print(f"  (warn) pair-mode input dir not found: {input_dir}; "
@@ -2195,7 +2262,7 @@ def _write_incytr_pair_pathways() -> dict | None:
 
     con = duckdb.connect()
     con.execute("PRAGMA threads=8; PRAGMA memory_limit='12GB';")
-    con.execute("SET temp_directory='/home/hchung/.cache/duckdb';")
+    _configure_duckdb_tempdir(con)
 
     # Detect optional path-level direction-flag columns once.
     sample_schema = pq.read_schema(file_to_contrast[0][0])
@@ -2394,10 +2461,9 @@ def _write_incytr_pair_pathways() -> dict | None:
     }
 
     # --- shard the long table per (sender, receiver) ---------------------
+    # Wipe-and-recreate to avoid mixing old/new shards on an aborted run.
+    shutil.rmtree(EDGE_SLICES_INCYTR_PATHWAYS_DIR, ignore_errors=True)
     os.makedirs(EDGE_SLICES_INCYTR_PATHWAYS_DIR, exist_ok=True)
-    for f in os.listdir(EDGE_SLICES_INCYTR_PATHWAYS_DIR):
-        if f.endswith(".parquet") or f == "index.json":
-            os.remove(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, f))
 
     # Materialize once; group + write. Pair-mode now supplies per-node FC
     # (driver Cal_scFC + post-hoc reconstruct_node_fc.R) and labels (driver
@@ -2764,7 +2830,7 @@ def build_payload(data: UnifiedData) -> dict:
         kid, contrast_to_id, config.MEA_FDR_THRESH,
     )
 
-    human_slice = build_human_slice()
+    human_slice, human_perdonor_substrate_index = build_human_slice()
     if human_slice is not None:
         print(f"  human slice: {len(human_slice['kinases']['id']):,} kinase rows "
               f"× {len(human_slice['donors'])} donors", flush=True)
@@ -2793,11 +2859,18 @@ def build_payload(data: UnifiedData) -> dict:
             "present_song_concordance_genes": song_concordance_slice_index.get(
                 "present_genes", []
             ),
+            "human_perdonor_url": "edge_slices/human_perdonor/",
+            "human_perdonor_index": "edge_slices/human_perdonor/index.json",
+            "present_human_perdonor_kinase_ids": [],
         },
         "incytr_pathways": incytr_pathways_block,
         "meta": meta,
     }
     if human_slice is not None:
+        if human_perdonor_substrate_index:
+            payload["edge_slice_ref"]["present_human_perdonor_kinase_ids"] = (
+                human_perdonor_substrate_index.get("present_kinase_ids", [])
+            )
         payload["human"] = human_slice
     return _sanitize(payload)
 
