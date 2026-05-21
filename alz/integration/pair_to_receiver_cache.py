@@ -2,7 +2,7 @@
 `receiver_cache/` layout the unified viewer already consumes.
 
 Pair-mode emits one parquet per (genotype, age) comparison at
-``bench/incytr_pair_levy_t5/output/ma_<age>_<geno>_ma_<age>_WTyp_incytr_output.parquet``
+``outputs/reports/incytr_pair_mode/wide/ma_<age>_<geno>_ma_<age>_WTyp_incytr_output.parquet``
 with two-condition columns (``SigProb_<c1>``, ``p_value_<c1>``,
 ``SiK_score_<c1>``, plus the WTyp twin) and no ``contrast`` column. The
 factorial path the viewer was originally wired against is long-form with a
@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 from viewer.paths import INCYTR_FACTORIAL_OUTPUTS_DIR  # noqa: E402
 
 DEFAULT_INPUT_DIR = os.path.normpath(
-    os.path.join(HERE, "..", "..", "bench", "incytr_pair_levy_t5", "output")
+    os.path.join(HERE, "..", "..", "outputs", "reports", "incytr_pair_mode", "wide")
 )
 
 # Pair-mode filename → factorial contrast. Pair-mode uses AppP/Ttau/ApTt;
@@ -53,6 +53,13 @@ _FC_NODES = ("Ligand", "Receptor", "EM", "Target")
 _FC_METRICS = ("sclog2FC", "pr_log2FC", "ps_log2FC", "py_log2FC")
 _FC_COLS = [f"{n}_{m}" for n in _FC_NODES for m in _FC_METRICS]
 _LABEL_COLS = [f"{n}.label" for n in _FC_NODES]
+
+# Direction note: Incytr's `Cal_foldchange` (incytr/R/math.R) computes
+# `log2(condition1 / condition2)`. The pair-mode driver
+# (alz/incytr/incytr_commandline.R) passes
+# `condition1 = <disease>`, `condition2 = WTyp` — so the raw `*_sclog2FC`
+# values are already disease/WT (positive = up in disease), matching the
+# viewer tooltip and the proteomics layers. No sign flip needed.
 
 
 def _sanitize_celltype(name: str) -> str:
@@ -131,7 +138,7 @@ def reshape(input_dir: str, out_dir: str, *, require_all_nine: bool = False) -> 
         os.rmdir(d)
 
     con = duckdb.connect()
-    con.execute("PRAGMA threads=8; PRAGMA memory_limit='12GB';")
+    con.execute("PRAGMA threads=4; PRAGMA memory_limit='6GB';")
     con.execute(f"SET temp_directory='{os.path.expanduser('~/.cache/duckdb')}';")
 
     union_sql = "\n        UNION ALL\n".join(
