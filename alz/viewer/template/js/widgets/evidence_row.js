@@ -1,0 +1,531 @@
+// ---------------------------------------------------------------------------
+// OmicsTraceStore — per-cluster protein + phospho raw-value shards backing
+// the Incytr Pathways "Evidence" tab.
+//
+// Shard layout: outputs/reports/unified_viewer/audit_sources/omics_trace/
+// <slug>.parquet where slug = sanitize_celltype(cluster).
+//
+// Schema per shard row (from build_omics_trace.py, schema_version=1):
+//   layer        : "protein" | "phospho_ps" | "phospho_py"
+//   gene_symbol  : string
+//   site_id      : string | null (null for protein rows)
+//   animal_id    : string  (e.g. "37_E50(L)_M_4mo_WT")
+//   group        : string  (e.g. "ma_2mo_AppP")
+//   sex          : "M" | "F"
+//   timepoint    : "2mo" | "4mo" | "6mo"
+//   genotype     : "AppP" | "Ttau" | "ApTt" | "WTyp"
+//   value        : float (raw intensity)
+//   log2_value   : float (log2(value), NaN when value==0)
+//
+// Per-animal (3 males per group arm). Use value column for LFC; log2_value
+// is display-only (see Item 3.2 implementation notes).
+//
+// Cluster routing per incytr/R/evaluation.R:227-230:
+//   Ligand → sender cluster
+//   Receptor → receiver cluster
+//   EM → receiver cluster
+//   Target → receiver cluster
+// ---------------------------------------------------------------------------
+
+const OmicsTraceStore = (() => {
+  const cache = new Map();        // cluster -> rows[]
+  const inflight = new Map();     // cluster -> Promise<rows>
+
+  // Mirror of alz/integration/pair_to_receiver_cache.py::_sanitize_celltype.
+  function _sanitize(name) {
+    return String(name).replaceAll("/", "-").replaceAll(" ", "_");
+  }
+
+  function _meta() {
+    return (typeof PAYLOAD !== "undefined"
+            && PAYLOAD.meta
+            && PAYLOAD.meta.omics_trace) || null;
+  }
+
+  function isAvailable() {
+    const m = _meta();
+    return !!(m && Array.isArray(m.clusters) && m.clusters.length);
+  }
+
+  function hasCluster(cluster) {
+    const m = _meta();
+    if (!m || !cluster) return false;
+    return (m.clusters || []).includes(cluster);
+  }
+
+  async function _fetchParquet(url) {
+    let resp;
+    try {
+      resp = await fetch(url);
+    } catch (e) {
+      if (window.location.protocol === "file:") {
+        throw new Error(
+          "Browser blocked local sidecar fetches under file://. " +
+          "Serve outputs/reports/unified_viewer over HTTP and open that URL."
+        );
+      }
+      throw e;
+    }
+    if (!resp.ok) throw new Error(`fetch ${url} → ${resp.status}`);
+    const buf = await resp.arrayBuffer();
+    if (typeof hyparquet === "undefined") {
+      throw new Error("parquet reader not loaded (hyparquet missing)");
+    }
+    return await hyparquet.parquetReadObjects({
+      file: buf, compressors: hyparquet.compressors,
+    });
+  }
+
+  async function loadCluster(cluster) {
+    if (!hasCluster(cluster)) return [];
+    if (cache.has(cluster)) return cache.get(cluster);
+    if (inflight.has(cluster)) return inflight.get(cluster);
+    const m = _meta();
+    const base = (m && m.relative_path) ? `${m.relative_path}/` : "audit_sources/omics_trace/";
+    const url = `${base}${_sanitize(cluster)}.parquet`;
+    const p = _fetchParquet(url).then(rows => {
+      cache.set(cluster, rows);
+      inflight.delete(cluster);
+      return rows;
+    }).catch(err => {
+      inflight.delete(cluster);
+      throw err;
+    });
+    inflight.set(cluster, p);
+    return p;
+  }
+
+  // Map contrast string (e.g. "App_2mo") to the two group codes present in the
+  // shard. Mirrors TranscriptTraceStore.contrastToArms convention.
+  // Returns [{arm, group}, {arm, group}] or null if unrecognised.
+  const _GENO_DECODE = { App: "AppP", Tau: "Ttau", ApTt: "ApTt" };
+  function contrastToArms(contrast) {
+    if (!contrast) return null;
+    const parts = String(contrast).split("_");
+    if (parts.length !== 2) return null;
+    const [geno, age] = parts;
+    const genoCode = _GENO_DECODE[geno];
+    if (!genoCode) return null;
+    return [
+      { arm: geno, group: `ma_${age}_${genoCode}` },
+      { arm: "WT",  group: `ma_${age}_WTyp` },
+    ];
+  }
+
+  // Return per-animal rows for (cluster, layer, gene_symbol, contrast).
+  // Returns { arms: [{arm, group}], rows: [] } where rows carry all columns.
+  // If gene has no rows in this layer, returns rows=[].
+  async function valuesForGene(cluster, layer, gene, contrast) {
+    const arms = contrastToArms(contrast);
+    if (!arms) return { arms: null, rows: [] };
+    const allRows = await loadCluster(cluster);
+    const groupSet = new Set(arms.map(a => a.group));
+    const rows = allRows.filter(r =>
+      String(r.layer) === layer
+      && String(r.gene_symbol) === String(gene)
+      && groupSet.has(String(r.group))
+    );
+    return { arms, rows };
+  }
+
+  // Return per-site rows grouped by site_id. Only meaningful for phospho layers.
+  // Returns Map<site_id_str, rows[]>.
+  async function siteRowsForGene(cluster, layer, gene, contrast) {
+    const { arms, rows } = await valuesForGene(cluster, layer, gene, contrast);
+    const bySite = new Map();
+    for (const r of rows) {
+      const sid = r.site_id == null ? "__protein__" : String(r.site_id);
+      if (!bySite.has(sid)) bySite.set(sid, []);
+      bySite.get(sid).push(r);
+    }
+    return { arms, bySite };
+  }
+
+  return { isAvailable, hasCluster, loadCluster, contrastToArms,
+           valuesForGene, siteRowsForGene, _sanitize };
+})();
+window.OmicsTraceStore = OmicsTraceStore;
+
+
+// ---------------------------------------------------------------------------
+// EvidencePanel — renders a 4-node × 4-layer evidence grid for a single
+// Incytr pathway row. Replaces the old "Fold Change" and "Measurement Trace"
+// tabs from Phase 3 Item 3.3.
+//
+// Layout:
+//   Column: Ligand | Receptor | EM | Target
+//   Row: transcript | protein | phospho_ps | phospho_py
+//
+// Cluster routing (per incytr/R/evaluation.R:227-230):
+//   Ligand  → sender cluster
+//   Receptor, EM, Target → receiver cluster
+//
+// Each sub-cell shows:
+//   - Per-animal dot strip (one dot per animal, coloured by arm)
+//   - Per-group mean bar
+//   - Right-edge LFC placeholder (filled by Item 3.4)
+//
+// For phospho layers, one sub-row per site_id. If a gene has zero sites in a
+// layer, renders a single "n/a" row.
+//
+// LFC computation is deferred to Item 3.4. This item renders raw dots + means
+// only, leaving an empty/placeholder LFC slot for 3.4 to fill.
+// ---------------------------------------------------------------------------
+
+const EvidencePanel = (() => {
+
+  // Human-readable labels for layers.
+  const _LAYER_LABELS = {
+    transcript:  "Transcript",
+    protein:     "Protein",
+    phospho_ps:  "Phospho (pS/pT)",
+    phospho_py:  "Phospho (pY)",
+  };
+
+  // Arm colours: disease arm red, WT arm grey.
+  const _ARM_COLOR = {
+    disease: "#a3203c",
+    WT:      "#777777",
+  };
+
+  function _armColor(arm) {
+    return arm === "WT" ? _ARM_COLOR.WT : _ARM_COLOR.disease;
+  }
+
+  function _esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  // ---------------------------------------------------------------------------
+  // SVG strip-plot + mean bars for one sub-cell (one layer, one gene, one site).
+  //
+  // arms    = [{arm, group}, {arm, group}] from contrastToArms
+  // armRows = Map<group_string, rows[]>   (rows from shard for this site)
+  // label   = display string for the sub-cell header (e.g. gene or site_id)
+  // isLog   = whether to use log2_value (true) or raw value (false) for dots
+  // ---------------------------------------------------------------------------
+  function _renderDotBarSvg(arms, armRows, label, isLog) {
+    if (!arms) {
+      return `<div class="ev-cell-label muted">${_esc(label)}</div>`
+           + `<div class="ev-cell-empty muted" style="font-size:10px;">no contrast</div>`;
+    }
+
+    // Collect values per arm.
+    const perArm = arms.map(a => {
+      const rows = armRows.get(a.group) || [];
+      const vals = rows.map(r => {
+        const v = isLog ? r.log2_value : r.value;
+        return (v == null || !isFinite(v)) ? null : Number(v);
+      }).filter(v => v != null);
+      return { arm: a.arm, group: a.group, vals };
+    });
+
+    const allVals = perArm.flatMap(a => a.vals);
+    const hasAny = allVals.length > 0;
+
+    if (!hasAny) {
+      return `<div class="ev-cell-label">${_esc(label)}</div>`
+           + `<div class="ev-cell-empty muted" style="font-size:10px;">no data</div>`
+           + `<div class="ev-lfc-slot" data-lfc-placeholder="1" style="font-size:10px;color:#999;">LFC —</div>`;
+    }
+
+    const vmax = Math.max(...allVals.map(Math.abs), 0.001);
+    const yScale = vmax * 1.2;
+
+    // SVG dimensions.
+    const W = 130, H = 88;
+    const padTop = 14, padBot = 22, padL = 6, padR = 6;
+    const barAreaH = H - padTop - padBot;
+    const nArms = perArm.length;
+    const colW = (W - padL - padR) / nArms;
+    const dotR = 3.5;
+
+    let svgParts = [];
+
+    perArm.forEach((a, ai) => {
+      const cx = padL + ai * colW + colW / 2;
+      const color = _armColor(a.arm);
+
+      // Mean bar.
+      const mean = a.vals.length > 0
+        ? a.vals.reduce((s, v) => s + v, 0) / a.vals.length
+        : null;
+
+      if (mean != null) {
+        const barH = Math.max(2, (Math.abs(mean) / yScale) * barAreaH);
+        const barY = padTop + barAreaH - barH;
+        const barW = colW * 0.45;
+        const barX = cx - barW / 2;
+        svgParts.push(
+          `<rect x="${barX.toFixed(1)}" y="${barY.toFixed(1)}" `
+          + `width="${barW.toFixed(1)}" height="${barH.toFixed(1)}" `
+          + `fill="${color}" opacity="0.25" rx="1"/>`
+        );
+        // Mean value label above bar.
+        svgParts.push(
+          `<text x="${cx.toFixed(1)}" y="${(barY - 2).toFixed(1)}" `
+          + `text-anchor="middle" font-size="8" fill="${color}">${mean.toFixed(2)}</text>`
+        );
+      }
+
+      // Per-animal dots (jittered horizontally within column).
+      const n = a.vals.length;
+      a.vals.forEach((v, di) => {
+        const jitter = n <= 1 ? 0 : (di / (n - 1) - 0.5) * colW * 0.5;
+        const dotX = cx + jitter;
+        const dotY = padTop + barAreaH - (v / yScale) * barAreaH;
+        svgParts.push(
+          `<circle cx="${dotX.toFixed(1)}" cy="${dotY.toFixed(1)}" `
+          + `r="${dotR}" fill="${color}" opacity="0.75" `
+          + `title="${_esc(a.arm)}: ${v.toFixed(3)}"/>`
+        );
+      });
+
+      // X-axis label.
+      svgParts.push(
+        `<text x="${cx.toFixed(1)}" y="${(H - 6).toFixed(1)}" `
+        + `text-anchor="middle" font-size="9" fill="#444">${_esc(a.arm)}</text>`
+      );
+    });
+
+    // Zero line.
+    const zeroY = padTop + barAreaH;
+    svgParts.push(
+      `<line x1="${padL}" y1="${zeroY.toFixed(1)}" `
+      + `x2="${(W - padR).toFixed(1)}" y2="${zeroY.toFixed(1)}" `
+      + `stroke="#ccc" stroke-width="0.5"/>`
+    );
+
+    const valueLabel = isLog ? "log₂" : "raw";
+    return `<div class="ev-cell-label" title="${_esc(label)}">${_esc(label)}</div>`
+         + `<svg class="ev-dot-svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" `
+         + `title="${_esc(valueLabel)} · dots=animals, bars=mean">${svgParts.join("")}</svg>`
+         + `<div class="ev-lfc-slot" data-lfc-placeholder="1" style="font-size:10px;color:#999;">LFC —</div>`;
+  }
+
+  // Build the arms-keyed row lookup for transcript data.
+  // TranscriptTraceStore rows have {gene, group, value} (one row per group).
+  function _transcriptArmRows(ttRows, gene, arms) {
+    // Build Map<group, rows[]> matching the dot-bar renderer's expectation.
+    // Transcript has exactly one value per group (pseudobulk mean), so each
+    // group maps to a single row.
+    const m = new Map();
+    for (const a of (arms || [])) m.set(a.group, []);
+    for (const row of (ttRows || [])) {
+      if (String(row.gene) !== String(gene)) continue;
+      const g = String(row.group);
+      if (m.has(g)) m.get(g).push(row);
+    }
+    return m;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Render one node column (Ligand/Receptor/EM/Target) into a DOM element.
+  // Handles all 4 layers sequentially.
+  // ---------------------------------------------------------------------------
+  async function _renderNodeColumn(
+    colEl, nodeLabel, gene, cluster,
+    contrast, ttRows, omicsShard
+  ) {
+    if (!gene || !cluster) {
+      colEl.innerHTML = `<div class="ev-node-head">${_esc(nodeLabel)} · <em>${_esc(gene || "—")}</em></div>`
+        + `<div class="ev-na muted" style="font-size:10px;">no gene on this node</div>`;
+      return;
+    }
+
+    const arms = OmicsTraceStore.contrastToArms(contrast);
+
+    // ---- Transcript sub-row ------------------------------------------------
+    const ttDiv = document.createElement("div");
+    ttDiv.className = "ev-layer-block";
+    ttDiv.innerHTML = `<div class="ev-layer-label">${_esc(_LAYER_LABELS.transcript)}</div>`
+      + `<div class="ev-cell-loading muted" style="font-size:10px;">loading…</div>`;
+    colEl.innerHTML = `<div class="ev-node-head">${_esc(nodeLabel)} · <em>${_esc(gene)}</em></div>`;
+    colEl.appendChild(ttDiv);
+
+    // Fill transcript from TranscriptTraceStore.
+    const hasTranscript = (typeof TranscriptTraceStore !== "undefined")
+      && TranscriptTraceStore.isAvailable()
+      && TranscriptTraceStore.hasCluster(cluster);
+
+    if (!hasTranscript) {
+      ttDiv.innerHTML = `<div class="ev-layer-label">${_esc(_LAYER_LABELS.transcript)}</div>`
+        + `<div class="ev-na muted" style="font-size:10px;">transcript not available</div>`;
+    } else {
+      const ttArms = TranscriptTraceStore.contrastToArms(contrast);
+      if (!ttArms) {
+        ttDiv.innerHTML = `<div class="ev-layer-label">${_esc(_LAYER_LABELS.transcript)}</div>`
+          + `<div class="ev-na muted" style="font-size:10px;">no contrast mapping</div>`;
+      } else {
+        // ttRows is already-loaded per cluster; use it directly.
+        const ttArmRows = _transcriptArmRows(ttRows, gene, ttArms);
+        // Convert {gene, group, value} row structure to the armRows map.
+        // value is pseudobulk log-normalized expression (not raw), use as-is.
+        const rawMap = new Map();
+        for (const a of ttArms) {
+          const srcRows = ttArmRows.get(a.group) || [];
+          // Map to {value: v} objects for _renderDotBarSvg.
+          rawMap.set(a.group, srcRows.map(r => ({ value: r.value, log2_value: r.value })));
+        }
+        ttDiv.innerHTML = `<div class="ev-layer-label">${_esc(_LAYER_LABELS.transcript)}</div>`
+          + _renderDotBarSvg(ttArms, rawMap, gene, false);
+      }
+    }
+
+    // ---- Omics layers (protein, phospho_ps, phospho_py) --------------------
+    const omicsLayers = ["protein", "phospho_ps", "phospho_py"];
+    for (const layer of omicsLayers) {
+      const layerDiv = document.createElement("div");
+      layerDiv.className = "ev-layer-block";
+      colEl.appendChild(layerDiv);
+
+      if (!OmicsTraceStore.isAvailable()) {
+        layerDiv.innerHTML = `<div class="ev-layer-label">${_esc(_LAYER_LABELS[layer])}</div>`
+          + `<div class="ev-na muted" style="font-size:10px;">omics trace not available</div>`;
+        continue;
+      }
+
+      // Filter shard rows to this layer + gene.
+      const layerRows = (omicsShard || []).filter(r =>
+        String(r.layer) === layer && String(r.gene_symbol) === String(gene)
+      );
+
+      if (layer === "protein") {
+        // Single sub-row (no site_id dimension).
+        if (layerRows.length === 0) {
+          layerDiv.innerHTML = `<div class="ev-layer-label">${_esc(_LAYER_LABELS[layer])}</div>`
+            + `<div class="ev-na muted" style="font-size:10px;">n/a</div>`;
+          continue;
+        }
+        const armRows = _groupByArm(layerRows, arms);
+        layerDiv.innerHTML = `<div class="ev-layer-label">${_esc(_LAYER_LABELS[layer])}</div>`
+          + _renderDotBarSvg(arms, armRows, gene, false);
+      } else {
+        // Phospho: one sub-row per site_id.
+        const bySite = new Map();
+        for (const r of layerRows) {
+          const sid = r.site_id == null ? "__null__" : String(r.site_id);
+          if (!bySite.has(sid)) bySite.set(sid, []);
+          bySite.get(sid).push(r);
+        }
+        if (bySite.size === 0) {
+          layerDiv.innerHTML = `<div class="ev-layer-label">${_esc(_LAYER_LABELS[layer])}</div>`
+            + `<div class="ev-na muted" style="font-size:10px;">n/a</div>`;
+          continue;
+        }
+        let layerHtml = `<div class="ev-layer-label">${_esc(_LAYER_LABELS[layer])}</div>`;
+        for (const [sid, siteRows] of bySite) {
+          const armRows = _groupByArm(siteRows, arms);
+          layerHtml += `<div class="ev-site-block">`
+            + _renderDotBarSvg(arms, armRows, sid, false)
+            + `</div>`;
+        }
+        layerDiv.innerHTML = layerHtml;
+      }
+    }
+  }
+
+  // Group shard rows by arm's group code → Map<group, rows[]>.
+  function _groupByArm(rows, arms) {
+    const m = new Map();
+    if (arms) for (const a of arms) m.set(a.group, []);
+    for (const r of (rows || [])) {
+      const g = String(r.group);
+      if (m.has(g)) m.get(g).push(r);
+    }
+    return m;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Public entry point: render the Evidence panel for one pathway row.
+  //
+  // host     : DOM element to write into
+  // r        : shard row object (keys: Ligand, Receptor, EM, Target, _sender,
+  //            _receiver, contrast)
+  // rk       : row key string (for id namespacing)
+  // ---------------------------------------------------------------------------
+  async function render(host, r, rk) {
+    if (!host) return;
+
+    const contrast = r.contrast || "";
+    const sender   = r._sender   || "";
+    const receiver = r._receiver || "";
+
+    // Per evaluation.R:227-230: Ligand→sender; Receptor/EM/Target→receiver.
+    const nodes = [
+      { node: "Ligand",   gene: r.Ligand,   cluster: sender   },
+      { node: "Receptor", gene: r.Receptor, cluster: receiver },
+      { node: "EM",       gene: r.EM,       cluster: receiver },
+      { node: "Target",   gene: r.Target,   cluster: receiver },
+    ];
+
+    const arms = OmicsTraceStore.contrastToArms(contrast);
+    const armsLabel = arms
+      ? `${arms[0].arm} vs ${arms[1].arm} @ ${contrast.split("_")[1] || ""}`
+      : contrast;
+
+    // Render skeleton with loading placeholders.
+    const safeRk = rk.replace(/[^a-zA-Z0-9]/g, "_");
+    const gridId = `ev-grid-${safeRk}`;
+    host.innerHTML =
+      `<div class="ev-note muted" style="font-size:11px;margin-bottom:6px;">`
+      + `Evidence · ${_esc(armsLabel)} · dots=animals · bars=mean · males-only`
+      + `</div>`
+      + `<div class="ev-grid" id="${_esc(gridId)}">`
+      + nodes.map((nd, i) =>
+          `<div class="ev-col" id="${_esc(gridId)}-col-${i}">`
+          + `<div class="ev-node-head">${_esc(nd.node)} · <em>${_esc(nd.gene || "—")}</em></div>`
+          + `<div class="ev-col-loading muted" style="font-size:10px;">loading…</div>`
+          + `</div>`
+        ).join("")
+      + `</div>`;
+
+    // Load per-cluster omics shards (only unique clusters).
+    const clusterSet = new Set(nodes.map(nd => nd.cluster).filter(Boolean));
+    const shardMap = new Map(); // cluster -> rows[]
+    await Promise.all([...clusterSet].map(async cl => {
+      try {
+        const rows = OmicsTraceStore.isAvailable()
+          ? await OmicsTraceStore.loadCluster(cl) : [];
+        shardMap.set(cl, rows);
+      } catch (e) {
+        shardMap.set(cl, []);
+      }
+    }));
+
+    // Load transcript shards (only unique clusters present in TranscriptTraceStore).
+    const ttShardMap = new Map(); // cluster -> rows[]
+    const hasTT = (typeof TranscriptTraceStore !== "undefined")
+      && TranscriptTraceStore.isAvailable();
+    if (hasTT) {
+      await Promise.all([...clusterSet].map(async cl => {
+        if (!TranscriptTraceStore.hasCluster(cl)) { ttShardMap.set(cl, []); return; }
+        try {
+          ttShardMap.set(cl, await TranscriptTraceStore.loadCluster(cl));
+        } catch (e) {
+          ttShardMap.set(cl, []);
+        }
+      }));
+    }
+
+    // Render each node column.
+    const gridEl = document.getElementById(gridId);
+    if (!gridEl) return;   // panel was replaced before load completed
+
+    await Promise.all(nodes.map(async (nd, i) => {
+      const colEl = document.getElementById(`${gridId}-col-${i}`);
+      if (!colEl) return;
+      const omicsShard = shardMap.get(nd.cluster) || [];
+      const ttRows     = ttShardMap.get(nd.cluster) || [];
+      await _renderNodeColumn(
+        colEl, nd.node, nd.gene, nd.cluster,
+        contrast, ttRows, omicsShard
+      );
+    }));
+  }
+
+  return { render };
+})();
+window.EvidencePanel = EvidencePanel;

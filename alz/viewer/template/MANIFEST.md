@@ -38,6 +38,14 @@ per-tab branches to `boot.js`.
 | `js/05_header.js` | 169 | header + tab population |
 | `js/boot.js` | 153 | boot, glossary, cross-tab refresh |
 
+## JS — widgets
+
+| File | Notes |
+|---|---|
+| `js/widgets/multiselect.js` | Multiselect popover used by kinase + incytr filter bars |
+| `js/widgets/transcript_trace.js` | TranscriptTraceStore — per-cluster transcript pseudobulk shards (kinase-audit drawer) |
+| `js/widgets/evidence_row.js` | OmicsTraceStore + EvidencePanel — 4 nodes × 4 layers Evidence tab for Incytr Pathways (Item 3.3) |
+
 ## JS — tabs
 
 | File | Lines | Notes |

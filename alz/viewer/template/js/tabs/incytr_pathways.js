@@ -113,8 +113,8 @@ const _ipRuntime = {
   loadedKey:      null,         // "<sender>||<receiver>" of shard currently loaded
   loading:        false,
   loadError:      null,
-  openKeys:       new Set(),    // keys of rows whose per-node FC detail is expanded
-  detailTab:      {},           // rk → "fc" | "trajectory" (which sub-tab is active)
+  openKeys:       new Set(),    // keys of rows whose Evidence detail is expanded
+  detailTab:      {},           // rk → "evidence" | "trajectory" (which sub-tab is active)
   recurFallback:  null,         // { sig, map } cache for fallback recurPathMap
   pathIndex:      null,         // Map<pathStr, rows[]> — built at shard-load
   pathLabels:     null,         // Map<pathStr, Map<disease, Set<label>>> — for chip filter
@@ -747,7 +747,7 @@ function _ipRenderTable() {
   ];
   // Leading expander column header is non-sortable.
   const thead =
-    `<th style="width:24px;" title="Toggle detail panel (fold-change matrix + trajectory chart)."></th>`
+    `<th style="width:24px;" title="Toggle detail panel (Evidence: 4 nodes × 4 layers, + Trajectory chart)."></th>`
     + cols.map(c => {
         if (c.isTraj) {
           const tip = c.tip ? ` title="${_escapeHtml(c.tip)}"` : "";
@@ -788,7 +788,7 @@ function _ipRenderTable() {
     }).join("");
     let html = `<tr data-ip-row="${idx}">${toggle}${cells}</tr>`;
     if (isOpen) {
-      const activeTab = _ipRuntime.detailTab[rk] || "fc";
+      const activeTab = _ipRuntime.detailTab[rk] || "evidence";
       html += `<tr class="ip-detail-row" data-ip-detail="${idx}"><td></td>`
         + `<td colspan="${cols.length}" style="padding:8px 12px;background:#fafafa;">`
         + _ipRenderDetailPanel(r, rk, activeTab)
@@ -866,7 +866,7 @@ function _ipRenderTable() {
         delete _ipRuntime.detailTab[rk];
       } else {
         _ipRuntime.openKeys.add(rk);
-        if (!_ipRuntime.detailTab[rk]) _ipRuntime.detailTab[rk] = "fc";
+        if (!_ipRuntime.detailTab[rk]) _ipRuntime.detailTab[rk] = "evidence";
       }
       _ipRenderTable();
       return;
@@ -885,32 +885,37 @@ function _ipRenderTable() {
       if (tdEl) tdEl.innerHTML = _ipRenderDetailPanel(r, rk, tab);
       // Re-wire Plotly if we switched to trajectory.
       if (tab === "trajectory") _ipRenderTrajChart(rk, r);
-      if (tab === "trace") _ipRenderTranscriptTrace(rk, r);
+      if (tab === "evidence") _ipRenderEvidencePanel(rk, r);
       return;
     }
   });
-  // After render, draw Plotly charts for any open trajectory panels, and
-  // populate any open transcript-trace panels.
+  // After render, draw Plotly charts for open trajectory panels, and
+  // populate open Evidence panels.
   for (const rk of _ipRuntime.openKeys) {
-    const tab = _ipRuntime.detailTab[rk] || "fc";
+    const tab = _ipRuntime.detailTab[rk] || "evidence";
     if (tab === "trajectory") {
       const idx = visible.findIndex(r => _ipRowKey(r) === rk);
       if (idx >= 0) _ipRenderTrajChart(rk, visible[idx]);
-    } else if (tab === "trace") {
+    } else if (tab === "evidence") {
       const idx = visible.findIndex(r => _ipRowKey(r) === rk);
-      if (idx >= 0) _ipRenderTranscriptTrace(rk, visible[idx]);
+      if (idx >= 0) _ipRenderEvidencePanel(rk, visible[idx]);
     }
   }
 }
 
 // ---------------------------------------------------------------------------
-// Detail panel: two sub-tabs — "FC matrix" and "Trajectory" (CR-04).
+// Detail panel: "Evidence" tab (default) + "Trajectory" sub-tab (when
+// trajectory_index is present in the payload).
+//
+// The old "Fold-change" tab (_ipRenderFcMatrix) and "Measurement trace" tab
+// (_ipRenderTranscriptTrace) were removed in Item 3.3 and replaced by the
+// Evidence tab, which renders all 4 nodes × 4 layers from the per-cluster
+// omics + transcript shards. Cluster routing per evaluation.R:227-230 is
+// enforced in EvidencePanel.render().
 // ---------------------------------------------------------------------------
 
 function _ipRenderDetailPanel(r, rk, activeTab) {
   const hasTrajIdx = _ipHasTraj();
-  const hasTT = (typeof TranscriptTraceStore !== "undefined")
-    && TranscriptTraceStore.isAvailable();
   const btn = (tab, label) =>
     `<button type="button" data-ip-detail-tab="${tab}" data-ip-detail-rk="${_escapeHtml(rk)}"
        style="padding:2px 12px;border-radius:4px;font-size:12px;cursor:pointer;
@@ -919,129 +924,37 @@ function _ipRenderDetailPanel(r, rk, activeTab) {
               color:${activeTab === tab ? "#fff" : "#444"};"
      >${label}</button>`;
   const tabBar = `<div style="display:flex;gap:6px;margin-bottom:8px;">`
-    + btn("fc", "Fold-change")
+    + btn("evidence", "Evidence")
     + (hasTrajIdx ? btn("trajectory", "Trajectory") : "")
-    + (hasTT ? btn("trace", "Measurement trace") : "")
     + `</div>`;
   if (activeTab === "trajectory" && hasTrajIdx) {
     const chartId = `ip-traj-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
     return tabBar
       + `<div id="${_escapeHtml(chartId)}" style="width:100%;min-height:220px;"></div>`;
   }
-  if (activeTab === "trace" && hasTT) {
-    return tabBar + _ipRenderTranscriptTraceHost(r, rk);
-  }
-  return tabBar + _ipRenderFcMatrix(r);
+  // Default: Evidence tab.
+  const hostId = `ip-ev-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  return tabBar
+    + `<div class="ev-panel-host" id="${_escapeHtml(hostId)}">`
+    + `<div class="ev-col-loading muted" style="font-size:11px;">Loading evidence…</div>`
+    + `</div>`;
 }
 
-// Render the empty host for the transcript-trace panel; populated
-// asynchronously by _ipRenderTranscriptTrace once the cluster shards load.
-function _ipRenderTranscriptTraceHost(r, rk) {
-  const hostId = `ip-tt-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
-  const headerNote = `Transcript pseudobulk · 1 library per arm · males-only`;
-  return `<div class="audit-measurement-trace tt-panel-host" id="${_escapeHtml(hostId)}">`
-       + `<div class="tt-panel-note muted" style="font-size:11px;margin-bottom:6px;">`
-       + _escapeHtml(headerNote) + `</div>`
-       + `<div class="tt-panel-loading muted">Loading transcript trace…</div>`
-       + `</div>`;
-}
-
-// Populate the 4 element-panels (L, R, EM, T) for a row's transcript trace.
-// Sender cluster routes L/EM; receiver cluster routes R/T.
-async function _ipRenderTranscriptTrace(rk, r) {
-  const hostId = `ip-tt-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
+// Populate the Evidence panel for a row. Called after DOM is updated.
+// Routes all 4 nodes through EvidencePanel.render() (cluster routing is
+// internal to EvidencePanel per evaluation.R:227-230).
+function _ipRenderEvidencePanel(rk, r) {
+  const hostId = `ip-ev-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
   const host = document.getElementById(hostId);
   if (!host) return;
-  if (typeof TranscriptTraceStore === "undefined"
-      || !TranscriptTraceStore.isAvailable()) {
-    host.innerHTML = `<div class="muted">Transcript trace not available in this build.</div>`;
+  if (typeof EvidencePanel === "undefined") {
+    host.innerHTML = `<div class="muted">EvidencePanel widget not loaded.</div>`;
     return;
   }
-  const contrast = r.contrast;
-  const sender = r._sender, receiver = r._receiver;
-  // 4 element panels in path order.
-  const elements = [
-    { node: "Ligand",   gene: r.Ligand,   cluster: sender,   side: "sender" },
-    { node: "Receptor", gene: r.Receptor, cluster: receiver, side: "receiver" },
-    { node: "EM",       gene: r.EM,       cluster: sender,   side: "sender" },
-    { node: "Target",   gene: r.Target,   cluster: receiver, side: "receiver" },
-  ];
-  const arms = TranscriptTraceStore.contrastToArms(contrast);
-  const note = `Transcript pseudobulk · 1 library per arm · males-only`
-    + (arms ? ` · ${arms[0].arm} vs ${arms[1].arm} @ ${contrast.split("_")[1] || ""}` : "");
-  // Build placeholder grid first so it's responsive even before async fetches.
-  const cellHtml = elements.map((el, i) => {
-    const slotId = `${hostId}-${i}`;
-    const headerSub = `${el.node} · ${el.cluster || "—"}`;
-    return `<div class="tt-cell" id="${_escapeHtml(slotId)}">`
-         + `<div class="tt-cell-head muted" style="font-size:10px;">${_escapeHtml(headerSub)}</div>`
-         + `<div class="tt-cell-body muted">…</div>`
-         + `</div>`;
-  }).join("");
-  host.innerHTML =
-    `<div class="tt-panel-note muted" style="font-size:11px;margin-bottom:6px;">`
-    + _escapeHtml(note) + `</div>`
-    + `<div class="tt-grid">${cellHtml}</div>`;
-
-  await Promise.all(elements.map(async (el, i) => {
-    const slot = document.getElementById(`${hostId}-${i}`);
-    if (!slot) return;
-    const body = slot.querySelector(".tt-cell-body");
-    if (!el.cluster) {
-      if (body) body.innerHTML = `<div class="muted">no cluster on row</div>`;
-      return;
-    }
-    if (!TranscriptTraceStore.hasCluster(el.cluster)) {
-      if (body) body.innerHTML =
-        `<div class="muted">no transcript trace for this cluster in this build.</div>`;
-      return;
-    }
-    if (!el.gene) {
-      if (body) body.innerHTML = `<div class="muted">no gene on this slot</div>`;
-      return;
-    }
-    try {
-      const armVals = await TranscriptTraceStore.values(
-        el.cluster, el.gene, contrast);
-      if (!armVals) {
-        body.innerHTML = `<div class="muted">no contrast mapping for ${_escapeHtml(contrast)}</div>`;
-        return;
-      }
-      TranscriptTraceStore.renderTwoBarPanel(body, el.gene, armVals);
-    } catch (err) {
-      body.innerHTML = `<div class="muted">load error: ${_escapeHtml(err.message || err)}</div>`;
-    }
-  }));
-}
-
-function _ipRenderFcMatrix(r) {
-  // 4×N matrix of per-node fold-changes (single-cell + 3 omics layers × 2
-  // metrics). Cells where the layer has no value render as "—".
-  const nodes   = _ipFcNodes();
-  const metrics = _ipFcMetrics();
-  const head = `<tr><th></th>${metrics.map(m => {
-    const tip = _IP_FC_METRIC_TIPS[m]
-      ? ` title="${_escapeHtml(_IP_FC_METRIC_TIPS[m])}"` : "";
-    return `<th style="text-align:right;font-weight:500;"${tip}>`
-      + `${_escapeHtml(_IP_FC_METRIC_LABELS[m] || m)}</th>`;
-  }).join("")}</tr>`;
-  const rows = nodes.map(n => {
-    const cells = metrics.map(m => {
-      const v = r[`${n}_${m}`];
-      const color = (v == null || !isFinite(v) || v === 0) ? ""
-        : (v > 0 ? "color:#a3203c;" : "color:#1f4ea3;");
-      return `<td style="text-align:right;${color}">${_ipFmtNum(v, 3)}</td>`;
-    }).join("");
-    const rowTip = _IP_FC_NODE_TIPS[n]
-      ? ` title="${_escapeHtml(_IP_FC_NODE_TIPS[n])}"` : "";
-    return `<tr><th style="text-align:left;font-weight:500;"${rowTip}>${_escapeHtml(n)}</th>${cells}</tr>`;
-  }).join("");
-  return `<div class="muted" style="margin-bottom:4px;font-size:11px;">`
-    + `Per-node log₂ fold-changes: single-cell (sc), proteomics (pr), `
-    + `phosphoserine (ps), phosphotyrosine (py). `
-    + `Red = up in disease, blue = down.</div>`
-    + `<table class="data-table" style="font-size:12px;">`
-    + `<thead>${head}</thead><tbody>${rows}</tbody></table>`;
+  EvidencePanel.render(host, r, rk).catch(err => {
+    if (host) host.innerHTML =
+      `<div class="muted">Evidence load error: ${_escapeHtml(err.message || err)}</div>`;
+  });
 }
 
 // Render the temporal PDS bar chart for a path in the trajectory sub-tab.
