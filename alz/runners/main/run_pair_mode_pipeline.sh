@@ -62,7 +62,7 @@ STEP_IDX=0
 # N_STEPS is the count of planned steps after skip-* flags. We compute it
 # by listing the keys that will run.
 PLANNED_KEYS=(A B C D-st D-py)
-if [[ $SKIP_INCYTR -eq 0 ]]; then PLANNED_KEYS+=(E1 E2); fi
+if [[ $SKIP_INCYTR -eq 0 ]]; then PLANNED_KEYS+=(E1 E2 E3); fi
 PLANNED_KEYS+=(F1 F2)
 if [[ $SKIP_ATLAS -eq 0 ]]; then PLANNED_KEYS+=(G1 G2); fi
 PLANNED_KEYS+=(H1 H2 I V)
@@ -127,12 +127,12 @@ run_step_softfail() {
   fi
 }
 
-# Pair-mode Incytr: bench/run_pair_mode.sh loops the 9 contrasts internally.
-# Worker parallelism is set via CHUNK_PARALLEL (subprocess fan-out within each
-# contrast's sender×receiver chunks); contrast-level parallel launches share
-# output/ and would race, so we keep that loop sequential.
+# Pair-mode Incytr: alz/incytr/run_pair_mode.sh loops the 9 contrasts
+# internally. Worker parallelism is set via CHUNK_PARALLEL (subprocess fan-out
+# within each contrast's sender×receiver chunks); contrast-level parallel
+# launches share output/ and would race, so we keep that loop sequential.
 run_pair_incytr() {
-  CHUNK_PARALLEL="$WORKERS" bash bench/run_pair_mode.sh --spine "$SPINE"
+  CHUNK_PARALLEL="$WORKERS" bash alz/incytr/run_pair_mode.sh
 }
 
 # ---------- pipeline ----------
@@ -159,28 +159,32 @@ run_step_softfail D-py "per-cluster MEA (py)" \
   pixi run python -m alz.decomposition.enrich_celltype --spine "$SPINE" --track py
 
 if [[ $SKIP_INCYTR -eq 0 ]]; then
-  bench_dir="bench/incytr_pair_${SPINE}"
-  bench_input_dir="$bench_dir/incytr input"
-  mkdir -p "$bench_input_dir"
-  if [[ ! -e "$bench_input_dir/kldata.csv" ]]; then
-    ln -sf ../../../data/datasets/song/kinase/kldata_pspy.csv "$bench_input_dir/kldata.csv"
-    echo "  seeded $bench_input_dir/kldata.csv"
-  fi
-  # Mouse ligand-receptor DB layers ship as package data in `../incytr`
-  # (loaded via `Incytr::DB_Layer*_mouse_filtered`); the legacy frozen
-  # Database/ + source/ symlinks are no longer needed since the driver
-  # switched to library(Incytr).
+  incytr_dir="alz/incytr"
+  inputs_dir="data/derived/incytr_inputs"
+  # Mouse ligand-receptor DB layers ship as package data in the upstream
+  # Incytr package (loaded via `Incytr::DB_Layer*_mouse_filtered`); no
+  # bench-side symlinks needed.
   for f in incytr_commandline.R reconstruct_labels.R reconstruct_node_fc.R; do
-    if [[ ! -e "$bench_dir/$f" ]]; then
-      echo "ERROR: required driver script $bench_dir/$f missing" >&2
-      echo "       check bench/incytr_pair_${SPINE}/ — driver scripts must live alongside the spine." >&2
+    if [[ ! -e "$incytr_dir/$f" ]]; then
+      echo "ERROR: required driver script $incytr_dir/$f missing" >&2
+      echo "       driver scripts must live under alz/incytr/." >&2
       exit 1
     fi
   done
-  run_step E1 "pair-mode inputs (bench/build_pair_inputs.sh)" \
-    bash bench/build_pair_inputs.sh --spine "$SPINE"
+  if [[ ! -e "$inputs_dir/kldata.csv" ]]; then
+    echo "ERROR: $inputs_dir/kldata.csv missing — run alz/incytr/build_pair_inputs.sh first." >&2
+    exit 1
+  fi
+  run_step E1 "pair-mode inputs (alz/incytr/build_pair_inputs.sh)" \
+    bash alz/incytr/build_pair_inputs.sh
   run_step E2 "pair-mode 9 contrasts (CHUNK_PARALLEL=$WORKERS)" \
     run_pair_incytr
+  # Substrate for the unified viewer's transcript-trace panel: per-(cluster,
+  # group) means of originalexp@data — the same matrix Cal_scFC reads. Run
+  # once per pair-mode build (contrast-invariant), before the viewer rebuild
+  # invalidates the transcript_trace shards on schema version bump.
+  run_step E3 "emit_expr_bygroup parquet (transcript trace substrate)" \
+    pixi run Rscript alz/incytr/emit_expr_bygroup.R
 fi
 
 run_step F1 "human ingest (reshape)" \
