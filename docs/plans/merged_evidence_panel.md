@@ -627,15 +627,36 @@ Goal: remove dead code, obsolete constants, and stale documentation references. 
 
 ### Item 4.1 — Delete dead JS for old FC + Measurement Trace tabs
 
-**Status:** pending
+**Status:** done
 **Depends on:** 3.3
-**Files:** `alz/viewer/template/js/tabs/incytr_pathways.js`, possibly orphaned widget files
+**Files:** `alz/viewer/template/js/tabs/incytr_pathways.js`, `alz/build_unified_viewer.py`
 
 **Scope:** After the Evidence tab is live, remove all helpers that backed the old tabs (`_ipRenderFoldChange`, `_ipRenderTranscriptTrace`, related CSS classes, tab-switching scaffolding). Don't leave dead-code stubs or back-compat shims.
 
 **Done when:** `grep -E '_ipRenderFoldChange|_ipRenderTranscriptTrace' alz/viewer/template/` returns empty.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+
+**Grep verification:** `grep -nE '_ipRender(FoldChange|FcMatrix|TranscriptTrace|TranscriptTraceHost)' alz/viewer/template/ -r` → empty (exit 1). `grep -nE '_IP_FC_|_ipFcNodes|_ipFcMetrics|"fc_nodes"|"fc_metrics"' alz/viewer/template/ -r` → empty (exit 1).
+
+**Removed identifiers in `alz/viewer/template/js/tabs/incytr_pathways.js` (net -37 lines):**
+- `_IP_FC_NODES_FALLBACK`, `_IP_FC_METRICS_FALLBACK`, `_IP_FC_METRIC_LABELS`, `_IP_FC_METRIC_TIPS`, `_IP_FC_NODE_TIPS` — five dead constants
+- `_ipFcNodes()`, `_ipFcMetrics()` — two dead functions (accessed `block.fc_nodes` / `block.fc_metrics`)
+- Dead historical comment block referencing `_ipRenderFcMatrix` / `_ipRenderTranscriptTrace` — replaced with clean description of the current Evidence tab
+
+**Removed payload fields in `alz/build_unified_viewer.py` (net -4 lines):** `"fc_nodes"` and `"fc_metrics"` entries from both payload return dicts (factorial branch and pair-mode branch). The underlying `_INCYTR_FC_NODES` / `_INCYTR_FC_METRICS` / `_INCYTR_FC_COLS` Python constants were intentionally **kept** — they are still used to generate the receiver-cache shard column schema (`Ligand_sclog2FC`, `Receptor_pr_log2FC`, etc.) that the Evidence tab reads for its cross-check.
+
+**Cross-tab shared code preserved (with rationale):**
+- `widgets/transcript_trace.js` — unchanged; kinase audit drawer uses `TranscriptTraceStore` and `.tt-*` CSS classes.
+- `widgets/evidence_row.js` — new in Item 3.3; retained (backs the Evidence tab).
+- `_INCYTR_FC_NODES` / `_INCYTR_FC_COLS` Python constants in `build_unified_viewer.py` — retained; define the receiver-cache shard column schema.
+- No dead CSS found: no `.fc-*` / `.ip-fc-*` / `.mt-*` classes existed in `styles.css`. No dead `<script>` tags in `index.html.j2`.
+
+**Viewer build:** `pixi run python alz/build_unified_viewer.py` completed with exit code 0 both before and after the Python builder edits. `py_compile` confirms syntax is clean.
+
+**Commit:** `71f635c refactor(viewer): delete dead JS/CSS for old FC + Measurement Trace tabs (Item 4.1)`
+
+**For the main agent before merging:** Item 4.2 (remove obsolete `paths.py` constants), Item 4.3 (final docs sweep), and Item 3.5 (build-time round-trip assertion) remain pending. None block merging this commit.
 
 ### Item 4.2 — Remove obsolete path constants
 
