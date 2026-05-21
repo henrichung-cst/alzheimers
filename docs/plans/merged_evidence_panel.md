@@ -375,7 +375,7 @@ The driver-script existence check at lines 173-179 should verify files under `al
 
 ### Item 2.10 — Documentation updates
 
-**Status:** pending
+**Status:** done
 **Depends on:** 2.1-2.8 (any documentation that references the old paths)
 **Files:** `CLAUDE.md`, `docs/integrations/kinase_incytr_integration.md`, `alz/integration/README.md`, `alz/incytr/README.md`
 
@@ -389,7 +389,16 @@ Also: `git grep -nE 'bench/(incytr|build_pair|run_pair|export_decomposition|prof
 
 **Done when:** the grep above is clean, and the README files describe the new layout accurately.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+
+- **Grep clean:** `git grep -nE 'bench/(incytr|build_pair|run_pair|export_decomposition|profile_pair)' -- ':!docs/archive/' ':!docs/plans/'` returns zero hits. Paste of pre-fix hits (for reference): CLAUDE.md ×2, README.md ×1, alz/build_unified_viewer.py ×3, alz/integration/build_transcript_trace.py ×2, alz/runners/main/run_pair_mode_viewer_build.sh ×2, alz/viewer/paths.py ×1, docs/integrations/kinase_incytr_integration.md ×3, alz/integration/README.md ×2.
+- **Scope was larger than declared.** The item listed 4 files but 5 additional files had bench/ hits: `README.md`, `alz/build_unified_viewer.py`, `alz/integration/build_transcript_trace.py`, `alz/runners/main/run_pair_mode_viewer_build.sh`, `alz/viewer/paths.py`. All were comment/docstring/default-value fixes (not logic changes). Fixed all 9 files to satisfy the done-condition grep. Scope gap noted here per the instruction to report when scope is incomplete.
+- **`alz/incytr/README.md`** file-by-file inventory filled out (was placeholder with item-number references from 2.1); now lists all 9 files with roles matching their actual implementation.
+- **`alz/integration/README.md`** clarifies the alz/integration/ ↔ alz/incytr/ boundary with a role-split table and updates `build_yuyu_kldata.py` reference from `bench/incytr_pair_*/incytr input/kldata.csv` to `data/derived/incytr_inputs/kldata.csv`.
+- **`docs/integrations/kinase_incytr_integration.md`** architecture diagram updated: `bench/incytr_pair_levy_t5/incytr_input/` → `data/derived/incytr_inputs/`, `bench/incytr_pair_levy_t5/output/` → `outputs/reports/incytr_pair_mode/wide/`; file inventory split into alz/incytr/ and alz/integration/ sections; entry points table updated.
+- **`CLAUDE.md`** Integration Code section restructured to document the two-module split (alz/incytr/ = run-time drivers, alz/integration/ = output consumers); Key Data Files gains a "Pair-mode Incytr Inputs/Outputs" subsection; two bench/ references in Per-cluster proportional decomposition removed.
+- **`alz/runners/main/run_pair_mode_viewer_build.sh`** default `INPUT_DIR` changed from `bench/incytr_pair_levy_t5/output` to `outputs/reports/incytr_pair_mode/wide` (was missed by item 2.8).
+- All changes committed in one commit.
 
 ---
 
