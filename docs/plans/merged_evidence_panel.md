@@ -476,10 +476,32 @@ The site→gene aggregation in the driver:
 
 - Committed as `feat(viewer): add omics_trace shard writer for Evidence tab (Item 3.2)`, `alz/build_unified_viewer.py` import list and `ensure_omics_trace_sources()` function are the wiring points.
 
-### Item 3.3 — Evidence tab JS (replace FC + Measurement Trace tabs)
+### Item 3.2b — Precompute limma-normalized substrate
 
 **Status:** pending
 **Depends on:** 3.2
+
+**Files:** `alz/integration/build_normalized_substrate.py` (new), `alz/viewer/paths.py` (constants), `alz/build_unified_viewer.py` (wire in)
+
+**Scope:** Resolve cross-phase Note #1 by adopting option (b). Build a parallel set of per-cluster substrate parquets that mirror Incytr's pre-`Cal_foldchange` `limma::normalizeBetweenArrays(matrix(cond1, cond2))` step (`incytr/R/analysis.R:385,391`) so the JS round-trip at Item 3.4 collapses to a near-trivial `log2((D+ε)/(W+ε))` join.
+
+- Replicate `limma::normalizeBetweenArrays` quantile normalization in Python (or call via `rpy2` if simpler/more faithful). Default `method = "quantile"` in limma.
+- For each omics layer (`protein`, `phospho_ps`, `phospho_py`), each contrast (9), each cluster (31): normalize the (genes × {disease_mean, WT_mean}) matrix via limma quantile normalization. Store both normalized condition means per (layer, cluster, contrast, gene).
+- Write per-cluster parquets `audit_sources/omics_trace_normalized/{cluster}.parquet` with columns `(layer, gene_symbol, site_id, contrast, group, mean_value_normalized)`. The phospho rows must use the same per-gene aggregation as the Incytr driver (mean across sites within gene, after per-group median across animals — see Item 3.1 notes).
+- Add `OMICS_TRACE_NORMALIZED_DIR`, `OMICS_TRACE_NORMALIZED_INDEX`, `OMICS_TRACE_NORMALIZED_SCHEMA_VERSION = 1` constants. Wire into `build_unified_viewer.py` next to `ensure_omics_trace_sources()`.
+- **Build-time round-trip assertion (load-bearing):** for a sample of (pathway, contrast) pairs, compute `log2((D_norm + 1e-5)/(W_norm + 1e-5))` from these new parquets and compare to Incytr's stored `*_pr/_ps/_py_log2FC` from the wide pair-mode parquets. Must agree to ≤1e-4 across the sample. If it doesn't, the normalization replication is wrong — diagnose before declaring done.
+
+**Done when:**
+- Parquets exist for all 31 clusters under `audit_sources/omics_trace_normalized/`.
+- Reference pathway `Apoe|App|Stk11|Cttnbp2` / Astrocytes→Basal-Ganglia-GABAergic-Neurons / ApTt_2mo: Apoe/Ligand/pr round-trip matches stored `+0.7015` (Item 1.2's spot-check), not naive `+0.7424`, within 1e-4.
+- Sample of ≥20 (pathway, layer, contrast) cells across multiple clusters all agree to ≤1e-4.
+
+**Implementation notes:** _(empty)_
+
+### Item 3.3 — Evidence tab JS (replace FC + Measurement Trace tabs)
+
+**Status:** pending
+**Depends on:** 3.2 (3.2b is required for Item 3.4's round-trip check, not for 3.3 itself; 3.3 and 3.2b can run in parallel)
 **Files:** `alz/viewer/template/js/tabs/incytr_pathways.js`, `alz/viewer/template/js/widgets/transcript_trace.js` (or new `widgets/evidence_row.js`)
 
 **Scope:**
