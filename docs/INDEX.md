@@ -8,7 +8,7 @@ Read by analytical role, not creation order.
 |:---|:---|
 | [`pipeline_overview.qmd`](./pipeline_overview.qmd) | End-to-end narrative of the full pipeline (bulk + Incytr) with cross-references into every foundation spec (renders to `pipeline_overview.html`) |
 
-## Foundation (start here for live work)
+## Foundation (authoritative live specs)
 
 | File | Role |
 |:---|:---|
@@ -17,9 +17,13 @@ Read by analytical role, not creation order.
 | [`foundation/concordance.md`](./foundation/concordance.md) | SEA-AD + Song concordance model: evidence sources, weights, confidence tiers |
 | [`foundation/analysis_rationale.md`](./foundation/analysis_rationale.md) | Why the project pivoted from deconvolution to stoichiometry |
 | [`foundation/statistical_constraints.md`](./foundation/statistical_constraints.md) | Governing identifiability and interpretation limits |
-| [`foundation/repo_retention_policy.md`](./foundation/repo_retention_policy.md) | Retention policy + file-level main / supporting / archived inventory; banned code paths |
+| [`foundation/multiple_testing.md`](./foundation/multiple_testing.md) | Multiple-testing policy across the pipeline |
+| [`foundation/repo_retention_policy.md`](./foundation/repo_retention_policy.md) | Retention policy + active vs archived inventory; banned code paths |
+| [`foundation/mukesh_ingest_policies.yml`](./foundation/mukesh_ingest_policies.yml) | Mukesh / NBB human ingest edge-case policies (consumed by `ingest_mukesh.py`) |
 
-## Supplementary Analysis
+## Reference Guides
+
+Stable docs that aren't authoritative specs but aren't plans either.
 
 | File | Role |
 |:---|:---|
@@ -27,33 +31,66 @@ Read by analytical role, not creation order.
 | [`result_analysis_plan.md`](./result_analysis_plan.md) | Interpretation framework: how to move from generated outputs to biological claims |
 | [`allen_ctx_hpf_disagreement.md`](./allen_ctx_hpf_disagreement.md) | Reviewer FAQ: why our cell-type verdicts may differ from the Allen ctx+HPF Transcriptomics Explorer |
 | [`viewer_style.md`](./viewer_style.md) | Writing-style guide for unified-viewer copy (panels, drawers, tooltips) |
-| [`plex_covariate_plan.md`](./plex_covariate_plan.md) | **Deferred plan** — TMT plex covariate addition for males-only OLS (diagnostic complete, activation pending) |
-| [`../archive/deconvolution/docs/deconvolution_infeasibility.md`](../archive/deconvolution/docs/deconvolution_infeasibility.md) | **Archived** — synthetic validation proving direct deconvolution is infeasible on this dataset. Source script + figures alongside under `archive/deconvolution/`. |
 
 ## Integrations
 
 | File | Role |
 |:---|:---|
-| [`integrations/kinase_incytr_integration.md`](./integrations/kinase_incytr_integration.md) | In-tree Phase 1 stub inventory + one-way handoff diagram (thin pointer to the remediation plan) |
-| [`incytr_remediation_plan.md`](./incytr_remediation_plan.md) | Authoritative architectural plan for the kinase ↔ Incytr integration rewrite |
+| [`integrations/kinase_incytr_integration.md`](./integrations/kinase_incytr_integration.md) | Current pair-mode integration architecture; in-tree file inventory; data-flow diagram |
 | [`integrations/5xfad-lucie-manifest.json`](./integrations/5xfad-lucie-manifest.json) | Local inventory of Lucie 5xFAD upstream files |
+
+## Active Plans
+
+Live plans in `docs/plans/`. Each is open work or a deferred decision with
+durable context. Completed plans are moved to `docs/archive/plans/` (see
+Archive below).
+
+| File | Status |
+|:---|:---|
+| [`plans/repo_organization_2026-05-21.md`](./plans/repo_organization_2026-05-21.md) | Master plan: two-layer architecture (bespoke ingest → canonical artifacts → shared analyses); methodical sequencing |
+| [`plans/data_layout_consolidation_2026-05-21.md`](./plans/data_layout_consolidation_2026-05-21.md) | Data-layout consolidation (8/9 phases done; Lucie FUSE-mount blocker remains) |
+| [`plans/aptt_late_tpds_collapse_investigation.md`](./plans/aptt_late_tpds_collapse_investigation.md) | Investigation: global late-timepoint SigProb collapse (open) |
+| [`plans/kinase_mapping_rerun_plan.md`](./plans/kinase_mapping_rerun_plan.md) | Post-kinase-mapping full rerun audit; cortex_hpf sensitivity addendum |
+| [`plans/plex_covariate_plan.md`](./plans/plex_covariate_plan.md) | TMT plex covariate addition for males-only OLS (diagnostic complete; activation pending) |
+| [`plans/unified_viewer_human_mode_plan.md`](./plans/unified_viewer_human_mode_plan.md) | Human (Mukesh/NBB) mode for the unified viewer |
+| [`plans/evidence_tab_redesign_2026-05-21.md`](./plans/evidence_tab_redesign_2026-05-21.md) | Viewer evidence-tab redesign |
+| [`plans/kinase_motif_logo_2026-05-21.md`](./plans/kinase_motif_logo_2026-05-21.md) | Kinase motif-logo viewer feature |
+| [`plans/viewer_input_audit_2026-05-21.md`](./plans/viewer_input_audit_2026-05-21.md) | Viewer input audit |
+| [`plans/viewer_input_audit_remediation_2026-05-21.md`](./plans/viewer_input_audit_remediation_2026-05-21.md) | Viewer input audit — remediation tasks |
+| [`plans/incytr_mea_seed_list_expansion_plan.md`](./plans/incytr_mea_seed_list_expansion_plan.md) | Incytr seed list expansion |
+| [`plans/incytr_pathway_measurement_trace_plan.md`](./plans/incytr_pathway_measurement_trace_plan.md) | Incytr pathway measurement trace |
+| [`plans/levy_t5_attribution_pivot.md`](./plans/levy_t5_attribution_pivot.md) | levy_t5 spine attribution pivot |
+| [`plans/human_attribution_mirror.md`](./plans/human_attribution_mirror.md) | Human-cohort attribution mirroring the mouse pipeline |
+| [`plans/merged_evidence_panel.md`](./plans/merged_evidence_panel.md) | Merged evidence panel design |
+| [`plans/change_requests_sequencing.md`](./plans/change_requests_sequencing.md) | CR sequencing meta-plan |
+| [`plans/change_request_01_human_control_mea.md`](./plans/change_request_01_human_control_mea.md) | CR-01: human control MEA |
+| [`plans/change_request_03_human_celltype_specificity.md`](./plans/change_request_03_human_celltype_specificity.md) | CR-03: human cell-type specificity (epic adopted; see archive for phase docs) |
+| [`plans/change_request_04_incytr_viewer.md`](./plans/change_request_04_incytr_viewer.md) | CR-04: Incytr viewer |
 
 ## Archive
 
-`docs/archive/` is gitignored (2026-04-20). Local files persist on disk for provenance but are not tracked or linked. See [`foundation/repo_retention_policy.md`](./foundation/repo_retention_policy.md) §Archived for what's there and why.
+`docs/archive/` is gitignored. Local files persist on disk for provenance but
+are not tracked. See [`foundation/repo_retention_policy.md`](./foundation/repo_retention_policy.md) §Archived for what's there and why.
+
+Archived material includes:
+
+- Completed campaigns (e.g. CR-03 adoption, factorial-era Incytr docs)
+- Superseded plans (WMB-34 spine, levy-19 spine, factorial deconvolution attempts)
+- Historical audits + investigation notes
 
 ## Reading Rule
 
-- **What should we do next?** → [`foundation/`](./foundation/analysis_charter.md)
-- **How do external inputs map into runtime?** → [`integrations/kinase_incytr_integration.md`](./integrations/kinase_incytr_integration.md) + [`incytr_remediation_plan.md`](./incytr_remediation_plan.md)
-- **Why was a path closed?** → [`foundation/analysis_rationale.md`](./foundation/analysis_rationale.md) + [`../archive/deconvolution/docs/deconvolution_infeasibility.md`](../archive/deconvolution/docs/deconvolution_infeasibility.md)
-- **Historical context** → `archive/`
+- **What should we do next?** → [`foundation/`](./foundation/analysis_charter.md) + [`plans/repo_organization_2026-05-21.md`](./plans/repo_organization_2026-05-21.md)
+- **How do external inputs map into runtime?** → [`integrations/kinase_incytr_integration.md`](./integrations/kinase_incytr_integration.md)
+- **Why was a path closed?** → [`foundation/analysis_rationale.md`](./foundation/analysis_rationale.md)
+- **What plans are open?** → [`plans/`](./plans/)
+- **Historical context** → `archive/` (on disk; not tracked)
 
 ---
 
 # Asset Map
 
-Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../CLAUDE.md).
+Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../CLAUDE.md); canonical data sources live in [`data/README.md`](../data/README.md).
 
 ## Inputs
 
@@ -65,17 +102,31 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 | `data/datasets/song/primary/phospho/song_pY_{sitequant,compositeSites}_merged_labeled (2).xlsx` | Phospho pY — site-level + composite |
 | `data/datasets/song/primary/metadata/Sample_list_72mice (1).xlsx` | TMT channel ↔ animal mapping |
 | `data/datasets/song/transcriptomics/170_gex_celltypes_00.h5ad` | Paired snRNA-seq (63K nuclei, 28 animals) |
+| `data/datasets/song/kinase/kldata_pspy.csv` | Song-built kinase-substrate library (canonical; symlinked into `data/derived/incytr_inputs/kldata.csv`) |
+
+### Human cohort (Mukesh / NBB)
+| Path | Contents |
+|:---|:---|
+| `data/datasets/mukesh/proteomics/` | DIA total proteome |
+| `data/datasets/mukesh/phospho/IMAC/` | IMAC phospho |
+| `data/datasets/mukesh/phospho/pY/` | pY phospho |
 
 ### External atlases
 | Path | Contents |
 |:---|:---|
 | `data/external/allen_abc/` | Allen WMB cache (zstd-compressed) |
 | `data/external/sea_ad/` | SEA-AD MTG effect sizes (`effect_sizes{,_early,_late}.h5ad`, 139 supertypes) |
+| `data/external/allen_hbca/` | HBCA WHB-10Xv3 |
 
-### Analysis cache
+### Derived bridges + caches
 | Path | Contents |
 |:---|:---|
-| `data/datasets/song/analysis_cache/kinase_to_gene_mapping.csv` | Cached kinase → gene symbol mapping |
+| `data/derived/bridges/cluster_to_{wmb_class,seaad_supertype,hbca_supercluster}.csv` | levy_t5 cluster → reference vocabulary (1-hop crosswalks) |
+| `data/derived/bridges/wmb_subclass_to_class.csv` | WMB subclass → class |
+| `data/derived/aggregates/seaad/expression_by_supertype.csv` | SEA-AD MTG per-supertype expression |
+| `data/derived/aggregates/hbca/expression_by_class.csv` | HBCA per-class expression |
+| `data/derived/caches/kinase_to_gene_mapping.csv` | Kinase abbreviation → gene symbol (MyGene cache) |
+| `data/derived/caches/human_to_mouse_homologene.csv` | Homologene mapping |
 
 ## Pipeline
 
@@ -83,47 +134,49 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 | Stage | Script | Runner | Output dir |
 |:---|:---|:---|:---|
 | Config | `config.py` | — | — |
-| 1. Ingest | `data_ingest.py` | `runners/main/run_data_ingest.sh` | `outputs/reports/data_ingest/` |
-| 2. Normalize | `kinase_normalize.py` (CLI shim) / `kedro run --pipeline=normalize` | `runners/main/run_kinase_attribution.sh` (covers 2–4) | `outputs/reports/kinase_attribution/` |
-| 3. Enrich | `kinase_enrich.py` (CLI shim) / `kedro run --pipeline=enrich` | (above) | `outputs/reports/kinase_attribution/` |
-| 4. Attribute | `kinase_attribute.py` (CLI shim) / `kedro run --pipeline=attribute` | (above) | `outputs/reports/kinase_attribution/` |
-| 5. Recovery | `attribution_recovery.py` (CLI shim) / `kedro run --pipeline=recovery` | `runners/main/run_attribution_recovery.sh` | `outputs/reports/attribution_recovery/` |
-| Optional: mechanism | `kinase_mechanism.py` (CLI shim) / `kedro run --pipeline=mechanism` | — | `outputs/reports/kinase_attribution/` |
+| 1. Ingest | `data_ingest.py` / `kedro run --pipeline=ingest_mapping` | `runners/main/run_data_ingest.sh` | `outputs/reports/data_ingest/` |
+| 2. Normalize | `kinase_normalize.py` / `kedro run --pipeline=normalize` | `runners/main/run_kinase_attribution.sh` (2–4) | `outputs/reports/kinase_attribution/` |
+| 3. Enrich | `kinase_enrich.py` / `kedro run --pipeline=enrich` | (above) | `outputs/reports/kinase_attribution/` |
+| 4. Attribute | `kinase_attribute.py` / `kedro run --pipeline=attribute` | (above) | `outputs/reports/kinase_attribution/` |
+| 5. Recovery | `attribution_recovery.py` / `kedro run --pipeline=recovery` | `runners/main/run_attribution_recovery.sh` | `outputs/reports/attribution_recovery/` |
+| Optional: mechanism | `kinase_mechanism.py` / `kedro run --pipeline=mechanism` | — | `outputs/reports/kinase_attribution/` |
 | Plots | `plot_attribution_bubbles.py` | — | `outputs/reports/attribution_recovery/bubble_plots/` |
 | Bundled | — | `runners/main/run_live_pipeline.sh` | all of the above |
 | Dual-track | — | `runners/main/run_dual_analysis.sh` | `*_males_only/`, `*_full_cohort/` |
+| End-to-end | — | `runners/main/run_all.sh` (= `pixi run all`) | everything |
 
-### Standalone utilities (`alz/`)
-| Script | Purpose |
-|:---|:---|
-| `map_kinases_to_genes.py` | Kinase → gene symbol mapping utility |
-| `lucie_5xfad_manifest.py` | Proteomics manifest builder for Lucie 5xFAD integration |
-| `build_unified_viewer.py` | See Viewers section below |
+### Mouse decomposition + Incytr pair-mode (not yet under kedro)
+| Stage | Script | Runner |
+|:---|:---|:---|
+| snRNA pseudobulk + concordance | `snrna_integration.py` | `runners/supporting/run_snrna_integration.sh` |
+| Per-(animal, cluster, gene) proportions | `snrna_proportions.py` | (part of decomposition rerun) |
+| Per-cluster decomposition | `decomposition/build_celltype_decomposition.py` | `runners/main/rerun_decomposition_chain.sh` |
+| Per-cluster MEA | `decomposition/enrich_celltype.py` | (above) |
+| Decomposition verification | `decomposition/verify_decomposition.py` | (above) |
+| Incytr pair-mode | `incytr/*` + `integration/pair_to_receiver_cache.py` | `runners/main/run_pair_mode_pipeline.sh` |
+
+### Human cohort pipeline (not yet under kedro)
+| Stage | Script | Runner |
+|:---|:---|:---|
+| Ingest | `ingest_mukesh.py` | `runners/main/run_mukesh_perdonor.sh` |
+| Per-donor MEA | `ingest_mukesh_perdonor.py` | (above) |
+| SEA-AD agreement | `seaad_human_agreement.py` | (above; = `pixi run human`) |
 
 ### Supporting (`alz/`)
 | Script | Runner | Output dir |
 |:---|:---|:---|
 | `atlas_reference.py` | `runners/supporting/run_atlas_reference.sh` | `data/external/sea_ad/`, `data/external/allen_abc/` |
 | `wmb_expression.py` | `runners/supporting/run_wmb_expression.sh` | `outputs/reports/wmb_expression/` |
-| `snrna_integration.py` | `runners/supporting/run_snrna_integration.sh` | `outputs/reports/snrna_integration/` |
-
-Additional supporting runners (ops utilities, no Python counterpart): `runners/supporting/compress_atlas_cache.sh`, `decompress_atlas_cache.sh`, `run_wmb_download.sh`, `run_extract_wmb_subset.sh`.
 
 ### Supplementary diagnostics (`alz/supplementary/`)
-`fdr_stringent.py`, `threshold_sensitivity.py`, `aggregation_robustness.py`, `parent_protein_qc.py` — run via `runners/supplementary/run_reviewer_diagnostics.sh`. Output: `outputs/reports/supplementary/`. (The historical `deconvolution_infeasibility.py` proof has been frozen and moved to `archive/deconvolution/code/`.)
+`fdr_stringent.py`, `threshold_sensitivity.py`, `aggregation_robustness.py`, `parent_protein_qc.py`, `deconvolution_feasibility.py` — run via `runners/supplementary/run_reviewer_diagnostics.sh`. Output: `outputs/reports/supplementary/`.
 
-### Integration pipeline (`alz/integration/`)
-
-Thin AD-specific client around the upstream `incytr` R package, gated on the production engine landing per [`incytr_remediation_plan.md`](./incytr_remediation_plan.md). The legacy `wrappers/`, `adapters/`, `sidecar/`, `tests/`, and orchestrator shell scripts are preserved under `archive/incytr_integration/`.
-
-In-tree now:
-
-| File | Role |
+### Standalone utilities (`alz/`)
+| Script | Purpose |
 |:---|:---|
-| `config_integration.py` | Filter values, design columns, contrast vectors, paths |
-| `export_factorial_inputs.py` | Reads h5ad, writes the on-disk contract `load.R` consumes |
-| `factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh` | Entry point + AD loader + parquet writer + DuckDB views (gated on production package API in `../incytr`) |
-| `README.md` | File-by-file layout |
+| `map_kinases_to_genes.py` | Kinase → gene symbol mapping; emits `data/derived/caches/kinase_to_gene_mapping.csv` |
+| `lucie_5xfad_manifest.py` | Proteomics manifest builder for Lucie 5xFAD integration |
+| `build_unified_viewer.py` | See Viewers section below |
 
 ## Outputs
 
@@ -135,10 +188,10 @@ In-tree now:
 | `attribution_recovery/` | **`kinase_hypothesis_table.csv` (primary deliverable)**, `kinase_activity_matrix.csv`, `celltype_evidence_table.csv`, `bubble_plots/` |
 | `wmb_expression/`, `snrna_integration/` | Supporting prerequisites |
 | `supplementary/` | Reviewer-diagnostic results |
-
-### Integration pipeline outputs
-
-Legacy outputs lived under `alz/integration/intermediates/` (gitignored). That tree is now orphaned by the integration rewrite (see [`incytr_remediation_plan.md`](./incytr_remediation_plan.md)); the new architecture writes to `outputs/reports/incytr_factorial/` instead. Nothing currently regenerates either.
+| `decomposition/levy_t5/` | per-(animal, cluster) projected bulk + per-cluster MEA |
+| `incytr_pair_mode/` | 9 wide parquets + `receiver_cache/` (31² pair-mode results) |
+| `kinase_attribution_human/` | Human per-donor MEA, recurrence, kinase_donor_nes |
+| `unified_viewer/` | `index.html` + payload JSON + sharded edge slices |
 
 ## Viewers
 
