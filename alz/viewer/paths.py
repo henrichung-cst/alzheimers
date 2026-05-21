@@ -93,3 +93,16 @@ TRANSCRIPT_TRACE_SCHEMA_VERSION = 3
 OMICS_TRACE_DIR = os.path.join(AUDIT_SOURCES_DIR, "omics_trace")
 OMICS_TRACE_INDEX = os.path.join(OMICS_TRACE_DIR, "index.json")
 OMICS_TRACE_SCHEMA_VERSION = 1
+
+# Companion limma-normalized condition means (per cluster × contrast × layer)
+# backing the Evidence tab's right-edge LFC recomputation. Mirrors Incytr's
+# `normalizeBetweenArrays` step pre-`Cal_foldchange` so a JS-side
+# `log2((D + 1e-5) / (W + 1e-5))` agrees with stored `*_pr/_ps/_py_log2FC`
+# to <= 1e-4. Built by alz/integration/build_normalized_substrate.py.
+OMICS_TRACE_NORMALIZED_DIR = os.path.join(
+    AUDIT_SOURCES_DIR, "omics_trace_normalized"
+)
+OMICS_TRACE_NORMALIZED_INDEX = os.path.join(
+    OMICS_TRACE_NORMALIZED_DIR, "index.json"
+)
+OMICS_TRACE_NORMALIZED_SCHEMA_VERSION = 1

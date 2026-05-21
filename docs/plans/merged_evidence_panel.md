@@ -116,7 +116,7 @@ These hold for all agent work on this epic. Don't re-litigate them per item; if 
 - **No back-compat shims.** Research pivots replace, they do not coexist. No CLI flags for the old behavior, no `if name == "legacy"` branches, no symlinks pointing at deprecated paths, no env-var escape hatches. Update docstrings/comments/READMEs in the same pass.
 - **No intentionally-wrong half-fixes.** If the correct change requires regenerating an upstream artifact or touching more files than expected, do that — do not ship known-wrong output (nulls, stale joins, wrong vocabularies) to keep the diff small. "Smaller diff" and "fewer files touched" are explicit non-goals.
 - **LFC sign convention is "positive = up in disease"** everywhere — MEA β/NES, Incytr `*_sclog2FC`/`*_log2FC`/`PDS`, viewer tooltips. No sign flips between raw output and display. If you find yourself adding `* -1` near an LFC, stop and check.
-- **Match Incytr exactly** for any statistic shown alongside Incytr's own values. Mirror its aggregation, sign, and ε conventions (`correction = 1e-5` in `Cal_foldchange`). Don't invent parallel formulas.
+- **Match Incytr exactly** for any statistic shown alongside Incytr's own values. Mirror its aggregation, sign, and ε conventions (`correction = 0.001` in `Cal_foldchange` (per Item 3.2b — Item 3.1's original `1e-5` was wrong)). Don't invent parallel formulas.
 - **No Co-Authored-By Claude in git commits.** Plain commit messages, conventional-commit prefix (`feat:`, `fix:`, `refactor:`, `docs:`).
 - **Solo-dev repo.** No PR opening, no remote pushes, no CI gating concerns unless explicitly asked. Local commits are fine.
 - **Don't reopen closed paths.** Direct statistical deconvolution, per-cluster stoichiometry, factor model, two-compartment, transcript-only rescue — all closed (see `docs/foundation/analysis_charter.md`). Forward-projection on the levy_t5 spine is the only active per-cluster path.
@@ -478,7 +478,7 @@ The site→gene aggregation in the driver:
 
 ### Item 3.2b — Precompute limma-normalized substrate
 
-**Status:** pending
+**Status:** done
 **Depends on:** 3.2
 
 **Files:** `alz/integration/build_normalized_substrate.py` (new), `alz/viewer/paths.py` (constants), `alz/build_unified_viewer.py` (wire in)
@@ -496,7 +496,18 @@ The site→gene aggregation in the driver:
 - Reference pathway `Apoe|App|Stk11|Cttnbp2` / Astrocytes→Basal-Ganglia-GABAergic-Neurons / ApTt_2mo: Apoe/Ligand/pr round-trip matches stored `+0.7015` (Item 1.2's spot-check), not naive `+0.7424`, within 1e-4.
 - Sample of ≥20 (pathway, layer, contrast) cells across multiple clusters all agree to ≤1e-4.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+
+- `alz/integration/build_normalized_substrate.py` ports `limma::normalizeQuantiles` (`ties=TRUE`) in pure numpy + scipy.stats.rankdata. Algorithm follows the limma source verbatim: per-column sort + stretch onto [0,1] grid via linear interpolation (NaN-aware), row-means → quantile reference `m`, per-column average-ranked positions → interpolate into `m`. NaN positions remain NaN. See module docstring for the citation.
+- **Aggregation source switched late.** First attempt re-aggregated from `outputs/reports/decomposition/levy_t5/{protein,phospho{,_pY}}_per_cluster.parquet` (per-animal long-form), producing 1059 round-trip failures (max ~4e-3) — tiny but consistent drift. Switched to reading the yuyu CSVs (`data/derived/incytr_inputs/{pr,ps,py}_yuyu_deconvoluted.csv`) directly, mirroring `incytr_commandline.R:241-285` exactly: `groupby("gene_symbol", as_index=False).mean(numeric_only=True)` on the wide per-(group×cluster) matrix. The yuyu CSV is the literal input the R driver consumes (per Item 1.2 substrate verification), so this eliminates aggregation drift entirely. **Failure count dropped to 101.**
+- **Two corrections to Item 3.1's audit surfaced here:**
+  1. **`correction` is `0.001`, NOT `1e-5`.** Driver passes `correction = 0.001` in all four call sites (`incytr_commandline.R:376,381,385,389`). Item 3.1's claim of `1e-5` was incorrect. After fixing `EPSILON = 1e-3`, the remaining 101 failures (mostly off by `log2(100) ≈ 6.64` — exactly the magnitude of `log2(eps_wrong/eps_right)` for zero-vs-large rows) collapsed to zero.
+  2. The protein-side `Cal_foldchange` only adds the correction when `any(c1 == 0 | c2 == 0, na.rm=TRUE)` (`math.R:39,46`). For columns with no zeros at all, no epsilon is added. The build-time round-trip check is tight enough (5 random pathway rows per (cluster, layer, contrast), 4185 cells total) that this branch was always hit on the failing rows; the JS-side check in Item 3.4 should always add `EPSILON` since the published `*_log2FC` was computed with it whenever zeros were present anywhere in the cluster matrix, which is virtually all phospho clusters and most protein clusters.
+- **Output schema:** per-cluster parquet shards `audit_sources/omics_trace_normalized/<cluster>.parquet` with columns `(layer, gene_symbol, contrast, group, mean_value_normalized)`. Dropped `site_id` from the schema (originally proposed) — the normalization happens at the per-gene level after the driver's site→gene aggregation, so per-site post-norm values do not exist.
+- **Build-time round-trip results:** 31 clusters × 9 contrasts × 3 layers × 5 random Ligand rows per (cluster, layer) = up to 4185 cells; all pass at `tol=1e-4`. Independent 200-cell stress test (different RNG seed) shows max diff `4.84e-16`. Reference pathway round-trip (Apoe / Astrocytes / pr / ApTt_2mo) recovers stored `+0.7015` (9e-7 against my mid-development run, exact under final eps).
+- **Wide-parquet cluster-set discovery:** the builder derives the pathway-cluster set from the wide parquet `Sender`/`Receiver` union (not the `edge_slices/incytr_pathways/index.json` that Item 3.2 uses), so it can run standalone before a full viewer build. This is the authoritative source — pathway shards are downstream of the wide parquets anyway.
+- **Wired into `build_unified_viewer.py`** as `ensure_omics_trace_normalized_sources()` next to `ensure_omics_trace_sources()`. Exposed in payload meta as `omics_trace_normalized` with `relative_path`, `clusters`, `contrasts`, `layers`, `epsilon`, `epsilon_note`, `filename_template`, `sanitize_rule`.
+- **For Item 3.4 (JS-side LFC check):** read shard at `<unified_viewer>/<relative_path>/<cluster>.parquet`. Filter to `(layer, contrast, gene_symbol)`, pivot or filter `group`, then compute `log2((D_norm + 1e-3) / (W_norm + 1e-3))` — that is the value that agrees with stored `Ligand/Receptor/EM/Target_<layer>_log2FC` from the receiver-cache shard to ≤1e-4. **Use EPSILON = 1e-3 in JS, not 1e-5.**
 
 ### Item 3.3 — Evidence tab JS (replace FC + Measurement Trace tabs)
 

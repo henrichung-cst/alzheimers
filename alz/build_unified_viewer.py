@@ -79,6 +79,8 @@ from viewer.paths import (  # noqa: E402
     MEASUREMENT_TRACE_SCHEMA_VERSION,
     OMICS_TRACE_INDEX,
     OMICS_TRACE_SCHEMA_VERSION,
+    OMICS_TRACE_NORMALIZED_INDEX,
+    OMICS_TRACE_NORMALIZED_SCHEMA_VERSION,
     TRANSCRIPT_TRACE_INDEX,
     TRANSCRIPT_TRACE_SCHEMA_VERSION,
     PAYLOAD_JSON,
@@ -542,6 +544,35 @@ def ensure_omics_trace_sources() -> dict:
         "sanitize_rule": index.get("sanitize_rule",
                                    "replace('/', '-'); replace(' ', '_')"),
         "log2_value_note": index.get("log2_value_note", ""),
+    }
+
+
+def ensure_omics_trace_normalized_sources() -> dict:
+    """Build (or reuse) per-cluster limma-normalized condition means backing
+    the Evidence tab's right-edge LFC recomputation. Hard-fails if the
+    build-time round-trip vs Incytr's stored ``*_log2FC`` exceeds 1e-4."""
+    from integration import build_normalized_substrate as bns  # noqa: E402
+
+    rebuild = True
+    if os.path.exists(OMICS_TRACE_NORMALIZED_INDEX):
+        with open(OMICS_TRACE_NORMALIZED_INDEX) as f:
+            existing = json.load(f)
+        if existing.get("schema_version") == OMICS_TRACE_NORMALIZED_SCHEMA_VERSION:
+            rebuild = False
+            index = existing
+    if rebuild:
+        index = bns.build(force=True)
+    return {
+        "schema_version": OMICS_TRACE_NORMALIZED_SCHEMA_VERSION,
+        "relative_path": index.get("relative_path"),
+        "clusters": index.get("clusters", []),
+        "contrasts": index.get("contrasts", []),
+        "layers": index.get("layers", ["protein", "phospho_ps", "phospho_py"]),
+        "epsilon": index.get("epsilon"),
+        "epsilon_note": index.get("epsilon_note", ""),
+        "filename_template": index.get("filename_template", "{cluster}.parquet"),
+        "sanitize_rule": index.get("sanitize_rule",
+                                   "replace('/', '-'); replace(' ', '_')"),
     }
 
 
@@ -2776,6 +2807,7 @@ def build_payload(data: UnifiedData) -> dict:
         "familyMap": fam,
         "transcript_trace": ensure_transcript_trace_sources(),
         "omics_trace": ensure_omics_trace_sources(),
+        "omics_trace_normalized": ensure_omics_trace_normalized_sources(),
     }
 
     kid = {k: i for i, k in enumerate(data.edge_metadata["kinases"])}
