@@ -324,7 +324,7 @@ Resolve paths relative to repo root via `system("git rev-parse --show-toplevel",
 
 ### Item 2.8 — Update runner shell
 
-**Status:** pending
+**Status:** done
 **Depends on:** 2.4, 2.5, 2.6, 2.7
 **Files:** `alz/runners/main/run_pair_mode_pipeline.sh`
 
@@ -337,7 +337,16 @@ The driver-script existence check at lines 173-179 should verify files under `al
 
 **Done when:** `bash alz/runners/main/run_pair_mode_pipeline.sh --skip-atlas` runs end-to-end and produces equivalent outputs to a pre-relocation run.
 
-**Implementation notes:** _(empty)_
+**Implementation notes:**
+- `bench_dir` and `bench_input_dir` variables removed entirely.
+- `kldata.csv` symlink seeding block removed — Item 2.5 already placed the symlink at `data/derived/incytr_inputs/kldata.csv`. Pre-flight instead asserts that the symlink exists (hard-fail if missing with a message pointing to `build_pair_inputs.sh`).
+- E1 changed to `bash alz/incytr/build_pair_inputs.sh` (no `--spine` arg — levy_t5 hardwired per Item 2.3).
+- E2 changed to `CHUNK_PARALLEL="$WORKERS" bash alz/incytr/run_pair_mode.sh` (no `--spine` arg — levy_t5 hardwired per Item 2.4). The `run_pair_incytr()` helper function updated accordingly.
+- E3 changed to `pixi run Rscript alz/incytr/emit_expr_bygroup.R` (no `cd` to bench dir required — script resolves repo root via `git rev-parse` per Item 2.2).
+- Driver-script existence check updated to verify `alz/incytr/{incytr_commandline,reconstruct_labels,reconstruct_node_fc}.R` (was checking `bench_dir/$f`).
+- Spec text said E2 should pass `--spine levy_t5`; the actual `alz/incytr/run_pair_mode.sh` (per Item 2.4) accepts no `--spine` arg — levy_t5 is hardwired. Followed the code, not the spec text, per the task notes. Discrepancy noted here.
+- All referenced paths confirmed to exist on disk: `alz/incytr/` scripts all present, `data/derived/incytr_inputs/` all 6 inputs present including the `kldata.csv` symlink.
+- Committed as `refactor(runners): update run_pair_mode_pipeline.sh for bench/ relocation` (commit `74ddbff`).
 
 ### Item 2.9 — Hash-equality verification
 
