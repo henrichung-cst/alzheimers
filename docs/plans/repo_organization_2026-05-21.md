@@ -185,8 +185,8 @@ schema spec independent of which framework reads it.
 
 5. **Carve out Mode 4 as `alz/cross_reference/` (task #16).** Mode 4 is
    currently the most scattered:
-   - Move `alz/seaad_human_agreement.py` → `alz/cross_reference/`
-   - Move `alz/human_celltype_attribution.py` → `alz/cross_reference/`
+   - Move `alz/cross_reference/seaad_human_agreement.py` → `alz/cross_reference/`
+   - Move `alz/cross_reference/human_celltype_attribution.py` → `alz/cross_reference/`
    - Extract SEA-AD/WMB/Song evidence loading currently inlined in
      `kinase_attribute.py` (functions `_compute_sea_ad_concordance`,
      `_prepare_wmb_specificity`, `_prepare_song_specificity`,
@@ -280,6 +280,9 @@ These are aspirational endpoints, not deadlines. Methodical beats fast.
   - Task #15 — Consolidate Mode 3 under `alz/incytr_pair/`: **done 2026-05-21**
     (renamed `alz/incytr/` → `alz/incytr_pair/` and moved
     `pair_to_receiver_cache.py` into it)
-  - Task #16 — Carve out `alz/cross_reference/` for Mode 4: pending
+  - Task #16 — Carve out `alz/cross_reference/` for Mode 4: **in progress
+    2026-05-21** — `seaad_human_agreement.py` + `human_celltype_attribution.py`
+    moved into `alz/cross_reference/` (commit forthcoming); evidence-loader
+    extraction from `bulk_mea/attribute.py` queued as a follow-up commit.
   - Task #17 — Group ingest + reference: pending
   - Task #18 — Move config.py to `alz/shared/`: pending

@@ -29,7 +29,7 @@ echo "[run_mukesh_perdonor] running python alz/ingest_mukesh_perdonor.py --track
 
 pixi run python alz/ingest_mukesh_perdonor.py --track both 2>&1 | tee -a "$LOG"
 
-echo "[run_mukesh_perdonor] running python alz/seaad_human_agreement.py" | tee -a "$LOG"
-pixi run python alz/seaad_human_agreement.py 2>&1 | tee -a "$LOG"
+echo "[run_mukesh_perdonor] running python alz/cross_reference/seaad_human_agreement.py" | tee -a "$LOG"
+pixi run python alz/cross_reference/seaad_human_agreement.py 2>&1 | tee -a "$LOG"
 
 echo "[run_mukesh_perdonor] done $(date -Is)" | tee -a "$LOG"

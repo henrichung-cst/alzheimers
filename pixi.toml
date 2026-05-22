@@ -19,7 +19,7 @@ live = { depends-on = ["ingest", "normalize", "enrich", "attribute", "recover"] 
 dual = "bash alz/runners/main/run_dual_analysis.sh"
 human-ingest = "python alz/ingest_mukesh.py --reshape"
 human-perdonor = "python alz/ingest_mukesh_perdonor.py --track both"
-human-seaad = "python alz/seaad_human_agreement.py"
+human-seaad = "python alz/cross_reference/seaad_human_agreement.py"
 human = { depends-on = ["human-ingest", "human-perdonor", "human-seaad"] }
 all = "bash alz/runners/main/run_all.sh"
 atlas = "python alz/atlas_reference.py --run"

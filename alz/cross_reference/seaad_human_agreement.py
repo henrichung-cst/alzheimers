@@ -11,12 +11,12 @@ gene-level LFC across SEA-AD's 139 MTG supertypes.
 
 Inputs:
   data/external/sea_ad/effect_sizes.h5ad                          — full CPS effect sizes
-  data/datasets/song/analysis_cache/kinase_to_gene_mapping.csv    — kinase abbr → gene
+  data/derived/caches/kinase_to_gene_mapping.csv    — kinase abbr → gene
   outputs/reports/kinase_attribution_human/perdonor/recurrence{,_pY}.csv
     — kinase list per residue track
 
 Output:
-  outputs/reports/kinase_attribution_human/seaad_agreement.csv
+  outputs/reports/kinase_attribution/human_seaad_agreement.csv
     Columns: kinase, gene_symbol, residue_type, sea_ad_lfc_median,
              sea_ad_lfc_mean, n_supertypes_finite, sea_ad_direction_agreement
 """
@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
@@ -41,7 +41,10 @@ KINASE_GENE_CSV = os.path.join(
     "kinase_to_gene_mapping.csv",
 )
 PERDONOR_DIR = os.path.join(HUMAN_KINASE_DIR, "perdonor")
-OUT_CSV = os.path.join(HUMAN_KINASE_DIR, "seaad_agreement.csv")
+OUT_CSV = os.path.join(
+    config.REPO_ROOT, "outputs", "reports", "kinase_attribution",
+    "human_seaad_agreement.csv",
+)
 
 
 def _load_kinase_list() -> pd.DataFrame:

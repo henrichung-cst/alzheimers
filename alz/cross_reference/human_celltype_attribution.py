@@ -11,19 +11,25 @@ Output:
   Columns: kinase, reference, celltype, specificity_score, rank
 
 Usage:
-    python alz/human_celltype_attribution.py          # compute and save
-    python alz/human_celltype_attribution.py --summary # print cached results
+    python alz/cross_reference/human_celltype_attribution.py          # compute and save
+    python alz/cross_reference/human_celltype_attribution.py --summary # print cached results
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-import config
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from alz import config
 
 # ---------------------------------------------------------------------------
 # Constants

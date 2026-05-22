@@ -43,6 +43,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "integration"))
 sys.path.insert(0, os.path.join(HERE, "bulk_mea"))
+sys.path.insert(0, os.path.join(HERE, "cross_reference"))
 
 import config  # noqa: E402
 import config_integration as icfg  # noqa: E402

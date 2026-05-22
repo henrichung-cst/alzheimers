@@ -249,7 +249,7 @@ Independent chain for the human Alzheimer's cohort, feeding the unified viewer's
 Stages:
 1. `alz/ingest_mukesh.py --reshape` — reshape raw Mukesh CSVs into `kinase_attribution_human/raw_phospho_normalized{,_pY}.csv` + stoichiometry matrices
 2. `alz/ingest_mukesh_perdonor.py --track both` — per-donor MEA on stoichiometry and raw-phospho tracks; emits `perdonor/recurrence{,_pY}.csv`, `kinase_donor_nes{,_pY}.csv`, etc.
-3. `alz/seaad_human_agreement.py` — cohort-level SEA-AD LFC per kinase (collapsed across 139 MTG supertypes); writes `outputs/reports/kinase_attribution/human_seaad_agreement.csv`
+3. `alz/cross_reference/seaad_human_agreement.py` — cohort-level SEA-AD LFC per kinase (collapsed across 139 MTG supertypes); writes `outputs/reports/kinase_attribution/human_seaad_agreement.csv`
 
 Entry point: `bash alz/runners/main/run_mukesh_perdonor.sh` or `pixi run human` (= ingest + perdonor + seaad).
 

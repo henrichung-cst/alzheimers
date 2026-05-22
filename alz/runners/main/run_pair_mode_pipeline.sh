@@ -176,7 +176,7 @@ run_step H1 "human reference expression (CR03)" \
   pixi run python alz/human_reference_expression.py --ref both
 
 run_step H2 "human cell-type attribution (CR03)" \
-  pixi run python alz/human_celltype_attribution.py --force
+  pixi run python alz/cross_reference/human_celltype_attribution.py --force
 
 run_step I "rebuild unified viewer" \
   pixi run python alz/build_unified_viewer.py
