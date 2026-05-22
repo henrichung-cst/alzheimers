@@ -3,7 +3,7 @@
 Consumes Stage 6's `phospho_per_cluster.parquet` (one row per
 (site, cluster, animal)) and runs the bulk-pipeline OLS + MEA for each
 cluster on the same 9 factorial contrasts, reusing helpers from
-`alz.kinase_enrich`.
+`alz.bulk_mea.enrich`.
 
 For each cluster:
   1. pivot to (site × column_name) on `log2_value`
@@ -36,7 +36,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
-from kinase_enrich import (  # noqa: E402
+from bulk_mea.enrich import (  # noqa: E402
     CONTRAST_COEFS,
     _bh_fdr,
     _build_design_matrix,

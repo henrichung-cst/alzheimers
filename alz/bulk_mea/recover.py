@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Kinase hypothesis table assembly: kinase-first and cell-type-first views.
 
-Reads MEA enrichment from kinase_enrich.py and unified attribution from
-kinase_attribute.py and produces four output tables suited for hypothesis generation about AD
+Reads MEA enrichment from alz/bulk_mea/enrich.py and unified attribution from
+alz/bulk_mea/attribute.py and produces four output tables suited for hypothesis generation about AD
 progression across cell types, timepoints, and conditions.
 
 Design principle: static localization evidence (WMB expression, SEA-AD
@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pandas as pd
 
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
@@ -299,7 +299,7 @@ def _build_kinase_hypothesis_table(t1, t2):
 
     # Single source of truth: the pill mirrors the per-row combined_confidence
     # from unified_attribution_full (set by _assign_confidence_and_basis_vectorized
-    # in kinase_attribute.py). Pill = True iff at least one (kinase, cell_type)
+    # in alz/bulk_mea/attribute.py). Pill = True iff at least one (kinase, cell_type)
     # row reaches "high" — the same tier rendered in the Attribution verdict
     # table. Tier-by-tier evidence is shown in the Attribution tab; the pill is
     # only a binary "has at least one HIGH row" indicator.
@@ -402,7 +402,7 @@ def print_summary():
 def _load_params():
     """Load parameters from conf/base/parameters.yml with optional KEDRO_ENV overlay."""
     import yaml
-    project_root = Path(__file__).resolve().parent.parent
+    project_root = Path(__file__).resolve().parent.parent.parent
     params_path = project_root / "conf" / "base" / "parameters.yml"
     with open(params_path) as f:
         params = yaml.safe_load(f)
@@ -450,14 +450,14 @@ def main():
         frames.append(df)
     if not frames:
         raise FileNotFoundError(
-            "No MEA stoichiometry files found; run kinase_enrich.py first.")
+            "No MEA stoichiometry files found; run alz/bulk_mea/enrich.py first.")
     mea_combined = pd.concat(frames, ignore_index=True, sort=False)
 
     uaf_path = os.path.join(kinase_attr_dir, "unified_attribution_full.csv")
     if not os.path.exists(uaf_path):
         raise FileNotFoundError(
             f"unified_attribution_full.csv not found at {uaf_path}; "
-            "run kinase_attribute.py first.")
+            "run alz/bulk_mea/attribute.py first.")
     uaf_full = pd.read_csv(uaf_path)
 
     t1, t2, t3 = step_attribution_recovery(mea_combined, uaf_full)

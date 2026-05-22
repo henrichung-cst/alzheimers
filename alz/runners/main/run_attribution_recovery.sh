@@ -13,8 +13,8 @@ mkdir -p outputs/reports/attribution_recovery
 echo "=== Attribution recovery started at $(date) ===" | tee "$LOG"
 
 # The Kedro `recovery` pipeline produces all three hypothesis tables atomically.
-$PYTHON alz/attribution_recovery.py 2>&1 | tee -a "$LOG"
+$PYTHON alz/bulk_mea/recover.py 2>&1 | tee -a "$LOG"
 
 echo "=== Attribution recovery finished at $(date) ===" | tee -a "$LOG"
 echo "Summary:"
-$PYTHON alz/attribution_recovery.py --summary
+$PYTHON alz/bulk_mea/recover.py --summary

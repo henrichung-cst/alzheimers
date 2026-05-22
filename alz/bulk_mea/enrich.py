@@ -20,9 +20,9 @@ import sys
 from pathlib import Path
 
 # Bootstrap project root onto sys.path so direct invocation
-# (`python alz/kinase_enrich.py`) can resolve `from alz import config`.
+# (`python alz/bulk_mea/enrich.py`) can resolve `from alz import config`.
 # Phase 2's bridge adds `alz/` to sys.path; this adds the parent.
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
@@ -374,7 +374,7 @@ def _prepare_raw_ols(mapping, bio_cols, raw_df):
 
 def _load_params():
     """Load parameters from conf/base/parameters.yml with optional KEDRO_ENV overlay."""
-    project_root = Path(__file__).resolve().parent.parent
+    project_root = Path(__file__).resolve().parent.parent.parent
     params_path = project_root / "conf" / "base" / "parameters.yml"
     with open(params_path) as f:
         params = yaml.safe_load(f)

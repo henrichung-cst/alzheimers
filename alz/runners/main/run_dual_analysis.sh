@@ -22,7 +22,7 @@ PYTHON="${PYTHON:-pixi run --manifest-path "$REPO_ROOT/pixi.toml" python}"
 # Ensure normalization has been run (uses all 72 samples, mode-independent)
 if [[ ! -f outputs/reports/kinase_attribution/stoichiometry_matrix.csv ]]; then
     echo "--- Normalization (all 72 samples) ---"
-    $PYTHON alz/kinase_normalize.py
+    $PYTHON alz/bulk_mea/normalize.py
 fi
 
 # Ensure outlier detection has been run
@@ -38,10 +38,10 @@ echo "=========================================="
 echo "  PRIMARY ANALYSIS: males-only"
 echo "=========================================="
 
-$PYTHON alz/kinase_enrich.py
-$PYTHON alz/kinase_attribute.py
-$PYTHON alz/kinase_mechanism.py
-$PYTHON alz/attribution_recovery.py
+$PYTHON alz/bulk_mea/enrich.py
+$PYTHON alz/bulk_mea/attribute.py
+$PYTHON alz/bulk_mea/mechanism.py
+$PYTHON alz/bulk_mea/recover.py
 
 # Archive primary outputs
 rm -rf outputs/reports/kinase_attribution_males_only
@@ -58,10 +58,10 @@ echo "  SENSITIVITY ANALYSIS: full cohort"
 echo "=========================================="
 
 export KEDRO_ENV=full_cohort
-$PYTHON alz/kinase_enrich.py
-$PYTHON alz/kinase_attribute.py
-$PYTHON alz/kinase_mechanism.py
-$PYTHON alz/attribution_recovery.py
+$PYTHON alz/bulk_mea/enrich.py
+$PYTHON alz/bulk_mea/attribute.py
+$PYTHON alz/bulk_mea/mechanism.py
+$PYTHON alz/bulk_mea/recover.py
 unset KEDRO_ENV
 
 # Archive sensitivity outputs

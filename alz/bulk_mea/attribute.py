@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
@@ -537,7 +537,7 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
 
 def _load_params():
     """Load parameters from conf/base/parameters.yml with optional KEDRO_ENV overlay."""
-    project_root = Path(__file__).resolve().parent.parent
+    project_root = Path(__file__).resolve().parent.parent.parent
     params_path = project_root / "conf" / "base" / "parameters.yml"
     with open(params_path) as f:
         params = yaml.safe_load(f)

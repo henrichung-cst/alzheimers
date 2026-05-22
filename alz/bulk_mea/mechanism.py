@@ -5,7 +5,7 @@ the stoichiometry MEA from Stage 2. Each (kinase, contrast) is classified as
 activity_driven / abundance_driven / both / non_significant. Diagnostic for
 reviewers — confirms that stoichiometry correction is doing real work.
 
-Reuses Stage 2 helpers via import from kinase_enrich.
+Reuses Stage 2 helpers via import from alz.bulk_mea.enrich.
 
 Inputs:
   outputs/reports/kinase_attribution/raw_phospho_normalized{,_pY}.csv
@@ -26,12 +26,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from alz import config
-from alz.kinase_enrich import (
+from alz.bulk_mea.enrich import (
     CONTRAST_COEFS,
     _filter_samples,
     _prepare_raw_ols,

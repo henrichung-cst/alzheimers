@@ -22,10 +22,10 @@ mkdir -p outputs/reports/audits
 
   echo "--- (2) Full-cohort sensitivity: attribute + mechanism + recover ---"
   export KEDRO_ENV=full_cohort
-  $PYTHON alz/kinase_enrich.py
-  $PYTHON alz/kinase_attribute.py
-  $PYTHON alz/kinase_mechanism.py
-  $PYTHON alz/attribution_recovery.py
+  $PYTHON alz/bulk_mea/enrich.py
+  $PYTHON alz/bulk_mea/attribute.py
+  $PYTHON alz/bulk_mea/mechanism.py
+  $PYTHON alz/bulk_mea/recover.py
   unset KEDRO_ENV
 
   echo "--- (3) Snapshot canonical → full_cohort ---"
@@ -34,10 +34,10 @@ mkdir -p outputs/reports/audits
   cp -r outputs/reports/attribution_recovery outputs/reports/attribution_recovery_full_cohort
 
   echo "--- (4) Restore canonical as males_only primary ---"
-  $PYTHON alz/kinase_enrich.py
-  $PYTHON alz/kinase_attribute.py
-  $PYTHON alz/kinase_mechanism.py
-  $PYTHON alz/attribution_recovery.py
+  $PYTHON alz/bulk_mea/enrich.py
+  $PYTHON alz/bulk_mea/attribute.py
+  $PYTHON alz/bulk_mea/mechanism.py
+  $PYTHON alz/bulk_mea/recover.py
 
   echo "=== Phase 2 finished at $(date) ==="
 } 2>&1 | tee "$LOG"

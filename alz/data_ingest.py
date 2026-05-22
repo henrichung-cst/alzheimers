@@ -656,7 +656,7 @@ def step_outliers():
     sites, then z-scores within its genotype×timepoint group (6 animals each).
     Animals with |z| > config.OUTLIER_ZSCORE_THRESH are flagged for exclusion.
 
-    Requires kinase_normalize.py to have been run first (needs
+    Requires alz/bulk_mea/normalize.py to have been run first (needs
     stoichiometry_matrix.csv).  Falls back to total-proteome PCA if unavailable.
 
     Outputs:

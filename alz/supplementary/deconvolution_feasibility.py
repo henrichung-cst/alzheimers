@@ -11,7 +11,7 @@ actively *anti-track* composition (consistent with disease-driven per-cell
 expression dynamics dominating over fraction shifts).
 
 For each high-specificity gene × WMB cell type pair, fits the same factorial
-OLS used by alz/kinase_enrich.py on (a) IRS-normalized log2 protein abundance
+OLS used by alz/bulk_mea/enrich.py on (a) IRS-normalized log2 protein abundance
 and (b) per-animal composition fraction, then correlates the 9 disease×time
 β coefficients across the pair. A specificity-threshold sweep shows that
 tightening the marker pool worsens (rather than rescues) the null result.

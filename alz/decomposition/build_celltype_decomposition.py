@@ -214,7 +214,7 @@ def main():
     print(f"  Bulk protein: {TOTAL_PROTEOME_FILE}")
     if not TOTAL_PROTEOME_FILE.exists():
         raise FileNotFoundError(
-            f"{TOTAL_PROTEOME_FILE} missing — re-run kinase_normalize.py "
+            f"{TOTAL_PROTEOME_FILE} missing — re-run alz/bulk_mea/normalize.py "
             f"(Stage 1 now emits total_proteome_normalized.csv)."
         )
     protein = pd.read_csv(TOTAL_PROTEOME_FILE)

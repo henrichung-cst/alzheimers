@@ -53,7 +53,7 @@ def step_run():
     mech_path = os.path.join(KINASE_ATTR_DIR, "mechanism_annotation.csv")
     if not os.path.exists(mech_path):
         raise FileNotFoundError(
-            f"{mech_path} not found. Run kinase_mechanism.py first.")
+            f"{mech_path} not found. Run alz/bulk_mea/mechanism.py first.")
     mech = pd.read_csv(mech_path)
 
     activity_driven = mech[mech["mechanism"] == "activity_driven"].copy()

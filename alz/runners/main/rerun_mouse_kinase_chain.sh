@@ -20,7 +20,7 @@ echo "=== $(date -Is) [2/5] enrich (OLS + MEA, males-only) ==="
 pixi run enrich
 
 echo "=== $(date -Is) [3/5] mechanism (raw phospho MEA + classification) ==="
-pixi run python alz/kinase_mechanism.py
+pixi run python alz/bulk_mea/mechanism.py
 
 echo "=== $(date -Is) [4/5] attribute (unified cell-type attribution) ==="
 pixi run attribute

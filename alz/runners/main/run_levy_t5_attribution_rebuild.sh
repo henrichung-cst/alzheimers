@@ -17,11 +17,11 @@ echo "=== levy_t5 attribution rebuild start $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
 echo
 echo "--- [1/3] kinase_attribute (regenerate unified_attribution.csv) ---"
-pixi run python alz/kinase_attribute.py
+pixi run python alz/bulk_mea/attribute.py
 
 echo
 echo "--- [2/3] attribution_recovery (regenerate hypothesis tables) ---"
-pixi run python alz/attribution_recovery.py
+pixi run python alz/bulk_mea/recover.py
 
 echo
 echo "--- [3/3] build_unified_viewer (pair-mode levy_t5) ---"

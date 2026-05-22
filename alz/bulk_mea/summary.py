@@ -2,17 +2,23 @@
 """Print a cached-results summary of the kinase attribution pipeline.
 
 Reads outputs already produced by the four modular stages
-(`kinase_normalize`, `kinase_enrich`, `kinase_attribute`,
-`kinase_mechanism`). Does not run any analysis.
+(``normalize`, `enrich`, `attribute`,
+`mechanism`). Does not run any analysis.
 """
 
 import argparse
 import json
 import os
+import sys
+from pathlib import Path
 
 import pandas as pd
 
-import config
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from alz import config
 
 OUTPUT_DIR = config.KINASE_ATTRIBUTION_OUTPUT_DIR
 

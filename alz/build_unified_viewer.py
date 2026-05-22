@@ -42,10 +42,11 @@ import pyarrow.parquet as pq
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "integration"))
+sys.path.insert(0, os.path.join(HERE, "bulk_mea"))
 
 import config  # noqa: E402
 import config_integration as icfg  # noqa: E402
-import kinase_normalize as kattr  # noqa: E402  (Stage 1 helpers + load_sample_mapping)
+import normalize as kattr  # noqa: E402  (alz.bulk_mea.normalize — Stage 1 helpers + load_sample_mapping)
 try:
     from human_celltype_attribution import build_celltype_specificity_payload  # noqa: E402
     _HAS_HUMAN_CELLTYPE = True
@@ -918,15 +919,16 @@ def _write_human_perdonor_substrate_slices(
     shutil.rmtree(EDGE_SLICES_HUMAN_PERDONOR_DIR, ignore_errors=True)
     os.makedirs(EDGE_SLICES_HUMAN_PERDONOR_DIR, exist_ok=True)
 
-    by_kid: dict[int, list[tuple[str, str, str]]] = {}
+    by_kid: dict[int, list[tuple[str, str, str, str]]] = {}
     for r in perdonor_rows:
         kid = int(r[0])
         donor = str(r[1])
         leading = str(r[4]) if r[4] is not None else ""
         motifs = str(r[11]) if r[11] is not None else ""
+        kl_pcts = str(r[12]) if len(r) > 12 and r[12] is not None else ""
         if not leading and not motifs:
             continue
-        by_kid.setdefault(kid, []).append((donor, leading, motifs))
+        by_kid.setdefault(kid, []).append((donor, leading, motifs, kl_pcts))
 
     template = "{kinase_id:03d}.parquet"
     present: list[int] = []
@@ -934,7 +936,7 @@ def _write_human_perdonor_substrate_slices(
     for kid in sorted(by_kid):
         df = pd.DataFrame(
             by_kid[kid],
-            columns=["donor", "leading_substrates", "substrate_motifs"],
+            columns=["donor", "leading_substrates", "substrate_motifs", "substrate_kl_percentiles"],
         )
         path = os.path.join(
             EDGE_SLICES_HUMAN_PERDONOR_DIR,
@@ -966,7 +968,7 @@ def _human_track_load(suffix: str, residue: str) -> dict | None:
 
     Both the stoichiometry and raw-phospho MEA outputs are loaded when
     present. Raw-phospho is the sensitivity check (analogous to mouse
-    ``kinase_mechanism.py``); when only stoichiometry is available the
+    ``alz/bulk_mea/mechanism.py``); when only stoichiometry is available the
     raw entries are empty DataFrames and the viewer hides the comparison.
     """
     rec_path = os.path.join(HUMAN_PERDONOR_DIR, f"recurrence{suffix}.csv")
@@ -1083,8 +1085,8 @@ def build_human_slice() -> tuple[dict, dict] | tuple[None, None]:
     # collapsed across SEA-AD supertypes; no cell-type bridge because the
     # human AD samples have no per-cell-type resolution).
     seaad_csv = os.path.join(
-        config.REPO_ROOT, "outputs", "reports", "kinase_attribution_human",
-        "seaad_agreement.csv",
+        config.REPO_ROOT, "outputs", "reports", "kinase_attribution",
+        "human_seaad_agreement.csv",
     )
     seaad_lookup: dict[tuple[str, str], dict] = {}
     if os.path.exists(seaad_csv):
@@ -1111,7 +1113,7 @@ def build_human_slice() -> tuple[dict, dict] | tuple[None, None]:
         cols[f"NES_{d}_vs_CTRLmean"] = []
         cols[f"FDR_{d}_vs_CTRLmean"] = []
 
-    perdonor_rows: list[tuple] = []  # (kid, donor, NES, FDR, lead, ES, subs_fraction, p_value, raw_NES, raw_FDR, raw_p, substrate_motifs)
+    perdonor_rows: list[tuple] = []  # (kid, donor, NES, FDR, lead, ES, subs_fraction, p_value, raw_NES, raw_FDR, raw_p, substrate_motifs, substrate_kl_percentiles)
     next_id = 0
     for t in tracks:
         residue = t["residue"]
@@ -1137,6 +1139,7 @@ def build_human_slice() -> tuple[dict, dict] | tuple[None, None]:
         # `ingest_mukesh_perdonor.py`. Used at view time to replay the GSEA walk
         # against the full substrate set (not the leading-edge subset).
         subs_lookup: dict[tuple[str, str], list[str]] = {}
+        subs_pct_lookup: dict[tuple[str, str], list[float]] = {}
         if not subs.empty:
             for _, srow in subs.iterrows():
                 k = str(srow.get("kinase", ""))
@@ -1145,6 +1148,10 @@ def build_human_slice() -> tuple[dict, dict] | tuple[None, None]:
                 motif = str(srow.get("motif", ""))
                 if motif:
                     subs_lookup.setdefault((k, donor), []).append(motif)
+                    pct_val = srow.get("kl_percentile")
+                    subs_pct_lookup.setdefault((k, donor), []).append(
+                        float(pct_val) if pd.notna(pct_val) else float("nan")
+                    )
         mea_lookup: dict[tuple[str, str], tuple[float, float, str, float, str, float]] = {}
         if not mea.empty:
             for _, row in mea.iterrows():
@@ -1202,7 +1209,11 @@ def build_human_slice() -> tuple[dict, dict] | tuple[None, None]:
                     n_, f_, lead, es_, subs_, p_ = mea_lookup[(k, d)]
                     rn_, rf_, rp_ = raw_lookup.get((k, d), (float("nan"), float("nan"), float("nan")))
                     motifs = ";".join(subs_lookup.get((k, d), []))
-                    perdonor_rows.append((kid, d, n_, f_, lead, es_, subs_, p_, rn_, rf_, rp_, motifs))
+                    kl_pcts = ";".join(
+                        ("" if not (v == v) else f"{v:.2f}")  # NaN check via self-cmp
+                        for v in subs_pct_lookup.get((k, d), [])
+                    )
+                    perdonor_rows.append((kid, d, n_, f_, lead, es_, subs_, p_, rn_, rf_, rp_, motifs, kl_pcts))
 
     # Per-donor scalar index (one row per (kinase, donor) with an MEA record).
     # `leading_substrates` and `substrate_motifs` are sharded out to
@@ -1547,10 +1558,11 @@ def _norm_motif(s: str) -> str:
 def _write_decomp_ols_slices(kid: dict, contrast_to_id: dict) -> dict:
     """Per-kinase shard of per-cell-type OLS at substrate sites.
 
-    Reads `outputs/reports/deconvolution/per_animal/site_level_ols.parquet`
-    (3.77M rows: site × wmb_class × contrast × track), filters each kinase
-    to its substrate-set motifs (across all contrasts/tracks), and writes
-    one parquet per kinase to `edge_slices/decomp_ols/{kid:03d}.parquet`.
+    Reads `outputs/reports/decomposition/{spine}/per_animal/site_level_ols.parquet`
+    (per-cell_type × per-contrast × per-track site rows in Levy-t5
+    vocabulary), filters each kinase to its substrate-set motifs (across
+    all contrasts/tracks), and writes one parquet per kinase to
+    `edge_slices/decomp_ols/{kid:03d}.parquet`.
 
     The drawer in the Attribution tab fetches one shard on demand and
     filters client-side by current contrast + cell_type to populate the
@@ -1593,7 +1605,7 @@ def _write_decomp_ols_slices(kid: dict, contrast_to_id: dict) -> dict:
 
     print(f"  decomp_ols: loading {DECOMP_OLS_PARQUET} "
           f"({os.path.getsize(DECOMP_OLS_PARQUET) / 1e6:.1f} MB)", flush=True)
-    cols = ["site_id", "gene_symbol", "motif", "wmb_class",
+    cols = ["site_id", "gene_symbol", "motif", "cell_type",
             "contrast", "lfc", "se", "pval", "track"]
     pcdf = pq.read_table(DECOMP_OLS_PARQUET, columns=cols).to_pandas()
     pcdf = pcdf[pcdf["contrast"].isin(contrast_to_id)].copy()
@@ -1623,7 +1635,7 @@ def _write_decomp_ols_slices(kid: dict, contrast_to_id: dict) -> dict:
         if sub.empty:
             continue
         out = sub.reset_index(drop=True)[
-            ["contrast_id", "wmb_class", "site_id", "gene_symbol",
+            ["contrast_id", "cell_type", "site_id", "gene_symbol",
              "motif", "lfc", "se", "pval", "track"]
         ].copy()
         out["lfc"] = out["lfc"].astype("float32")
@@ -1719,11 +1731,7 @@ def _write_song_concordance_slices(genes_of_interest: set[str]) -> dict:
     return index
 
 
-_INCYTR_CONTRASTS = (
-    "App_2mo", "App_4mo", "App_6mo",
-    "Tau_2mo", "Tau_4mo", "Tau_6mo",
-    "ApTt_2mo", "ApTt_4mo", "ApTt_6mo",
-)
+_INCYTR_CONTRASTS = tuple(config.CONTRAST_COEFS.keys())
 
 # ---------------------------------------------------------------------------
 # CR-04: trajectory_index + recur_index computation
@@ -2444,6 +2452,52 @@ def _read_empty_deg_celltypes() -> list[str]:
     return sorted(empty)
 
 
+def _build_kinase_motifs(kinase_names: list) -> dict:
+    """Per-kinase library PSSM (normalized probabilities) + ST favorability.
+
+    Output is keyed by kinase name. Each entry:
+        {
+          "kin_type": "ser_thr" | "tyrosine",
+          "positions": [-5, -4, ..., 4]  (or +5 for tyrosine),
+          "amino_acids": [..., 23 entries ...],
+          "matrix":  [[...], ...]  (n_aa x n_positions, normalized probs),
+          "st_fav":  {"S": float, "T": float} | null,
+        }
+    Sequence-logo widget on the viewer side scales letter heights by
+    information content (log2(20) - entropy) at each position.
+    """
+    import kinase_library as kl
+    out: dict[str, dict] = {}
+    skipped: list[str] = []
+    for name in kinase_names:
+        try:
+            mat = kl.get_matrix(name, mat_type="norm")
+            kin_type = kl.get_kinase_type(name)
+        except Exception as e:
+            skipped.append(f"{name} ({e})")
+            continue
+        st_fav: dict | None = None
+        if kin_type == "ser_thr":
+            try:
+                sf = kl.get_st_fav(name)
+                st_fav = {"S": float(sf.loc[name, "S"]),
+                          "T": float(sf.loc[name, "T"])}
+            except Exception:
+                st_fav = None
+        out[name] = {
+            "kin_type": kin_type,
+            "positions": [int(c) for c in mat.columns],
+            "amino_acids": [str(a) for a in mat.index],
+            "matrix": [[round(float(v), 4) for v in row] for row in mat.values],
+            "st_fav": st_fav,
+        }
+    if skipped:
+        print(f"  kinase_motifs: skipped {len(skipped)} kinases "
+              f"(first 3: {skipped[:3]})", flush=True)
+    print(f"  kinase_motifs: emitted PSSM for {len(out):,} kinases", flush=True)
+    return out
+
+
 def build_payload(data: UnifiedData) -> dict:
     """Assemble the full JSON payload (no edges — that's the sidecar)."""
     from kinase_library.modules import data as kl_data
@@ -2582,8 +2636,14 @@ def build_payload(data: UnifiedData) -> dict:
         print(f"  human slice: {len(human_slice['kinases']['id']):,} kinase rows "
               f"× {len(human_slice['donors'])} donors", flush=True)
 
+    motif_names = set(kinases_slice.get("name", []))
+    if human_slice is not None:
+        motif_names.update(human_slice["kinases"].get("name", []))
+    kinase_motifs = _build_kinase_motifs(sorted(motif_names))
+
     payload = {
         "kinases": kinases_slice,
+        "kinase_motifs": kinase_motifs,
         "celltypes": celltypes_slice,
         "kinase_celltype_evidence": kinase_celltype_evidence,
         "attribution_index": attribution_index,
@@ -2825,7 +2885,7 @@ def validate(data: UnifiedData) -> str:
 # CLI
 # ---------------------------------------------------------------------------
 
-def _assert_input_provenance() -> None:
+def _assert_input_provenance(skip_verify: bool = False) -> None:
     """Hardfail if upstream artifacts disagree on scope/spine/cohort.
 
     Reads sidecar JSONs from the WMB expression, decomposition, and enrichment
@@ -2852,24 +2912,12 @@ def _assert_input_provenance() -> None:
         config.REPO_ROOT, "outputs", "reports", "decomposition", config.CLUSTER_SPINE_NAME,
     )
     enrich_audit_path = os.path.join(decomp_dir, "enrich_audit.json")
-    if os.path.exists(enrich_audit_path):
-        with open(enrich_audit_path) as f:
-            ea = json.load(f)
-        spine = ea.get("spine")
-        if spine and spine != config.CLUSTER_SPINE_NAME:
-            raise SystemExit(
-                f"Decomposition spine mismatch: enrich_audit.json reports "
-                f"{spine!r}, expected {config.CLUSTER_SPINE_NAME!r}."
-            )
-        amode = ea.get("analysis_mode")
-        if amode and amode != config.ANALYSIS_MODE:
-            raise SystemExit(
-                f"Decomposition analysis_mode mismatch: enrich_audit.json "
-                f"reports {amode!r}, expected {config.ANALYSIS_MODE!r}."
-            )
 
     verify_path = os.path.join(decomp_dir, "verification.json")
-    if os.path.exists(verify_path):
+    if skip_verify:
+        print(f"[provenance] --skip-verify: bypassing {verify_path} gate",
+              flush=True)
+    elif os.path.exists(verify_path):
         with open(verify_path) as f:
             verif = json.load(f)
         if verif.get("all_pass") is False:
@@ -2878,6 +2926,36 @@ def _assert_input_provenance() -> None:
             raise SystemExit(
                 f"Decomposition verification did not pass: failed checks = "
                 f"{failed}. See {verify_path}."
+            )
+
+    # Cross-summary provenance: every summary that stamps `analysis_mode` /
+    # `spine` must agree with config. Missing fields are allowed (older
+    # artifacts predate the stamp); contradictions abort.
+    summaries = [
+        os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "normalization_summary.json"),
+        os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "normalization_summary_pY.json"),
+        os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "attribution_summary.json"),
+        os.path.join(config.REPO_ROOT, "outputs", "reports", "attribution_recovery",
+                     "recovery_summary.json"),
+        os.path.join(decomp_dir, "per_animal", "site_level_ols.audit.json"),
+        enrich_audit_path,
+    ]
+    for sp in summaries:
+        if not os.path.exists(sp):
+            continue
+        with open(sp) as f:
+            meta = json.load(f)
+        amode = meta.get("analysis_mode")
+        if amode and amode != config.ANALYSIS_MODE:
+            raise SystemExit(
+                f"analysis_mode mismatch in {sp}: {amode!r} != "
+                f"{config.ANALYSIS_MODE!r} — chains disagree on cohort."
+            )
+        spine_field = meta.get("spine")
+        if spine_field and spine_field != config.CLUSTER_SPINE_NAME:
+            raise SystemExit(
+                f"spine mismatch in {sp}: {spine_field!r} != "
+                f"{config.CLUSTER_SPINE_NAME!r}."
             )
 
 
@@ -2890,6 +2968,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--skip-roundtrip", action="store_true",
                     help="Skip the Item 3.5 build-time LFC round-trip assertion "
                          "(default mode, ~60s). Use only for fast iteration.")
+    ap.add_argument("--skip-verify", action="store_true",
+                    help="Bypass the decomposition verification.json gate. Use "
+                         "when a failing check is known-orthogonal to viewer "
+                         "outputs (e.g. per_cluster_vs_bulk_mea).")
     ap.add_argument("--strict-roundtrip", action="store_true",
                     help="Run the Item 3.5 round-trip in full-grid strict mode "
                          "(checks every (contrast, pair, node, layer) cell). "
@@ -2900,7 +2982,7 @@ def main(argv: list[str] | None = None) -> int:
         args.payload = True
         args.html = True
 
-    _assert_input_provenance()
+    _assert_input_provenance(skip_verify=args.skip_verify)
 
     data = load_all_data()
 

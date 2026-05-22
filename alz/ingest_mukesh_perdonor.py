@@ -8,7 +8,7 @@ on two preprocessing tracks and runs MEA against each:
 
 Aggregates each into a kinase x donor NES matrix and a recurrence
 summary (kinases significant at FDR < MEA_FDR_THRESH in >= k donors).
-The raw-phospho variant mirrors `kinase_mechanism.py` for mouse: it lets
+The raw-phospho variant mirrors `alz/bulk_mea/mechanism.py` for mouse: it lets
 the viewer cross-check whether a per-donor stoichiometry signal is
 abundance-driven vs activity-driven.
 
@@ -45,7 +45,7 @@ import numpy as np
 import pandas as pd
 
 from alz import config
-from alz import kinase_enrich
+from alz.bulk_mea import enrich as kinase_enrich
 from alz.ingest_mukesh import (
     HUMAN_DATA_INGEST_DIR,
     HUMAN_KINASE_DIR,

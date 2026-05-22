@@ -37,7 +37,7 @@ def step_run():
     # Load MEA results
     mea_path = os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "mea_stoichiometry.csv")
     if not os.path.exists(mea_path):
-        raise FileNotFoundError(f"{mea_path} not found. Run kinase_enrich.py first.")
+        raise FileNotFoundError(f"{mea_path} not found. Run alz/bulk_mea/enrich.py first.")
     mea = pd.read_csv(mea_path)
     print(f"  MEA results loaded: {len(mea)} total rows")
 

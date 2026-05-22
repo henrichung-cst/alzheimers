@@ -6,7 +6,7 @@ Whole Mouse Brain (WMB) 10Xv3 dataset, pooled across all 13 anatomical
 regions (cerebellum, cortical subplate, hippocampal formation, hypothalamus,
 isocortex, midbrain, medulla, olfactory, pons, pallidum, striatum,
 thalamus). The output file (wmb_kinase_expression.csv) is consumed by
-kinase_attribute.py and attribution_recovery.py.
+alz/bulk_mea/attribute.py and alz/bulk_mea/recover.py.
 
 Extracted from the archived pre-stoichiometry concordance logic to isolate
 the live supporting dependency.
@@ -15,7 +15,7 @@ Inputs:
   data/external/allen_abc/  (WMB 10Xv3 cell metadata + per-region h5ad files
                              across all 13 regions, via ABC Atlas cache)
   Kinase gene universe is fetched via atlas_reference.get_all_kinase_genes,
-  which itself reads data/datasets/song/kinase/kldata.csv.
+  which itself reads data/derived/caches/kinase_to_gene_mapping.csv.
 
 Outputs:
   outputs/reports/wmb_expression/wmb_kinase_expression.csv

@@ -5,7 +5,7 @@ Acquires Allen Institute transcriptomic datasets used by the live pipeline:
   - WMB (Allen Mouse Whole Brain): per-region log2 expression matrices, downloaded
     on demand by the WMB cache.  Used by `wmb_expression.py`.
   - SEA-AD (Seattle Alzheimer's Disease MTG): pre-computed Nebula effect-size h5ads
-    (`effect_sizes{,_early,_late}.h5ad`).  Used by `kinase_attribute.py` for
+    (`effect_sizes{,_early,_late}.h5ad`).  Used by `alz/bulk_mea/attribute.py` for
     transcriptomic concordance.
   - SEA-AD MTG expression: per-supertype mean expression from the full donor-level
     h5ad (~50 GB).  Used by `human_reference_expression.py`.  Phase-2 download.
@@ -76,18 +76,25 @@ def _import_boto3():
 
 
 def get_all_kinase_genes() -> Tuple[Set[str], Set[str]]:
-    """Return (mouse_symbols, human_symbols) for all kinases in kldata.csv."""
-    kldata = pd.read_csv(config.KLDATA_FILE, usecols=["GENE_NAME"], low_memory=False)
-    human_genes = set(kldata["GENE_NAME"].dropna().unique())
-    mouse_genes: Set[str] = set()
-    for g in human_genes:
-        mouse = g[0].upper() + g[1:].lower() if len(g) > 1 else g.upper()
-        mouse_genes.add(mouse)
-    if os.path.exists(config.MAPPING_CACHE_FILE):
-        cache = pd.read_csv(config.MAPPING_CACHE_FILE)
-        if "gene_symbol" in cache.columns:
-            for g in cache["gene_symbol"].dropna():
-                mouse_genes.add(g)
+    """Return (mouse_symbols, human_symbols) for all kinases in the kinome.
+
+    Source of truth is `kinase_to_gene_mapping.csv` (kinase-abbreviation →
+    HGNC gene symbol), built once by `alz/map_kinases_to_genes.py` from
+    `kinase_library.get_kinome_info()`. Mouse symbol is the title-case of
+    the human symbol (canonical for mouse orthologs of phospho-active
+    kinases; explicit exceptions live in `kinase_to_gene_overrides.csv`).
+    """
+    if not os.path.exists(config.MAPPING_CACHE_FILE):
+        raise RuntimeError(
+            f"{config.MAPPING_CACHE_FILE} missing — run "
+            f"`pixi run python alz/map_kinases_to_genes.py` first."
+        )
+    cache = pd.read_csv(config.MAPPING_CACHE_FILE)
+    human_genes = {str(g) for g in cache["gene_symbol"].dropna()}
+    mouse_genes = {
+        g[0].upper() + g[1:].lower() if len(g) > 1 else g.upper()
+        for g in human_genes
+    }
     return mouse_genes, human_genes
 
 
@@ -304,7 +311,7 @@ def download_sea_ad_expression(chunk_size: int = 5000, force: bool = False,
     A process-level RLIMIT_AS cap (default 22 GB) keeps any blow-up confined to
     this process — kernel global OOM-killer doesn't fire.
 
-    Output: ``data/external/sea_ad/expression_by_supertype.csv``
+    Output: ``data/derived/aggregates/seaad/expression_by_supertype.csv``
     (rows = gene HGNC symbols, columns = 139 supertypes).
     """
     out_path = Path(config.SEA_AD_EXPRESSION_FILE)
@@ -427,7 +434,7 @@ def download_hbca(force: bool = False, mem_cap_gb: float = 22.0,
     """Download Allen HBCA (WHB-10Xv3) log2 expression and aggregate per supercluster.
 
     Output (the contract consumed by ``alz/human_reference_expression.py``):
-        ``data/external/allen_hbca/expression_by_class.csv``
+        ``data/derived/aggregates/hbca/expression_by_class.csv``
         (rows = gene HGNC symbols, columns = HBCA superclusters).
 
     Sources (Siletti 2023, ~3.37M nuclei, 31 superclusters):
@@ -644,7 +651,7 @@ def main():
     group.add_argument("--sea-ad-expression", action="store_true",
                        help="Phase 2: download SEA-AD MTG h5ad and compute "
                             "per-supertype mean expression → "
-                            "data/external/sea_ad/expression_by_supertype.csv")
+                            "data/derived/aggregates/seaad/expression_by_supertype.csv")
     group.add_argument("--hbca-download", action="store_true",
                        help="Phase 2: download Allen Human Brain Cell Atlas (HBCA) "
                             "expression matrices (~95 GB) via abc_atlas_access")

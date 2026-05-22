@@ -8,7 +8,7 @@
 #   (no argument)   — All three tiers
 #
 # Exclusions (kept uncompressed for runtime use):
-#   - effect_sizes{,_early,_late}.h5ad (read by kinase_attribute.py)
+#   - effect_sizes{,_early,_late}.h5ad (read by alz/bulk_mea/attribute.py)
 #   - cell_metadata_with_cluster_annotation.csv (read by ABC cache API)
 #
 # To decompress: bash alz/runners/supporting/decompress_atlas_cache.sh [filter]
