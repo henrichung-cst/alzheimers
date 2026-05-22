@@ -280,9 +280,11 @@ These are aspirational endpoints, not deadlines. Methodical beats fast.
   - Task #15 — Consolidate Mode 3 under `alz/incytr_pair/`: **done 2026-05-21**
     (renamed `alz/incytr/` → `alz/incytr_pair/` and moved
     `pair_to_receiver_cache.py` into it)
-  - Task #16 — Carve out `alz/cross_reference/` for Mode 4: **in progress
-    2026-05-21** — `seaad_human_agreement.py` + `human_celltype_attribution.py`
-    moved into `alz/cross_reference/` (commit forthcoming); evidence-loader
-    extraction from `bulk_mea/attribute.py` queued as a follow-up commit.
+  - Task #16 — Carve out `alz/cross_reference/` for Mode 4: **done 2026-05-21**
+    in two commits — (a) `8e8bd5e` moved `seaad_human_agreement.py` +
+    `human_celltype_attribution.py` into `alz/cross_reference/`; (b) the
+    follow-up extracted the SEA-AD / WMB / Song evidence loaders out of
+    `bulk_mea/attribute.py` into `alz/cross_reference/evidence.py` and
+    promoted them to public (no leading underscore).
   - Task #17 — Group ingest + reference: pending
   - Task #18 — Move config.py to `alz/shared/`: pending
