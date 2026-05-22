@@ -10,7 +10,7 @@
 # needed.
 #
 # Usage (from any working directory):
-#   Rscript alz/incytr/incytr_commandline.R <condition1> <condition2> <input_gene_list.csv>
+#   Rscript alz/incytr_pair/incytr_commandline.R <condition1> <condition2> <input_gene_list.csv>
 
 suppressPackageStartupMessages({
   library(Incytr)
@@ -41,7 +41,7 @@ OUTPUT_DIR <- file.path(REPO_ROOT, "outputs", "reports", "incytr_pair_mode", "wi
 #   NPERM_WORKERS   — per-pair Permutation_test workers (fork over nboot)
 #
 # A fourth layer (contrasts) is handled by the outer wrapper script
-# (alz/incytr/run_pair_mode.sh). If that wrapper ever runs N contrasts at once,
+# (alz/incytr_pair/run_pair_mode.sh). If that wrapper ever runs N contrasts at once,
 # the box-wide ceiling becomes N × (CHUNK_PARALLEL × NPAIR_WORKERS × NPERM_WORKERS).
 # Mirror this assertion there before adding contrast parallelism.
 #

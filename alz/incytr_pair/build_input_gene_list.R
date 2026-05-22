@@ -3,7 +3,7 @@
 #
 # Adapted from data/incytr/v2_46clusters/provenance/run_input_gene_list.R.
 # Two changes vs that source:
-#   1. Idents and Type already set in alz/incytr/build_pair_seurat.R; we only
+#   1. Idents and Type already set in alz/incytr_pair/build_pair_seurat.R; we only
 #      need to compose Type_condition.
 #   2. condition = `ma_<age>_<geno>` (compound) NOT plain Genotype, because
 #      pair-mode runs disease vs WT at the *same* timepoint. Using bare

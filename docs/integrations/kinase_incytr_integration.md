@@ -18,19 +18,19 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
                   │   MEA, 9 contrasts, NaN where           │
                   │   rank-deficient)                       │
                   ▼                                        ▼
-    data/derived/incytr_inputs/      ◄── alz/incytr/export_decomposition_for_pair.py
-                  │                  ◄── alz/incytr/build_pair_seurat.R
+    data/derived/incytr_inputs/      ◄── alz/incytr_pair/export_decomposition_for_pair.py
+                  │                  ◄── alz/incytr_pair/build_pair_seurat.R
                   │                  ◄── alz/integration/build_yuyu_kldata.py
                   │                  ◄── alz/integration/build_cluster_spine.py
                   ▼
     Incytr::Cal_pairwise_grid   (upstream, ~/Projects/work/incytr/R/grid.R)
-    driven by alz/incytr/incytr_commandline.R
+    driven by alz/incytr_pair/incytr_commandline.R
                   │
                   ▼
     outputs/reports/incytr_pair_mode/wide/<contrast>_incytr_output.parquet
                   │  (9 wide parquets, 31² = 961 rows each)
                   ▼
-    alz/integration/pair_to_receiver_cache.py
+    alz/incytr_pair/pair_to_receiver_cache.py
                   │
                   ▼
     outputs/reports/unified_viewer/  (consumed by alz/build_unified_viewer.py)
@@ -38,7 +38,7 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
 
 ## In-tree files
 
-### `alz/incytr/` — run-time drivers
+### `alz/incytr_pair/` — run-time drivers
 
 | File | Role |
 |---|---|
@@ -51,6 +51,7 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
 | `build_input_gene_list.R` | Builds `input_gene_list.csv` for the driver. Writes to `data/derived/incytr_inputs/`. |
 | `export_decomposition_for_pair.py` | Reshapes `{protein,phospho,phospho_pY}_per_cluster.parquet` into yuyu CSV format for the R driver. Writes to `data/derived/incytr_inputs/`. |
 | `run_pair_mode.sh` | Per-contrast loop driver; calls `incytr_commandline.R` for each of the 9 contrasts. |
+| `pair_to_receiver_cache.py` | Reshapes pair-mode wide outputs from `outputs/reports/incytr_pair_mode/wide/` (9 contrasts × 961 rows) into the long-form `receiver_cache/` layout the unified viewer consumes. Invoked by `alz/runners/main/run_pair_mode_viewer_build.sh`. |
 
 ### `alz/integration/` — output consumers + config
 
@@ -62,7 +63,6 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
 | `plot_cluster_spine.py` | Diagnostic plots over `cluster_spine.csv`. |
 | `build_seaad_bridge.py` | One-shot: hand-curated `cluster_to_seaad_supertype.csv` (levy_t5 cluster → SEA-AD supertype). Direct crosswalks only — no chained mappings through intermediate vocabularies. |
 | `build_yuyu_kldata.py` | Builds `kldata_pspy.csv`; symlinked into `data/derived/incytr_inputs/kldata.csv` for the R driver. |
-| `pair_to_receiver_cache.py` | Reshapes pair-mode wide outputs from `outputs/reports/incytr_pair_mode/wide/` (9 contrasts × 961 rows) into the long-form `receiver_cache/` layout the unified viewer consumes. Invoked by `alz/runners/main/run_pair_mode_viewer_build.sh`. |
 
 ## Entry points
 
@@ -70,7 +70,7 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
 |---|---|
 | `bash alz/runners/main/run_pair_mode_pipeline.sh` | End-to-end: per-cluster decomposition → enrich → pair-mode inputs → `Cal_pairwise_grid` → reshape. |
 | `bash alz/runners/main/run_pair_mode_viewer_build.sh` | Reshape only: pair-mode parquet → `receiver_cache/`. |
-| `bash alz/incytr/run_pair_mode.sh` | Incytr invocation in isolation (9 contrasts, reads from `data/derived/incytr_inputs/`). |
+| `bash alz/incytr_pair/run_pair_mode.sh` | Incytr invocation in isolation (9 contrasts, reads from `data/derived/incytr_inputs/`). |
 | `pixi run install-incytr` | Reinstall upstream `Incytr` after changes in `~/Projects/work/incytr/`. |
 
 R dependencies still required: `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`. Integration config lives in `alz/integration/config_integration.py`, not `alz/config.py`.

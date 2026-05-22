@@ -19,7 +19,7 @@ Aggregation:
 - Wide schema: row keys + columns `<condition>_<cluster>` where
   condition = `ma_<age>_<geno>` (12 conditions x 31 clusters = 372 value columns).
 
-Schema matches what alz/incytr/incytr_commandline.R expects:
+Schema matches what alz/incytr_pair/incytr_commandline.R expects:
 - pr: row key `Gene Symbol` (driver hard-codes the spaced form). We also
       keep `gene_symbol` for debuggability.
 - ps: row keys `site_id`, `gene_symbol`.

@@ -27,7 +27,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-DRIVER="alz/incytr/incytr_commandline.R"
+DRIVER="alz/incytr_pair/incytr_commandline.R"
 INPUTS_DIR="data/derived/incytr_inputs"
 OUTPUT_DIR="outputs/reports/incytr_pair_mode/wide"
 LOG_DIR="outputs/reports/incytr_pair_mode"

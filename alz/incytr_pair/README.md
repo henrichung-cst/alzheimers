@@ -1,4 +1,4 @@
-# alz/incytr/
+# alz/incytr_pair/
 
 Pair-mode Incytr production code for the AD phosphoproteomics project.
 All math, scoring, and pathway construction lives in the upstream `incytr` R
@@ -10,13 +10,13 @@ reshape outputs.
 
 | Module | Responsibility |
 |---|---|
-| `alz/incytr/` | Run-time drivers: build Seurat inputs, run `Incytr::Cal_pairwise_grid`, emit transcript substrate, orchestrate the per-contrast loop |
+| `alz/incytr_pair/` | Run-time drivers: build Seurat inputs, run `Incytr::Cal_pairwise_grid`, emit transcript substrate, orchestrate the per-contrast loop |
 | `alz/integration/` | Consume outputs: reshape wide parquets into `receiver_cache/` for the viewer; build transcript-trace shards; manage config and cluster-spine loading |
 
 ## Entry point
 
 ```bash
-bash alz/incytr/run_pair_mode.sh
+bash alz/incytr_pair/run_pair_mode.sh
 ```
 
 Runs the 9 contrast pair-mode grid (3 diseases × 3 timepoints) and writes
@@ -29,7 +29,7 @@ bash alz/runners/main/run_pair_mode_pipeline.sh
 
 Build driver inputs only:
 ```bash
-bash alz/incytr/build_pair_inputs.sh
+bash alz/incytr_pair/build_pair_inputs.sh
 ```
 
 ## File inventory
@@ -45,6 +45,7 @@ bash alz/incytr/build_pair_inputs.sh
 | `build_pair_seurat.R` | Builds `incytr_obj.rds` from the snRNA-seq data. Writes to `data/derived/incytr_inputs/incytr_obj.rds`. |
 | `build_input_gene_list.R` | Builds `input_gene_list.csv` for the driver. Writes to `data/derived/incytr_inputs/`. |
 | `export_decomposition_for_pair.py` | Reshapes `{protein,phospho,phospho_pY}_per_cluster.parquet` into yuyu CSV format for the R driver. Writes `{pr,ps,py}_yuyu_deconvoluted.csv` to `data/derived/incytr_inputs/`. |
+| `pair_to_receiver_cache.py` | Reshapes the 9 wide driver outputs from `outputs/reports/incytr_pair_mode/wide/` into the long-form `receiver_cache/` layout the unified viewer consumes. Invoked by `alz/runners/main/run_pair_mode_viewer_build.sh`. |
 
 ## Data layout
 

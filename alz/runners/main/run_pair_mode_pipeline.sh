@@ -99,12 +99,12 @@ run_step() {
   echo "[$STEP_IDX/$N_STEPS] ($key) $label  DONE in $(fmt_elapsed $((t1 - t0)))"
 }
 
-# Pair-mode Incytr: alz/incytr/run_pair_mode.sh loops the 9 contrasts
+# Pair-mode Incytr: alz/incytr_pair/run_pair_mode.sh loops the 9 contrasts
 # internally. Worker parallelism is set via CHUNK_PARALLEL (subprocess fan-out
 # within each contrast's sender×receiver chunks); contrast-level parallel
 # launches share output/ and would race, so we keep that loop sequential.
 run_pair_incytr() {
-  CHUNK_PARALLEL="$WORKERS" bash alz/incytr/run_pair_mode.sh
+  CHUNK_PARALLEL="$WORKERS" bash alz/incytr_pair/run_pair_mode.sh
 }
 
 # ---------- pipeline ----------
@@ -139,16 +139,16 @@ if [[ $SKIP_INCYTR -eq 0 ]]; then
   for f in incytr_commandline.R reconstruct_labels.R reconstruct_node_fc.R; do
     if [[ ! -e "$incytr_dir/$f" ]]; then
       echo "ERROR: required driver script $incytr_dir/$f missing" >&2
-      echo "       driver scripts must live under alz/incytr/." >&2
+      echo "       driver scripts must live under alz/incytr_pair/." >&2
       exit 1
     fi
   done
   if [[ ! -e "$inputs_dir/kldata.csv" ]]; then
-    echo "ERROR: $inputs_dir/kldata.csv missing — run alz/incytr/build_pair_inputs.sh first." >&2
+    echo "ERROR: $inputs_dir/kldata.csv missing — run alz/incytr_pair/build_pair_inputs.sh first." >&2
     exit 1
   fi
-  run_step E1 "pair-mode inputs (alz/incytr/build_pair_inputs.sh)" \
-    bash alz/incytr/build_pair_inputs.sh
+  run_step E1 "pair-mode inputs (alz/incytr_pair/build_pair_inputs.sh)" \
+    bash alz/incytr_pair/build_pair_inputs.sh
   run_step E2 "pair-mode 9 contrasts (CHUNK_PARALLEL=$WORKERS)" \
     run_pair_incytr
   # Substrate for the unified viewer's transcript-trace panel: per-(cluster,
@@ -156,7 +156,7 @@ if [[ $SKIP_INCYTR -eq 0 ]]; then
   # once per pair-mode build (contrast-invariant), before the viewer rebuild
   # invalidates the transcript_trace shards on schema version bump.
   run_step E3 "emit_expr_bygroup parquet (transcript trace substrate)" \
-    pixi run Rscript alz/incytr/emit_expr_bygroup.R
+    pixi run Rscript alz/incytr_pair/emit_expr_bygroup.R
 fi
 
 run_step F1 "human ingest (reshape)" \

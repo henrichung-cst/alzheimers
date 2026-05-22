@@ -12,8 +12,8 @@
 # "prG" if in PRG set only.
 #
 # Usage (from any working directory):
-#   pixi run Rscript alz/incytr/reconstruct_labels.R           # default: outputs/reports/incytr_pair_mode/wide/
-#   pixi run Rscript alz/incytr/reconstruct_labels.R <dir>     # custom output dir
+#   pixi run Rscript alz/incytr_pair/reconstruct_labels.R           # default: outputs/reports/incytr_pair_mode/wide/
+#   pixi run Rscript alz/incytr_pair/reconstruct_labels.R <dir>     # custom output dir
 
 suppressPackageStartupMessages({
   library(Seurat)

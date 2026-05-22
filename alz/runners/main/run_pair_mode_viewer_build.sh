@@ -21,7 +21,7 @@ fi
 export INCYTR_PAIR_MODE_INPUT_DIR="$INPUT_DIR"
 
 echo "=== $(date -Is) reshape pair-mode → receiver_cache ==="
-pixi run python alz/integration/pair_to_receiver_cache.py \
+pixi run python alz/incytr_pair/pair_to_receiver_cache.py \
   --input-dir "$INPUT_DIR" \
   $STRICT_FLAG
 

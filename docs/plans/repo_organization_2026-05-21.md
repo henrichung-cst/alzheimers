@@ -64,7 +64,7 @@ factorial vocabulary as hardcoded constants:
 - `alz/kinase_enrich.py` — `GENOTYPE_CODING`, `CONTRAST_COEFS`
 - `alz/decomposition/enrich_celltype.py` — reuses the same coding
 - `alz/snrna_integration.py` — `SAP_FACTORIAL`
-- `alz/incytr/export_decomposition_for_pair.py` — `GENO_DECODE`, `ANIMAL_RE`
+- `alz/incytr_pair/export_decomposition_for_pair.py` — `GENO_DECODE`, `ANIMAL_RE`
 
 Plus the SAP vocabulary (`WTyp/AppP/Ttau/ApTt`, `ma/fe`, `2mo/4mo/6mo`)
 appears across ≥7 files spanning modes 1–3.
@@ -101,7 +101,7 @@ Target layout:
 alz/
   bulk_mea/                 # Mode 1 — flat scripts (was alz/kinase_*.py + alz/pipelines/)
   decomposition_mea/        # Mode 2 — renamed from alz/decomposition/
-  incytr_pair/              # Mode 3 — renamed from alz/incytr/ + reshape moved in
+  incytr_pair/              # Mode 3 — renamed from alz/incytr_pair/ + reshape moved in
   cross_reference/          # Mode 4 — carved out (currently scattered)
   ingest/                   # Layer 1 — bespoke per-dataset modules
   reference/                # shared atlas/expression (feeds 1+4)
@@ -173,8 +173,8 @@ schema spec independent of which framework reads it.
    imports across the repo. Internal file layout stays the same.
 
 4. **Consolidate Mode 3 under `alz/incytr_pair/` (task #15).**
-   - Rename `alz/incytr/` → `alz/incytr_pair/`
-   - Move `alz/integration/pair_to_receiver_cache.py` →
+   - Rename `alz/incytr_pair/` → `alz/incytr_pair/`
+   - Move `alz/incytr_pair/pair_to_receiver_cache.py` →
      `alz/incytr_pair/pair_to_receiver_cache.py` (it's purely a Mode-3
      output reshaper; doesn't belong in cross-mode integration glue)
    - `alz/integration/` retains: cluster spine builder, omics/transcript
@@ -277,7 +277,9 @@ These are aspirational endpoints, not deadlines. Methodical beats fast.
     (commit `7e73ecb`)
   - Task #14 — Rename `alz/decomposition/` → `alz/decomposition_mea/`:
     **done 2026-05-21** (commit `629446e`)
-  - Task #15 — Consolidate Mode 3 under `alz/incytr_pair/`: pending (next)
+  - Task #15 — Consolidate Mode 3 under `alz/incytr_pair/`: **done 2026-05-21**
+    (renamed `alz/incytr/` → `alz/incytr_pair/` and moved
+    `pair_to_receiver_cache.py` into it)
   - Task #16 — Carve out `alz/cross_reference/` for Mode 4: pending
   - Task #17 — Group ingest + reference: pending
   - Task #18 — Move config.py to `alz/shared/`: pending

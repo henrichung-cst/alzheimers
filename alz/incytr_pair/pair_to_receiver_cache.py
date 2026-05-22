@@ -56,7 +56,7 @@ _LABEL_COLS = [f"{n}.label" for n in _FC_NODES]
 
 # Direction note: Incytr's `Cal_foldchange` (incytr/R/math.R) computes
 # `log2(condition1 / condition2)`. The pair-mode driver
-# (alz/incytr/incytr_commandline.R) passes
+# (alz/incytr_pair/incytr_commandline.R) passes
 # `condition1 = <disease>`, `condition2 = WTyp` — so the raw `*_sclog2FC`
 # values are already disease/WT (positive = up in disease), matching the
 # viewer tooltip and the proteomics layers. No sign flip needed.

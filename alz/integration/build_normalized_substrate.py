@@ -23,7 +23,7 @@ Substrates (per Phase 2 layout, see ``alz/integration/build_omics_trace.py``):
 Driver wide parquets (one per contrast):
     outputs/reports/incytr_pair_mode/wide/<c1>_<c2>_incytr_output.parquet
 
-Aggregation rules (mirror ``alz/incytr/incytr_commandline.R:241-285``):
+Aggregation rules (mirror ``alz/incytr_pair/incytr_commandline.R:241-285``):
     protein   : per-(gene, group) median across the 3 males per group,
                 then per-gene mean (defensive — substrate is already per-gene).
     phospho_* : per-(site, group) median across the 3 males per group,
@@ -80,7 +80,7 @@ YUYU_PS = os.path.join(YUYU_DIR, "ps_yuyu_deconvoluted.csv")
 YUYU_PY = os.path.join(YUYU_DIR, "py_yuyu_deconvoluted.csv")
 
 EPSILON = 1e-3  # matches Cal_foldchange's driver-passed `correction = 0.001`
-# (see alz/incytr/incytr_commandline.R:376-389; the original Item 3.1 audit
+# (see alz/incytr_pair/incytr_commandline.R:376-389; the original Item 3.1 audit
 # noted 1e-5 in error).
 
 # Round-trip sample size per (contrast, layer) for build-time assertion.
@@ -218,7 +218,7 @@ def _discover_contrasts() -> list[tuple[str, str, str]]:
     if not out:
         raise FileNotFoundError(
             f"no wide pair-mode parquets found under {WIDE_DIR}; "
-            f"run alz/incytr/run_pair_mode.sh before this step."
+            f"run alz/incytr_pair/run_pair_mode.sh before this step."
         )
     return out
 
@@ -343,7 +343,7 @@ def build(force: bool = False) -> dict:
         if not os.path.exists(path):
             raise FileNotFoundError(
                 f"normalized-substrate input missing: {path} ({label}). "
-                f"Run alz/incytr/build_pair_inputs.sh first."
+                f"Run alz/incytr_pair/build_pair_inputs.sh first."
             )
 
     contrasts = _discover_contrasts()

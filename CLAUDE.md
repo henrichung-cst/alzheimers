@@ -194,12 +194,12 @@ kinase_enrich.py / kinase_attribute.py + snrna_integration.py  ←  alz/integrat
 
 The Incytr integration is split across two directories:
 
-- **`alz/incytr/`** — run-time drivers: build Seurat inputs, run `Incytr::Cal_pairwise_grid`, emit transcript substrate, orchestrate the per-contrast loop. Reads from `data/derived/incytr_inputs/`; writes wide parquets to `outputs/reports/incytr_pair_mode/wide/`.
+- **`alz/incytr_pair/`** — run-time drivers: build Seurat inputs, run `Incytr::Cal_pairwise_grid`, emit transcript substrate, orchestrate the per-contrast loop. Reads from `data/derived/incytr_inputs/`; writes wide parquets to `outputs/reports/incytr_pair_mode/wide/`.
 - **`alz/integration/`** — consume outputs: reshape wide parquets into `receiver_cache/` for the viewer; build transcript-trace shards; manage config and cluster-spine loading.
 
-All math, scoring, and pathway construction live in the upstream `incytr` R package (`~/Projects/work/incytr/`). **Pair-mode on the levy_t5 spine is the active integration path.** Factorial Incytr was archived 2026-05-18 (`archive/incytr_factorial_2026-05-18/`); upstream `Incytr::construct_factorial_paths` / `score_factorial_paths` were deleted at commit `424119f`. The current production entry point is `Incytr::Cal_pairwise_grid` (`R/grid.R`). See `docs/integrations/kinase_incytr_integration.md` for the architecture; `alz/incytr/README.md` and `alz/integration/README.md` for file-by-file layouts.
+All math, scoring, and pathway construction live in the upstream `incytr` R package (`~/Projects/work/incytr/`). **Pair-mode on the levy_t5 spine is the active integration path.** Factorial Incytr was archived 2026-05-18 (`archive/incytr_factorial_2026-05-18/`); upstream `Incytr::construct_factorial_paths` / `score_factorial_paths` were deleted at commit `424119f`. The current production entry point is `Incytr::Cal_pairwise_grid` (`R/grid.R`). See `docs/integrations/kinase_incytr_integration.md` for the architecture; `alz/incytr_pair/README.md` and `alz/integration/README.md` for file-by-file layouts.
 
-`alz/incytr/` files:
+`alz/incytr_pair/` files:
 
 - `incytr_commandline.R` — R driver: calls `Incytr::Cal_pairwise_grid`; writes one wide parquet per contrast to `outputs/reports/incytr_pair_mode/wide/`
 - `reconstruct_labels.R` / `reconstruct_node_fc.R` — post-processing helpers
@@ -207,6 +207,7 @@ All math, scoring, and pathway construction live in the upstream `incytr` R pack
 - `build_pair_inputs.sh` / `build_pair_seurat.R` / `build_input_gene_list.R` — input-prep (writes to `data/derived/incytr_inputs/`)
 - `export_decomposition_for_pair.py` — reshapes per_cluster parquets into yuyu CSV format for the R driver
 - `run_pair_mode.sh` — per-contrast loop driver
+- `pair_to_receiver_cache.py` — reshapes 9 wide pair-mode parquets from `outputs/reports/incytr_pair_mode/wide/` into `receiver_cache/` for the viewer
 
 `alz/integration/` files:
 
@@ -216,9 +217,8 @@ All math, scoring, and pathway construction live in the upstream `incytr` R pack
 - `plot_cluster_spine.py` — diagnostic plots
 - `build_seaad_bridge.py` — hand-curated `cluster_to_seaad_supertype.csv` (direct, no chained mappings)
 - `build_yuyu_kldata.py` — builds `kldata_pspy.csv` (symlinked into `data/derived/incytr_inputs/kldata.csv`)
-- `pair_to_receiver_cache.py` — reshapes 9 wide pair-mode parquets from `outputs/reports/incytr_pair_mode/wide/` into `receiver_cache/` for the viewer
 
-Entry points: `bash alz/runners/main/run_pair_mode_pipeline.sh` (end-to-end), `bash alz/runners/main/run_pair_mode_viewer_build.sh` (reshape only), `bash alz/incytr/run_pair_mode.sh` (Incytr invocation in isolation). Invariants: **31² = 961 sender × receiver pairs per contrast**, 9 contrasts, rank-deficient clusters emit NaN, **pair pvalue is untrustworthy — filter/rank on `|PDS|`**.
+Entry points: `bash alz/runners/main/run_pair_mode_pipeline.sh` (end-to-end), `bash alz/runners/main/run_pair_mode_viewer_build.sh` (reshape only), `bash alz/incytr_pair/run_pair_mode.sh` (Incytr invocation in isolation). Invariants: **31² = 961 sender × receiver pairs per contrast**, 9 contrasts, rank-deficient clusters emit NaN, **pair pvalue is untrustworthy — filter/rank on `|PDS|`**.
 
 ### Per-cluster proportional decomposition (Levy-t5 spine)
 
@@ -230,7 +230,7 @@ Stages:
 1. `alz/snrna_proportions.py --spine levy_t5` — per-(animal, cluster, gene) weights `f_c = (expr_c / Σ expr) × (N_total / N_c)`
 2. `alz/decomposition_mea/build_celltype_decomposition.py --spine levy_t5 --track both` — projects bulk phospho (IMAC + pY) and protein onto the 31-cluster spine
 3. `alz/decomposition_mea/enrich_celltype.py --spine levy_t5 --track {st,py}` — per-cluster factorial OLS + MEA (9 contrasts; NaN where rank-deficient)
-4. Pair-mode Incytr — `alz/incytr/run_pair_mode.sh` produces `31² = 961` sender × receiver pairs per contrast; outputs to `outputs/reports/incytr_pair_mode/wide/` (factorial Incytr archived 2026-05-18)
+4. Pair-mode Incytr — `alz/incytr_pair/run_pair_mode.sh` produces `31² = 961` sender × receiver pairs per contrast; outputs to `outputs/reports/incytr_pair_mode/wide/` (factorial Incytr archived 2026-05-18)
 
 End-to-end smoke runner: `bash alz/runners/main/run_pivot_smoke.sh [--skip-normalize]` (defaults to `SPINE=levy_t5`).
 

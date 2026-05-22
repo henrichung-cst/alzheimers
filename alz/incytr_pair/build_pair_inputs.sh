@@ -3,9 +3,9 @@
 # data/derived/incytr_inputs/.
 #
 # Order:
-#   1. alz/incytr/build_pair_seurat.R         -> incytr_obj.rds
-#   2. alz/incytr/export_decomposition_for_pair.py -> {pr,ps,py}_yuyu_deconvoluted.csv
-#   3. alz/incytr/build_input_gene_list.R       -> allmarkers.csv, HEG_df.csv,
+#   1. alz/incytr_pair/build_pair_seurat.R         -> incytr_obj.rds
+#   2. alz/incytr_pair/export_decomposition_for_pair.py -> {pr,ps,py}_yuyu_deconvoluted.csv
+#   3. alz/incytr_pair/build_input_gene_list.R       -> allmarkers.csv, HEG_df.csv,
 #                                                  input_gene_list.csv
 #
 # kldata.csv is symlinked in the inputs dir (pointing at
@@ -45,20 +45,20 @@ done
 echo "  ... checking R deps (presto, future)"
 pixi run Rscript -e 'stopifnot(requireNamespace("presto", quietly=TRUE),
                                requireNamespace("future", quietly=TRUE))' \
-  || { echo "missing R deps presto/future — see alz/incytr/build_input_gene_list.R"; exit 1; }
+  || { echo "missing R deps presto/future — see alz/incytr_pair/build_input_gene_list.R"; exit 1; }
 
 {
   echo
   echo "=== $(date -Is) Phase 1a: build_pair_seurat.R (spine=levy_t5) ==="
-  pixi run Rscript alz/incytr/build_pair_seurat.R
+  pixi run Rscript alz/incytr_pair/build_pair_seurat.R
 
   echo
   echo "=== $(date -Is) Phase 1b: export_decomposition_for_pair.py ==="
-  pixi run python alz/incytr/export_decomposition_for_pair.py --track all
+  pixi run python alz/incytr_pair/export_decomposition_for_pair.py --track all
 
   echo
   echo "=== $(date -Is) Phase 1c: build_input_gene_list.R (spine=levy_t5) ==="
-  pixi run Rscript alz/incytr/build_input_gene_list.R
+  pixi run Rscript alz/incytr_pair/build_input_gene_list.R
 
   echo
   echo "=== $(date -Is) Done. Inputs ready under $INPUTS_DIR ==="

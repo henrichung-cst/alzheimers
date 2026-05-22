@@ -9,7 +9,7 @@
 #   Ligand        → Sender   cluster
 #   Receptor, EM, Target → Receiver cluster
 #
-# Conventions matched against alz/incytr/incytr_commandline.R:
+# Conventions matched against alz/incytr_pair/incytr_commandline.R:
 #   * gene-level rollup for ps/py is mean across sites with the same
 #     gene_symbol (Integr_multiomics does the same group_by + mean)
 #   * additive pseudo-count = 0.001 (driver's pr.correction / ps.correction
@@ -21,8 +21,8 @@
 # parquets that already carry them).
 #
 # Usage (from any working directory):
-#   pixi run Rscript alz/incytr/reconstruct_node_fc.R          # default: outputs/reports/incytr_pair_mode/wide/
-#   pixi run Rscript alz/incytr/reconstruct_node_fc.R <dir>
+#   pixi run Rscript alz/incytr_pair/reconstruct_node_fc.R          # default: outputs/reports/incytr_pair_mode/wide/
+#   pixi run Rscript alz/incytr_pair/reconstruct_node_fc.R <dir>
 
 suppressPackageStartupMessages({
   library(Seurat)
