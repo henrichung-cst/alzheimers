@@ -19,6 +19,7 @@ Read by analytical role, not creation order.
 | [`foundation/statistical_constraints.md`](./foundation/statistical_constraints.md) | Governing identifiability and interpretation limits |
 | [`foundation/multiple_testing.md`](./foundation/multiple_testing.md) | Multiple-testing policy across the pipeline |
 | [`foundation/repo_retention_policy.md`](./foundation/repo_retention_policy.md) | Retention policy + active vs archived inventory; banned code paths |
+| [`foundation/cohort_contract.md`](./foundation/cohort_contract.md) | Canonical input/output schemas for the four shared analysis modes; per-cohort parameter knobs |
 | [`foundation/mukesh_ingest_policies.yml`](./foundation/mukesh_ingest_policies.yml) | Mukesh / NBB human ingest edge-case policies (consumed by `ingest_mukesh.py`) |
 
 ## Reference Guides

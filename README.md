@@ -15,7 +15,7 @@ Documentation is organized by role, not by creation date:
 - [`docs/foundation/live_pipeline_contract.md`](docs/foundation/live_pipeline_contract.md) — stage-by-stage inputs, outputs, and run order
 - [`docs/foundation/statistical_constraints.md`](docs/foundation/statistical_constraints.md) — identifiability limits and interpretation guardrails
 - [`docs/foundation/repo_retention_policy.md`](docs/foundation/repo_retention_policy.md) — explicit `main` / `supporting` / `archived` inventory
-- [`CLAUDE.md`](CLAUDE.md) — operator-oriented overview: tasks, file layout, gotchas
+- [`CLAUDE.md`](CLAUDE.md) — agent-specific operating overrides, correctness invariants, and pipeline gotchas (not a duplicate of this README)
 
 Historical context lives under `archive/`.
 
