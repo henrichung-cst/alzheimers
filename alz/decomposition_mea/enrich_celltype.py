@@ -320,7 +320,7 @@ def main():
     if not phospho_path.exists():
         raise FileNotFoundError(
             f"{phospho_path} missing — run Stage 6 "
-            f"(alz/decomposition/build_celltype_decomposition.py) first."
+            f"(alz/decomposition_mea/build_celltype_decomposition.py) first."
         )
 
     print(f"Stage 7 — per-cluster MEA on spine: {args.spine} "

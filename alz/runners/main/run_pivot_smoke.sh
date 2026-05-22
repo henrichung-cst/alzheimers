@@ -12,7 +12,7 @@
 #   2. Stage 5 — snRNA per-cluster proportions
 #   3. Stage 6 — proportional decomposition (st + py)
 #   4. Stage 7 — per-cluster MEA enrichment (st + py)
-#   5. Verification (alz/decomposition/verify_decomposition.py)
+#   5. Verification (alz/decomposition_mea/verify_decomposition.py)
 #
 # Factorial Incytr was archived 2026-05-18 (see archive/incytr_factorial_2026-05-18/);
 # pair-mode is the active Incytr path, driven by run_pair_mode_pipeline.sh.
@@ -45,15 +45,15 @@ echo "=== Step 2: Stage 5 — snRNA per-cluster proportions ==="
 pixi run python alz/snrna_proportions.py --run --spine "$SPINE"
 
 echo "=== Step 3: Stage 6 — proportional decomposition (st + py) ==="
-pixi run python alz/decomposition/build_celltype_decomposition.py --spine "$SPINE" --track both
+pixi run python alz/decomposition_mea/build_celltype_decomposition.py --spine "$SPINE" --track both
 
 echo "=== Step 4a: Stage 7 — per-cluster MEA (st) ==="
-pixi run python -m alz.decomposition.enrich_celltype --spine "$SPINE" --track st
+pixi run python -m alz.decomposition_mea.enrich_celltype --spine "$SPINE" --track st
 echo "=== Step 4b: Stage 7 — per-cluster MEA (py) ==="
-pixi run python -m alz.decomposition.enrich_celltype --spine "$SPINE" --track py || \
+pixi run python -m alz.decomposition_mea.enrich_celltype --spine "$SPINE" --track py || \
   echo "  pY track skipped/failed (likely missing phospho_per_cluster_pY.parquet)"
 
 echo "=== Step 5: verification ==="
-pixi run python alz/decomposition/verify_decomposition.py --spine "$SPINE"
+pixi run python alz/decomposition_mea/verify_decomposition.py --spine "$SPINE"
 
 echo "=== DONE ==="

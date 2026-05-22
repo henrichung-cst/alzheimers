@@ -1,4 +1,4 @@
-# `alz/decomposition/` — per-cluster proportional decomposition track
+# `alz/decomposition_mea/` — per-cluster proportional decomposition track
 
 **Status:** mid-pivot. Renamed from `alz/deconvolution/` in Step 8 of
 the canonical implementation plan. The math, spine, and CLI are being

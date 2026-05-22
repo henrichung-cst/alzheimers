@@ -21,7 +21,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
-from decomposition.build_celltype_decomposition import (  # noqa: E402
+from decomposition_mea.build_celltype_decomposition import (  # noqa: E402
     _bulk_to_long, _load_sample_mapping,
 )
 
@@ -167,9 +167,12 @@ def check_per_cluster_vs_bulk_mea(spine_dir: Path, weights: pd.DataFrame) -> dic
 
 def check_incytr_pair_count() -> dict:
     expected = icfg.load_cluster_spine()
-    # Self-pairs (sender == receiver) are intentionally excluded by the
-    # factorial wrapper, so the expected universe is 19 × 18 = 342, not 19².
-    expected_pairs = len(expected) * (len(expected) - 1)
+    # Pair-mode (Cal_pairwise_grid) emits the full N×N grid including
+    # self-pairs (sender == receiver). The legacy factorial wrapper used to
+    # exclude self-pairs (N × (N−1)); factorial was archived 2026-05-18 and
+    # the upstream APIs deleted at commit 424119f, so this check no longer
+    # subtracts the diagonal.
+    expected_pairs = len(expected) * len(expected)
     if not INCYTR_PAIRS.exists():
         return {"check": "incytr_pair_count", "status": "missing",
                 "expected_pairs": expected_pairs, "pass": None}
@@ -188,7 +191,7 @@ def check_incytr_pair_count() -> dict:
             "pass": len(pm) == expected_pairs
                     and senders == set(expected)
                     and receivers == set(expected)
-                    and self_pairs == 0}
+                    and self_pairs == len(expected)}
 
 
 def main():

@@ -121,14 +121,14 @@ run_step B "snRNA proportions" \
   pixi run python alz/snrna_proportions.py --run --spine "$SPINE"
 
 run_step C "cell-type decomposition (st + py)" \
-  pixi run python alz/decomposition/build_celltype_decomposition.py \
+  pixi run python alz/decomposition_mea/build_celltype_decomposition.py \
     --spine "$SPINE" --track both
 
 run_step D-st "per-cluster MEA (st)" \
-  pixi run python -m alz.decomposition.enrich_celltype --spine "$SPINE" --track st
+  pixi run python -m alz.decomposition_mea.enrich_celltype --spine "$SPINE" --track st
 
 run_step D-py "per-cluster MEA (py)" \
-  pixi run python -m alz.decomposition.enrich_celltype --spine "$SPINE" --track py
+  pixi run python -m alz.decomposition_mea.enrich_celltype --spine "$SPINE" --track py
 
 if [[ $SKIP_INCYTR -eq 0 ]]; then
   incytr_dir="alz/incytr"
@@ -182,7 +182,7 @@ run_step I "rebuild unified viewer" \
   pixi run python alz/build_unified_viewer.py
 
 run_step V "verification" \
-  pixi run python alz/decomposition/verify_decomposition.py --spine "$SPINE"
+  pixi run python alz/decomposition_mea/verify_decomposition.py --spine "$SPINE"
 
 T_TOTAL_END=$(date +%s)
 TOTAL=$((T_TOTAL_END - T_TOTAL_START))

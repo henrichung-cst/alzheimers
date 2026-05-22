@@ -32,6 +32,16 @@ The **dual-track runner** runs males-only (primary) and full-cohort (sensitivity
 pixi run dual
 ```
 
+The **human cohort pipeline** runs the NBB/Mukesh ingest → per-donor MEA → SEA-AD agreement chain:
+```bash
+pixi run human
+```
+
+The **end-to-end runner** chains every stage — mouse + per-cluster decomposition + Incytr pair-mode + human + viewer — with hardfail gates and resumable sentinels:
+```bash
+pixi run all
+```
+
 Or run individual stages:
 ```bash
 pixi run ingest     # data ingestion
@@ -89,7 +99,7 @@ python alz/wmb_expression.py --summary   # Print cached results
 # Runner: bash alz/runners/supporting/run_wmb_expression.sh
 
 # Song snRNA-seq Integration (within-cohort evidence from paired animals)
-python alz/snrna_integration.py --pseudobulk    # S1: pseudobulk from 170 h5ad (28 animals → ~21 of 34 WMB classes)
+python alz/snrna_integration.py --pseudobulk    # S1: pseudobulk from 170 h5ad (28 animals → all 31 Levy-t5 clusters)
 python alz/snrna_integration.py --specificity   # S2: within-cohort expression specificity
 python alz/snrna_integration.py --concordance   # S3: within-cohort transcriptomic concordance (males-only OLS)
 python alz/snrna_integration.py --run           # All stages in order
@@ -218,13 +228,13 @@ Branch path active alongside the bulk live pipeline. Forward projection only —
 
 Stages:
 1. `alz/snrna_proportions.py --spine levy_t5` — per-(animal, cluster, gene) weights `f_c = (expr_c / Σ expr) × (N_total / N_c)`
-2. `alz/decomposition/build_celltype_decomposition.py --spine levy_t5 --track both` — projects bulk phospho (IMAC + pY) and protein onto the 31-cluster spine
-3. `alz/decomposition/enrich_celltype.py --spine levy_t5 --track {st,py}` — per-cluster factorial OLS + MEA (9 contrasts; NaN where rank-deficient)
+2. `alz/decomposition_mea/build_celltype_decomposition.py --spine levy_t5 --track both` — projects bulk phospho (IMAC + pY) and protein onto the 31-cluster spine
+3. `alz/decomposition_mea/enrich_celltype.py --spine levy_t5 --track {st,py}` — per-cluster factorial OLS + MEA (9 contrasts; NaN where rank-deficient)
 4. Pair-mode Incytr — `alz/incytr/run_pair_mode.sh` produces `31² = 961` sender × receiver pairs per contrast; outputs to `outputs/reports/incytr_pair_mode/wide/` (factorial Incytr archived 2026-05-18)
 
 End-to-end smoke runner: `bash alz/runners/main/run_pivot_smoke.sh [--skip-normalize]` (defaults to `SPINE=levy_t5`).
 
-Verification harness (`alz/decomposition/verify_decomposition.py --spine levy_t5 --all`) writes `outputs/reports/decomposition/levy_t5/verification.json` and checks four contracts:
+Verification harness (`alz/decomposition_mea/verify_decomposition.py --spine levy_t5 --all`) writes `outputs/reports/decomposition/levy_t5/verification.json` and checks four contracts:
 - Mass identity `Σ_c [P_c × (N_c / N_total)] ≈ bulk` (per-cell-rate, **not** `Σ_c P_c = bulk`)
 - Spine coverage (all 31 clusters present, no silent drops)
 - Per-cluster vs bulk MEA agreement under `f_c`-weighting (Spearman ρ ≥ 0.7 per contrast)
@@ -232,11 +242,30 @@ Verification harness (`alz/decomposition/verify_decomposition.py --spine levy_t5
 
 The legacy R wrappers / Python adapters / sidecars / orchestrator shell scripts were retired during the rewrite. They are preserved under `archive/incytr_integration/` (bulk gitignored per repo allowlist; on disk only — copy back if needed). R deps (`Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`) are still required.
 
+### Human-Cohort Pipeline (NBB / Mukesh)
+
+Independent chain for the human Alzheimer's cohort, feeding the unified viewer's human evidence panels. AD-vs-CTRL is per-donor (no per-cell-type resolution in the human samples), so SEA-AD agreement is a cohort-level direction check rather than the cell-type-resolved attribution used on the mouse side.
+
+Stages:
+1. `alz/ingest_mukesh.py --reshape` — reshape raw Mukesh CSVs into `kinase_attribution_human/raw_phospho_normalized{,_pY}.csv` + stoichiometry matrices
+2. `alz/ingest_mukesh_perdonor.py --track both` — per-donor MEA on stoichiometry and raw-phospho tracks; emits `perdonor/recurrence{,_pY}.csv`, `kinase_donor_nes{,_pY}.csv`, etc.
+3. `alz/seaad_human_agreement.py` — cohort-level SEA-AD LFC per kinase (collapsed across 139 MTG supertypes); writes `outputs/reports/kinase_attribution/human_seaad_agreement.csv`
+
+Entry point: `bash alz/runners/main/run_mukesh_perdonor.sh` or `pixi run human` (= ingest + perdonor + seaad).
+
+Outputs:
+- `outputs/reports/kinase_attribution_human/` — raw + per-donor results (cohort-internal vocabulary; lives separately from mouse outputs)
+- `outputs/reports/kinase_attribution/human_seaad_agreement.csv` — cross-cohort SEA-AD agreement, colocated with mouse SEA-AD evidence for the viewer to join
+
 ### Runners
 
 Operational shell wrappers under `alz/runners/`:
+- `main/run_all.sh` — **End-to-end runner**: mouse → decomposition → Incytr pair-mode → human → viewer. Backs `pixi run all`. Resumable via per-step sentinels.
 - `main/run_live_pipeline.sh` — Bundled front door (data_ingest → kinase_attribution → attribution_recovery, gates on WMB prerequisite)
 - `main/run_dual_analysis.sh` — **Dual-track runner**: males-only (primary) + full-cohort (sensitivity), archives outputs to `*_males_only/` and `*_full_cohort/` directories
+- `main/run_mukesh_perdonor.sh` — Human cohort: ingest_mukesh_perdonor + seaad_human_agreement
+- `main/rerun_mouse_kinase_chain.sh` — Re-run normalize → enrich → mechanism → attribute → recover after Stage-1 changes
+- `main/rerun_decomposition_chain.sh` — Re-run pseudobulk → proportions → decomposition → enrich_celltype → build_per_animal_site_ols → verify
 - `main/run_data_ingest.sh` — Data ingestion wrapper
 - `main/run_kinase_attribution.sh` — Kinase attribution wrapper
 - `main/run_attribution_recovery.sh` — Attribution recovery wrapper
@@ -244,20 +273,35 @@ Operational shell wrappers under `alz/runners/`:
 - `supporting/run_atlas_reference.sh` — Atlas reference setup
 - `supporting/run_wmb_expression.sh` — WMB expression export
 
-**Caching:** External API calls (MyGene.info, Allen Brain Atlas) are cached inside `data/datasets/song/analysis_cache/` to avoid redundant requests.
+**Caching:** External API calls (MyGene.info, Allen Brain Atlas) are cached inside `data/derived/caches/` to avoid redundant requests.
 
 ## Key Data Files
+
+**Storage tiers** (see `data/README.md` for full layout):
+- `data/datasets/` — raw collaborator drops (Song, Mukesh, 5xFAD)
+- `data/external/` — raw downloads from public sources (SEA-AD h5ads, WMB matrices, HBCA)
+- `data/derived/bridges/` — curated crosswalks built once from raw sources
+- `data/derived/aggregates/` — heavyweight derived matrices (SEA-AD supertype expression, HBCA class expression)
+- `data/derived/caches/` — API caches (MyGene homologene + kinase→gene mappings)
+- `data/derived/incytr_inputs/` — R driver inputs (built tables + `kldata.csv` symlink)
+- `data/incytr_frozen/v2_46clusters/` — run-once snRNA spine artifacts (levy_t5 + provenance)
+- `data/raw/external/` — rclone ingest targets (Lucie 5xFAD)
 
 ### Live Pipeline Inputs
 - `data/datasets/song/primary/proteomics/song2024_tmttotal_protein_quant_merged_labeled (2).xlsx` — 72-animal total proteome (6 plexes × 10 TMT channels)
 - `data/datasets/song/primary/phospho/song_IMAC_{sitequant,compositeSites}_merged_labeled (2).xlsx` — Phospho IMAC (pS/pT) site-level + composite
 - `data/datasets/song/primary/phospho/song_pY_{sitequant,compositeSites}_merged_labeled (2).xlsx` — Phospho pY site-level + composite (1st-class sibling to IMAC)
 - `data/datasets/song/primary/metadata/Sample_list_72mice (1).xlsx` — TMT channel-to-animal sample mapping
-- `data/external/allen_abc/` — Cached Allen Brain Cell Atlas data (WMB)
-- `data/external/sea_ad/` — SEA-AD MTG processed data (h5ad, 139 supertypes): `effect_sizes.h5ad` (full CPS), `effect_sizes_early.h5ad` (early/low-CPS), `effect_sizes_late.h5ad` (late/high-CPS)
+- `data/datasets/song/kinase/kldata_pspy.csv` — Song/Yuyu-derived kinase-substrate library (built by `alz/integration/build_yuyu_kldata.py`; symlinked into `data/derived/incytr_inputs/kldata.csv` for the R driver). **Canonical** — `config.KLDATA_FILE` points here.
+- `data/external/allen_abc/expression_matrices/` — WMB 10Xv3 log2 expression matrices (~26 GB compressed)
+- `data/external/sea_ad/` — SEA-AD MTG processed h5ads: `effect_sizes.h5ad` (full CPS), `effect_sizes_early.h5ad` (early/low-CPS), `effect_sizes_late.h5ad` (late/high-CPS)
+- `data/derived/bridges/` — `cluster_to_wmb_class.csv`, `cluster_to_seaad_supertype.csv`, `cluster_to_hbca_supercluster.csv`, `wmb_subclass_to_class.csv` (all curated crosswalks)
+- `data/derived/aggregates/seaad/expression_by_supertype.csv` — SEA-AD MTG per-supertype mean expression (built by `atlas_reference.py --sea-ad-expression`)
+- `data/derived/aggregates/hbca/expression_by_class.csv` — HBCA per-class mean expression (built by `atlas_reference.py --hbca-download`)
 
 ### Supporting/Cached Data
-- `data/datasets/song/analysis_cache/kinase_to_gene_mapping.csv` — Cached kinase→gene symbol mappings
+- `data/derived/caches/kinase_to_gene_mapping.csv` — Cached kinase→gene symbol mappings (MyGene API)
+- `data/derived/caches/human_to_mouse_homologene.csv` — Cached homologene mappings (built by `build_yuyu_kldata.py`)
 - `outputs/reports/wmb_expression/wmb_kinase_expression.csv` — WMB expression matrix (required for unified attribution)
 
 ### Pair-mode Incytr Inputs/Outputs
@@ -265,7 +309,7 @@ Operational shell wrappers under `alz/runners/`:
 - `outputs/reports/incytr_pair_mode/wide/` — 9 wide parquets (one per contrast, 31² = 961 rows each): `ma_{2,4,6}mo_{AppP,Ttau,ApTt}_ma_{2,4,6}mo_WTyp_incytr_output.parquet`
 
 ### Decomposition (CTM-native, branch-only — not in live pipeline)
-`alz/deconvolution/build_wmb_decomposition.py` consumes per-(site, group) bulk medians (`imac_median.csv`, `py_median.csv`, `pr_median.csv`) and the `yuyu_samplekey.csv` MS\_ID↔SCRNA bridge. These were deleted from `data/datasets/song/proteomics/source/` on 2026-05-07; re-pull from Google Drive via `pixi run ingest-gdrive-shared` before running the branch. Outputs: `outputs/reports/deconvolution/wmb_decomposition/{ps,py,pr}_wmb_decomposition.csv` + `wmb_class_size.csv`.
+`alz/deconvolution/build_wmb_decomposition.py` consumes per-(site, group) bulk medians (`imac_median.csv`, `py_median.csv`, `pr_median.csv`) and the `yuyu_samplekey.csv` MS\_ID↔SCRNA bridge under `data/datasets/song/proteomics/source/`. If missing, re-pull from Google Drive via `pixi run ingest-gdrive-shared` before running the branch. Outputs: `outputs/reports/deconvolution/wmb_decomposition/{ps,py,pr}_wmb_decomposition.csv` + `wmb_class_size.csv`.
 
 ## Output
 
@@ -318,7 +362,7 @@ Other documentation:
 - **WMB region scope** — `WMB_REGION_SCOPE` env var (default `whole_brain`) selects the regions streamed by `wmb_expression.py`. `whole_brain` uses all 13 regions, which is correct for the specificity score (its denominator is the brain-wide reference). `cortex_hpf` (Isocortex-1/2 + HPF + CTXsp) exists as a sensitivity-check toggle — see `docs/kinase_mapping_rerun_plan.md` "cortex_hpf swap" addendum for why it is not the default. Output filename is the same across scopes; the active scope is stamped to `wmb_kinase_expression.scope.json` and a scope mismatch will force a recompute
 - **Atlas cache compressed** — raw h5ad files under `data/external/allen_abc/` are zstd-compressed to save space (~115 GB → ~26 GB). Decompress with `bash alz/runners/supporting/decompress_atlas_cache.sh` before re-running `wmb_expression.py`. See `data/external/allen_abc/MANIFEST.json` for provenance
 - **SEA-AD data required** — Unified attribution needs SEA-AD effect sizes under `config.SEA_AD_DIR`
-- **API caching** — delete files under `data/datasets/song/analysis_cache/` to force re-fetch
+- **API caching** — delete files under `data/derived/caches/` to force re-fetch
 - **WMB expression memory** — `wmb_expression.py --proteome` processes 6,308 genes across 13 regions; use `skip_regional=True` and `chunk_size=2000` to avoid OOM (~30GB RAM available)
 - **Do not reopen closed paths** — direct (statistical) deconvolution, per-cluster stoichiometry, factor model, two-compartment, and transcript-only rescue are all closed (see charter). Proportional decomposition on the **Levy-t5** spine (31 clusters, min-cells ≥ 5, no rank gate) is **active** as a forward projection only. Earlier spines (WMB-34, Levy-19) are superseded — do not reintroduce them as flags or fallbacks (see the research-pivot rule below)
 - **Research pivots replace, they do not coexist** — this is an active research repo, not a product. When an analytical choice changes (cell-type spine, threshold, normalization, taxonomy), the new choice **replaces** the old one. Do not preserve the prior mode behind a CLI flag default, an `if name == "old"` branch, a legacy symlink, a renamed column for old readers, or an env-var escape hatch. A pivot means the prior mode was *wrong* in light of new evidence — keeping it reachable bloats the codebase and signals false equivalence between deprecated and current methods. Update docstrings, comments, README, and runner scripts in the same pass. Output artifacts from prior runs (e.g. `outputs/reports/decomposition/levy19/`) may stay on disk as historical record, but *code paths* referencing them must go. "We might switch back later" and "smaller diff" are explicit non-goals

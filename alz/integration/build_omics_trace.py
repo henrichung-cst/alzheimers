@@ -241,7 +241,7 @@ def build(force: bool = False) -> dict:
         if not os.path.exists(path):
             raise FileNotFoundError(
                 f"omics_trace substrate missing: {path} ({label}). "
-                f"Run alz/decomposition/build_celltype_decomposition.py "
+                f"Run alz/decomposition_mea/build_celltype_decomposition.py "
                 f"before rebuilding the viewer."
             )
 

@@ -27,7 +27,7 @@ reachable from code.
 
 | File | Role |
 |---|---|
-| `config_integration.py` | Filter values, design columns, contrast vectors, paths. `load_cluster_spine()` is consumed by `alz/snrna_proportions.py`, `alz/decomposition/verify_decomposition.py`, and the viewer. |
+| `config_integration.py` | Filter values, design columns, contrast vectors, paths. `load_cluster_spine()` is consumed by `alz/snrna_proportions.py`, `alz/decomposition_mea/verify_decomposition.py`, and the viewer. |
 | `build_cluster_spine.py` | Run-once generator: builds the Levy-t5 31-cluster spine CSV from the Levy lab cluster key + barcode-to-cluster table. Outputs to `data/incytr_frozen/v2_46clusters/spines/<name>/cluster_spine.csv`. |
 | `extract_cluster_assignments.R` | Run-once generator: emits `barcode_to_cluster.csv` and `cell_metadata.csv` from the legacy `incytr_obj.rds`. |
 | `plot_cluster_spine.py` | Diagnostic plots over `cluster_spine.csv`. |

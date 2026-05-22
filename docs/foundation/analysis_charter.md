@@ -21,7 +21,7 @@ These paths are closed and should not drive new code. See [`analysis_rationale.m
 |:---|:---|
 | Direct (statistical) cell-type deconvolution from the 24-group design | Closed — not identifiable |
 | Per-cluster stoichiometry | Closed — algebraically collapses to bulk under same-proportion-for-both numerator and denominator |
-| Proportional decomposition with snRNA-seq prior (`alz/decomposition/`) | **Active branch (Levy-19 spine)** — forward projection only (`P_c = f_c × bulk`), not statistical recovery; consumed by per-cluster MEA (Stage 7) and the Incytr factorial wrapper (Stage 8). See [`../incytr_deconvolution_pivot.md`](../incytr_deconvolution_pivot.md) |
+| Proportional decomposition with snRNA-seq prior (`alz/decomposition_mea/`) | **Active branch (Levy-19 spine)** — forward projection only (`P_c = f_c × bulk`), not statistical recovery; consumed by per-cluster MEA (Stage 7) and the Incytr factorial wrapper (Stage 8). See [`../incytr_deconvolution_pivot.md`](../incytr_deconvolution_pivot.md) |
 | Joint kinase-activity factor model | Closed — composition bottleneck |
 | Two-compartment neuronal/glial simplification | Closed — failed validation |
 | Transcript-only rescue | Closed — no defensible attribution |

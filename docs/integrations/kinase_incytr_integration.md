@@ -9,11 +9,11 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
 ```
             kinase pipeline                          snRNA pipeline
                   │                                        │
-    alz/decomposition/build_celltype_decomposition.py      │
+    alz/decomposition_mea/build_celltype_decomposition.py      │
                   │  (per-cluster phospho + protein         │
                   │   projected onto levy_t5 spine)         │
                   ▼                                        │
-    alz/decomposition/enrich_celltype.py                    │
+    alz/decomposition_mea/enrich_celltype.py                    │
                   │  (per-cluster factorial OLS +           │
                   │   MEA, 9 contrasts, NaN where           │
                   │   rank-deficient)                       │
@@ -56,7 +56,7 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
 
 | File | Role |
 |---|---|
-| `config_integration.py` | Filter values, design columns, contrast vectors, paths. `load_cluster_spine()` is the single source of truth for the 31-cluster levy_t5 spine; consumed by `alz/snrna_proportions.py`, `alz/decomposition/verify_decomposition.py`, and the viewer. |
+| `config_integration.py` | Filter values, design columns, contrast vectors, paths. `load_cluster_spine()` is the single source of truth for the 31-cluster levy_t5 spine; consumed by `alz/snrna_proportions.py`, `alz/decomposition_mea/verify_decomposition.py`, and the viewer. |
 | `build_cluster_spine.py` | Run-once generator: builds the levy_t5 31-cluster spine CSV from the Levy lab cluster key + barcode-to-cluster table. Outputs to `data/incytr_frozen/v2_46clusters/spines/<name>/cluster_spine.csv`. |
 | `extract_cluster_assignments.R` | Run-once generator: emits `barcode_to_cluster.csv` and `cell_metadata.csv` from the legacy `incytr_obj.rds`. |
 | `plot_cluster_spine.py` | Diagnostic plots over `cluster_spine.csv`. |
@@ -79,7 +79,7 @@ R dependencies still required: `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`.
 
 - **31² = 961 sender × receiver pairs per contrast** — must hold for every one of the 9 contrasts. A drop indicates either a spine-rebuild bug or a silent filter in the upstream call.
 - **9 contrasts** — disease × timepoint (3 diseases × 3 timepoints; const + App + Tau + Int + time_4mo + time_6mo + App×time4 + App×time6 + Tau×time4 + Tau×time6, contrast list in `config_integration.py`).
-- **Rank-deficient clusters emit NaN, not silent drops** — preserves the 31-cluster spine in every output. Verify with `python alz/decomposition/verify_decomposition.py --spine levy_t5 --all`.
+- **Rank-deficient clusters emit NaN, not silent drops** — preserves the 31-cluster spine in every output. Verify with `python alz/decomposition_mea/verify_decomposition.py --spine levy_t5 --all`.
 - **Pair-mode pvalue is untrustworthy** — filter / rank pathways on `|PDS|`, not pvalue. (Reason: pair-mode permutation pvalues conflate enumeration biases with signal; see memory note `project_incytr_pair_pvalue_untrustworthy`.)
 - **Direct levy_t5 crosswalks only** — reference annotations (WMB, SEA-AD, HBCA, Song) map *directly* to levy_t5 clusters. No chained mappings through intermediate vocabularies.
 
