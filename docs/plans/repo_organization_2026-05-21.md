@@ -93,7 +93,7 @@ overkill for a solo-dev research repo with four pipelines, and the parallel
 kedro entry points (added for Mode 1 only) duplicate the flat-script CLI
 without adding enough value to justify finishing. Decision: **stop the kedro
 migration and adopt one consistent organizational style for all four modes**
-— the subdirectory pattern that already works for `alz/decomposition/`.
+— the subdirectory pattern that already works for `alz/decomposition_mea/`.
 
 Target layout:
 
@@ -166,7 +166,7 @@ schema spec independent of which framework reads it.
    - Every script under `alz/runners/main/` and `alz/runners/supplementary/`
      that invokes `python alz/kinase_*.py` or `python alz/attribution_recovery.py`
 
-3. **Rename `alz/decomposition/` → `alz/decomposition_mea/` (task #14)** for
+3. **Rename `alz/decomposition_mea/` → `alz/decomposition_mea/` (task #14)** for
    parallelism with `bulk_mea/`. Update `alz/decomposition/paths.py` import
    sites, `alz/runners/main/rerun_decomposition_chain.sh`,
    `alz/runners/main/run_pivot_smoke.sh`, and any `from alz.decomposition`
@@ -224,7 +224,7 @@ commits. **Recommended commit cadence: one commit per task.**
 
 **Why not numbered files inside each subdir.** Considered briefly. Numbered
 prefixes break when steps get inserted/reordered, and the existing
-`alz/decomposition/` (six descriptive filenames + README documenting order)
+`alz/decomposition_mea/` (six descriptive filenames + README documenting order)
 reads fine without them. Stick with descriptive names + README.
 
 ## Open Blockers (the stack)
@@ -276,8 +276,8 @@ These are aspirational endpoints, not deadlines. Methodical beats fast.
   - Task #13 — Move Mode 1 → `alz/bulk_mea/`: **done 2026-05-21**
     (commit `7e73ecb`)
   - Task #14 — Rename `alz/decomposition/` → `alz/decomposition_mea/`:
-    pending (next)
-  - Task #15 — Consolidate Mode 3 under `alz/incytr_pair/`: pending
+    **done 2026-05-21** (commit `629446e`)
+  - Task #15 — Consolidate Mode 3 under `alz/incytr_pair/`: pending (next)
   - Task #16 — Carve out `alz/cross_reference/` for Mode 4: pending
   - Task #17 — Group ingest + reference: pending
   - Task #18 — Move config.py to `alz/shared/`: pending
