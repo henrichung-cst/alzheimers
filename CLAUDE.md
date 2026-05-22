@@ -65,20 +65,20 @@ python alz/ingest/song.py --summary       # Print cached results
 
 Sample filtering (`analysis_mode`) lives in `conf/base/parameters.yml`. Default is `males_only`; `KEDRO_ENV=full_cohort` overlays `conf/full_cohort/parameters.yml` for the sensitivity analysis.
 ```bash
-python alz/kinase_normalize.py                            # Stage 1: IRS cross-plex normalization + stoichiometry (all 72 samples)
-python alz/kinase_enrich.py                               # Stage 2: OLS + MEA (males-only by default; KEDRO_ENV=full_cohort to switch)
-python alz/kinase_attribute.py                            # Stage 3: Unified cell-type attribution
-python alz/kinase_mechanism.py                            # Optional: raw phospho MEA + mechanism classification
-python alz/kinase_summary.py                              # Print cached results
+python alz/bulk_mea/normalize.py                          # Stage 1: IRS cross-plex normalization + stoichiometry (all 72 samples)
+python alz/bulk_mea/enrich.py                             # Stage 2: OLS + MEA (males-only by default; KEDRO_ENV=full_cohort to switch)
+python alz/bulk_mea/attribute.py                          # Stage 3: Unified cell-type attribution
+python alz/bulk_mea/mechanism.py                          # Optional: raw phospho MEA + mechanism classification
+python alz/bulk_mea/summary.py                            # Print cached results
 ```
 
-**Final attribution-table assembly** (`attribution_recovery.py`):
+**Final attribution-table assembly** (`alz/bulk_mea/recover.py`):
 ```bash
-python alz/attribution_recovery.py --kinase-profiles   # S3: Kinase activity matrix + hypothesis table
-python alz/attribution_recovery.py --celltype-profiles # S4: Cell-type evidence table + kinase profiles
-python alz/attribution_recovery.py --hypothesis-tables # S3+S4: Run both new hypothesis table steps
-python alz/attribution_recovery.py --run               # All steps in order
-python alz/attribution_recovery.py --summary           # Print cached results
+python alz/bulk_mea/recover.py --kinase-profiles   # S3: Kinase activity matrix + hypothesis table
+python alz/bulk_mea/recover.py --celltype-profiles # S4: Cell-type evidence table + kinase profiles
+python alz/bulk_mea/recover.py --hypothesis-tables # S3+S4: Run both new hypothesis table steps
+python alz/bulk_mea/recover.py --run               # All steps in order
+python alz/bulk_mea/recover.py --summary           # Print cached results
 ```
 
 ### Supporting Prerequisites
@@ -173,12 +173,12 @@ alz/bulk_mea/{enrich,attribute}.py + alz/reference/snrna_integration.py  ←  al
 
 - `alz/shared/config.py` — Shared configuration (imported as `from alz.shared import config`): file paths, thresholds, enrichment method params, `WMB_CLASSES` list (34 WMB classes, single source of truth for the cell-type spine — used by both the kinase pipeline and the Incytr integration), `load_song_to_wmb_class_map()` (Allen Cell Type Mapper raw `subclass_name` → WMB class, built from `wmb_subclass_to_class.csv` with numeric prefix stripped; no SEA-AD intermediate), `OUTLIER_ZSCORE_THRESH`. `ANALYSIS_MODE` is a bridge attribute that loads `analysis_mode` from Kedro parameters (`conf/base/parameters.yml`, KEDRO_ENV-switchable); Phase 4 will replace direct reads with node-injected `params:analysis_mode`. Still structurally mixed with legacy settings.
 - `alz/ingest/song.py` — TMT channel mapping, phosphosite-to-protein matching, marker assessment, PCA quality control, outlier detection. Outputs to `outputs/reports/data_ingest/`. Requires: `scikit-learn`, `matplotlib`.
-- `kinase_normalize.py` — Stage 1: IRS cross-plex normalization (all 72 samples) + stoichiometry computation. Per-track (`--track st|py|both`). Outputs to `outputs/reports/kinase_attribution/`. Requires: `scikit-learn`, `matplotlib`.
-- `kinase_enrich.py` — Stage 2: sample filtering (outlier exclusion + sex), factorial OLS with disease×timepoint interactions (9 contrasts), MEA kinase enrichment (median-centered + winsorized). Per-track. Requires: `kinase-library`, `gseapy`.
-- `kinase_attribute.py` — Stage 3: unified cell-type attribution (SEA-AD concordance + WMB expression specificity + Song within-cohort). Currently consumes the `st` track only. Requires: `anndata`.
-- `kinase_mechanism.py` — Optional supplementary stage: raw-phospho MEA + abundance/activity/both classification. Reuses Stage 2 helpers via import.
-- `kinase_summary.py` — Read-only: prints a cached-results summary across all four stages.
-- `attribution_recovery.py` — Cross-contrast consistency analysis, final unified attribution table. Outputs to `outputs/reports/attribution_recovery/`. Requires: `matplotlib`.
+- `alz/bulk_mea/normalize.py` — Stage 1: IRS cross-plex normalization (all 72 samples) + stoichiometry computation. Per-track (`--track st|py|both`). Outputs to `outputs/reports/kinase_attribution/`. Requires: `scikit-learn`, `matplotlib`.
+- `alz/bulk_mea/enrich.py` — Stage 2: sample filtering (outlier exclusion + sex), factorial OLS with disease×timepoint interactions (9 contrasts), MEA kinase enrichment (median-centered + winsorized). Per-track. Requires: `kinase-library`, `gseapy`.
+- `alz/bulk_mea/attribute.py` — Stage 3: unified cell-type attribution (SEA-AD concordance + WMB expression specificity + Song within-cohort). Currently consumes the `st` track only. Requires: `anndata`.
+- `alz/bulk_mea/mechanism.py` — Optional supplementary stage: raw-phospho MEA + abundance/activity/both classification. Reuses Stage 2 helpers via import.
+- `alz/bulk_mea/summary.py` — Read-only: prints a cached-results summary across all four stages.
+- `alz/bulk_mea/recover.py` — Cross-contrast consistency analysis, final unified attribution table. Outputs to `outputs/reports/attribution_recovery/`. Requires: `matplotlib`.
 - `plot_attribution_bubbles.py` — Per-tissue heatmaps, direction-over-time diverging bars, ApTt additivity scatter, winsorization diagnostic. Outputs to `outputs/reports/attribution_recovery/bubble_plots/`. Requires: `matplotlib`, `scipy`.
 - `build_unified_viewer.py` — Generates the interactive HTML viewer (kinase activity → cell-type attribution → pathway backbones → cross-entity views). Reads attribution-recovery tables, MEA stoichiometry, site-level OLS, factorial backbone recurrence + permutation pvalues, and the `kinase_backbone_edges.parquet` edge index. Emits `outputs/reports/unified_viewer/index.html` + a shared JSON payload plus sharded per-entity edge slices under `edge_slices/{kinase,backbone}/` fetched on demand via `SliceCache`. Requires: `kinase-library`, `scipy`, `pyarrow`.
 - `alz/ingest/lucie.py` — Builds a proteomics manifest for Lucie 5xFAD data integration.
@@ -368,7 +368,7 @@ Other documentation:
 - **Research pivots replace, they do not coexist** — this is an active research repo, not a product. When an analytical choice changes (cell-type spine, threshold, normalization, taxonomy), the new choice **replaces** the old one. Do not preserve the prior mode behind a CLI flag default, an `if name == "old"` branch, a legacy symlink, a renamed column for old readers, or an env-var escape hatch. A pivot means the prior mode was *wrong* in light of new evidence — keeping it reachable bloats the codebase and signals false equivalence between deprecated and current methods. Update docstrings, comments, README, and runner scripts in the same pass. Output artifacts from prior runs (e.g. `outputs/reports/decomposition/levy19/`) may stay on disk as historical record, but *code paths* referencing them must go. "We might switch back later" and "smaller diff" are explicit non-goals
 - **Per-cluster mass identity is per-cell-rate** — verification check is `Σ_c [P_c × (N_c / N_total)] ≈ bulk`, NOT `Σ_c P_c = bulk` (the `f_c` weights are per-cell rates × N_total/N_c, so literal summation overshoots)
 - **Stage 6 pY track gating** — `build_celltype_decomposition.py --track py` (or `both`) requires `raw_phospho_normalized_pY.csv` from Stage 1. Smoke runner tolerates missing pY; if you need it, re-run `pixi run normalize` first
-- **Integration is pair-mode only** — production entry point is `Incytr::Cal_pairwise_grid` (`~/Projects/work/incytr/R/grid.R`); factorial Incytr was archived 2026-05-18 and the upstream factorial APIs (`construct_factorial_paths`, `score_factorial_paths`) were deleted at commit `424119f` — do not reintroduce them. R deps still required: `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`. Integration config lives in `alz/integration/config_integration.py`, not `alz/config.py`. **Pair pvalue is untrustworthy — filter/rank pathways on `|PDS|`**
+- **Integration is pair-mode only** — production entry point is `Incytr::Cal_pairwise_grid` (`~/Projects/work/incytr/R/grid.R`); factorial Incytr was archived 2026-05-18 and the upstream factorial APIs (`construct_factorial_paths`, `score_factorial_paths`) were deleted at commit `424119f` — do not reintroduce them. R deps still required: `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`. Integration config lives in `alz/integration/config_integration.py`, not `alz/shared/config.py`. **Pair pvalue is untrustworthy — filter/rank pathways on `|PDS|`**
 - **Unified-viewer payload is inlined into `index.html`** — `build_unified_viewer.py` ships PAYLOAD as `<script type="application/json" id="payload-data">` directly in the HTML, not as a separate fetch. After `pixi run viewer` rebuilds, reload the page with a hard refresh (Ctrl+Shift+R / Cmd+Shift+R) — a soft reload serves the cached HTML and the new data won't appear. Quick check from DevTools: `PAYLOAD.meta.generated_at` should match the latest build timestamp
 
 ## Tooling & Environment
