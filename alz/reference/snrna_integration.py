@@ -21,11 +21,11 @@ Outputs:
   outputs/reports/snrna_integration/song_concordance.csv
 
 Usage:
-    python alz/snrna_integration.py --pseudobulk    # S1: pseudobulk from h5ad
-    python alz/snrna_integration.py --specificity   # S2: within-cohort specificity
-    python alz/snrna_integration.py --concordance   # S3: within-cohort concordance
-    python alz/snrna_integration.py --run           # All stages in order
-    python alz/snrna_integration.py --summary       # Print cached results
+    python alz/reference/snrna_integration.py --pseudobulk    # S1: pseudobulk from h5ad
+    python alz/reference/snrna_integration.py --specificity   # S2: within-cohort specificity
+    python alz/reference/snrna_integration.py --concordance   # S3: within-cohort concordance
+    python alz/reference/snrna_integration.py --run           # All stages in order
+    python alz/reference/snrna_integration.py --summary       # Print cached results
 """
 
 from __future__ import annotations

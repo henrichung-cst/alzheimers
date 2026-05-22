@@ -36,7 +36,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from alz.shared import config  # noqa: E402
-from bulk_mea.enrich import (  # noqa: E402
+from alz.bulk_mea.enrich import (  # noqa: E402
     CONTRAST_COEFS,
     _bh_fdr,
     _build_design_matrix,

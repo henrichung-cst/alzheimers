@@ -1,7 +1,7 @@
 # `alz/bulk_mea/` — Mode 1: Bulk MEA
 
 Stoichiometry-corrected kinase attribution for bulk phosphoproteomics on the
-Song mouse cohort (and, via the human chain in `alz/ingest_mukesh_perdonor.py`,
+Song mouse cohort (and, via the human chain in `alz/ingest/mukesh_perdonor.py`,
 the NBB human cohort).
 
 ## Stage order
@@ -21,14 +21,14 @@ recover`), or the bundled `pixi run live` to chain ingest → recover.
 ## Inputs
 
 - `outputs/reports/data_ingest/sample_mapping.csv` (from
-  `alz/data_ingest.py --mapping`)
+  `alz/ingest/song.py --mapping`)
 - `outputs/reports/data_ingest/sample_exclusions.csv` (from
-  `alz/data_ingest.py --outliers`)
+  `alz/ingest/song.py --outliers`)
 - Raw TMT total proteome + phospho IMAC/pY workbooks under
   `data/datasets/song/primary/` (read by `normalize.py`)
 - WMB per-class expression matrix at
   `outputs/reports/wmb_expression/wmb_kinase_expression.csv` (built by
-  `alz/wmb_expression.py`; required for `attribute.py`)
+  `alz/reference/wmb_expression.py`; required for `attribute.py`)
 - SEA-AD effect-size h5ads under `data/external/sea_ad/`
   (required for `attribute.py`)
 

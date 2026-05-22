@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Human Reference Expression: per-celltype kinase specificity from SEA-AD MTG + Allen HBCA.
 
-Mirrors ``alz/wmb_expression.py`` but consumes two human brain references:
+Mirrors ``alz/reference/wmb_expression.py`` but consumes two human brain references:
 
   1. **SEA-AD MTG** — cortical, 139 supertypes. Source:
      ``data/derived/aggregates/seaad/expression_by_supertype.csv``
-     (produced by ``atlas_reference.py --sea-ad-expression``).
+     (produced by ``alz/reference/atlas.py --sea-ad-expression``).
 
   2. **Allen Human Brain Cell Atlas (HBCA)** — whole brain, class-level.
      Source: ``data/derived/aggregates/hbca/expression_by_class.csv``
-     (produced by ``atlas_reference.py --hbca-download``).
+     (produced by ``alz/reference/atlas.py --hbca-download``).
 
 Specificity metric (same formula as WMB):
   ``log2( mean_celltype / mean_brain )`` per gene, then ranked into a
@@ -29,10 +29,10 @@ A small fake h5ad unit test (test_human_reference_expression.py) validates
 the specificity recipe without requiring the multi-GB references.
 
 Usage:
-    python alz/human_reference_expression.py --ref seaad   # SEA-AD MTG only
-    python alz/human_reference_expression.py --ref hbca    # HBCA only
-    python alz/human_reference_expression.py --ref both    # Both
-    python alz/human_reference_expression.py --summary     # Print cached results
+    python alz/reference/human_expression.py --ref seaad   # SEA-AD MTG only
+    python alz/reference/human_expression.py --ref hbca    # HBCA only
+    python alz/reference/human_expression.py --ref both    # Both
+    python alz/reference/human_expression.py --summary     # Print cached results
 """
 
 from __future__ import annotations
@@ -201,7 +201,7 @@ def compute_seaad_specificity(force: bool = False) -> pd.DataFrame:
     """Compute kinase specificity from SEA-AD MTG per-supertype expression.
 
     Reads ``data/derived/aggregates/seaad/expression_by_supertype.csv``
-    (genes × 139 supertypes, produced by atlas_reference.py --sea-ad-expression).
+    (genes × 139 supertypes, produced by alz/reference/atlas.py --sea-ad-expression).
     Applies the shared specificity recipe and writes
     ``outputs/reports/human_reference_expression/seaad_kinase_specificity.csv``.
 
@@ -264,7 +264,7 @@ def compute_hbca_specificity(force: bool = False) -> pd.DataFrame:
     """Compute kinase specificity from Allen HBCA per-class expression.
 
     Reads ``data/derived/aggregates/hbca/expression_by_class.csv``
-    (genes × N classes, produced by atlas_reference.py --hbca-download).
+    (genes × N classes, produced by alz/reference/atlas.py --hbca-download).
     Applies the shared specificity recipe and writes
     ``outputs/reports/human_reference_expression/hbca_kinase_specificity.csv``.
 

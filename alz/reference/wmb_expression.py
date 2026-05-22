@@ -25,8 +25,8 @@ Optional dependencies:
     pip install anndata
 
 Usage:
-    python alz/wmb_expression.py --run       # Compute WMB expression matrix
-    python alz/wmb_expression.py --summary   # Print cached results
+    python alz/reference/wmb_expression.py --run       # Compute WMB expression matrix
+    python alz/reference/wmb_expression.py --summary   # Print cached results
 """
 
 from __future__ import annotations
@@ -704,7 +704,7 @@ def compute_wmb_proteome_expression(force: bool = False) -> pd.DataFrame:
     if not os.path.exists(gene_list_path):
         raise FileNotFoundError(
             f"Proteome gene list not found at {gene_list_path}. "
-            "Run: python alz/data_ingest.py --phospho-match"
+            "Run: python alz/ingest/song.py --phospho-match"
         )
     with open(gene_list_path) as f:
         proteome_genes_upper = [line.strip() for line in f if line.strip()]

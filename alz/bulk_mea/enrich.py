@@ -5,7 +5,7 @@ Inputs (under outputs/reports/kinase_attribution/, written by Stage 1):
   raw_phospho_normalized.csv (track-suffixed)
   outputs/reports/data_ingest/sample_mapping.csv
   outputs/reports/data_ingest/sample_exclusions.csv (optional)
-  alz/config.py
+  alz/shared/config.py
 
 Outputs (under outputs/reports/kinase_attribution/, track-suffixed):
   mea_stoichiometry.csv

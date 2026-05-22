@@ -7,7 +7,7 @@ Inputs:
   data/datasets/song/primary/phospho/
     song_IMAC_sitequant_merged_labeled (2).xlsx  (or pY workbook for track=py)
   outputs/reports/data_ingest/sample_mapping.csv
-  alz/config.py
+  alz/shared/config.py
 
 Outputs (under outputs/reports/kinase_attribution/, track-suffixed):
   stoichiometry_matrix.csv

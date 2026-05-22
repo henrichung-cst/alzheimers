@@ -20,9 +20,9 @@ Outputs under `outputs/reports/decomposition/{spine}/`:
   coverage_report.csv               per-cluster nonzero-gene counts, drops
 
 Usage:
-  pixi run python alz/snrna_proportions.py --run
-  pixi run python alz/snrna_proportions.py --run --spine levy_t5
-  pixi run python alz/snrna_proportions.py --summary
+  pixi run python alz/reference/snrna_proportions.py --run
+  pixi run python alz/reference/snrna_proportions.py --run --spine levy_t5
+  pixi run python alz/reference/snrna_proportions.py --summary
 """
 from __future__ import annotations
 

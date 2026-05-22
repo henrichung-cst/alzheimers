@@ -23,12 +23,12 @@ Optional dependencies:
     pip install boto3   # for SEA-AD S3 access
 
 Usage:
-    python alz/atlas_reference.py --sea-ad            # Download SEA-AD effect-size h5ads
-    python alz/atlas_reference.py --wmb-download      # Download all 13 WMB-10Xv3 log2 matrices (~95 GB)
-    python alz/atlas_reference.py --run               # SEA-AD + WMB download
-    python alz/atlas_reference.py --sea-ad-full       # Fallback: full SEA-AD MTG h5ad (~34 GB)
-    python alz/atlas_reference.py --sea-ad-expression # Phase 2: compute per-supertype mean expression
-    python alz/atlas_reference.py --hbca-download     # Phase 2: download Allen HBCA (~95 GB)
+    python alz/reference/atlas.py --sea-ad            # Download SEA-AD effect-size h5ads
+    python alz/reference/atlas.py --wmb-download      # Download all 13 WMB-10Xv3 log2 matrices (~95 GB)
+    python alz/reference/atlas.py --run               # SEA-AD + WMB download
+    python alz/reference/atlas.py --sea-ad-full       # Fallback: full SEA-AD MTG h5ad (~34 GB)
+    python alz/reference/atlas.py --sea-ad-expression # Phase 2: compute per-supertype mean expression
+    python alz/reference/atlas.py --hbca-download     # Phase 2: download Allen HBCA (~95 GB)
 """
 
 from __future__ import annotations
@@ -438,7 +438,7 @@ def download_hbca(force: bool = False, mem_cap_gb: float = 22.0,
                   chunk_size: int = 5000) -> Optional[Path]:
     """Download Allen HBCA (WHB-10Xv3) log2 expression and aggregate per supercluster.
 
-    Output (the contract consumed by ``alz/human_reference_expression.py``):
+    Output (the contract consumed by ``alz/reference/human_expression.py``):
         ``data/derived/aggregates/hbca/expression_by_class.csv``
         (rows = gene HGNC symbols, columns = HBCA superclusters).
 
