@@ -38,8 +38,9 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, "alz"))
-import config  # noqa: E402
+from alz.shared import config  # noqa: E402
 
 DEC_DIR = os.path.join(REPO_ROOT, "outputs", "reports", "decomposition", "levy_t5")
 OUT_DIR = os.path.join(REPO_ROOT, "data", "derived", "incytr_inputs")

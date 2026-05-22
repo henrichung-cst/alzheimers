@@ -27,9 +27,9 @@ from pathlib import Path
 import pandas as pd
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(HERE.parent.parent))
 
-import config  # noqa: E402
+from alz.shared import config  # noqa: E402
 
 REPO = Path(config.REPO_ROOT)
 DEC_ROOT = REPO / "outputs/reports/decomposition"

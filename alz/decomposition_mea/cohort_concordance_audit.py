@@ -23,7 +23,7 @@ sys.path.insert(0, REPO_ROOT)
 import numpy as np
 import pandas as pd
 
-import config
+from alz.shared import config
 from deconvolution import paths
 from deconvolution.cohort_concordance import compute_cohort_concordance
 

@@ -34,9 +34,9 @@ import time
 import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(HERE))  # alz/
+sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))  # repo root
 
-import config  # noqa: E402
+from alz.shared import config  # noqa: E402
 
 from integration.pair_to_receiver_cache import _sanitize_celltype  # noqa: E402
 from viewer.paths import (  # noqa: E402

@@ -3,7 +3,7 @@ import re
 
 import numpy as np
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SONG_WORKSPACE_DIR = os.path.join(REPO_ROOT, "data", "datasets", "song")
 SONG_PRIMARY_DIR = os.path.join(SONG_WORKSPACE_DIR, "primary")
 SONG_PRIMARY_PROTEOMICS_DIR = os.path.join(SONG_PRIMARY_DIR, "proteomics")

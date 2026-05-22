@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-import config
+from alz.shared import config
 from deconvolution import paths
 from deconvolution.load_deconvoluted import (
     DeconvoluatedTrack, load_track, safe_log2,

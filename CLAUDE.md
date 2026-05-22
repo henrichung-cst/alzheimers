@@ -124,7 +124,7 @@ python alz/supplementary/deconvolution_feasibility.py --run  # Q6: Marker→comp
 ### Standalone Utilities
 
 ```bash
-python alz/map_kinases_to_genes.py       # Kinase→gene symbol mapping
+python alz/shared/map_kinases_to_genes.py       # Kinase→gene symbol mapping
 python alz/build_unified_viewer.py       # Interactive HTML viewer (kinase + pathway + cross-entity)
 python alz/ingest/lucie.py       # Lucie 5xFAD proteomics manifest builder
 ```
@@ -157,13 +157,13 @@ The live pipeline is a 3-stage stoichiometry-corrected MEA enrichment + unified 
 ### Dependency Graph
 
 ```
-alz/config.py  ←  alz/ingest/song.py  ←  alz/bulk_mea/normalize.py  ←  alz/bulk_mea/enrich.py  ←  alz/bulk_mea/attribute.py  ←  alz/bulk_mea/recover.py
-                                                                                              ←  alz/bulk_mea/mechanism.py (optional, off the live path)
-                                                                                              ←  alz/bulk_mea/summary.py (read-only)
+alz/shared/config.py  ←  alz/ingest/song.py  ←  alz/bulk_mea/normalize.py  ←  alz/bulk_mea/enrich.py  ←  alz/bulk_mea/attribute.py  ←  alz/bulk_mea/recover.py
+                                                                                                     ←  alz/bulk_mea/mechanism.py (optional, off the live path)
+                                                                                                     ←  alz/bulk_mea/summary.py (read-only)
 
 Supporting:
-alz/config.py  ←  alz/reference/atlas.py  ←  alz/reference/wmb_expression.py
-alz/config.py  ←  alz/reference/snrna_integration.py
+alz/shared/config.py  ←  alz/reference/atlas.py  ←  alz/reference/wmb_expression.py
+alz/shared/config.py  ←  alz/reference/snrna_integration.py
 
 Integration:
 alz/bulk_mea/{enrich,attribute}.py + alz/reference/snrna_integration.py  ←  alz/integration/
@@ -171,7 +171,7 @@ alz/bulk_mea/{enrich,attribute}.py + alz/reference/snrna_integration.py  ←  al
 
 ### Live Code
 
-- `config.py` — Shared configuration: file paths, thresholds, enrichment method params, `WMB_CLASSES` list (34 WMB classes, single source of truth for the cell-type spine — used by both the kinase pipeline and the Incytr integration), `load_song_to_wmb_class_map()` (Allen Cell Type Mapper raw `subclass_name` → WMB class, built from `wmb_subclass_to_class.csv` with numeric prefix stripped; no SEA-AD intermediate), `OUTLIER_ZSCORE_THRESH`. `ANALYSIS_MODE` is a bridge attribute that loads `analysis_mode` from Kedro parameters (`conf/base/parameters.yml`, KEDRO_ENV-switchable); Phase 4 will replace direct reads with node-injected `params:analysis_mode`. Still structurally mixed with legacy settings.
+- `alz/shared/config.py` — Shared configuration (imported as `from alz.shared import config`): file paths, thresholds, enrichment method params, `WMB_CLASSES` list (34 WMB classes, single source of truth for the cell-type spine — used by both the kinase pipeline and the Incytr integration), `load_song_to_wmb_class_map()` (Allen Cell Type Mapper raw `subclass_name` → WMB class, built from `wmb_subclass_to_class.csv` with numeric prefix stripped; no SEA-AD intermediate), `OUTLIER_ZSCORE_THRESH`. `ANALYSIS_MODE` is a bridge attribute that loads `analysis_mode` from Kedro parameters (`conf/base/parameters.yml`, KEDRO_ENV-switchable); Phase 4 will replace direct reads with node-injected `params:analysis_mode`. Still structurally mixed with legacy settings.
 - `alz/ingest/song.py` — TMT channel mapping, phosphosite-to-protein matching, marker assessment, PCA quality control, outlier detection. Outputs to `outputs/reports/data_ingest/`. Requires: `scikit-learn`, `matplotlib`.
 - `kinase_normalize.py` — Stage 1: IRS cross-plex normalization (all 72 samples) + stoichiometry computation. Per-track (`--track st|py|both`). Outputs to `outputs/reports/kinase_attribution/`. Requires: `scikit-learn`, `matplotlib`.
 - `kinase_enrich.py` — Stage 2: sample filtering (outlier exclusion + sex), factorial OLS with disease×timepoint interactions (9 contrasts), MEA kinase enrichment (median-centered + winsorized). Per-track. Requires: `kinase-library`, `gseapy`.
@@ -188,7 +188,7 @@ alz/bulk_mea/{enrich,attribute}.py + alz/reference/snrna_integration.py  ←  al
 - `alz/reference/atlas.py` — External atlas acquisition: downloads SEA-AD Nebula effect-size h5ads (`effect_sizes{,_early,_late}.h5ad`) from S3 and all 13 WMB-10Xv3 log2 expression matrices into the ABC project cache. Also exports kinase/phosphatase gene-list helpers and ABC cache utilities consumed by `alz/reference/wmb_expression.py`. Requires: `abc_atlas_access`, `anndata`, `boto3`.
 - `alz/reference/wmb_expression.py` — WMB expression export: per-class kinase/phosphatase expression from Allen WMB 10Xv3 (34 WMB classes, group-by on `wmb_meta["class"]`, no silent drops). Emits `outputs/reports/wmb_expression/wmb_kinase_expression.csv` (primary, class-level) + `wmb_kinase_expression_subclass.csv` (audit sidecar at WMB subclass level). Consumed by `alz/bulk_mea/attribute.py`. Requires: `anndata`.
 - `alz/reference/snrna_integration.py` — Song snRNA-seq integration: computes pseudobulk expression from paired 170_gex_celltypes_00.h5ad (63K nuclei, 28 animals), joining barcodes to the Levy-t5 spine via `barcode_to_cluster.csv` and filtering to `config.CLUSTER_SPINE` (31 clusters). Within-cohort expression specificity and transcriptomic concordance via factorial OLS (males-only, pooled across timepoints). Outputs to `outputs/reports/snrna_integration/`. Requires: `anndata`, `scipy`, `statsmodels`.
-- `map_kinases_to_genes.py` — Kinase→gene symbol mapping utility.
+- `alz/shared/map_kinases_to_genes.py` — Kinase→gene symbol mapping utility.
 
 ### Integration Code (Incytr)
 

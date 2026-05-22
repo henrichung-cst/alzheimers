@@ -5,10 +5,11 @@ from __future__ import annotations
 import os
 import sys
 
-HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # alz/
-sys.path.insert(0, HERE)
+HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
 
-import config  # noqa: E402
+from alz.shared import config  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Viewer outputs

@@ -40,12 +40,15 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(HERE)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "integration"))
 sys.path.insert(0, os.path.join(HERE, "bulk_mea"))
 sys.path.insert(0, os.path.join(HERE, "cross_reference"))
 
-import config  # noqa: E402
+from alz.shared import config  # noqa: E402
 import config_integration as icfg  # noqa: E402
 import normalize as kattr  # noqa: E402  (alz.bulk_mea.normalize — Stage 1 helpers + load_sample_mapping)
 try:

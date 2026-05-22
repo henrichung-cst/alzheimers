@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats as sp_stats
 
-import config
+from alz.shared import config
 from deconvolution import paths
 from deconvolution.load_deconvoluted import (
     DeconvoluatedTrack, males_only, parse_sample_metadata, safe_log2,

@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 # Bootstrap project root onto sys.path so direct invocation
-# (`python alz/bulk_mea/enrich.py`) can resolve `from alz import config`.
+# (`python alz/bulk_mea/enrich.py`) can resolve `from alz.shared import config`.
 # Phase 2's bridge adds `alz/` to sys.path; this adds the parent.
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
@@ -32,7 +32,7 @@ import yaml
 from scipy import stats as sp_stats
 from statsmodels.stats.multitest import multipletests
 
-from alz import config
+from alz.shared import config
 
 # ---------------------------------------------------------------------------
 # Constants

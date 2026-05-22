@@ -2,8 +2,14 @@
 from __future__ import annotations
 
 import os
+import sys as _sys
+from pathlib import Path as _Path
 
-import config  # noqa: E402 — repo-level config, available because callers run from repo root
+_REPO = str(_Path(__file__).resolve().parents[2])
+if _REPO not in _sys.path:
+    _sys.path.insert(0, _REPO)
+
+from alz.shared import config  # noqa: E402 — repo-level config, available because callers run from repo root
 
 REPO_ROOT = config.REPO_ROOT
 

@@ -19,7 +19,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 import sys
 
 sys.path.insert(0, os.path.join(REPO_ROOT, "alz"))
-import config as main_config  # noqa: E402
+from alz.shared import config as main_config  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Factorial filter (males-only, all 4 genotypes x 3 timepoints)

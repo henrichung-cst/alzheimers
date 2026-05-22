@@ -50,7 +50,7 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from alz import config
+from alz.shared import config
 from alz.reference.atlas import get_all_kinase_genes, get_phosphatase_genes_from_genelist
 
 # ---------------------------------------------------------------------------

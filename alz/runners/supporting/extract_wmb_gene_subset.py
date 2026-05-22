@@ -36,7 +36,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 sys.path.insert(0, REPO_ROOT)
 
-from alz import config
+from alz.shared import config
 from alz.reference.atlas import (
     get_abc_cache,
     get_all_kinase_genes,

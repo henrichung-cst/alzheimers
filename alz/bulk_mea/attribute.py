@@ -40,7 +40,7 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from alz import config
+from alz.shared import config
 from alz.cross_reference.evidence import (
     compute_sea_ad_concordance,
     prepare_song_concordance,

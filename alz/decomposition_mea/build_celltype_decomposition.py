@@ -35,8 +35,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import config  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from alz.shared import config  # noqa: E402
 
 REPO = Path(config.REPO_ROOT)
 BULK_DIR = REPO / "outputs/reports/kinase_attribution"

@@ -293,4 +293,16 @@ These are aspirational endpoints, not deadlines. Methodical beats fast.
     `snrna_integration.py`, `snrna_proportions.py`); fixed sys.path
     bootstraps, repointed every import + CLI string + runner script
     + pixi.toml task + CLAUDE.md reference.
-  - Task #18 — Move config.py to `alz/shared/`: pending
+  - Task #18 — Move config.py to `alz/shared/`: **done 2026-05-21** —
+    `git mv`'d `alz/config.py` → `alz/shared/config.py` (REPO_ROOT depth
+    bumped to `dirname×3`) and `alz/map_kinases_to_genes.py` →
+    `alz/shared/map_kinases_to_genes.py`; created `alz/shared/__init__.py`
+    + `README.md`; bulk-replaced `import config` → `from alz.shared
+    import config` across the live tree (`bulk_mea`, `cross_reference`,
+    `ingest`, `reference`), the viewer (`build_unified_viewer.py`,
+    `viewer/paths.py`), `integration/*`, `decomposition_mea/*`,
+    `incytr_pair/export_decomposition_for_pair.py`, `supplementary/*`,
+    `runners/supporting/extract_wmb_gene_subset.py`; fixed sys.path
+    bootstraps that pointed at `alz/` to point at the repo root.
+    Smoke-tested `from alz.shared import config` + downstream imports
+    from `bulk_mea`, `ingest`, `reference`, `cross_reference`.

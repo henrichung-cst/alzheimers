@@ -84,7 +84,7 @@ run_step() {
 }
 
 # --- mouse kinase chain ---
-run_step K-map     "kinase→gene mapping cache"        pixi run python alz/map_kinases_to_genes.py
+run_step K-map     "kinase→gene mapping cache"        pixi run python alz/shared/map_kinases_to_genes.py
 run_step A-wmb     "WMB expression export"            pixi run python alz/reference/wmb_expression.py --run
 run_step A-snrna   "Song snRNA integration"           pixi run python alz/reference/snrna_integration.py --run
 run_step K-norm    "kinase_normalize (IRS + stoich)"  pixi run python alz/bulk_mea/normalize.py

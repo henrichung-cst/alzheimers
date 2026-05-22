@@ -17,8 +17,8 @@ import sys
 
 import pandas as pd
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import config
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+from alz.shared import config
 
 OUTPUT_DIR = os.path.join(config.SUPPLEMENTARY_OUTPUT_DIR, "threshold_sensitivity")
 

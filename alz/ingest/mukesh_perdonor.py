@@ -44,7 +44,7 @@ if _PROJECT_ROOT not in sys.path:
 import numpy as np
 import pandas as pd
 
-from alz import config
+from alz.shared import config
 from alz.bulk_mea import enrich as kinase_enrich
 from alz.ingest.mukesh import (
     HUMAN_DATA_INGEST_DIR,

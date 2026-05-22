@@ -18,8 +18,8 @@ import sys
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import config
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+from alz.shared import config
 
 OUTPUT_DIR = os.path.join(config.SUPPLEMENTARY_OUTPUT_DIR, "parent_protein_qc")
 
