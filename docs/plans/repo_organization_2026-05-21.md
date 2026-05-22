@@ -139,23 +139,88 @@ schema spec independent of which framework reads it.
    - Verified: `python alz/attribution_recovery.py` and
      `python alz/kinase_enrich.py` both run end-to-end with no regressions
      (after regenerating stale pre-`abd394a` `sample_mapping.csv`).
-2. **Move Mode 1 → `alz/bulk_mea/`.** `kinase_normalize/enrich/attribute/
-   mechanism/summary.py` + `attribution_recovery.py` → shorter names
-   (`normalize`, `enrich`, `attribute`, `mechanism`, `summary`, `recover`).
-   Update runners + pixi tasks. Write README.
-3. **Rename `alz/decomposition/` → `alz/decomposition_mea/`** for parallelism.
-4. **Consolidate Mode 3** under `alz/incytr_pair/`. Move
-   `pair_to_receiver_cache.py` in; keep `alz/integration/` for genuine
-   cross-mode artifacts.
-5. **Carve out Mode 4** as `alz/cross_reference/`. Move
-   `seaad_human_agreement.py` + `human_celltype_attribution.py` in; refactor
-   SEA-AD/WMB evidence loading currently embedded in
-   `kinase_attribute.py` into a module here.
-6. **Group `alz/ingest/` and `alz/reference/`.**
-7. **`alz/shared/`** for `config.py` + small utilities.
+2. **Move Mode 1 → `alz/bulk_mea/` (next, task #13).** Renames:
+   - `kinase_normalize.py` → `alz/bulk_mea/normalize.py`
+   - `kinase_enrich.py` → `alz/bulk_mea/enrich.py`
+   - `kinase_attribute.py` → `alz/bulk_mea/attribute.py`
+   - `kinase_mechanism.py` → `alz/bulk_mea/mechanism.py`
+   - `kinase_summary.py` → `alz/bulk_mea/summary.py`
+   - `attribution_recovery.py` → `alz/bulk_mea/recover.py`
+
+   Then: update every import site (decomposition/enrich_celltype, viewer,
+   supplementary scripts, runners), update pixi-task command paths
+   (`pixi.toml` lines for `normalize`/`enrich`/`attribute`/`mechanism`/
+   `recover`), update `alz/runners/main/*.sh` paths, write
+   `alz/bulk_mea/README.md` documenting the order
+   `normalize → enrich → attribute → recover` (+ optional `mechanism`,
+   read-only `summary`). Smoke-test `pixi run live` end-to-end.
+
+   Known import surfaces to update (from `grep -l kinase_normalize\|
+   kinase_enrich\|kinase_attribute\|kinase_mechanism\|attribution_recovery\|
+   kinase_summary alz/ docs/ -r`):
+   - `alz/decomposition/enrich_celltype.py` imports
+     `from alz.kinase_enrich import ...`
+   - `alz/build_unified_viewer.py` reads attribution-recovery outputs by path
+     (no import; just verify the output dir hasn't moved)
+   - `pixi.toml [tasks]` block
+   - Every script under `alz/runners/main/` and `alz/runners/supplementary/`
+     that invokes `python alz/kinase_*.py` or `python alz/attribution_recovery.py`
+
+3. **Rename `alz/decomposition/` → `alz/decomposition_mea/` (task #14)** for
+   parallelism with `bulk_mea/`. Update `alz/decomposition/paths.py` import
+   sites, `alz/runners/main/rerun_decomposition_chain.sh`,
+   `alz/runners/main/run_pivot_smoke.sh`, and any `from alz.decomposition`
+   imports across the repo. Internal file layout stays the same.
+
+4. **Consolidate Mode 3 under `alz/incytr_pair/` (task #15).**
+   - Rename `alz/incytr/` → `alz/incytr_pair/`
+   - Move `alz/integration/pair_to_receiver_cache.py` →
+     `alz/incytr_pair/pair_to_receiver_cache.py` (it's purely a Mode-3
+     output reshaper; doesn't belong in cross-mode integration glue)
+   - `alz/integration/` retains: cluster spine builder, omics/transcript
+     trace, normalized substrate, bridge builders, config_integration —
+     these are genuinely cross-mode (consumed by Mode 2, Mode 3, AND viewer)
+   - Update `alz/runners/main/run_pair_mode_pipeline.sh` +
+     `run_pair_mode_viewer_build.sh` paths
+
+5. **Carve out Mode 4 as `alz/cross_reference/` (task #16).** Mode 4 is
+   currently the most scattered:
+   - Move `alz/seaad_human_agreement.py` → `alz/cross_reference/`
+   - Move `alz/human_celltype_attribution.py` → `alz/cross_reference/`
+   - Extract SEA-AD/WMB/Song evidence loading currently inlined in
+     `kinase_attribute.py` (functions `_compute_sea_ad_concordance`,
+     `_prepare_wmb_specificity`, `_prepare_song_specificity`,
+     `_prepare_song_concordance`) into a shared module under
+     `alz/cross_reference/`. `bulk_mea/attribute.py` (post-task-#13) and
+     viewer consumers import from there.
+   - This is the most-invasive of #13–#17; defer until #13 lands and the
+     bulk_mea/attribute import surface is stable
+
+6. **Group `alz/ingest/` and `alz/reference/` (task #17).** Ingest:
+   - `data_ingest.py` → `alz/ingest/song.py`
+   - `ingest_mukesh.py` + `ingest_mukesh_perdonor.py` →
+     `alz/ingest/mukesh.py` + `alz/ingest/mukesh_perdonor.py`
+   - `lucie_5xfad_manifest.py` → `alz/ingest/lucie.py`
+
+   Reference (atlas + cross-cohort expression):
+   - `atlas_reference.py` → `alz/reference/atlas.py`
+   - `wmb_expression.py` → `alz/reference/wmb_expression.py`
+   - `human_reference_expression.py` → `alz/reference/human_expression.py`
+   - `snrna_integration.py` → `alz/reference/snrna_integration.py`
+   - `snrna_proportions.py` → `alz/reference/snrna_proportions.py`
+
+   Update import sites + runners.
+
+7. **`alz/shared/` for `config.py` + small utilities (task #18).**
+   - `alz/config.py` → `alz/shared/config.py` (single biggest import-site
+     fan-out — every script imports `from alz import config`. Plan to update
+     to `from alz.shared import config` in one pass)
+   - `alz/map_kinases_to_genes.py` → `alz/shared/`
+   - Consider extracting the repeated `_load_params()` helper that appears
+     in 5 CLI shims into `alz/shared/params.py`
 
 Each step is independently shippable; the repo stays runnable between
-commits.
+commits. **Recommended commit cadence: one commit per task.**
 
 **Why not numbered files inside each subdir.** Considered briefly. Numbered
 prefixes break when steps get inserted/reordered, and the existing
@@ -187,11 +252,31 @@ time; don't lose the broader thread.
 
 The plan is "done" when:
 
-- `docs/` reflects only live, authoritative material.
-- The Song factorial coding lives in exactly one place.
-- The four analysis modes have explicit canonical input contracts AND are
-  defined as kedro pipelines.
+- `docs/` reflects only live, authoritative material. (Phase 2 — done.)
+- The Song factorial coding lives in exactly one place. (Phase 3 — done.)
+- The four analysis modes each live in their own `alz/<mode>/` subdirectory
+  with a README documenting stage order, and a single shared `config.py`
+  + `alz/shared/` for cross-mode utilities. (Phase 4 — task #12 done;
+  tasks #13–18 pending.)
 - A new cohort can be onboarded by writing one ingest module + adding one
   `conf/<cohort>/parameters.yml`, with no changes to shared analysis code.
+  (Validation step, post-#18.)
 
 These are aspirational endpoints, not deadlines. Methodical beats fast.
+
+## Progress Snapshot — 2026-05-21
+
+- Phase 1 (write the plan): done
+- Phase 2 (docs cleanup): done
+- Phase 3 (factorial fragments): done (B3/B4/B5 cleanups landed in
+  `alz/integration/config_integration.py` + `alz/attribution_recovery.py` +
+  `alz/build_unified_viewer.py`)
+- Phase 4:
+  - Task #12 — Strip Kedro: **done 2026-05-21** (commit `0c2a997`)
+  - Task #13 — Move Mode 1 → `alz/bulk_mea/`: pending (next)
+  - Task #14 — Rename `alz/decomposition/` → `alz/decomposition_mea/`:
+    pending
+  - Task #15 — Consolidate Mode 3 under `alz/incytr_pair/`: pending
+  - Task #16 — Carve out `alz/cross_reference/` for Mode 4: pending
+  - Task #17 — Group ingest + reference: pending
+  - Task #18 — Move config.py to `alz/shared/`: pending
