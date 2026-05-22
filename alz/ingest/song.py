@@ -45,6 +45,8 @@ import argparse
 import json
 import os
 import re
+import sys
+from pathlib import Path
 
 
 import matplotlib
@@ -56,7 +58,11 @@ import pandas as pd
 from scipy import stats
 from sklearn.decomposition import PCA
 
-import config
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from alz import config
 
 # ---------------------------------------------------------------------------
 # Constants

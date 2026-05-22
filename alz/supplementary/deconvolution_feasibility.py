@@ -94,7 +94,7 @@ def _load_proteome_normalized():
     if not os.path.exists(SAMPLE_MAPPING_FILE):
         raise FileNotFoundError(
             f"sample_mapping.csv not found at {SAMPLE_MAPPING_FILE}. "
-            "Run: python alz/data_ingest.py --mapping"
+            "Run: python alz/ingest/song.py --mapping"
         )
     tp = pd.read_excel(TOTAL_PROTEOME_FILE, header=1)
     mapping = pd.read_csv(SAMPLE_MAPPING_FILE)
@@ -181,7 +181,7 @@ def step_run():
     if not os.path.exists(config.WMB_PROTEOME_EXPRESSION_FILE):
         raise FileNotFoundError(
             f"WMB proteome expression not found at {config.WMB_PROTEOME_EXPRESSION_FILE}. "
-            "Run: python alz/wmb_expression.py --proteome"
+            "Run: python alz/reference/wmb_expression.py --proteome"
         )
 
     print("  Loading & IRS-normalizing total proteome ...")

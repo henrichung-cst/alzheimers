@@ -34,17 +34,17 @@ from scipy import sparse
 # Add repo root to path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
-sys.path.insert(0, os.path.join(REPO_ROOT, "code"))
+sys.path.insert(0, REPO_ROOT)
 
-import config
-from atlas_reference import (
+from alz import config
+from alz.reference.atlas import (
     get_abc_cache,
     get_all_kinase_genes,
     get_phosphatase_genes_from_genelist,
     _extract_gene_symbols,
     _get_expression_path,
 )
-from wmb_expression import _human_to_mouse
+from alz.reference.wmb_expression import _human_to_mouse
 
 
 def _build_gene_union():
@@ -66,7 +66,7 @@ def _build_gene_union():
         sources["proteome"] = len(proteome_mouse)
     else:
         print(f"  WARNING: Proteome gene list not found at {gene_list_path}")
-        print("  Run: python alz/data_ingest.py --phospho-match")
+        print("  Run: python alz/ingest/song.py --phospho-match")
 
     # 2. Kinase/phosphatase genes
     try:

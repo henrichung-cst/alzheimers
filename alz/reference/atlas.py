@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -42,7 +43,11 @@ from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 import pandas as pd
 
-import config
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from alz import config
 
 # ---------------------------------------------------------------------------
 # Lazy imports for optional dependencies

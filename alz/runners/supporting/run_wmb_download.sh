@@ -12,5 +12,5 @@ LOG="outputs/reports/wmb_expression/wmb_download.log"
 mkdir -p outputs/reports/wmb_expression
 
 echo "=== WMB download started at $(date) ===" | tee "$LOG"
-$PYTHON alz/atlas_reference.py --wmb-download 2>&1 | tee -a "$LOG"
+$PYTHON alz/reference/atlas.py --wmb-download 2>&1 | tee -a "$LOG"
 echo "=== WMB download finished at $(date) ===" | tee -a "$LOG"

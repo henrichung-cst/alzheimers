@@ -14,5 +14,5 @@ if [[ ! -f "$H5AD" ]]; then
 fi
 
 echo "=== Song snRNA Integration ==="
-python alz/snrna_integration.py --run
+python alz/reference/snrna_integration.py --run
 echo "=== Done ==="

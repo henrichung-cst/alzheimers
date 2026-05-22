@@ -6,7 +6,7 @@ platforms = ["linux-64"]
 version = "0.1.0"
 
 [tasks]
-ingest = "python alz/data_ingest.py --run"
+ingest = "python alz/ingest/song.py --run"
 ingest-gdrive-shared = "rclone copy gdrive_shared: data/external/gdrive_shared/ --drive-root-folder-id 1syiic6d9DUJIc1sPL5wc8uL7Od3Dsq3Z --progress"
 ingest-lucie-proteomics = "rclone copy gdrive_shared: data/external/lucie_proteomics/ --drive-root-folder-id 1uWjRb_ZnrDp9HwgijE48zhb8gvJjOr2P --progress"
 ingest-deconvolution-bulk = "rclone copy gdrive_shared:yuyu01/documentation/incytr/deconvolution/ data/datasets/song/proteomics/source/ --drive-root-folder-id 1syiic6d9DUJIc1sPL5wc8uL7Od3Dsq3Z --max-depth 1 --include imac_median.csv --include py_median.csv --include pr_median.csv --include yuyu_samplekey.csv --progress"
@@ -17,14 +17,14 @@ mechanism = "python alz/bulk_mea/mechanism.py"
 recover = "python alz/bulk_mea/recover.py"
 live = { depends-on = ["ingest", "normalize", "enrich", "attribute", "recover"] }
 dual = "bash alz/runners/main/run_dual_analysis.sh"
-human-ingest = "python alz/ingest_mukesh.py --reshape"
-human-perdonor = "python alz/ingest_mukesh_perdonor.py --track both"
+human-ingest = "python alz/ingest/mukesh.py --reshape"
+human-perdonor = "python alz/ingest/mukesh_perdonor.py --track both"
 human-seaad = "python alz/cross_reference/seaad_human_agreement.py"
 human = { depends-on = ["human-ingest", "human-perdonor", "human-seaad"] }
 all = "bash alz/runners/main/run_all.sh"
-atlas = "python alz/atlas_reference.py --run"
-wmb-export = "python alz/wmb_expression.py --run"
-snrna = "python alz/snrna_integration.py --run"
+atlas = "python alz/reference/atlas.py --run"
+wmb-export = "python alz/reference/wmb_expression.py --run"
+snrna = "python alz/reference/snrna_integration.py --run"
 bubbles = "python alz/plot_attribution_bubbles.py"
 viewer = "python alz/build_unified_viewer.py"
 install-incytr = "R CMD INSTALL --no-multiarch ../incytr"

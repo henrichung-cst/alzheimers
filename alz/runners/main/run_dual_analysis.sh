@@ -28,7 +28,7 @@ fi
 # Ensure outlier detection has been run
 if [[ ! -f outputs/reports/data_ingest/sample_exclusions.csv ]]; then
     echo "--- Outlier detection ---"
-    $PYTHON alz/data_ingest.py --outliers
+    $PYTHON alz/ingest/song.py --outliers
 fi
 
 # ── Track 1: Males-only (primary) ──────────────────────────────────────────

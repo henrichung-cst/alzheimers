@@ -33,7 +33,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from alz import config
-from alz.ingest_mukesh import HUMAN_KINASE_DIR
+from alz.ingest.mukesh import HUMAN_KINASE_DIR
 
 SEA_AD_H5AD = os.path.join(config.REPO_ROOT, "data", "external", "sea_ad", "effect_sizes.h5ad")
 KINASE_GENE_CSV = os.path.join(
@@ -63,7 +63,7 @@ def _load_kinase_list() -> pd.DataFrame:
     if not rows:
         raise FileNotFoundError(
             f"No recurrence CSV found under {PERDONOR_DIR}; "
-            "run ingest_mukesh_perdonor.py first."
+            "run alz/ingest/mukesh_perdonor.py first."
         )
     return pd.concat(rows, ignore_index=True)
 
@@ -104,7 +104,7 @@ def _gene_lfc_summary(adata, gene_idx: int) -> dict:
 def run() -> None:
     if not os.path.exists(SEA_AD_H5AD):
         raise FileNotFoundError(
-            f"missing {SEA_AD_H5AD}; run `python alz/atlas_reference.py --sea-ad` first"
+            f"missing {SEA_AD_H5AD}; run `python alz/reference/atlas.py --sea-ad` first"
         )
     try:
         import anndata as ad_mod

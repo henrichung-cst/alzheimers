@@ -51,14 +51,14 @@ pixi run attribute  # unified cell-type attribution (males-only)
 pixi run recover    # cross-contrast + final tables
 ```
 
-**Data ingestion and characterization** (`data_ingest.py`):
+**Data ingestion and characterization** (`alz/ingest/song.py`):
 ```bash
-python alz/data_ingest.py --mapping       # §1: TMT channel-to-animal sample mapping (72 animals, 6 plexes)
-python alz/data_ingest.py --phospho-match # §2: Phosphosite-to-protein matching (91.7% match rate)
-python alz/data_ingest.py --quality       # §3: Data quality (PCA, batch effects, missingness)
-python alz/data_ingest.py --outliers      # §4: Statistical outlier detection (within-group robust z-scores)
-python alz/data_ingest.py --run           # All steps in order
-python alz/data_ingest.py --summary       # Print cached results
+python alz/ingest/song.py --mapping       # §1: TMT channel-to-animal sample mapping (72 animals, 6 plexes)
+python alz/ingest/song.py --phospho-match # §2: Phosphosite-to-protein matching (91.7% match rate)
+python alz/ingest/song.py --quality       # §3: Data quality (PCA, batch effects, missingness)
+python alz/ingest/song.py --outliers      # §4: Statistical outlier detection (within-group robust z-scores)
+python alz/ingest/song.py --run           # All steps in order
+python alz/ingest/song.py --summary       # Print cached results
 ```
 
 **Stoichiometry, MEA enrichment, and unified attribution** — split into four stage modules plus a summary helper:
@@ -87,23 +87,23 @@ These must be run before the live pipeline if their outputs don't exist:
 
 ```bash
 # External Atlas Data Acquisition (SEA-AD + WMB from Allen Institute)
-python alz/atlas_reference.py --sea-ad        # SEA-AD MTG Nebula effect-size h5ads
-python alz/atlas_reference.py --wmb-download  # All 13 WMB-10Xv3 log2 expression matrices (~95 GB)
-python alz/atlas_reference.py --run           # SEA-AD + WMB download
+python alz/reference/atlas.py --sea-ad        # SEA-AD MTG Nebula effect-size h5ads
+python alz/reference/atlas.py --wmb-download  # All 13 WMB-10Xv3 log2 expression matrices (~95 GB)
+python alz/reference/atlas.py --run           # SEA-AD + WMB download
 # Runner: bash alz/runners/supporting/run_atlas_reference.sh
 
 # WMB Expression Export (required for unified attribution + marker assessment)
-python alz/wmb_expression.py --run       # Compute WMB per-cell-type kinase expression matrix
-python alz/wmb_expression.py --proteome  # Compute proteome-wide WMB expression (for --markers)
-python alz/wmb_expression.py --summary   # Print cached results
+python alz/reference/wmb_expression.py --run       # Compute WMB per-cell-type kinase expression matrix
+python alz/reference/wmb_expression.py --proteome  # Compute proteome-wide WMB expression (for --markers)
+python alz/reference/wmb_expression.py --summary   # Print cached results
 # Runner: bash alz/runners/supporting/run_wmb_expression.sh
 
 # Song snRNA-seq Integration (within-cohort evidence from paired animals)
-python alz/snrna_integration.py --pseudobulk    # S1: pseudobulk from 170 h5ad (28 animals → all 31 Levy-t5 clusters)
-python alz/snrna_integration.py --specificity   # S2: within-cohort expression specificity
-python alz/snrna_integration.py --concordance   # S3: within-cohort transcriptomic concordance (males-only OLS)
-python alz/snrna_integration.py --run           # All stages in order
-python alz/snrna_integration.py --summary       # Print cached results
+python alz/reference/snrna_integration.py --pseudobulk    # S1: pseudobulk from 170 h5ad (28 animals → all 31 Levy-t5 clusters)
+python alz/reference/snrna_integration.py --specificity   # S2: within-cohort expression specificity
+python alz/reference/snrna_integration.py --concordance   # S3: within-cohort transcriptomic concordance (males-only OLS)
+python alz/reference/snrna_integration.py --run           # All stages in order
+python alz/reference/snrna_integration.py --summary       # Print cached results
 # Runner: bash alz/runners/supporting/run_snrna_integration.sh
 ```
 
@@ -126,7 +126,7 @@ python alz/supplementary/deconvolution_feasibility.py --run  # Q6: Marker→comp
 ```bash
 python alz/map_kinases_to_genes.py       # Kinase→gene symbol mapping
 python alz/build_unified_viewer.py       # Interactive HTML viewer (kinase + pathway + cross-entity)
-python alz/lucie_5xfad_manifest.py       # Lucie 5xFAD proteomics manifest builder
+python alz/ingest/lucie.py       # Lucie 5xFAD proteomics manifest builder
 ```
 
 ## Architecture
@@ -141,9 +141,9 @@ The live pipeline is a 3-stage stoichiometry-corrected MEA enrichment + unified 
 
 ### Pipeline Summary
 
-1. **data_ingest.py** — TMT channel mapping, phosphosite-to-protein matching (91.7%), marker assessment, PCA QC, outlier detection
-2. **kinase_normalize.py / kinase_enrich.py / kinase_attribute.py / kinase_mechanism.py** — Modular kinase pipeline: IRS normalization (all 72 samples) → stoichiometry (`log2(phospho) − log2(protein)`) → factorial OLS (9 time-resolved contrasts) + MEA kinase enrichment (median-centered + winsorized) → unified cell-type attribution (SEA-AD + WMB + Song concordance) → optional mechanism classification. `kinase_summary.py` prints cached results.
-3. **attribution_recovery.py** — Cross-contrast consistency and final hypothesis tables (primary deliverable: `kinase_hypothesis_table.csv`)
+1. **alz/ingest/song.py** — TMT channel mapping, phosphosite-to-protein matching (91.7%), marker assessment, PCA QC, outlier detection
+2. **alz/bulk_mea/{normalize,enrich,attribute,mechanism}.py** — Modular kinase pipeline: IRS normalization (all 72 samples) → stoichiometry (`log2(phospho) − log2(protein)`) → factorial OLS (9 time-resolved contrasts) + MEA kinase enrichment (median-centered + winsorized) → unified cell-type attribution (SEA-AD + WMB + Song concordance) → optional mechanism classification. `alz/bulk_mea/summary.py` prints cached results.
+3. **alz/bulk_mea/recover.py** — Cross-contrast consistency and final hypothesis tables (primary deliverable: `kinase_hypothesis_table.csv`)
 4. **plot_attribution_bubbles.py** — Visualization: heatmaps, direction-over-time bars, additivity scatter
 
 ### Key Design Points
@@ -157,22 +157,22 @@ The live pipeline is a 3-stage stoichiometry-corrected MEA enrichment + unified 
 ### Dependency Graph
 
 ```
-config.py  ←  data_ingest.py  ←  kinase_normalize.py  ←  kinase_enrich.py  ←  kinase_attribute.py  ←  attribution_recovery.py
-                                                                          ←  kinase_mechanism.py (optional, off the live path)
-                                                                          ←  kinase_summary.py (read-only)
+alz/config.py  ←  alz/ingest/song.py  ←  alz/bulk_mea/normalize.py  ←  alz/bulk_mea/enrich.py  ←  alz/bulk_mea/attribute.py  ←  alz/bulk_mea/recover.py
+                                                                                              ←  alz/bulk_mea/mechanism.py (optional, off the live path)
+                                                                                              ←  alz/bulk_mea/summary.py (read-only)
 
 Supporting:
-config.py  ←  atlas_reference.py  ←  wmb_expression.py
-config.py  ←  snrna_integration.py
+alz/config.py  ←  alz/reference/atlas.py  ←  alz/reference/wmb_expression.py
+alz/config.py  ←  alz/reference/snrna_integration.py
 
 Integration:
-kinase_enrich.py / kinase_attribute.py + snrna_integration.py  ←  alz/integration/
+alz/bulk_mea/{enrich,attribute}.py + alz/reference/snrna_integration.py  ←  alz/integration/
 ```
 
 ### Live Code
 
 - `config.py` — Shared configuration: file paths, thresholds, enrichment method params, `WMB_CLASSES` list (34 WMB classes, single source of truth for the cell-type spine — used by both the kinase pipeline and the Incytr integration), `load_song_to_wmb_class_map()` (Allen Cell Type Mapper raw `subclass_name` → WMB class, built from `wmb_subclass_to_class.csv` with numeric prefix stripped; no SEA-AD intermediate), `OUTLIER_ZSCORE_THRESH`. `ANALYSIS_MODE` is a bridge attribute that loads `analysis_mode` from Kedro parameters (`conf/base/parameters.yml`, KEDRO_ENV-switchable); Phase 4 will replace direct reads with node-injected `params:analysis_mode`. Still structurally mixed with legacy settings.
-- `data_ingest.py` — TMT channel mapping, phosphosite-to-protein matching, marker assessment, PCA quality control, outlier detection. Outputs to `outputs/reports/data_ingest/`. Requires: `scikit-learn`, `matplotlib`.
+- `alz/ingest/song.py` — TMT channel mapping, phosphosite-to-protein matching, marker assessment, PCA quality control, outlier detection. Outputs to `outputs/reports/data_ingest/`. Requires: `scikit-learn`, `matplotlib`.
 - `kinase_normalize.py` — Stage 1: IRS cross-plex normalization (all 72 samples) + stoichiometry computation. Per-track (`--track st|py|both`). Outputs to `outputs/reports/kinase_attribution/`. Requires: `scikit-learn`, `matplotlib`.
 - `kinase_enrich.py` — Stage 2: sample filtering (outlier exclusion + sex), factorial OLS with disease×timepoint interactions (9 contrasts), MEA kinase enrichment (median-centered + winsorized). Per-track. Requires: `kinase-library`, `gseapy`.
 - `kinase_attribute.py` — Stage 3: unified cell-type attribution (SEA-AD concordance + WMB expression specificity + Song within-cohort). Currently consumes the `st` track only. Requires: `anndata`.
@@ -181,13 +181,13 @@ kinase_enrich.py / kinase_attribute.py + snrna_integration.py  ←  alz/integrat
 - `attribution_recovery.py` — Cross-contrast consistency analysis, final unified attribution table. Outputs to `outputs/reports/attribution_recovery/`. Requires: `matplotlib`.
 - `plot_attribution_bubbles.py` — Per-tissue heatmaps, direction-over-time diverging bars, ApTt additivity scatter, winsorization diagnostic. Outputs to `outputs/reports/attribution_recovery/bubble_plots/`. Requires: `matplotlib`, `scipy`.
 - `build_unified_viewer.py` — Generates the interactive HTML viewer (kinase activity → cell-type attribution → pathway backbones → cross-entity views). Reads attribution-recovery tables, MEA stoichiometry, site-level OLS, factorial backbone recurrence + permutation pvalues, and the `kinase_backbone_edges.parquet` edge index. Emits `outputs/reports/unified_viewer/index.html` + a shared JSON payload plus sharded per-entity edge slices under `edge_slices/{kinase,backbone}/` fetched on demand via `SliceCache`. Requires: `kinase-library`, `scipy`, `pyarrow`.
-- `lucie_5xfad_manifest.py` — Builds a proteomics manifest for Lucie 5xFAD data integration.
+- `alz/ingest/lucie.py` — Builds a proteomics manifest for Lucie 5xFAD data integration.
 
 ### Supporting Code
 
-- `atlas_reference.py` — External atlas acquisition: downloads SEA-AD Nebula effect-size h5ads (`effect_sizes{,_early,_late}.h5ad`) from S3 and all 13 WMB-10Xv3 log2 expression matrices into the ABC project cache. Also exports kinase/phosphatase gene-list helpers and ABC cache utilities consumed by `wmb_expression.py`. Requires: `abc_atlas_access`, `anndata`, `boto3`.
-- `wmb_expression.py` — WMB expression export: per-class kinase/phosphatase expression from Allen WMB 10Xv3 (34 WMB classes, group-by on `wmb_meta["class"]`, no silent drops). Emits `outputs/reports/wmb_expression/wmb_kinase_expression.csv` (primary, class-level) + `wmb_kinase_expression_subclass.csv` (audit sidecar at WMB subclass level). Consumed by kinase_attribute.py. Requires: `anndata`.
-- `snrna_integration.py` — Song snRNA-seq integration: computes pseudobulk expression from paired 170_gex_celltypes_00.h5ad (63K nuclei, 28 animals), joining barcodes to the Levy-t5 spine via `barcode_to_cluster.csv` and filtering to `config.CLUSTER_SPINE` (31 clusters). Within-cohort expression specificity and transcriptomic concordance via factorial OLS (males-only, pooled across timepoints). Outputs to `outputs/reports/snrna_integration/`. Requires: `anndata`, `scipy`, `statsmodels`.
+- `alz/reference/atlas.py` — External atlas acquisition: downloads SEA-AD Nebula effect-size h5ads (`effect_sizes{,_early,_late}.h5ad`) from S3 and all 13 WMB-10Xv3 log2 expression matrices into the ABC project cache. Also exports kinase/phosphatase gene-list helpers and ABC cache utilities consumed by `alz/reference/wmb_expression.py`. Requires: `abc_atlas_access`, `anndata`, `boto3`.
+- `alz/reference/wmb_expression.py` — WMB expression export: per-class kinase/phosphatase expression from Allen WMB 10Xv3 (34 WMB classes, group-by on `wmb_meta["class"]`, no silent drops). Emits `outputs/reports/wmb_expression/wmb_kinase_expression.csv` (primary, class-level) + `wmb_kinase_expression_subclass.csv` (audit sidecar at WMB subclass level). Consumed by `alz/bulk_mea/attribute.py`. Requires: `anndata`.
+- `alz/reference/snrna_integration.py` — Song snRNA-seq integration: computes pseudobulk expression from paired 170_gex_celltypes_00.h5ad (63K nuclei, 28 animals), joining barcodes to the Levy-t5 spine via `barcode_to_cluster.csv` and filtering to `config.CLUSTER_SPINE` (31 clusters). Within-cohort expression specificity and transcriptomic concordance via factorial OLS (males-only, pooled across timepoints). Outputs to `outputs/reports/snrna_integration/`. Requires: `anndata`, `scipy`, `statsmodels`.
 - `map_kinases_to_genes.py` — Kinase→gene symbol mapping utility.
 
 ### Integration Code (Incytr)
@@ -227,7 +227,7 @@ Branch path active alongside the bulk live pipeline. Forward projection only —
 **Active spine: `levy_t5` (31 clusters, 94.5% nucleus coverage), built with `min_cells = 5` and no rank gate.** Built once by `alz/integration/build_cluster_spine.py --min-cells 5 --no-rank-gate --spine-name levy_t5`. Rank-deficient clusters are kept and emit NaN for contrasts the design can't identify. This spine supersedes the prior Levy-19 (rank-10 gate, `min_cells = 20`) and WMB-34 (`min_cells = 50`) spines, which are no longer reachable from code.
 
 Stages:
-1. `alz/snrna_proportions.py --spine levy_t5` — per-(animal, cluster, gene) weights `f_c = (expr_c / Σ expr) × (N_total / N_c)`
+1. `alz/reference/snrna_proportions.py --spine levy_t5` — per-(animal, cluster, gene) weights `f_c = (expr_c / Σ expr) × (N_total / N_c)`
 2. `alz/decomposition_mea/build_celltype_decomposition.py --spine levy_t5 --track both` — projects bulk phospho (IMAC + pY) and protein onto the 31-cluster spine
 3. `alz/decomposition_mea/enrich_celltype.py --spine levy_t5 --track {st,py}` — per-cluster factorial OLS + MEA (9 contrasts; NaN where rank-deficient)
 4. Pair-mode Incytr — `alz/incytr_pair/run_pair_mode.sh` produces `31² = 961` sender × receiver pairs per contrast; outputs to `outputs/reports/incytr_pair_mode/wide/` (factorial Incytr archived 2026-05-18)
@@ -247,8 +247,8 @@ The legacy R wrappers / Python adapters / sidecars / orchestrator shell scripts 
 Independent chain for the human Alzheimer's cohort, feeding the unified viewer's human evidence panels. AD-vs-CTRL is per-donor (no per-cell-type resolution in the human samples), so SEA-AD agreement is a cohort-level direction check rather than the cell-type-resolved attribution used on the mouse side.
 
 Stages:
-1. `alz/ingest_mukesh.py --reshape` — reshape raw Mukesh CSVs into `kinase_attribution_human/raw_phospho_normalized{,_pY}.csv` + stoichiometry matrices
-2. `alz/ingest_mukesh_perdonor.py --track both` — per-donor MEA on stoichiometry and raw-phospho tracks; emits `perdonor/recurrence{,_pY}.csv`, `kinase_donor_nes{,_pY}.csv`, etc.
+1. `alz/ingest/mukesh.py --reshape` — reshape raw Mukesh CSVs into `kinase_attribution_human/raw_phospho_normalized{,_pY}.csv` + stoichiometry matrices
+2. `alz/ingest/mukesh_perdonor.py --track both` — per-donor MEA on stoichiometry and raw-phospho tracks; emits `perdonor/recurrence{,_pY}.csv`, `kinase_donor_nes{,_pY}.csv`, etc.
 3. `alz/cross_reference/seaad_human_agreement.py` — cohort-level SEA-AD LFC per kinase (collapsed across 139 MTG supertypes); writes `outputs/reports/kinase_attribution/human_seaad_agreement.csv`
 
 Entry point: `bash alz/runners/main/run_mukesh_perdonor.sh` or `pixi run human` (= ingest + perdonor + seaad).
@@ -263,7 +263,7 @@ Operational shell wrappers under `alz/runners/`:
 - `main/run_all.sh` — **End-to-end runner**: mouse → decomposition → Incytr pair-mode → human → viewer. Backs `pixi run all`. Resumable via per-step sentinels.
 - `main/run_live_pipeline.sh` — Bundled front door (data_ingest → kinase_attribution → attribution_recovery, gates on WMB prerequisite)
 - `main/run_dual_analysis.sh` — **Dual-track runner**: males-only (primary) + full-cohort (sensitivity), archives outputs to `*_males_only/` and `*_full_cohort/` directories
-- `main/run_mukesh_perdonor.sh` — Human cohort: ingest_mukesh_perdonor + seaad_human_agreement
+- `main/run_mukesh_perdonor.sh` — Human cohort: `alz/ingest/mukesh_perdonor.py` + `alz/cross_reference/seaad_human_agreement.py`
 - `main/rerun_mouse_kinase_chain.sh` — Re-run normalize → enrich → mechanism → attribute → recover after Stage-1 changes
 - `main/rerun_decomposition_chain.sh` — Re-run pseudobulk → proportions → decomposition → enrich_celltype → build_per_animal_site_ols → verify
 - `main/run_data_ingest.sh` — Data ingestion wrapper
@@ -354,16 +354,16 @@ Other documentation:
 
 ## Gotchas
 
-- **`analysis_mode` controls sample filtering** — Kedro parameter in `conf/base/parameters.yml`, defaults to `males_only`. Use `KEDRO_ENV=full_cohort` to overlay `conf/full_cohort/parameters.yml` for sensitivity analysis with both sexes. Affects `kinase_enrich.py`, `kinase_attribute.py`, and `kinase_mechanism.py` but NOT `kinase_normalize.py` (which always uses all 72 samples). The legacy `ANALYSIS_MODE` env var was retired in Phase 3 — setting it is silently ignored
-- **Outlier detection requires stoichiometry** — `data_ingest.py --outliers` reads `stoichiometry_matrix.csv`, so `kinase_normalize.py` must be run first. Falls back to total proteome if unavailable
-- **Limited automated tests** — live pipeline has no unit tests; verify with `python alz/kinase_summary.py`
-- **Song proteomics files must be mounted** — data_ingest.py reads Excel workbooks from `data/datasets/song/primary/proteomics/`
+- **`analysis_mode` controls sample filtering** — Kedro parameter in `conf/base/parameters.yml`, defaults to `males_only`. Use `KEDRO_ENV=full_cohort` to overlay `conf/full_cohort/parameters.yml` for sensitivity analysis with both sexes. Affects `alz/bulk_mea/enrich.py`, `alz/bulk_mea/attribute.py`, and `alz/bulk_mea/mechanism.py` but NOT `alz/bulk_mea/normalize.py` (which always uses all 72 samples). The legacy `ANALYSIS_MODE` env var was retired in Phase 3 — setting it is silently ignored
+- **Outlier detection requires stoichiometry** — `alz/ingest/song.py --outliers` reads `stoichiometry_matrix.csv`, so `alz/bulk_mea/normalize.py` must be run first. Falls back to total proteome if unavailable
+- **Limited automated tests** — live pipeline has no unit tests; verify with `python alz/bulk_mea/summary.py`
+- **Song proteomics files must be mounted** — `alz/ingest/song.py` reads Excel workbooks from `data/datasets/song/primary/proteomics/`
 - **WMB prerequisite** — `run_live_pipeline.sh` gates on `wmb_kinase_expression.csv` and `wmb_proteome_expression.csv`; run `run_wmb_expression.sh` first
-- **WMB region scope** — `WMB_REGION_SCOPE` env var (default `whole_brain`) selects the regions streamed by `wmb_expression.py`. `whole_brain` uses all 13 regions, which is correct for the specificity score (its denominator is the brain-wide reference). `cortex_hpf` (Isocortex-1/2 + HPF + CTXsp) exists as a sensitivity-check toggle — see `docs/kinase_mapping_rerun_plan.md` "cortex_hpf swap" addendum for why it is not the default. Output filename is the same across scopes; the active scope is stamped to `wmb_kinase_expression.scope.json` and a scope mismatch will force a recompute
-- **Atlas cache compressed** — raw h5ad files under `data/external/allen_abc/` are zstd-compressed to save space (~115 GB → ~26 GB). Decompress with `bash alz/runners/supporting/decompress_atlas_cache.sh` before re-running `wmb_expression.py`. See `data/external/allen_abc/MANIFEST.json` for provenance
+- **WMB region scope** — `WMB_REGION_SCOPE` env var (default `whole_brain`) selects the regions streamed by `alz/reference/wmb_expression.py`. `whole_brain` uses all 13 regions, which is correct for the specificity score (its denominator is the brain-wide reference). `cortex_hpf` (Isocortex-1/2 + HPF + CTXsp) exists as a sensitivity-check toggle — see `docs/kinase_mapping_rerun_plan.md` "cortex_hpf swap" addendum for why it is not the default. Output filename is the same across scopes; the active scope is stamped to `wmb_kinase_expression.scope.json` and a scope mismatch will force a recompute
+- **Atlas cache compressed** — raw h5ad files under `data/external/allen_abc/` are zstd-compressed to save space (~115 GB → ~26 GB). Decompress with `bash alz/runners/supporting/decompress_atlas_cache.sh` before re-running `alz/reference/wmb_expression.py`. See `data/external/allen_abc/MANIFEST.json` for provenance
 - **SEA-AD data required** — Unified attribution needs SEA-AD effect sizes under `config.SEA_AD_DIR`
 - **API caching** — delete files under `data/derived/caches/` to force re-fetch
-- **WMB expression memory** — `wmb_expression.py --proteome` processes 6,308 genes across 13 regions; use `skip_regional=True` and `chunk_size=2000` to avoid OOM (~30GB RAM available)
+- **WMB expression memory** — `alz/reference/wmb_expression.py --proteome` processes 6,308 genes across 13 regions; use `skip_regional=True` and `chunk_size=2000` to avoid OOM (~30GB RAM available)
 - **Do not reopen closed paths** — direct (statistical) deconvolution, per-cluster stoichiometry, factor model, two-compartment, and transcript-only rescue are all closed (see charter). Proportional decomposition on the **Levy-t5** spine (31 clusters, min-cells ≥ 5, no rank gate) is **active** as a forward projection only. Earlier spines (WMB-34, Levy-19) are superseded — do not reintroduce them as flags or fallbacks (see the research-pivot rule below)
 - **Research pivots replace, they do not coexist** — this is an active research repo, not a product. When an analytical choice changes (cell-type spine, threshold, normalization, taxonomy), the new choice **replaces** the old one. Do not preserve the prior mode behind a CLI flag default, an `if name == "old"` branch, a legacy symlink, a renamed column for old readers, or an env-var escape hatch. A pivot means the prior mode was *wrong* in light of new evidence — keeping it reachable bloats the codebase and signals false equivalence between deprecated and current methods. Update docstrings, comments, README, and runner scripts in the same pass. Output artifacts from prior runs (e.g. `outputs/reports/decomposition/levy19/`) may stay on disk as historical record, but *code paths* referencing them must go. "We might switch back later" and "smaller diff" are explicit non-goals
 - **Per-cluster mass identity is per-cell-rate** — verification check is `Σ_c [P_c × (N_c / N_total)] ≈ bulk`, NOT `Σ_c P_c = bulk` (the `f_c` weights are per-cell rates × N_total/N_c, so literal summation overshoots)

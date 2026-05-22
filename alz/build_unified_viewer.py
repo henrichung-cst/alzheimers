@@ -2906,7 +2906,7 @@ def _assert_input_provenance(skip_verify: bool = False) -> None:
             raise SystemExit(
                 f"WMB expression scope mismatch: file says {wmb_scope!r}, "
                 f"config.WMB_REGION_SCOPE is {config.WMB_REGION_SCOPE!r}. "
-                f"Re-run alz/wmb_expression.py with the expected scope."
+                f"Re-run alz/reference/wmb_expression.py with the expected scope."
             )
 
     decomp_dir = os.path.join(

@@ -3,7 +3,7 @@
 #
 # Downloads the two log2 expression h5ads (Neurons ~33 GB, Nonneurons ~17 GB)
 # and the WHB-taxonomy / cell_metadata, then streams them through h5py to
-# produce data/external/allen_hbca/expression_by_class.csv (genes × 31
+# produce data/derived/aggregates/hbca/expression_by_class.csv (genes × 31
 # superclusters mean log2 expression).
 #
 # Runs inside a systemd --user scope with MemoryMax so an OOM is confined
@@ -22,4 +22,4 @@ echo "  starting at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 systemd-run --user --scope --unit "$SCOPE" \
   -p MemoryMax=24G -p MemorySwapMax=0 \
-  bash -c "pixi run python alz/atlas_reference.py --hbca-download 2>&1 | tee '$LOG'"
+  bash -c "pixi run python alz/reference/atlas.py --hbca-download 2>&1 | tee '$LOG'"

@@ -34,6 +34,7 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Tuple
 
 import numpy as np
@@ -41,7 +42,11 @@ import pandas as pd
 from scipy import stats as sp_stats
 from statsmodels.stats.multitest import multipletests
 
-import config
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from alz import config
 
 # ---------------------------------------------------------------------------
 # Constants

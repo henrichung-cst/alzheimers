@@ -6,7 +6,7 @@ Forward projection (linear space):
     P_c(gene, A)    = f_c(gene, A) × bulk_protein(gene, A)
     Phos_c(site, A) = f_c(parent_gene(site), A) × bulk_phospho(site, A)
 
-`f_c` here is the per-cell-rate weight produced by `alz/snrna_proportions.py`
+`f_c` here is the per-cell-rate weight produced by `alz/reference/snrna_proportions.py`
 (`(expr_c / Σ expr) × (N_total / N_c)`), so the decomposition is **not**
 mass-preserving in the literal Σ_c P_c sense. The verifiable mass identity is
 
@@ -152,7 +152,7 @@ def main():
     out_dir = _spine_dir(args.spine)
     if not out_dir.exists():
         raise FileNotFoundError(f"Spine directory not found: {out_dir} "
-                                f"(run alz/snrna_proportions.py first)")
+                                f"(run alz/reference/snrna_proportions.py first)")
     prop_path = out_dir / "proportions.parquet"
     if not prop_path.exists():
         raise FileNotFoundError(f"{prop_path} missing")

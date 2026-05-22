@@ -210,7 +210,7 @@ def compute_human_celltype_attribution(force: bool = False) -> pd.DataFrame:
     ]:
         if not os.path.exists(spec_path):
             print(f"  WARNING: {ref_label} specificity file not found at {spec_path} — skipping")
-            print(f"  Run: python alz/human_reference_expression.py --ref "
+            print(f"  Run: python alz/reference/human_expression.py --ref "
                   f"{'seaad' if ref_label == 'seaad_mtg' else 'hbca'}")
             continue
 

@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data" / "raw" / "external" / "lucie_proteomics"
 OUT_PATH = ROOT / "docs" / "integrations" / "5xfad-lucie-manifest.json"
 SCAN_BYTES = 65536

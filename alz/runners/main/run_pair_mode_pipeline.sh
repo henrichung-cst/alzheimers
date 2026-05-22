@@ -118,7 +118,7 @@ run_step A "cluster spine (CR02)" \
     --min-cells "$MIN_CELLS" --spine-name "$SPINE"
 
 run_step B "snRNA proportions" \
-  pixi run python alz/snrna_proportions.py --run --spine "$SPINE"
+  pixi run python alz/reference/snrna_proportions.py --run --spine "$SPINE"
 
 run_step C "cell-type decomposition (st + py)" \
   pixi run python alz/decomposition_mea/build_celltype_decomposition.py \
@@ -160,20 +160,20 @@ if [[ $SKIP_INCYTR -eq 0 ]]; then
 fi
 
 run_step F1 "human ingest (reshape)" \
-  pixi run python alz/ingest_mukesh.py --reshape
+  pixi run python alz/ingest/mukesh.py --reshape
 
 run_step F2 "human per-donor MEA + CTRL LOO (CR01)" \
-  pixi run python alz/ingest_mukesh_perdonor.py --track both
+  pixi run python alz/ingest/mukesh_perdonor.py --track both
 
 if [[ $SKIP_ATLAS -eq 0 ]]; then
   run_step G1 "SEA-AD MTG expression download (CR03)" \
-    pixi run python alz/atlas_reference.py --sea-ad-expression
+    pixi run python alz/reference/atlas.py --sea-ad-expression
   run_step G2 "Allen HBCA download (CR03)" \
-    pixi run python alz/atlas_reference.py --hbca-download
+    pixi run python alz/reference/atlas.py --hbca-download
 fi
 
 run_step H1 "human reference expression (CR03)" \
-  pixi run python alz/human_reference_expression.py --ref both
+  pixi run python alz/reference/human_expression.py --ref both
 
 run_step H2 "human cell-type attribution (CR03)" \
   pixi run python alz/cross_reference/human_celltype_attribution.py --force

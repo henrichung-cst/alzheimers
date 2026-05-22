@@ -66,7 +66,7 @@ def annotate(mea_df: pd.DataFrame) -> pd.DataFrame:
     if not os.path.exists(config.SONG_CONCORDANCE_FILE):
         raise FileNotFoundError(
             f"snRNA concordance file not found: {config.SONG_CONCORDANCE_FILE}. "
-            "Run `python alz/snrna_integration.py --concordance` first."
+            "Run `python alz/reference/snrna_integration.py --concordance` first."
         )
     snrna = pd.read_csv(config.SONG_CONCORDANCE_FILE)
     snrna = snrna[["gene_symbol", "cell_type", "contrast", "song_lfc",

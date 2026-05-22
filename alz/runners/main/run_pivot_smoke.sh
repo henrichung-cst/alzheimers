@@ -42,7 +42,7 @@ else
 fi
 
 echo "=== Step 2: Stage 5 — snRNA per-cluster proportions ==="
-pixi run python alz/snrna_proportions.py --run --spine "$SPINE"
+pixi run python alz/reference/snrna_proportions.py --run --spine "$SPINE"
 
 echo "=== Step 3: Stage 6 — proportional decomposition (st + py) ==="
 pixi run python alz/decomposition_mea/build_celltype_decomposition.py --spine "$SPINE" --track both

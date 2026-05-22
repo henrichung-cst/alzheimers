@@ -115,7 +115,7 @@ manifest = {
     },
     're_acquisition': {
         'install': 'pip install git+https://github.com/alleninstitute/abc_atlas_access.git',
-        'command': 'python alz/atlas_reference.py --run',
+        'command': 'python alz/reference/atlas.py --run',
     },
     'archived_date': datetime.date.today().isoformat(),
     'files': files,

@@ -14,9 +14,9 @@ mkdir -p "$LOG_DIR"
 echo "=== Atlas reference acquisition started at $(date) ===" | tee "$LOG"
 
 echo "--- Step 1/2: SEA-AD effect sizes ---" | tee -a "$LOG"
-$PYTHON alz/atlas_reference.py --sea-ad 2>&1 | tee -a "$LOG"
+$PYTHON alz/reference/atlas.py --sea-ad 2>&1 | tee -a "$LOG"
 
 echo "--- Step 2/2: WMB-10Xv3 log2 expression matrices ---" | tee -a "$LOG"
-$PYTHON alz/atlas_reference.py --wmb-download 2>&1 | tee -a "$LOG"
+$PYTHON alz/reference/atlas.py --wmb-download 2>&1 | tee -a "$LOG"
 
 echo "=== Atlas reference acquisition finished at $(date) ===" | tee -a "$LOG"

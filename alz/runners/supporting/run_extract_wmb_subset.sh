@@ -39,7 +39,7 @@ fi
 GENE_LIST="outputs/reports/data_ingest/total_proteome_genes.txt"
 if [[ ! -f "$GENE_LIST" ]]; then
     echo "ERROR: Proteome gene list not found at $GENE_LIST"
-    echo "Run first: python alz/data_ingest.py --phospho-match"
+    echo "Run first: python alz/ingest/song.py --phospho-match"
     exit 1
 fi
 

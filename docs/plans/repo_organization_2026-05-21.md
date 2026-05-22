@@ -286,5 +286,11 @@ These are aspirational endpoints, not deadlines. Methodical beats fast.
     follow-up extracted the SEA-AD / WMB / Song evidence loaders out of
     `bulk_mea/attribute.py` into `alz/cross_reference/evidence.py` and
     promoted them to public (no leading underscore).
-  - Task #17 — Group ingest + reference: pending
+  - Task #17 — Group ingest + reference: **done 2026-05-21** —
+    `git mv`'d 9 files into `alz/ingest/` (`song.py`, `mukesh.py`,
+    `mukesh_perdonor.py`, `lucie.py`) and `alz/reference/`
+    (`atlas.py`, `wmb_expression.py`, `human_expression.py`,
+    `snrna_integration.py`, `snrna_proportions.py`); fixed sys.path
+    bootstraps, repointed every import + CLI string + runner script
+    + pixi.toml task + CLAUDE.md reference.
   - Task #18 — Move config.py to `alz/shared/`: pending

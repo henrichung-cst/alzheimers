@@ -4,11 +4,11 @@
 Mirrors ``alz/wmb_expression.py`` but consumes two human brain references:
 
   1. **SEA-AD MTG** — cortical, 139 supertypes. Source:
-     ``data/external/sea_ad/expression_by_supertype.csv``
+     ``data/derived/aggregates/seaad/expression_by_supertype.csv``
      (produced by ``atlas_reference.py --sea-ad-expression``).
 
   2. **Allen Human Brain Cell Atlas (HBCA)** — whole brain, class-level.
-     Source: ``data/external/allen_hbca/expression_by_class.csv``
+     Source: ``data/derived/aggregates/hbca/expression_by_class.csv``
      (produced by ``atlas_reference.py --hbca-download``).
 
 Specificity metric (same formula as WMB):
@@ -39,13 +39,19 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 
-import config
-from atlas_reference import get_all_kinase_genes, get_phosphatase_genes_from_genelist
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from alz import config
+from alz.reference.atlas import get_all_kinase_genes, get_phosphatase_genes_from_genelist
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -194,7 +200,7 @@ def compute_specificity(
 def compute_seaad_specificity(force: bool = False) -> pd.DataFrame:
     """Compute kinase specificity from SEA-AD MTG per-supertype expression.
 
-    Reads ``data/external/sea_ad/expression_by_supertype.csv``
+    Reads ``data/derived/aggregates/seaad/expression_by_supertype.csv``
     (genes × 139 supertypes, produced by atlas_reference.py --sea-ad-expression).
     Applies the shared specificity recipe and writes
     ``outputs/reports/human_reference_expression/seaad_kinase_specificity.csv``.
@@ -257,7 +263,7 @@ def compute_seaad_specificity(force: bool = False) -> pd.DataFrame:
 def compute_hbca_specificity(force: bool = False) -> pd.DataFrame:
     """Compute kinase specificity from Allen HBCA per-class expression.
 
-    Reads ``data/external/allen_hbca/expression_by_class.csv``
+    Reads ``data/derived/aggregates/hbca/expression_by_class.csv``
     (genes × N classes, produced by atlas_reference.py --hbca-download).
     Applies the shared specificity recipe and writes
     ``outputs/reports/human_reference_expression/hbca_kinase_specificity.csv``.
