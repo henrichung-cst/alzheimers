@@ -25,8 +25,8 @@ EDGE_SLICES_DECOMP_OLS_DIR = os.path.join(
     UNIFIED_VIEWER_DIR, "edge_slices", "decomp_ols"
 )
 DECOMP_OLS_PARQUET = os.path.join(
-    config.REPO_ROOT, "outputs", "reports", "deconvolution",
-    "per_animal", "site_level_ols.parquet",
+    config.REPO_ROOT, "outputs", "reports", "decomposition",
+    config.CLUSTER_SPINE_NAME, "per_animal", "site_level_ols.parquet",
 )
 
 # Song concordance shards — lazy-loaded per gene.
@@ -59,14 +59,14 @@ MEASUREMENT_TRACE_INDEX = os.path.join(MEASUREMENT_TRACE_DIR, "index.json")
 # Per-cluster transcript pseudobulk shards backing the Incytr Pathways
 # Evidence tab's transcript sub-row. Substrate is the per-(cluster, Group)
 # mean of `Data.input@assays$originalexp@data` emitted by
-# alz/incytr/emit_expr_bygroup.R — bit-for-bit the same matrix
+# alz/incytr_pair/emit_expr_bygroup.R — bit-for-bit the same matrix
 # Incytr's `Cal_scFC` consumes, so the JS-side LFC recomputation in
 # evidence_row.js agrees numerically with the stored `*_sclog2FC` columns.
 TRANSCRIPT_TRACE_DIR = os.path.join(AUDIT_SOURCES_DIR, "transcript_trace")
 TRANSCRIPT_TRACE_INDEX = os.path.join(TRANSCRIPT_TRACE_DIR, "index.json")
 TRANSCRIPT_TRACE_PSEUDOBULK = os.path.join(
-    config.REPO_ROOT, "outputs", "reports", "decomposition", "levy_t5",
-    "transcript_per_cluster.parquet",
+    config.REPO_ROOT, "outputs", "reports", "decomposition",
+    config.CLUSTER_SPINE_NAME, "transcript_per_cluster.parquet",
 )
 TRANSCRIPT_TRACE_SAMPLEKEY = os.path.join(
     config.REPO_ROOT, "data", "incytr_frozen", "v2_46clusters",
@@ -90,7 +90,7 @@ TRANSCRIPT_TRACE_SCHEMA_VERSION = 3
 # outputs/reports/decomposition/levy_t5/{protein,phospho,phospho_pY}_per_cluster.parquet.
 OMICS_TRACE_DIR = os.path.join(AUDIT_SOURCES_DIR, "omics_trace")
 OMICS_TRACE_INDEX = os.path.join(OMICS_TRACE_DIR, "index.json")
-OMICS_TRACE_SCHEMA_VERSION = 1
+OMICS_TRACE_SCHEMA_VERSION = 2
 
 # Companion limma-normalized condition means (per cluster × contrast × layer)
 # backing the Evidence tab's right-edge LFC recomputation. Mirrors Incytr's

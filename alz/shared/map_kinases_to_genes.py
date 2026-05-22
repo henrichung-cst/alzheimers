@@ -1,6 +1,26 @@
+"""Regenerable kinase-abbreviation → gene-symbol cache.
 
-import ast
+The kinase-library uses its own kinase abbreviation vocabulary (e.g. `AKT3`,
+`DNAPK`, `CK1A2`) that does not always match the HGNC gene symbol. This
+producer enumerates every kinase in `kinase_library.get_kinome_info()`
+(the authoritative source — `kldata*.csv` exports are derived from it),
+falls back to MyGene.info for anything the kinome_info table doesn't resolve
+cleanly, and writes the result to `data/derived/caches/kinase_to_gene_mapping.csv`.
+
+Manual curation lives in a sidecar `kinase_to_gene_overrides.csv` that takes
+precedence. When the upstream returns a wrong ortholog, add the correct
+mapping to the sidecar rather than editing the regenerable cache.
+
+Outputs:
+  data/derived/caches/kinase_to_gene_mapping.csv  (regenerable)
+
+Usage:
+  pixi run python alz/shared/map_kinases_to_genes.py
+"""
+from __future__ import annotations
+
 import os
+import sys
 
 import pandas as pd
 import requests
@@ -9,100 +29,100 @@ import urllib3
 # Suppress SSL warnings for the environment
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-import config
+from alz.shared import config
 
 MAPPING_CACHE_FILE = config.MAPPING_CACHE_FILE
+OVERRIDES_FILE = os.path.join(
+    config.DERIVED_CACHES_DIR, "kinase_to_gene_overrides.csv"
+)
 
-KINASE_SYMBOL_OVERRIDES = {
-    # ALK1 is the common kinase abbreviation for activin receptor-like kinase 1.
-    # MyGene can return SLPI because "ALK1" appears as a secretory leukocyte
-    # protease inhibitor alias; that is not the kinase intended here.
-    "ALK1": "ACVRL1",
-}
 
-def get_mapping_cache():
-    """Loads the mapping cache from CSV or creates an empty one."""
-    if os.path.exists(MAPPING_CACHE_FILE):
-        cache = pd.read_csv(MAPPING_CACHE_FILE, index_col=0).to_dict()['gene_symbol']
-    else:
-        cache = {}
-    cache.update(KINASE_SYMBOL_OVERRIDES)
-    return cache
+def _load_overrides() -> dict[str, str]:
+    """Manual kinase → gene symbol overrides (precedence over MyGene)."""
+    if not os.path.exists(OVERRIDES_FILE):
+        return {}
+    df = pd.read_csv(OVERRIDES_FILE)
+    return dict(zip(df["kinase_abbreviation"].astype(str),
+                    df["gene_symbol"].astype(str)))
 
-def save_mapping_cache(cache_dict):
-    """Saves the mapping cache to CSV."""
-    cache_dict = dict(cache_dict)
-    cache_dict.update(KINASE_SYMBOL_OVERRIDES)
-    df = pd.DataFrame.from_dict(cache_dict, orient='index', columns=['gene_symbol'])
-    df.index.name = 'kinase_abbreviation'
-    df.to_csv(MAPPING_CACHE_FILE)
 
-def resolve_kinase_symbol(kinase_name, cache):
-    """Uses MyGene.info REST API to find the official gene symbol, with caching."""
-    if kinase_name in KINASE_SYMBOL_OVERRIDES:
-        cache[kinase_name] = KINASE_SYMBOL_OVERRIDES[kinase_name]
-        return cache[kinase_name]
-    if kinase_name in cache:
-        return cache[kinase_name]
-
-    # Search specifically in symbol or alias fields to avoid greedy matches
+def _resolve_via_mygene(kinase_name: str) -> str | None:
+    """MyGene.info symbol/alias lookup. Returns None on failure."""
     query = f"(symbol:{kinase_name} OR alias:{kinase_name})"
-    url = f"https://mygene.info/v3/query?q={query}&species=mouse,human&fields=symbol,alias&size=5"
-
+    url = (f"https://mygene.info/v3/query?q={query}"
+           f"&species=mouse,human&fields=symbol,alias&size=5")
     try:
-        response = requests.get(url, verify=False).json()
-        if response.get('hits'):
-            hits = response['hits']
-            # 1. Exact Symbol match
-            for hit in hits:
-                if hit.get('symbol', '').upper() == kinase_name.upper():
-                    symbol = hit['symbol']
-                    cache[kinase_name] = symbol
-                    return symbol
-            # 2. Exact Alias match
-            for hit in hits:
-                aliases = hit.get('alias', [])
-                if isinstance(aliases, str):
-                    aliases = [aliases]
-                if any(a.upper() == kinase_name.upper() for a in aliases):
-                    symbol = hit['symbol']
-                    cache[kinase_name] = symbol
-                    return symbol
-            # 3. Fallback to first hit
-            symbol = hits[0]['symbol']
-            cache[kinase_name] = symbol
-            return symbol
+        hits = requests.get(url, verify=False, timeout=10).json().get("hits") or []
     except Exception as e:
-        print(f"  Warning: MyGene.info lookup failed for {kinase_name}: {e}")
+        print(f"  WARN: MyGene.info lookup failed for {kinase_name}: {e}")
+        return None
+    if not hits:
+        return None
+    # 1. Exact symbol match
+    for h in hits:
+        if str(h.get("symbol", "")).upper() == kinase_name.upper():
+            return h["symbol"]
+    # 2. Exact alias match
+    for h in hits:
+        aliases = h.get("alias") or []
+        if isinstance(aliases, str):
+            aliases = [aliases]
+        if any(str(a).upper() == kinase_name.upper() for a in aliases):
+            return h["symbol"]
+    # 3. Fallback to first hit
+    return hits[0].get("symbol")
 
-    # Default to itself if all else fails
-    cache[kinase_name] = kinase_name
-    return kinase_name
 
-def main():
-    summary_path = "outputs/deconv/enrichment_summary_sig_kins.csv"
-    if not os.path.exists(summary_path):
-        print(f"Error: Summary file not found at {summary_path}. Run the enrichment analysis first.")
-        return
+def main() -> int:
+    import kinase_library as kl
+    overrides = _load_overrides()
+    info = kl.get_kinome_info()[["KINASE", "GENE_NAME"]].drop_duplicates()
+    info = info[info["KINASE"].notna()]
+    kinases = sorted({str(k) for k in info["KINASE"].unique()})
+    upstream_lookup = dict(zip(info["KINASE"].astype(str),
+                               info["GENE_NAME"].astype(str)))
+    print(f"Resolving {len(kinases)} unique kinase abbreviations from "
+          f"kinase_library.get_kinome_info()")
+    print(f"  Overrides: {len(overrides)} manual entries from {OVERRIDES_FILE}")
 
-    # Extract all unique kinases from the enrichment summary
-    df = pd.read_csv(summary_path)
-    all_kinases = set()
-    for k_list_str in df['top10_most_regulated_kinases']:
-        all_kinases.update(ast.literal_eval(k_list_str))
+    mapping: dict[str, str] = {}
+    n_overridden = n_upstream = n_mygene = n_self = 0
+    for k in kinases:
+        if k in overrides:
+            mapping[k] = overrides[k]
+            n_overridden += 1
+            continue
+        upstream_gene = upstream_lookup.get(k)
+        if upstream_gene and upstream_gene.strip():
+            mapping[k] = upstream_gene
+            n_upstream += 1
+            continue
+        resolved = _resolve_via_mygene(k)
+        if resolved:
+            mapping[k] = resolved
+            n_mygene += 1
+        else:
+            mapping[k] = k
+            n_self += 1
+            print(f"  WARN: {k} unresolved, falling back to self")
 
-    cache = get_mapping_cache()
-    new_mappings = 0
+    df = pd.DataFrame(
+        sorted(mapping.items()), columns=["kinase_abbreviation", "gene_symbol"]
+    )
+    os.makedirs(os.path.dirname(MAPPING_CACHE_FILE), exist_ok=True)
+    df.to_csv(MAPPING_CACHE_FILE, index=False)
+    print(f"Wrote {MAPPING_CACHE_FILE}")
+    print(f"  total: {len(df)}  overridden: {n_overridden}  "
+          f"upstream: {n_upstream}  mygene: {n_mygene}  "
+          f"fell-back-to-self: {n_self}")
+    if not os.path.exists(OVERRIDES_FILE):
+        # Seed an empty overrides file so the existence is documented.
+        pd.DataFrame(columns=["kinase_abbreviation", "gene_symbol"]).to_csv(
+            OVERRIDES_FILE, index=False
+        )
+        print(f"  seeded empty {OVERRIDES_FILE}")
+    return 0
 
-    print(f"Checking mappings for {len(all_kinases)} unique kinases...")
-    for gene in sorted(list(all_kinases)):
-        if gene not in cache:
-            resolve_kinase_symbol(gene, cache)
-            new_mappings += 1
-
-    save_mapping_cache(cache)
-    print(f"Mapping complete. Total mappings: {len(cache)} ({new_mappings} new).")
-    print(f"Result saved to: {MAPPING_CACHE_FILE}")
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

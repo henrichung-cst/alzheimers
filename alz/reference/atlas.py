@@ -84,7 +84,7 @@ def get_all_kinase_genes() -> Tuple[Set[str], Set[str]]:
     """Return (mouse_symbols, human_symbols) for all kinases in the kinome.
 
     Source of truth is `kinase_to_gene_mapping.csv` (kinase-abbreviation →
-    HGNC gene symbol), built once by `alz/map_kinases_to_genes.py` from
+    HGNC gene symbol), built once by `alz/shared/map_kinases_to_genes.py` from
     `kinase_library.get_kinome_info()`. Mouse symbol is the title-case of
     the human symbol (canonical for mouse orthologs of phospho-active
     kinases; explicit exceptions live in `kinase_to_gene_overrides.csv`).
@@ -92,7 +92,7 @@ def get_all_kinase_genes() -> Tuple[Set[str], Set[str]]:
     if not os.path.exists(config.MAPPING_CACHE_FILE):
         raise RuntimeError(
             f"{config.MAPPING_CACHE_FILE} missing — run "
-            f"`pixi run python alz/map_kinases_to_genes.py` first."
+            f"`pixi run python alz/shared/map_kinases_to_genes.py` first."
         )
     cache = pd.read_csv(config.MAPPING_CACHE_FILE)
     human_genes = {str(g) for g in cache["gene_symbol"].dropna()}

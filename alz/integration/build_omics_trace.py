@@ -72,7 +72,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))  # repo root
 
 from alz.shared import config  # noqa: E402
 
-from integration.pair_to_receiver_cache import _sanitize_celltype  # noqa: E402
+from incytr_pair.pair_to_receiver_cache import _sanitize_celltype  # noqa: E402
 from viewer.paths import (  # noqa: E402
     EDGE_SLICES_INCYTR_PATHWAYS_DIR,
     OMICS_TRACE_DIR,
@@ -86,7 +86,8 @@ from viewer.paths import (  # noqa: E402
 # Substrate paths (canonical — per the Phase 2 layout).
 # ---------------------------------------------------------------------------
 _DEC_DIR = os.path.join(
-    config.REPO_ROOT, "outputs", "reports", "decomposition", "levy_t5"
+    config.REPO_ROOT, "outputs", "reports", "decomposition",
+    config.CLUSTER_SPINE_NAME,
 )
 PROTEIN_PARQUET = os.path.join(_DEC_DIR, "protein_per_cluster.parquet")
 PHOSPHO_PS_PARQUET = os.path.join(_DEC_DIR, "phospho_per_cluster.parquet")
