@@ -763,8 +763,8 @@ function _renderAttributionVerdict(hostId, ctx) {
     ? `FDR = ${num(_bulkFdr, 3)}${_bulkSig ? "" : " (n.s.)"}` : "FDR n/a";
   const bulkAnchor =
     `<div class="attr-bulk-anchor">Bulk MEA anchor for ${_escapeHtml(ctx.contrast || "")}: ` +
-    `<span class="attr-bulk-pill">${_bulkDir} · ${_bulkFdrTxt}</span> ` +
-    `<span class="muted">— sign of the bulk NES is the reference direction every column below is checked against.</span></div>`;
+    `<span class="attr-bulk-pill" title="Sign convention: + NES = kinase substrates concentrated among sites with higher stoichiometry (log2 phospho − log2 protein) in disease vs WT. Matches the Incytr tab's 'red = up in disease' convention.">${_bulkDir} · ${_bulkFdrTxt}</span> ` +
+    `<span class="muted">— sign of the bulk NES is the reference direction every column below is checked against. <strong>Positive NES = kinase more active in disease; negative = more active in WT.</strong></span></div>`;
   host.innerHTML =
     bulkAnchor +
     `<table class="attr-verdict-table">` +
@@ -843,8 +843,8 @@ function _renderAttributionDrawer(hostId, ctx, cellType) {
         `<p class="muted attr-caption">Factorial OLS coefficient on the per-animal pseudobulk for this cell type and pathway. Pathway is derived from the contrast prefix (App / Tau / ApTt).</p>` +
         `<div id="attr-song-table"></div></section>` +
     `</div>` +
-    `<section class="attr-section attr-section-wide"><h5>Per-cell substrate-site OLS <span class="muted">(deconvolution/per_animal/site_level_ols.parquet)</span></h5>` +
-      `<p class="muted attr-caption">Per-(site, contrast, cell type) β / SE / p from the CTM-native pseudo-deconvolution OLS, restricted to ${_escapeHtml(ctx.name || "")}'s substrate set in ${_escapeHtml(cellType)}. Shows what is driving the Decomp NES in the row above. Bulk β is the same site's stoichiometry β before share-reweighting; |Δβ| measures how much the per-cell estimate diverges from bulk. <strong>Note:</strong> not yet available for Levy-t5 clusters (shards still keyed on WMB-34).</p>` +
+    `<section class="attr-section attr-section-wide"><h5>Per-cell substrate-site OLS <span class="muted">(site_level_ols.parquet)</span></h5>` +
+      `<p class="muted attr-caption">Per-(site, contrast, cell type) β / SE / p from the Levy-t5 pseudo-decomposition OLS, restricted to ${_escapeHtml(ctx.name || "")}'s substrate set in ${_escapeHtml(cellType)}. Shows what is driving the Decomp NES in the row above. Bulk β is the same site's stoichiometry β before share-reweighting; |Δβ| measures how much the per-cell estimate diverges from bulk.</p>` +
       `<div id="attr-decomp-ols-table" class="audit-scroll"></div></section>`;
   _renderWMBDotPlot("attr-wmb-dotplot", ctx, cellType);
   _renderSEAADHeatmap("attr-seaad-heatmap", ctx, cellType);
@@ -878,7 +878,7 @@ function _renderDecompOlsTable(hostId, ctx, cellType) {
       return;
     }
     const sub = rows.filter(r => Number(r.contrast_id) === cId
-                              && String(r.wmb_class) === String(reqCell));
+                              && String(r.cell_type) === String(reqCell));
     if (!sub.length) {
       host.innerHTML = `<div class="muted">No substrate sites for ${_escapeHtml(reqCell)} in ${_escapeHtml(reqContrast)}.</div>`;
       return;
@@ -914,7 +914,7 @@ function _renderDecompOlsTable(hostId, ctx, cellType) {
       `<div class="muted" style="font-size:11px;margin-bottom:4px;">${sub.length} substrate sites · sorted by per-cell β (largest first)</div>` +
       `<table class="attr-decomp-ols-table"><thead><tr>` +
         `<th>Gene</th><th>Site</th><th>Motif</th><th>Track</th>` +
-        `<th title="Per-cell β: substrate-site stoichiometry coefficient from the per-(group, wmb_class) OLS, on the deconvoluted phospho signal. Bold when per-cell p < 0.05.">Per-cell β</th>` +
+        `<th title="Per-cell β: substrate-site stoichiometry coefficient from the per-(group, cell_type) OLS, on the deconvoluted phospho signal. Bold when per-cell p < 0.05.">Per-cell β</th>` +
         `<th>SE</th>` +
         `<th title="Per-cell p-value (uncorrected). Bold at p < 0.05.">p</th>` +
         `<th title="Bulk β: same site's stoichiometry β from the bulk MEA pipeline before share-reweighting. Bold when bulk p < 0.05.">Bulk β</th>` +
@@ -1186,8 +1186,14 @@ async function _loadKinaseAuditContext(kinase_id, seq) {
   // gene set restricted to this contrast's prerank universe). This is what GSEA
   // walks for this kinase, and is upstream of the MEA leading-edge result.
   const substrateMotifs = new Set();
+  const klPctByMotif = new Map();
   for (const r of (subsRows || [])) {
-    if (r.kinase === name && r.contrast === contrast) substrateMotifs.add(_normMotif(r.motif));
+    if (r.kinase === name && r.contrast === contrast) {
+      const nm = _normMotif(r.motif);
+      substrateMotifs.add(nm);
+      const pct = Number(r.kl_percentile);
+      if (Number.isFinite(pct)) klPctByMotif.set(nm, pct);
+    }
   }
   const substrateMotifBySite = new Map();
   for (const r of stoichMatrix) {
@@ -1205,7 +1211,7 @@ async function _loadKinaseAuditContext(kinase_id, seq) {
     residueType,
     meaStoich, meaRaw, leadRow, siteIds, siteRows, attrRows, olsRows,
     wmbRows, seaSuperRows,
-    substrateMotifs, substrateSiteIds, substrateSiteRows, subsRows,
+    substrateMotifs, klPctByMotif, substrateSiteIds, substrateSiteRows, subsRows,
     rawMatrix, stoichMatrix, normRows, sampleRows, winsorRows, globalRows,
   };
 }
@@ -1277,12 +1283,21 @@ async function renderActiveKinaseAuditTab(kinase_id) {
     const wantedMea = ["kinase", "contrast", "ES", "NES", "p-value", "FDR", "Subs fraction", "Leading substrates"];
 
     if (tab === "measurement-trace") {
-      body.innerHTML = `<p class="kinase-stage-note">Raw-to-stoichiometry receipt for the selected kinase and contrast's leading-substrate sites. The Sample control selects one animal/channel column; each row shows raw PTM, raw parent protein, IRS-normalized values, log2 transforms, and the stoichiometry subtraction used downstream.</p><div id="audit-measurement-trace"></div>`;
+      const motif = (PAYLOAD.kinase_motifs || {})[ctx.name] || null;
+      const logoBlock = SequenceLogo.buildBlock(ctx.name, motif, "audit-trace-logo");
+      body.innerHTML = logoBlock
+        + `<p class="kinase-stage-note">Raw-to-stoichiometry receipt for the selected kinase and contrast's leading-substrate sites. The Sample control selects one animal/channel column; each row shows raw PTM, raw parent protein, IRS-normalized values, log2 transforms, and the stoichiometry subtraction used downstream. <code>kl_percentile</code> is the kinase-library substrate percentile (0-100; higher = this motif scores stronger than that many sites in the library's reference phosphoproteome for this kinase).</p>`
+        + `<div id="audit-measurement-trace"></div>`;
+      if (motif) SequenceLogo.render(document.getElementById("audit-trace-logo"), motif);
       const traceRows = await MeasurementTraceStore.load(sample, ctx.residueType);
       if (seq !== _kinaseAuditSeq) return;
-      const rows = _substrateSiteRows(traceRows, ctx.siteIds, 500);
+      const klBy = ctx.klPctByMotif || new Map();
+      const rows = _substrateSiteRows(traceRows, ctx.siteIds, 500).map(r => ({
+        ...r,
+        kl_percentile: klBy.get(_normMotif(r.motif)) ?? null,
+      }));
       _renderAuditTable("audit-measurement-trace", "measurement_trace", rows,
-        ["site_id","gene_symbol","motif","protein_gene","matched_protein","raw_phospho","raw_protein","irs_phospho","irs_protein","log2_irs_phospho","log2_irs_protein","stoichiometry"],
+        ["site_id","gene_symbol","motif","kl_percentile","protein_gene","matched_protein","raw_phospho","raw_protein","irs_phospho","irs_protein","log2_irs_phospho","log2_irs_protein","stoichiometry"],
         false);
     } else if (tab === "site-stats") {
       body.innerHTML = `<p class="kinase-stage-note">OLS contrast details for the selected kinase's leading-substrate phosphosites. Each row is one phosphosite, not one sample. The selected contrast controls which stoichiometry and raw-phospho effect columns are shown; n_obs_stoich is the total count of usable stoichiometry sample columns available for that site.</p><div id="audit-site-stats"></div>`;

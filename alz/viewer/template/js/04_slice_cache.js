@@ -8,7 +8,7 @@ const SliceCache = (function(){
   // PAYLOAD is async-loaded now; read it lazily on first method call.
   let ESR = null;
   let BUCKET_SIZE = 256;
-  let dPresent = null, sPresent = null, iPresent = null;
+  let dPresent = null, sPresent = null, iPresent = null, hPresent = null;
   function _ensureInit() {
     if (ESR !== null) return;
     ESR = (typeof PAYLOAD !== "undefined" && PAYLOAD && PAYLOAD.edge_slice_ref) || {};
@@ -22,6 +22,7 @@ const SliceCache = (function(){
         && PAYLOAD.incytr_pathways.slice_index.present) || [])
         .map(([s, r]) => s + "||" + r)
     );
+    hPresent = new Set((ESR.present_human_perdonor_kinase_ids || []).map(Number));
   }
   const MAX = 16;                          // LRU cap (per side)
   const bCache = new Map();                // bucket_id -> rows[]
@@ -73,7 +74,7 @@ const SliceCache = (function(){
     return rows.filter(r => r.backbone_id === backbone_id);
   }
 
-  // Decomp-OLS shards: per-kinase substrate-site OLS for every (contrast, wmb_class).
+  // Decomp-OLS shards: per-kinase substrate-site OLS for every (contrast, cell_type).
   const dCache = new Map();              // kinase_id -> rows[]
   async function loadDecompOls(kinase_id){
     _ensureInit();
@@ -128,12 +129,53 @@ const SliceCache = (function(){
     return rows;
   }
 
+  // Human per-donor substrate shards: one parquet per kinase id with
+  // (donor, leading_substrates, substrate_motifs). Returns a Map keyed by
+  // donor for O(1) lookup; empty Map when the kinase has no leading-edge
+  // hits in any donor (kinase not in present_human_perdonor_kinase_ids).
+  const hCache = new Map();              // kinase_id -> Map<donor, {leading,motifs}>
+  const hInflight = new Map();           // kinase_id -> Promise<Map>
+  async function loadHumanPerdonorSubstrate(kinase_id) {
+    _ensureInit();
+    const kid = Number(kinase_id);
+    if (!hPresent.has(kid)) return new Map();
+    if (hCache.has(kid)) {
+      const v = hCache.get(kid); _lruTouch(hCache, kid, v); return v;
+    }
+    if (hInflight.has(kid)) return hInflight.get(kid);
+    if (!ESR.human_perdonor_url) return new Map();
+    const pad = String(kid).padStart(3, "0");
+    const url = `${ESR.human_perdonor_url}${pad}.parquet`;
+    // Coalesce concurrent fetches — the Trace and Running Enrichment sub-tabs
+    // both render asynchronously from the same kinase selection and would
+    // otherwise race on the same shard.
+    const p = _fetchParquet(url).then(rows => {
+      const byDonor = new Map();
+      for (const r of rows) {
+        byDonor.set(String(r.donor), {
+          leading: r.leading_substrates || "",
+          motifs: r.substrate_motifs || "",
+          klPercentiles: r.substrate_kl_percentiles || "",
+        });
+      }
+      _lruTouch(hCache, kid, byDonor);
+      hInflight.delete(kid);
+      return byDonor;
+    }).catch(err => {
+      hInflight.delete(kid);
+      throw err;
+    });
+    hInflight.set(kid, p);
+    return p;
+  }
+
   return { loadBackboneBucket, backboneEdges, loadDecompOls, loadIncytrShard,
-           loadSongConcordance,
+           loadSongConcordance, loadHumanPerdonorSubstrate,
            get backboneCacheSize(){ return bCache.size; },
            get decompOlsCacheSize(){ return dCache.size; },
            get incytrCacheSize(){ return iCache.size; },
-           get songConcordanceCacheSize(){ return sCache.size; } };
+           get songConcordanceCacheSize(){ return sCache.size; },
+           get humanPerdonorCacheSize(){ return hCache.size; } };
 })();
 window.SliceCache = SliceCache;
 

@@ -38,7 +38,7 @@ const OmicsTraceStore = (() => {
   const cache = new Map();        // cluster -> rows[]
   const inflight = new Map();     // cluster -> Promise<rows>
 
-  // Mirror of alz/integration/pair_to_receiver_cache.py::_sanitize_celltype.
+  // Mirror of alz/incytr_pair/pair_to_receiver_cache.py::_sanitize_celltype.
   function _sanitize(name) {
     return String(name).replaceAll("/", "-").replaceAll(" ", "_");
   }
@@ -89,7 +89,8 @@ const OmicsTraceStore = (() => {
     if (inflight.has(cluster)) return inflight.get(cluster);
     const m = _meta();
     const base = (m && m.relative_path) ? `${m.relative_path}/` : "audit_sources/omics_trace/";
-    const url = `${base}${_sanitize(cluster)}.parquet`;
+    const ver = (m && m.omics_schema_version) || 0;
+    const url = `${base}${_sanitize(cluster)}.parquet?v=${ver}`;
     const p = _fetchParquet(url).then(rows => {
       cache.set(cluster, rows);
       inflight.delete(cluster);
@@ -510,21 +511,26 @@ const EvidencePanel = (() => {
     } else {
       // Phospho: aggregate sites → gene per animal × group (matches Incytr).
       perArm = _aggregatePhosphoToGene(layerRows, arms);
-      // Count only sites that have ≥1 in-arm, in-contrast measurement.
+      // Only count sites that contribute *signal* (≥1 positive value) in this
+      // contrast. Sites where the forward projection collapses to zero across
+      // every animal (e.g. parent gene not expressed in this cluster) carry no
+      // information and would clutter the popover.
       const armGroups = new Set(arms.map(a => a.group));
-      const sitesWithData = new Set();
+      const sitesWithSignal = new Set();
       for (const r of layerRows) {
         const gk = OmicsTraceStore.rowGroupKey(r);
         if (!gk || !armGroups.has(gk)) continue;
-        if (r.value == null || !isFinite(r.value)) continue;
-        sitesWithData.add(r.site_id == null ? "__protein__" : String(r.site_id));
+        if (r.value == null || !isFinite(r.value) || r.value <= 0) continue;
+        sitesWithSignal.add(r.site_id == null ? "__protein__" : String(r.site_id));
       }
-      if (sitesWithData.size > 0) {
-        footerHtml = `<button type="button" class="ev-phospho-expand" `
-          + `data-ev-popover="${_esc(cellId)}" `
-          + `title="View per-site detail (Incytr aggregates to gene-mean before LFC)">`
-          + `▾ ${sitesWithData.size} site${sitesWithData.size === 1 ? "" : "s"}</button>`;
+      if (sitesWithSignal.size === 0) {
+        return { klass: "ev-cell ev-cell-na",
+                 html: `<span>n/a</span><span>${_renderLfcChip(stored)}</span>` };
       }
+      footerHtml = `<button type="button" class="ev-phospho-expand" `
+        + `data-ev-popover="${_esc(cellId)}" `
+        + `title="View per-site detail (Incytr aggregates to gene-mean before LFC)">`
+        + `▾ ${sitesWithSignal.size} site${sitesWithSignal.size === 1 ? "" : "s"}</button>`;
     }
 
     // If after filtering to males-only and the requested contrast no per-arm
@@ -574,32 +580,51 @@ const EvidencePanel = (() => {
     setTimeout(() => document.addEventListener("click", _onDocClick, true), 0);
   }
 
+  function _formatMotif(motif) {
+    // Phospho motif is a 13-mer with the modified residue at position 7 (index 6).
+    // Render with that residue bolded so the reader can see which S/T/Y was measured.
+    if (!motif || typeof motif !== "string" || motif.length < 7) return null;
+    const left = motif.slice(0, 6);
+    const center = motif.slice(6, 7);
+    const right = motif.slice(7);
+    return `<span class="ev-pop-motif-flank">${_esc(left)}</span>`
+         + `<span class="ev-pop-motif-center">${_esc(center)}</span>`
+         + `<span class="ev-pop-motif-flank">${_esc(right)}</span>`;
+  }
+
   function _buildSitePopoverHtml(layer, gene, layerRows, arms) {
     const bySite = new Map();
+    const motifBySite = new Map();
     for (const r of layerRows) {
       const sid = r.site_id == null ? "__protein__" : String(r.site_id);
       if (!bySite.has(sid)) bySite.set(sid, []);
       bySite.get(sid).push(r);
+      if (!motifBySite.has(sid) && r.motif) motifBySite.set(sid, String(r.motif));
     }
     let rowsHtml = "";
     let kept = 0, skipped = 0;
     for (const [sid, siteRows] of bySite) {
       const perArm = _perArmFromRows(siteRows, arms);
-      const hasAny = perArm.some(a => a.vals && a.vals.length > 0);
-      if (!hasAny) { skipped += 1; continue; }
+      const hasSignal = perArm.some(a => a.vals && a.vals.some(v => v > 0));
+      if (!hasSignal) { skipped += 1; continue; }
       kept += 1;
       const plot = _renderMicroDotBar(perArm, _LAYER_UNITS[layer], _animalIdsByArm(perArm));
+      const motif = motifBySite.get(sid);
+      const motifHtml = _formatMotif(motif);
+      const label = motifHtml
+        ? `<span class="ev-pop-site-id" title="motif: ${_esc(motif)} · site_id ${_esc(sid)}">${motifHtml}</span>`
+        : `<span class="ev-pop-site-id" title="site_id ${_esc(sid)} (no motif)">${_esc(sid)}</span>`;
       rowsHtml += `<div class="ev-pop-site">`
-        + `<span class="ev-pop-site-id" title="${_esc(sid)}">${_esc(sid)}</span>`
+        + label
         + `<span>${plot}</span>`
         + `</div>`;
     }
     const totalSites = bySite.size;
     const subhead = kept === 0
-      ? `<div class="ev-pop-empty">No sites with measurements in this contrast for ${_esc(gene)} (${totalSites} total in shard, all filtered out).</div>`
+      ? `<div class="ev-pop-empty">No sites with signal in this contrast for ${_esc(gene)} (${totalSites} site${totalSites === 1 ? "" : "s"} in shard, all zero or missing).</div>`
       : (skipped > 0
-          ? `<div class="ev-pop-note">Showing ${kept} of ${totalSites} site${totalSites === 1 ? "" : "s"} (${skipped} hidden — no data in this contrast). Incytr aggregates sites → gene-mean before computing LFC.</div>`
-          : `<div class="ev-pop-note">Showing ${kept} site${kept === 1 ? "" : "s"}. Incytr aggregates sites → gene-mean before computing LFC.</div>`);
+          ? `<div class="ev-pop-note">${kept} of ${totalSites} sites contribute signal (${skipped} zero or missing).</div>`
+          : `<div class="ev-pop-note">${kept} site${kept === 1 ? "" : "s"} with signal.</div>`);
     return `<div class="ev-pop-head">${_esc(_LAYER_LABELS[layer])} · ${_esc(gene)} — per-site detail</div>`
       + subhead
       + rowsHtml;

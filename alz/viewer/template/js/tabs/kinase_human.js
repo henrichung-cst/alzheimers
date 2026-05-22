@@ -81,6 +81,10 @@ function _khEnsureSiteIndex() {
 }
 
 function _khPerdonorFor(khid, donor) {
+  // Scalar per-(kinase, donor) record. The two heavy string fields
+  // (leading_substrates, substrate_motifs) are sharded out to
+  // edge_slices/human_perdonor/ and fetched on demand via
+  // _khSubstrateFor — keeps PAYLOAD parse under ~30 MB.
   const PI = _KH && _KH.perdonor_index;
   if (!PI) return null;
   for (let i = 0; i < PI.kinase_id.length; i++) {
@@ -90,8 +94,6 @@ function _khPerdonorFor(khid, donor) {
         ES: PI.ES ? PI.ES[i] : null,
         p_value: PI.p_value ? PI.p_value[i] : null,
         subs_fraction: PI.subs_fraction ? PI.subs_fraction[i] : "",
-        leading: PI.leading_substrates[i] || "",
-        substrate_motifs: PI.substrate_motifs ? (PI.substrate_motifs[i] || "") : "",
         raw_NES: PI.raw_NES ? PI.raw_NES[i] : null,
         raw_FDR: PI.raw_FDR ? PI.raw_FDR[i] : null,
         raw_p_value: PI.raw_p_value ? PI.raw_p_value[i] : null,
@@ -99,6 +101,22 @@ function _khPerdonorFor(khid, donor) {
     }
   }
   return null;
+}
+
+async function _khSubstrateFor(khid, donor) {
+  // Returns {leading, motifs} for one (kinase, donor); both default to "".
+  // Empty result means either the shard has no row for this donor (no
+  // leading-edge hits) or the kinase isn't in present_human_perdonor_kinase_ids.
+  if (!window.SliceCache || !SliceCache.loadHumanPerdonorSubstrate) {
+    return {leading: "", motifs: "", klPercentiles: ""};
+  }
+  try {
+    const byDonor = await SliceCache.loadHumanPerdonorSubstrate(khid);
+    return byDonor.get(String(donor)) || {leading: "", motifs: "", klPercentiles: ""};
+  } catch (e) {
+    console.warn("loadHumanPerdonorSubstrate failed", khid, e);
+    return {leading: "", motifs: "", klPercentiles: ""};
+  }
 }
 
 function _khCtrlMean(siteIdx, kind) {
@@ -485,16 +503,33 @@ function _khRenderAuditBody(r) {
   if (tab === "attribution") return _khRenderAttribution(body, r);
 }
 
-function _khRenderTrace(body, r) {
+async function _khRenderTrace(body, r) {
   if (!_KH.sites) { body.innerHTML = `<div class="muted">Site matrices not available in payload.</div>`; return; }
   _khEnsureSiteIndex();
   const donor = _KHState.auditDonor;
   const pd = _khPerdonorFor(r.id, donor);
-  if (!pd || !pd.leading) {
+  if (!pd) {
+    body.innerHTML = `<p class="kinase-stage-note">No per-donor MEA record for ${_escapeHtml(r.name)} in donor ${_escapeHtml(donor)}.</p>`;
+    return;
+  }
+  body.innerHTML = `<p class="muted" style="padding:0.5em">Loading leading-edge substrates…</p>`;
+  const sub = await _khSubstrateFor(r.id, donor);
+  if (!sub.leading) {
     body.innerHTML = `<p class="kinase-stage-note">No leading-edge substrates recorded for ${_escapeHtml(r.name)} in donor ${_escapeHtml(donor)} (may not have reached MEA significance).</p>`;
     return;
   }
-  const motifs = pd.leading.split(";").map(s => _normMotif(s)).filter(Boolean);
+  const motifs = sub.leading.split(";").map(s => _normMotif(s)).filter(Boolean);
+  // (motif, kl_percentile) parallel-pair index from the full substrate set
+  // (sub.motifs + sub.klPercentiles). 0-100 substrate-vs-kinase agreement
+  // strength from kinase_library — higher = stronger motif match.
+  const klByMotif = new Map();
+  const subsArr = (sub.motifs || "").split(";").map(_normMotif);
+  const klArr = (sub.klPercentiles || "").split(";");
+  for (let i = 0; i < subsArr.length; i++) {
+    if (!subsArr[i]) continue;
+    const v = Number(klArr[i]);
+    if (Number.isFinite(v)) klByMotif.set(subsArr[i], v);
+  }
   const S = _KH.sites;
   const seen = new Set();
   const rows = [];
@@ -511,6 +546,7 @@ function _khRenderTrace(body, r) {
       const delta = (stoichD != null && stoichCM != null) ? (stoichD - stoichCM) : null;
       rows.push({
         site_id: S.site_id[i], motif: S.motif[i], gene: S.gene_symbol[i], pos: S.site_position[i],
+        kl_percentile: klByMotif.get(_normMotif(S.motif[i])) ?? null,
         raw_d: rawD, raw_cm: rawCM, stoich_d: stoichD, stoich_cm: stoichCM, delta,
       });
     }
@@ -520,22 +556,26 @@ function _khRenderTrace(body, r) {
     const db = b.delta == null ? -Infinity : Math.abs(b.delta);
     return db - da;
   });
-  const note = `<p class="kinase-stage-note">Per-site measurement trace for ${_escapeHtml(r.name)} (${_escapeHtml(r.residue_type)}) in donor <strong>${_escapeHtml(donor)}</strong>. Each row is a leading-edge substrate site for this (kinase, donor). CTRL mean is averaged across ${_KH.ctrl_donors.length} control donors; Δ = donor stoichiometry − CTRL mean.</p>`;
+  const motif = (PAYLOAD.kinase_motifs || {})[r.name] || null;
+  const logoBlock = SequenceLogo.buildBlock(r.name, motif, "kh-trace-logo");
+  const note = `<p class="kinase-stage-note">Per-site measurement trace for ${_escapeHtml(r.name)} (${_escapeHtml(r.residue_type)}) in donor <strong>${_escapeHtml(donor)}</strong>. Each row is a leading-edge substrate site for this (kinase, donor). CTRL mean is averaged across ${_KH.ctrl_donors.length} control donors; Δ = donor stoichiometry − CTRL mean. <code>kl_%</code> is the kinase-library substrate percentile: 0-100, where higher means this motif scores higher than that many phosphosites in the library's reference for this kinase.</p>`;
   const head = `<thead><tr>`
-    + `<th>site_id</th><th>gene</th><th>motif</th><th>raw_phospho (donor)</th>`
+    + `<th>site_id</th><th>gene</th><th>motif</th><th title="Kinase library substrate percentile (0-100, higher = stronger match).">kl_%</th><th>raw_phospho (donor)</th>`
     + `<th>raw_phospho (CTRL μ)</th><th>stoich (donor)</th><th>stoich (CTRL μ)</th><th>Δ stoich</th>`
     + `</tr></thead>`;
   const tbody = `<tbody>` + rows.map(rw =>
     `<tr><td>${_escapeHtml(rw.site_id)}</td>`
     + `<td>${_escapeHtml(rw.gene)}</td>`
     + `<td>${_escapeHtml(rw.motif)}</td>`
+    + `<td>${_khFmt(rw.kl_percentile, 1)}</td>`
     + `<td>${_khFmt(rw.raw_d, 3)}</td>`
     + `<td>${_khFmt(rw.raw_cm, 3)}</td>`
     + `<td>${_khFmt(rw.stoich_d, 3)}</td>`
     + `<td>${_khFmt(rw.stoich_cm, 3)}</td>`
     + `<td>${_khFmt(rw.delta, 3)}</td></tr>`
   ).join("") + `</tbody>`;
-  body.innerHTML = note + `<div class="kh-audit-tablewrap"><table class="data-table">${head}${tbody}</table></div>`;
+  body.innerHTML = logoBlock + note + `<div class="kh-audit-tablewrap"><table class="data-table">${head}${tbody}</table></div>`;
+  if (motif) SequenceLogo.render(document.getElementById("kh-trace-logo"), motif);
 }
 
 function _khRenderPrep(body, r) {
@@ -672,7 +712,7 @@ function _khRunningES(ranked, substrateMotifs) {
   return {N, Nh, running, hitIndices, peakES: peak, peakIdx, leadingEdge};
 }
 
-function _khRenderRunningEnrichment(hostId, r, donor) {
+async function _khRenderRunningEnrichment(hostId, r, donor) {
   const host = document.getElementById(hostId);
   if (!host) return;
   const pd = _khPerdonorFor(r.id, donor);
@@ -680,7 +720,9 @@ function _khRenderRunningEnrichment(hostId, r, donor) {
     host.innerHTML = `<div class="muted" style="padding:1em">No per-donor MEA record for ${_escapeHtml(r.name)} in ${_escapeHtml(donor)} — running enrichment unavailable.</div>`;
     return;
   }
-  const motifsStr = pd.substrate_motifs || "";
+  host.innerHTML = `<div class="muted" style="padding:1em">Loading substrate-set motifs…</div>`;
+  const sub = await _khSubstrateFor(r.id, donor);
+  const motifsStr = sub.motifs || "";
   if (!motifsStr) {
     host.innerHTML = `<div class="muted" style="padding:1em">No substrate-set motifs recorded for ${_escapeHtml(r.name)} in ${_escapeHtml(donor)} (mea_substrate_sets.csv). Re-run <code>python alz/ingest_mukesh_perdonor.py</code>.</div>`;
     return;

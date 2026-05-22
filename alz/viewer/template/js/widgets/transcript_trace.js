@@ -12,11 +12,18 @@
 // ---------------------------------------------------------------------------
 
 const TranscriptTraceStore = (() => {
-  const cache = new Map();        // cluster -> rows[]
+  const MAX = 8;                  // LRU cap — matches SliceCache discipline
+  const cache = new Map();        // cluster -> rows[] (insertion-order LRU)
   const inflight = new Map();     // cluster -> Promise<rows>
 
+  function _lruTouch(key, value) {
+    if (cache.has(key)) cache.delete(key);
+    cache.set(key, value);
+    while (cache.size > MAX) cache.delete(cache.keys().next().value);
+  }
+
   // Mirror of alz/integration/load.R::sanitize_celltype and
-  // alz/integration/pair_to_receiver_cache.py::_sanitize_celltype.
+  // alz/incytr_pair/pair_to_receiver_cache.py::_sanitize_celltype.
   // Single helper — do NOT scatter the replace calls across this file.
   function _sanitize(name) {
     return String(name).replaceAll("/", "-").replaceAll(" ", "_");
@@ -64,13 +71,15 @@ const TranscriptTraceStore = (() => {
 
   async function loadCluster(cluster) {
     if (!hasCluster(cluster)) return [];
-    if (cache.has(cluster)) return cache.get(cluster);
+    if (cache.has(cluster)) {
+      const v = cache.get(cluster); _lruTouch(cluster, v); return v;
+    }
     if (inflight.has(cluster)) return inflight.get(cluster);
     const m = _meta();
     const base = (m && m.relative_path) ? `${m.relative_path}/` : "audit_sources/transcript_trace/";
     const url = `${base}${_sanitize(cluster)}.parquet`;
     const p = _fetchParquet(url).then(rows => {
-      cache.set(cluster, rows);
+      _lruTouch(cluster, rows);
       inflight.delete(cluster);
       return rows;
     }).catch(err => {
@@ -81,7 +90,7 @@ const TranscriptTraceStore = (() => {
     return p;
   }
 
-  // Pair-mode inverse of _GENO_MAP (alz/integration/pair_to_receiver_cache.py):
+  // Pair-mode inverse of _GENO_MAP (alz/incytr_pair/pair_to_receiver_cache.py):
   //   AppP ← App, Ttau ← Tau, ApTt ← ApTt.
   // Hardcoded `ma_` prefix encodes the males-only pair-mode assumption (see
   // analysis_mode in conf/base/parameters.yml). Revisit if the contrast schema
@@ -164,12 +173,6 @@ const TranscriptTraceStore = (() => {
     host.innerHTML =
       `<div class="tt-panel-head">${_escapeHtml(label)}</div>` +
       `<svg class="tt-panel-svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${bars}</svg>`;
-  }
-
-  function _escapeHtml(s) {
-    return String(s == null ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
   return {
