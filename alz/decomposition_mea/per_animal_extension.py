@@ -17,11 +17,11 @@ import numpy as np
 import pandas as pd
 
 from alz.shared import config
-from deconvolution import paths
-from deconvolution.load_deconvoluted import (
+from alz.decomposition_mea import paths
+from alz.decomposition_mea.load_deconvoluted import (
     DeconvoluatedTrack, load_track, safe_log2,
 )
-from deconvolution.factorial_ols import (
+from alz.decomposition_mea.factorial_ols import (
     PARAM_NAMES, _ols_batch, _contrast_lfc_se, _contrast_vector,
 )
 

@@ -18,7 +18,7 @@ import pandas as pd
 from scipy.stats import binom
 from statsmodels.stats.multitest import multipletests
 
-from deconvolution import paths
+from alz.decomposition_mea import paths
 
 
 def compute_cohort_concordance(annotated_df: pd.DataFrame,

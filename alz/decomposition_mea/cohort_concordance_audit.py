@@ -24,8 +24,8 @@ import numpy as np
 import pandas as pd
 
 from alz.shared import config
-from deconvolution import paths
-from deconvolution.cohort_concordance import compute_cohort_concordance
+from alz.decomposition_mea import paths
+from alz.decomposition_mea.cohort_concordance import compute_cohort_concordance
 
 
 def _df_to_md(df: pd.DataFrame, float_fmt: str = "{:.3f}") -> str:

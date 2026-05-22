@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from alz.shared import config
-from deconvolution import paths
+from alz.decomposition_mea import paths
 
 
 def _to_mouse_symbol(human_sym: str) -> str:

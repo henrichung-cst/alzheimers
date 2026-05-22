@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from deconvolution import paths
+from alz.decomposition_mea import paths
 
 PS_META_COLS = [
     "site_id", "protein_id", "gene_symbol", "prot_description",

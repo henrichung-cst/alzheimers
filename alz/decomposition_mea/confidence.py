@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from deconvolution import paths
+from alz.decomposition_mea import paths
 
 CONTRAST_GROUPS = {
     "App_2mo":  ["ma_2mo_AppP", "ma_2mo_WTyp"],
