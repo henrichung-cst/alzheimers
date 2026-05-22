@@ -273,9 +273,10 @@ These are aspirational endpoints, not deadlines. Methodical beats fast.
   `alz/build_unified_viewer.py`)
 - Phase 4:
   - Task #12 — Strip Kedro: **done 2026-05-21** (commit `0c2a997`)
-  - Task #13 — Move Mode 1 → `alz/bulk_mea/`: pending (next)
+  - Task #13 — Move Mode 1 → `alz/bulk_mea/`: **done 2026-05-21**
+    (commit `7e73ecb`)
   - Task #14 — Rename `alz/decomposition/` → `alz/decomposition_mea/`:
-    pending
+    pending (next)
   - Task #15 — Consolidate Mode 3 under `alz/incytr_pair/`: pending
   - Task #16 — Carve out `alz/cross_reference/` for Mode 4: pending
   - Task #17 — Group ingest + reference: pending
