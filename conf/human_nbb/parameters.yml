@@ -3,7 +3,7 @@
 # This overlay covers the species-agnostic config swaps (paths, no sex
 # filter). The per-donor MEA orchestration — N runs, each AD donor vs
 # mean(CTRL) — is owned by `alz/runners/main/run_human_nbb_perdonor.sh`
-# and `alz/ingest_mukesh_perdonor.py`, NOT by the Kedro `enrich`
+# and `alz/ingest/mukesh_perdonor.py`, NOT by the Kedro `enrich`
 # pipeline. The factorial OLS design baked into kinase_enrich.py
 # (genotype x timepoint) does not apply to the NBB cross-sectional
 # design; do not point the standard live runner at this env.

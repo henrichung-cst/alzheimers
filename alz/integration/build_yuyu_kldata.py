@@ -43,7 +43,7 @@ PY_XLSX = REPO_ROOT / "data/datasets/song/primary/phospho/song_pY_sitequant_merg
 OUT_DIR = REPO_ROOT / "data/datasets/song/kinase"
 KLDATA_PATH = OUT_DIR / "kldata_pspy.csv"
 PROVENANCE_PATH = OUT_DIR / "PROVENANCE.json"
-HOMOLOGENE_CACHE = REPO_ROOT / "data/datasets/song/analysis_cache/human_to_mouse_homologene.csv"
+HOMOLOGENE_CACHE = REPO_ROOT / "data/derived/caches/human_to_mouse_homologene.csv"
 
 # Per the kinase_library notebook: top-5 ser/thr predictions per S/T site,
 # top-15 tyr predictions per Y site.

@@ -65,7 +65,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))  # repo root
 
 from alz.shared import config  # noqa: E402
-from integration.pair_to_receiver_cache import _sanitize_celltype  # noqa: E402
+from incytr_pair.pair_to_receiver_cache import _sanitize_celltype  # noqa: E402
 from viewer.paths import (  # noqa: E402
     EDGE_SLICES_INCYTR_PATHWAYS_DIR,
     OMICS_TRACE_NORMALIZED_DIR,
