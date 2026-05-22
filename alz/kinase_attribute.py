@@ -16,7 +16,7 @@ Inputs:
   data/external/sea_ad/effect_sizes{,_early,_late}.h5ad
   outputs/reports/wmb_expression/wmb_kinase_expression.csv
   outputs/reports/snrna_integration/song_{specificity,concordance}.csv (optional)
-  data/datasets/song/analysis_cache/kinase_to_gene_mapping.csv
+  data/derived/caches/kinase_to_gene_mapping.csv
   config.CLUSTER_TO_WMB_CLASS_FILE
   config.CLUSTER_TO_SEAAD_SUPERTYPE_FILE
 
@@ -27,12 +27,14 @@ Outputs (under outputs/reports/kinase_attribution/):
   attribution_summary.json
 """
 
+import json
 import os
 import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import yaml
 
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 if _PROJECT_ROOT not in sys.path:
@@ -524,6 +526,7 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
                          .to_dict() if len(attributed) > 0 else {}),
         "by_contrast": (attributed["contrast"].value_counts()
                         .to_dict() if len(attributed) > 0 else {}),
+        **config.provenance_stamp(),
     }
     return unified, attributed, summary
 
@@ -532,14 +535,101 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
 # CLI
 # ===========================================================================
 
-def main():
-    """CLI shim: delegates to `kedro run --pipeline=attribute`."""
-    from kedro.framework.session import KedroSession
-    from kedro.framework.startup import bootstrap_project
+def _load_params():
+    """Load parameters from conf/base/parameters.yml with optional KEDRO_ENV overlay."""
+    project_root = Path(__file__).resolve().parent.parent
+    params_path = project_root / "conf" / "base" / "parameters.yml"
+    with open(params_path) as f:
+        params = yaml.safe_load(f)
+    env = os.environ.get("KEDRO_ENV")
+    if env:
+        overlay_path = project_root / "conf" / env / "parameters.yml"
+        if overlay_path.exists():
+            with open(overlay_path) as f:
+                params.update(yaml.safe_load(f))
+    return params
 
-    bootstrap_project(Path(__file__).resolve().parent.parent)
-    with KedroSession.create() as session:
-        session.run(pipeline_name="attribute")
+
+def main():
+    """Run unified cell-type attribution directly (no Kedro)."""
+    print("\n=== Stage 3: Unified Cell-Type Attribution ===\n")
+
+    params = _load_params()
+    sea_ad_paths = params["sea_ad_paths"]
+    wmb_expression_path = params["wmb_expression_path"]
+    song_specificity_path = params["song_specificity_path"]
+    song_concordance_path = params["song_concordance_path"]
+
+    kinase_attr_dir = config.KINASE_ATTRIBUTION_OUTPUT_DIR
+    os.makedirs(kinase_attr_dir, exist_ok=True)
+
+    # Load per-track MEA stoichiometry
+    mea_by_track = []
+    for track_name, track_cfg in config.PHOSPHO_TRACKS.items():
+        suffix = track_cfg["output_suffix"]
+        fname = f"mea_stoichiometry{suffix}.csv"
+        path = os.path.join(kinase_attr_dir, fname)
+        if not os.path.exists(path):
+            print(f"  [{track_name}] {path} not found; skipping.")
+            mea_by_track.append((track_cfg, None))
+        else:
+            mea_by_track.append((track_cfg, pd.read_csv(path)))
+
+    # Load kinase-to-gene mapping
+    k2g_path = "data/datasets/song/analysis_cache/kinase_to_gene_mapping.csv"
+    if not os.path.exists(k2g_path):
+        raise FileNotFoundError(
+            f"kinase_to_gene_mapping.csv not found at {k2g_path}")
+    k2g_df = pd.read_csv(k2g_path)
+
+    # Combine MEA tracks and inject gene symbols
+    sig = _combine_mea_tracks(mea_by_track)
+    sig = _map_kinases_to_genes(sig, k2g_df)
+
+    # SEA-AD concordance
+    cluster_to_seaad = config.load_cluster_to_seaad_supertype_map()
+    sea_ad_df, supertype_df = _compute_sea_ad_concordance(
+        sig, cluster_to_seaad, sea_ad_paths)
+
+    # Assemble unified attribution
+    wmb_df = (pd.read_csv(wmb_expression_path)
+              if wmb_expression_path and os.path.exists(wmb_expression_path)
+              else None)
+    if wmb_df is None and wmb_expression_path:
+        print(f"  WMB expression file not found at {wmb_expression_path}")
+    wmb_top = _prepare_wmb_specificity(wmb_df)
+
+    song_sp_df = (pd.read_csv(song_specificity_path)
+                  if song_specificity_path and os.path.exists(song_specificity_path)
+                  else None)
+    song_spec_top = _prepare_song_specificity(song_sp_df)
+
+    song_cd_df = (pd.read_csv(song_concordance_path)
+                  if song_concordance_path and os.path.exists(song_concordance_path)
+                  else None)
+    song_cd_top, song_key_is_contrast = _prepare_song_concordance(song_cd_df)
+
+    unified, attributed, summary = _assemble_unified(
+        sig, sea_ad_df, wmb_top, song_spec_top, song_cd_top, song_key_is_contrast)
+
+    # Save outputs
+    attributed.to_csv(
+        os.path.join(kinase_attr_dir, "unified_attribution.csv"), index=False)
+    unified.to_csv(
+        os.path.join(kinase_attr_dir, "unified_attribution_full.csv"), index=False)
+    print(f"\n  Saved unified_attribution.csv ({len(attributed)} attributed rows)")
+    print(f"  Saved unified_attribution_full.csv ({len(unified)} rows)")
+
+    if supertype_df is not None and len(supertype_df) > 0:
+        supertype_df.to_csv(
+            os.path.join(kinase_attr_dir, "sea_ad_supertype_lfc.csv"), index=False)
+        print(f"  Saved sea_ad_supertype_lfc.csv ({len(supertype_df)} rows)")
+
+    summary_path = os.path.join(kinase_attr_dir, "attribution_summary.json")
+    with open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"  Saved attribution_summary.json")
+    print("\n  Stage 3 complete.")
 
 
 if __name__ == "__main__":

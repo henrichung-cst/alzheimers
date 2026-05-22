@@ -174,13 +174,8 @@ def step_mechanism_annotation():
 
 
 def main():
-    """CLI shim: delegates to `kedro run --pipeline=mechanism`."""
-    from kedro.framework.session import KedroSession
-    from kedro.framework.startup import bootstrap_project
-
-    bootstrap_project(Path(__file__).resolve().parent.parent)
-    with KedroSession.create() as session:
-        session.run(pipeline_name="mechanism")
+    """Run mechanism annotation directly (no Kedro)."""
+    step_mechanism_annotation()
 
 
 if __name__ == "__main__":

@@ -85,20 +85,82 @@ This phase is **scoped to Song mouse cohort vocabulary**. A separate, more
 ambitious effort to make the factorial design parametric for arbitrary
 cohorts is part of Phase 4, not here.
 
-### Phase 4 — Canonical contract + kedro pipeline structure (deferred)
+### Phase 4 — One organizational pattern: subdirectory per mode
 
-Only after Phase 3 closes. Two options surfaced in conversation:
+**Pivot 2026-05-21.** Initial direction was a kedro migration (4a contract +
+4b wiring). After surveying the actual repo state we concluded kedro is
+overkill for a solo-dev research repo with four pipelines, and the parallel
+kedro entry points (added for Mode 1 only) duplicate the flat-script CLI
+without adding enough value to justify finishing. Decision: **stop the kedro
+migration and adopt one consistent organizational style for all four modes**
+— the subdirectory pattern that already works for `alz/decomposition/`.
 
-- **(a) Contract-first:** write `docs/foundation/cohort_contract.md` locking
-  down columns/dtypes/sample-ID convention/group vocabulary for each
-  canonical artifact. Then refactor the four non-kedro modes onto that
-  contract.
-- **(b) Structure-first:** add `pipeline_registry.py` entries for all four
-  modes against today's de-facto contract, then iterate on cleaning up
-  couplings.
+Target layout:
 
-Working preference (subject to change): **(a) contract-first**. Without the
-contract, new kedro pipelines just lock in today's hardcoded vocabulary.
+```
+alz/
+  bulk_mea/                 # Mode 1 — flat scripts (was alz/kinase_*.py + alz/pipelines/)
+  decomposition_mea/        # Mode 2 — renamed from alz/decomposition/
+  incytr_pair/              # Mode 3 — renamed from alz/incytr/ + reshape moved in
+  cross_reference/          # Mode 4 — carved out (currently scattered)
+  ingest/                   # Layer 1 — bespoke per-dataset modules
+  reference/                # shared atlas/expression (feeds 1+4)
+  shared/                   # config.py + cross-mode utilities
+  integration/              # cross-mode glue (cluster spine, bridges, omics trace)
+  viewer/                   # unchanged
+  runners/                  # unchanged shell entry points
+```
+
+Order is documented in per-subdir READMEs, not filename prefixes. Per-cohort
+parameters live in plain YAML loaded by ingest modules (no kedro
+env-overlay; cohort identity propagates via CLI args).
+
+**4a (done 2026-05-21, superseded but retained).** Wrote
+`docs/foundation/cohort_contract.md`. Still useful as the canonical I/O
+schema spec independent of which framework reads it.
+
+**Migration order (tracked as TaskCreate tasks #12–18):**
+
+1. **Strip kedro (done 2026-05-21).** Three-pass strip:
+   - Pass 1: replaced `OmegaConfigLoader` with plain `yaml.safe_load` in
+     `alz/config._load_analysis_mode`, decoupling module-load from kedro.
+   - Pass 2: rewrote `main()` in `kinase_normalize.py`, `kinase_enrich.py`,
+     `kinase_attribute.py`, `kinase_mechanism.py`, `attribution_recovery.py`
+     to do direct orchestration (load inputs from disk → call existing
+     `step_*` helpers → save outputs). `_fit_and_contrast` inlined into
+     `kinase_enrich.py` after the deleted `pipelines/enrich/nodes.py`
+     was found to be its only home.
+   - Pass 3: deleted `alz/pipelines/`, `alz/pipeline_registry.py`,
+     `alz/settings.py`, `conf/base/catalog.yml`. Removed `[tool.kedro]` +
+     `[tool.kedro_telemetry]` from `pyproject.toml`. Removed `kedro` +
+     `kedro-datasets` from `pixi.toml`. Stripped kedro-only keys
+     (`proof_marker`, `track_st`, `track_py`, `contrast_coefs`) from
+     `conf/base/parameters.yml`.
+   - Verified: `python alz/attribution_recovery.py` and
+     `python alz/kinase_enrich.py` both run end-to-end with no regressions
+     (after regenerating stale pre-`abd394a` `sample_mapping.csv`).
+2. **Move Mode 1 → `alz/bulk_mea/`.** `kinase_normalize/enrich/attribute/
+   mechanism/summary.py` + `attribution_recovery.py` → shorter names
+   (`normalize`, `enrich`, `attribute`, `mechanism`, `summary`, `recover`).
+   Update runners + pixi tasks. Write README.
+3. **Rename `alz/decomposition/` → `alz/decomposition_mea/`** for parallelism.
+4. **Consolidate Mode 3** under `alz/incytr_pair/`. Move
+   `pair_to_receiver_cache.py` in; keep `alz/integration/` for genuine
+   cross-mode artifacts.
+5. **Carve out Mode 4** as `alz/cross_reference/`. Move
+   `seaad_human_agreement.py` + `human_celltype_attribution.py` in; refactor
+   SEA-AD/WMB evidence loading currently embedded in
+   `kinase_attribute.py` into a module here.
+6. **Group `alz/ingest/` and `alz/reference/`.**
+7. **`alz/shared/`** for `config.py` + small utilities.
+
+Each step is independently shippable; the repo stays runnable between
+commits.
+
+**Why not numbered files inside each subdir.** Considered briefly. Numbered
+prefixes break when steps get inserted/reordered, and the existing
+`alz/decomposition/` (six descriptive filenames + README documenting order)
+reads fine without them. Stick with descriptive names + README.
 
 ## Open Blockers (the stack)
 
@@ -109,14 +171,14 @@ time; don't lose the broader thread.
 - **B1.** Lucie 5xFAD path: `data/lucie_proteomics` appears to still be a
   live FUSE mount (`mv` → `Device or resource busy`). Defer — need explicit
   user ack to `umount` + move, or to run `pixi run ingest-lucie-proteomics`.
-  (Surfaced 2026-05-21 during data-layout consolidation; tracked in
-  `docs/plans/data_layout_consolidation_2026-05-21.md`.)
+  (Surfaced 2026-05-21 during data-layout consolidation; see
+  `docs/archive/plans/data_layout_consolidation_2026-05-21.md`.)
 - **B2.** Factorial fragments (see Phase 3 above) — promoted to Phase 3,
   not a side blocker.
 
 ## Reference Documents
 
-- Prior data-layout consolidation: `docs/plans/data_layout_consolidation_2026-05-21.md`
+- Prior data-layout consolidation: `docs/archive/plans/data_layout_consolidation_2026-05-21.md`
 - Canonical data sources: `data/README.md`
 - Live analysis charter: `docs/foundation/analysis_charter.md`
 - Repository-level instructions: `CLAUDE.md`

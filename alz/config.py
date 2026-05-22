@@ -93,22 +93,22 @@ OUTLIER_ZSCORE_THRESH = 3.0     # within-group z-score threshold for outlier exc
 
 def _load_analysis_mode() -> str:
     # Cohort selection: source of truth is `conf/base/parameters.yml`.
-    # KEDRO_ENV=full_cohort overlays `conf/full_cohort/parameters.yml`.
-    # base_env/default_run_env must be set explicitly: when used standalone
-    # (outside `kedro run`), OmegaConfigLoader defaults them to "" and the
-    # recursive `**/parameters*` glob then sweeps every conf subdir into a
-    # single merge — duplicate-key check fires on the env files.
+    # KEDRO_ENV=full_cohort overlays `conf/full_cohort/parameters.yml`
+    # (legacy env-var name retained until callers migrate to --cohort flags).
     from pathlib import Path
 
-    from kedro.config import OmegaConfigLoader
+    import yaml
 
-    conf_source = str(Path(REPO_ROOT) / "conf")
+    base = Path(REPO_ROOT) / "conf" / "base" / "parameters.yml"
+    with open(base) as f:
+        params = yaml.safe_load(f) or {}
     env = os.environ.get("KEDRO_ENV")
-    kwargs = {"conf_source": conf_source, "base_env": "base", "default_run_env": "local"}
     if env:
-        kwargs["env"] = env
-    loader = OmegaConfigLoader(**kwargs)
-    return loader["parameters"]["analysis_mode"]
+        overlay_path = Path(REPO_ROOT) / "conf" / env / "parameters.yml"
+        if overlay_path.exists():
+            with open(overlay_path) as f:
+                params.update(yaml.safe_load(f) or {})
+    return params["analysis_mode"]
 
 
 ANALYSIS_MODE = _load_analysis_mode()  # "males_only" or "full_cohort"

@@ -28,6 +28,7 @@ if _PROJECT_ROOT not in sys.path:
 
 import numpy as np
 import pandas as pd
+import yaml
 from scipy import stats as sp_stats
 from statsmodels.stats.multitest import multipletests
 
@@ -368,16 +369,158 @@ def _prepare_raw_ols(mapping, bio_cols, raw_df):
 
 
 # ===========================================================================
-# CLI shim — defers to the namespaced Kedro `enrich` pipeline.
+# CLI
 # ===========================================================================
 
-def main():
-    from kedro.framework.session import KedroSession
-    from kedro.framework.startup import bootstrap_project
+def _load_params():
+    """Load parameters from conf/base/parameters.yml with optional KEDRO_ENV overlay."""
+    project_root = Path(__file__).resolve().parent.parent
+    params_path = project_root / "conf" / "base" / "parameters.yml"
+    with open(params_path) as f:
+        params = yaml.safe_load(f)
+    env = os.environ.get("KEDRO_ENV")
+    if env:
+        overlay_path = project_root / "conf" / env / "parameters.yml"
+        if overlay_path.exists():
+            with open(overlay_path) as f:
+                params.update(yaml.safe_load(f))
+    return params
 
-    bootstrap_project(Path(__file__).resolve().parent.parent)
-    with KedroSession.create() as session:
-        session.run(pipeline_name="enrich")
+
+def _fit_and_contrast(stoich_df, raw_df, mapping, analysis_mode, contrast_coefs):
+    """Build design matrix, run OLS on stoich + raw, compute per-contrast LFC/SE/FDR."""
+    from scipy import stats as sp_stats
+
+    bio_cols = mapping["column_name"].tolist()
+    X = _build_design_matrix(mapping, bio_cols, analysis_mode=analysis_mode)
+    X_np = X.values
+    param_names = list(X.columns)
+    print(f"  Design matrix: {X_np.shape} (samples x params); cols={param_names}")
+
+    print("  --- OLS on stoichiometry ---")
+    Y_stoich = stoich_df[bio_cols].values
+    betas_s, pvals_s, nobs_s, xtxinv_s = _run_ols_all_sites(Y_stoich, X_np)
+
+    print("  --- OLS on raw phospho (log2-transformed) ---")
+    raw_vals = raw_df[bio_cols].values.copy()
+    raw_vals[raw_vals <= 0] = np.nan
+    with np.errstate(divide="ignore"):
+        Y_raw = np.log2(raw_vals)
+    betas_r, pvals_r, nobs_r, xtxinv_r = _run_ols_all_sites(Y_raw, X_np)
+
+    print("  --- Computing per-contrast LFC/SE/FDR ---")
+    results_by_contrast = {}
+    for contrast_name, coefs in contrast_coefs.items():
+        c_vec = np.zeros(len(param_names))
+        for param, weight in coefs.items():
+            c_vec[param_names.index(param)] = weight
+
+        lfc_s = betas_s @ c_vec
+        var_c_s = np.einsum("p,ipq,q->i", c_vec, xtxinv_s, c_vec)
+        residuals_s = Y_stoich - (X_np @ betas_s.T).T
+        dof_s = nobs_s - len(param_names)
+        dof_s[dof_s <= 0] = 1
+        sigma2_s = np.nansum(residuals_s ** 2, axis=1) / dof_s
+        se_contrast_s = np.sqrt(var_c_s * sigma2_s)
+        t_contrast_s = lfc_s / se_contrast_s
+        p_contrast_s = 2 * sp_stats.t.sf(np.abs(t_contrast_s), df=dof_s)
+        fdr_s = _bh_fdr(p_contrast_s)
+
+        lfc_r = betas_r @ c_vec
+        var_c_r = np.einsum("p,ipq,q->i", c_vec, xtxinv_r, c_vec)
+        residuals_r = Y_raw - (X_np @ betas_r.T).T
+        dof_r = nobs_r - len(param_names)
+        dof_r[dof_r <= 0] = 1
+        sigma2_r = np.nansum(residuals_r ** 2, axis=1) / dof_r
+        se_contrast_r = np.sqrt(var_c_r * sigma2_r)
+        t_contrast_r = lfc_r / se_contrast_r
+        p_contrast_r = 2 * sp_stats.t.sf(np.abs(t_contrast_r), df=dof_r)
+        fdr_r = _bh_fdr(p_contrast_r)
+
+        results_by_contrast[contrast_name] = {
+            "stoich_lfc": lfc_s, "stoich_pval": p_contrast_s, "stoich_fdr": fdr_s,
+            "raw_lfc": lfc_r, "raw_pval": p_contrast_r, "raw_fdr": fdr_r,
+        }
+
+        thresh = config.SITE_FDR_DIAGNOSTIC_THRESH
+        n_sig_s = int(np.sum(fdr_s < thresh))
+        n_sig_r = int(np.sum(fdr_r < thresh))
+        print(f"  {contrast_name}: stoich {n_sig_s} sig sites (FDR<{thresh}), "
+              f"raw {n_sig_r} sig sites")
+
+    site_results = pd.DataFrame({
+        "site_id": stoich_df["site_id"].values,
+        "gene_symbol": stoich_df["gene_symbol"].values,
+        "matched_protein": stoich_df["matched_protein"].values,
+        "n_obs_stoich": nobs_s,
+    })
+    for cn in contrast_coefs:
+        res = results_by_contrast[cn]
+        site_results[f"stoich_lfc_{cn}"] = res["stoich_lfc"]
+        site_results[f"stoich_pval_{cn}"] = res["stoich_pval"]
+        site_results[f"stoich_fdr_{cn}"] = res["stoich_fdr"]
+        site_results[f"raw_lfc_{cn}"] = res["raw_lfc"]
+        site_results[f"raw_pval_{cn}"] = res["raw_pval"]
+        site_results[f"raw_fdr_{cn}"] = res["raw_fdr"]
+
+    return site_results, results_by_contrast
+
+
+def main():
+    """Run OLS + MEA enrichment directly for both tracks."""
+    _ensure_output_dir()
+    params = _load_params()
+    analysis_mode = params.get("analysis_mode", config.ANALYSIS_MODE)
+
+    print(f"\n=== Stage 2: OLS + MEA Kinase Enrichment ({analysis_mode}) ===\n")
+
+    mapping_full = load_sample_mapping()
+    filtered_mapping = _filter_samples(mapping_full, analysis_mode=analysis_mode)
+
+    for track_name in config.PHOSPHO_TRACKS:
+        track_cfg = config.PHOSPHO_TRACKS[track_name]
+        print(f"\n--- Track: {track_name} ({track_cfg['label']}) ---")
+
+        stoich_path = _track_output("stoichiometry_matrix.csv", track_cfg)
+        raw_path = _track_output("raw_phospho_normalized.csv", track_cfg)
+
+        if not os.path.exists(stoich_path):
+            print(f"  {stoich_path} not found; skipping track.")
+            continue
+        if not os.path.exists(raw_path):
+            print(f"  {raw_path} not found; skipping track.")
+            continue
+
+        stoich_df = pd.read_csv(stoich_path)
+        raw_df = pd.read_csv(raw_path)
+
+        site_ols, results_by_contrast = _fit_and_contrast(
+            stoich_df, raw_df, filtered_mapping,
+            analysis_mode, config.CONTRAST_COEFS)
+
+        print(f"  --- MEA kinase enrichment (track={track_name}) ---")
+        mea_df, shift_df, winsorized_df, substrate_df = _run_mea(
+            stoich_df["motif"], results_by_contrast, "stoich_lfc",
+            site_ids=stoich_df["site_id"].values,
+            gene_symbols=stoich_df["gene_symbol"].values,
+            track=track_name,
+        )
+
+        site_ols.to_csv(_track_output("site_level_ols.csv", track_cfg), index=False)
+        if mea_df is not None and len(mea_df) > 0:
+            mea_df.to_csv(
+                _track_output("mea_stoichiometry.csv", track_cfg), index=False)
+        shift_df.to_csv(
+            _track_output("mea_global_shift.csv", track_cfg), index=False)
+        winsorized_df.to_csv(
+            _track_output("winsorized_sites.csv", track_cfg), index=False)
+        substrate_df.to_csv(
+            _track_output("mea_substrate_sets.csv", track_cfg), index=False)
+
+        print(f"  [{track_name}] Saved site_level_ols, mea_stoichiometry, "
+              "mea_global_shift, winsorized_sites, mea_substrate_sets")
+
+    print("\nStage 2 complete.")
 
 
 if __name__ == "__main__":

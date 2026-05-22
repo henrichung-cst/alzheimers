@@ -17,6 +17,7 @@ Outputs (under outputs/reports/kinase_attribution/, track-suffixed):
   pca_plots/{tp_raw,tp_norm}_by_{plex,genotype,sex,timepoint}.png
 """
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -522,13 +523,47 @@ def step_normalize(track, mapping, tp, sq):
 # ===========================================================================
 
 def main():
-    """CLI shim: delegates to `kedro run --pipeline=normalize`."""
-    from kedro.framework.session import KedroSession
-    from kedro.framework.startup import bootstrap_project
+    """Run IRS normalization + stoichiometry for both tracks directly (no Kedro)."""
+    print("\n=== Stage 1: Cross-Plex Normalization + Stoichiometry ===\n")
+    mapping = load_sample_mapping()
 
-    bootstrap_project(Path(__file__).resolve().parent.parent)
-    with KedroSession.create() as session:
-        session.run(pipeline_name="normalize")
+    tp_path = TOTAL_PROTEOME_FILE
+    if not os.path.exists(tp_path):
+        raise FileNotFoundError(f"Total proteome not found: {tp_path}")
+    tp = pd.read_excel(tp_path, header=1)
+
+    for track_name, track_cfg in config.PHOSPHO_TRACKS.items():
+        print(f"\n--- Track: {track_name} ({track_cfg['label']}) ---")
+
+        sq_path = track_cfg["input_file"]
+        if not os.path.exists(sq_path):
+            print(f"  {sq_path} not found; skipping track.")
+            continue
+        sq_raw = pd.read_excel(sq_path, header=1)
+        sq = _postprocess_phospho_df(sq_raw, track_cfg)
+
+        stoich_df, raw_phospho_df, total_proteome_df, qc_df, norm_summary = \
+            step_normalize(track_cfg, mapping, tp, sq)
+
+        stoich_df.to_csv(
+            _track_output("stoichiometry_matrix.csv", track_cfg), index=False)
+        raw_phospho_df.to_csv(
+            _track_output("raw_phospho_normalized.csv", track_cfg), index=False)
+        total_proteome_df.to_csv(
+            _track_output("total_proteome_normalized.csv", track_cfg), index=False)
+        qc_df.to_csv(
+            _track_output("stoichiometry_qc.csv", track_cfg), index=False)
+
+        summary_path = _track_output("normalization_summary.csv", track_cfg)
+        # normalization_summary is JSON
+        summary_path = summary_path.replace(".csv", ".json")
+        with open(summary_path, "w") as f:
+            json.dump(norm_summary, f, indent=2)
+
+        print(f"  [{track_name}] Saved stoichiometry_matrix, raw_phospho_normalized, "
+              "total_proteome_normalized, stoichiometry_qc, normalization_summary")
+
+    print("\nStage 1 complete.")
 
 
 if __name__ == "__main__":

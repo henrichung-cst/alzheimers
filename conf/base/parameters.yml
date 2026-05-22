@@ -1,19 +1,15 @@
-# Pipeline parameters.
-proof_marker: phase2_smoke_test
+# Pipeline parameters. Plain YAML loaded by each CLI script via PyYAML;
+# KEDRO_ENV (legacy env-var name retained) selects an overlay under
+# `conf/<env>/parameters.yml`. Not a Kedro project — see docs/plans/
+# repo_organization_2026-05-21.md for the post-Kedro layout.
 
 # Cohort selection (males-only primary, full-cohort sensitivity).
-# Override via `KEDRO_ENV=full_cohort` — see conf/full_cohort/parameters.yml.
 analysis_mode: males_only
 
-# Optional outlier exclusions (path may not exist; node guards in-line).
+# Optional outlier exclusions (path may not exist; scripts guard in-line).
 sample_exclusions_path: outputs/reports/data_ingest/sample_exclusions.csv
 
-# Per-track names (consumed by the namespaced enrich pipeline).
-track_st: st
-track_py: py
-
-# attribute pipeline — paths to optional/h5ad inputs handled inside nodes
-# (Kedro's catalog can't natively express anndata or "may-not-exist" files).
+# Optional / anndata inputs (paths may not exist; scripts guard in-line).
 sea_ad_paths:
   full:  data/external/sea_ad/effect_sizes.h5ad
   early: data/external/sea_ad/effect_sizes_early.h5ad

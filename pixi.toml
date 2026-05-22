@@ -17,6 +17,11 @@ mechanism = "python alz/kinase_mechanism.py"
 recover = "python alz/attribution_recovery.py"
 live = { depends-on = ["ingest", "normalize", "enrich", "attribute", "recover"] }
 dual = "bash alz/runners/main/run_dual_analysis.sh"
+human-ingest = "python alz/ingest_mukesh.py --reshape"
+human-perdonor = "python alz/ingest_mukesh_perdonor.py --track both"
+human-seaad = "python alz/seaad_human_agreement.py"
+human = { depends-on = ["human-ingest", "human-perdonor", "human-seaad"] }
+all = "bash alz/runners/main/run_all.sh"
 atlas = "python alz/atlas_reference.py --run"
 wmb-export = "python alz/wmb_expression.py --run"
 snrna = "python alz/snrna_integration.py --run"
@@ -76,6 +81,4 @@ r-readr = ">=2.2.0,<3"
 [pypi-dependencies]
 kinase-library = "*"
 py-spy = ">=0.4.1, <0.5"
-kedro = ">=1.3, <2"
-kedro-datasets = { version = ">=9.3.0, <10", extras = ["pandas-csvdataset", "pandas-exceldataset"] }
 abc-atlas-access = { git = "https://github.com/alleninstitute/abc_atlas_access.git" }

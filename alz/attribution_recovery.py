@@ -38,11 +38,7 @@ from alz import config
 
 OUTPUT_DIR = config.ATTRIBUTION_RECOVERY_OUTPUT_DIR
 
-CONTRASTS = [
-    "App_2mo", "App_4mo", "App_6mo",
-    "Tau_2mo", "Tau_4mo", "Tau_6mo",
-    "ApTt_2mo", "ApTt_4mo", "ApTt_6mo",
-]
+CONTRASTS = list(config.CONTRAST_COEFS.keys())
 NES_COLS = [f"{c}_NES" for c in CONTRASTS]
 FDR_COLS = [f"{c}_FDR" for c in CONTRASTS]
 
@@ -403,7 +399,25 @@ def print_summary():
     print()
 
 
+def _load_params():
+    """Load parameters from conf/base/parameters.yml with optional KEDRO_ENV overlay."""
+    import yaml
+    project_root = Path(__file__).resolve().parent.parent
+    params_path = project_root / "conf" / "base" / "parameters.yml"
+    with open(params_path) as f:
+        params = yaml.safe_load(f)
+    env = os.environ.get("KEDRO_ENV")
+    if env:
+        overlay_path = project_root / "conf" / env / "parameters.yml"
+        if overlay_path.exists():
+            with open(overlay_path) as f:
+                params.update(yaml.safe_load(f))
+    return params
+
+
 def main():
+    import json
+
     parser = argparse.ArgumentParser(
         description="Attribution Recovery: Kinase and cell-type hypothesis tables",
     )
@@ -415,12 +429,62 @@ def main():
         print_summary()
         return
 
-    from kedro.framework.session import KedroSession
-    from kedro.framework.startup import bootstrap_project
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    bootstrap_project(Path(__file__).resolve().parent.parent)
-    with KedroSession.create() as session:
-        session.run(pipeline_name="recovery")
+    kinase_attr_dir = config.KINASE_ATTRIBUTION_OUTPUT_DIR
+
+    # Load per-track MEA stoichiometry, inject residue_type/track if missing
+    frames = []
+    for track_name, track_cfg in config.PHOSPHO_TRACKS.items():
+        suffix = track_cfg["output_suffix"]
+        fname = f"mea_stoichiometry{suffix}.csv"
+        path = os.path.join(kinase_attr_dir, fname)
+        if not os.path.exists(path):
+            print(f"  [{track_name}] {path} not found; skipping track.")
+            continue
+        df = pd.read_csv(path)
+        if "residue_type" not in df.columns:
+            df["residue_type"] = track_cfg["residue"]
+        if "track" not in df.columns:
+            df["track"] = track_cfg["name"]
+        frames.append(df)
+    if not frames:
+        raise FileNotFoundError(
+            "No MEA stoichiometry files found; run kinase_enrich.py first.")
+    mea_combined = pd.concat(frames, ignore_index=True, sort=False)
+
+    uaf_path = os.path.join(kinase_attr_dir, "unified_attribution_full.csv")
+    if not os.path.exists(uaf_path):
+        raise FileNotFoundError(
+            f"unified_attribution_full.csv not found at {uaf_path}; "
+            "run kinase_attribute.py first.")
+    uaf_full = pd.read_csv(uaf_path)
+
+    t1, t2, t3 = step_attribution_recovery(mea_combined, uaf_full)
+
+    t1.to_csv(os.path.join(OUTPUT_DIR, "kinase_activity_matrix.csv"), index=False)
+    t2.to_csv(os.path.join(OUTPUT_DIR, "celltype_evidence_table.csv"), index=False)
+    t3.to_csv(os.path.join(OUTPUT_DIR, "kinase_hypothesis_table.csv"), index=False)
+    print(f"  Saved kinase_activity_matrix.csv ({len(t1)} kinases)")
+    print(f"  Saved celltype_evidence_table.csv ({len(t2)} rows)")
+    print(f"  Saved kinase_hypothesis_table.csv ({len(t3)} kinases)")
+
+    summary = {
+        "n_kinases_in_activity_matrix": int(len(t1)),
+        "n_celltype_evidence_rows": int(len(t2)),
+        "n_kinases_in_hypothesis_table": int(len(t3)),
+        "n_kinases_with_celltype_candidate": int(
+            (t3["n_celltype_candidates"] > 0).sum()
+        ) if "n_celltype_candidates" in t3.columns else 0,
+        "n_high_conf_attribution": int(t3["has_high_conf_attribution"].sum())
+            if "has_high_conf_attribution" in t3.columns else 0,
+        **config.provenance_stamp(),
+    }
+    summary_path = os.path.join(OUTPUT_DIR, "recovery_summary.json")
+    with open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"  Saved recovery_summary.json")
+    print("\nAttribution recovery complete.")
 
 
 if __name__ == "__main__":
