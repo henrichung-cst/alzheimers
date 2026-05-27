@@ -11,6 +11,11 @@
 # per-pair runIncytr memory profile) while still routing through the
 # upstream code paths that carry the sce4-parity defaults.
 #
+# The per-(gene, cluster, condition) trimean is pair-invariant, so it is
+# computed ONCE over the union of all per-cluster gene.use sets and injected
+# into every per-pair Cal_pairwise_grid call (expr_bygroup =), instead of
+# recomputing Expr_bygroup 961x per contrast (Incytr perf Improvement 3).
+#
 # sce4 parity: five of the six historical sce4-calibration overrides are
 # now upstream defaults (Cal_SigProb correction=0.01, cutoff_SigProb=0;
 # Cal_scFC correction=0.01; Cal_PDS cutoff_PDS=0; Expr_bygroup mean_method
@@ -208,6 +213,16 @@ cat(sprintf("[pair-driver] per-cluster gene.use sizes: median=%d  min=%d  max=%d
             min(lengths(dg_by_cluster)),
             max(lengths(dg_by_cluster))))
 
+# Every pair's pathway genes are a subset of (dg_sender u dg_receiver), so the
+# union of all per-cluster DG sets bounds every gene any pair can ever score.
+# The per-(gene, cluster, condition) trimean is pair-invariant, so we compute
+# it ONCE over this union below and inject it into each per-pair grid call
+# (Improvement 3), replacing 961 redundant Expr_bygroup passes per contrast.
+gene_union <- intersect(unique(unlist(dg_by_cluster, use.names = FALSE)),
+                        rownames(Data.input))
+cat(sprintf("[pair-driver] precompute-trimean gene union: %d genes\n",
+            length(gene_union)))
+
 # =====================================================================
 # Template object + pairs grid
 # =====================================================================
@@ -262,6 +277,38 @@ multiomics_args <- list(
   py.data_condition1 = py_1, py.data_condition2 = py_2, py.correction = 0.001, py.q = NULL
 )
 
+# One-time per-(gene, cluster, condition) trimean over gene_union, mirroring
+# Incytr's Expr_bygroup(mean_method = NULL) per condition so each per-pair
+# Cal_pairwise_grid call injects the slice it needs (expr_bygroup =) instead of
+# recomputing trimeans. Gene-chunked to bound the dense submatrix (genes_chunk x
+# cells_in_condition). Reuses Incytr's own kernel for bitwise parity with the
+# @expr.bygroup slot the internal Expr_bygroup would have produced.
+build_expr_substrate <- function(data, idents, cond_cells, genes,
+                                 gene_chunk = 4000L) {
+  n_g <- length(genes)
+  starts <- seq.int(1L, n_g, by = gene_chunk)
+  lapply(cond_cells, function(bc) {
+    if (length(bc) == 0L) return(data.frame())
+    labels <- as.character(idents[bc])
+    parts <- vector("list", length(starts))
+    for (k in seq_along(starts)) {
+      gs <- starts[k]; ge <- min(gs + gene_chunk - 1L, n_g)
+      sub <- as.matrix(data[genes[gs:ge], bc, drop = FALSE])
+      parts[[k]] <- Incytr:::grouped_weighted_quartile(sub, labels)
+    }
+    df <- as.data.frame(do.call(rbind, parts))
+    df$Gene <- rownames(df)
+    df
+  })
+}
+
+# Condition->barcodes split must be captured before rm(Data.input) below.
+cond_cells <- lapply(c(condition1, condition2), function(cc) {
+  rownames(Data.input@meta.data)[
+    as.character(Data.input@meta.data$condition) == cc]
+})
+names(cond_cells) <- c(condition1, condition2)
+
 # =====================================================================
 # Per-pair Cal_pairwise_grid loop
 # =====================================================================
@@ -310,6 +357,16 @@ cat(sprintf("[pair-driver] rss before rm(Data.input): %.0f MB\n", rss_mb()))
 rm(Data.input); gc(verbose = FALSE)
 cat(sprintf("[pair-driver] rss after  rm(Data.input): %.0f MB\n", rss_mb()))
 
+# Build the pair-invariant trimean substrate once (Improvement 3). template@data
+# shares the expression matrix (refcount) with the dropped Data.input, so this
+# reads the same values. Forks below COW-inherit it read-only; the slot is tiny
+# (gene_union x clusters x 2 conditions doubles).
+t_sub <- proc.time()[["elapsed"]]
+expr_substrate <- build_expr_substrate(template@data, template@idents,
+                                       cond_cells, gene_union)
+cat(sprintf("[pair-driver] built expr substrate in %.1fs  rss=%.0fMB\n",
+            proc.time()[["elapsed"]] - t_sub, rss_mb()))
+
 # One pair: run Cal_pairwise_grid, post-process, write its shard, return the
 # shard path (or NA if the pair produced no rows / errored). Self-contained so
 # it runs identically in-process (NPAIR_WORKERS=1) or in an mclapply fork.
@@ -337,7 +394,8 @@ process_pair <- function(i) {
       n.cores           = 1L,
       nboot             = NBOOT,
       seed.use          = 1L,
-      perm.n.cores      = N_PERM_WORKERS
+      perm.n.cores      = N_PERM_WORKERS,
+      expr_bygroup      = expr_substrate
     ),
     error = function(e) {
       warning(sprintf("[pair-driver] Cal_pairwise_grid failed for %s -> %s: %s",
