@@ -97,13 +97,19 @@ def _build_select(path: str, suffix: str, contrast: str) -> str:
         else f'CAST(NULL AS VARCHAR) AS "{c}"'
         for c in _LABEL_COLS
     )
+    # nboot=0 runs skip the permutation test, so there is no p_value_<suffix>
+    # column. NULL-fill it then (rank/filter on |PDS|, not pvalue) rather than
+    # erroring on a missing column.
+    pvalue_col = f"p_value_{suffix}"
+    pvalue_expr = (f'CAST("{pvalue_col}" AS DOUBLE)' if pvalue_col in src_cols
+                   else "CAST(NULL AS DOUBLE)")
     return f"""
         SELECT
           Sender AS sender,
           Receiver AS receiver,
           Path, Ligand, Receptor, EM, Target,
           '{contrast}' AS contrast,
-          CAST("p_value_{suffix}" AS DOUBLE) AS pvalue,
+          {pvalue_expr} AS pvalue,
           CAST(PDS AS DOUBLE) AS PDS,
           CAST(TPDS AS DOUBLE) AS TPDS,
           CAST(PPDS AS DOUBLE) AS PPDS,
@@ -138,17 +144,29 @@ def reshape(input_dir: str, out_dir: str, *, require_all_nine: bool = False) -> 
         os.rmdir(d)
 
     con = duckdb.connect()
-    con.execute("PRAGMA threads=4; PRAGMA memory_limit='6GB';")
+    con.execute("PRAGMA threads=4; PRAGMA memory_limit='8GB';")
     con.execute(f"SET temp_directory='{os.path.expanduser('~/.cache/duckdb')}';")
+    # Hard spill cap so a regression can't fill the shared disk (the original
+    # TEMP TABLE blew it to 110 GiB). With the streaming VIEW below the spill
+    # stays small; this just fails fast instead of exhausting the drive.
+    con.execute("SET max_temp_directory_size='40GiB';")
+    # PARTITION_BY over the full (181M-row at nboot=0) union must NOT buffer the
+    # whole table: a TEMP TABLE + insertion-order preservation spilled >110 GiB
+    # and exhausted the disk. A VIEW streams the union per-partition, and
+    # disabling insertion-order preservation lets DuckDB flush partitions
+    # incrementally (the fix DuckDB's OOM message itself recommends). Row order
+    # within a shard is irrelevant — the viewer re-sorts on read.
+    con.execute("SET preserve_insertion_order=false;")
 
     union_sql = "\n        UNION ALL\n".join(
         _build_select(path, suffix, contrast) for path, suffix, contrast in parsed
     )
-    # Materialize a staging table with both raw and sanitized receiver so we
-    # can (a) partition on the sanitized name to get the directory layout the
-    # viewer expects and (b) emit pair_metadata with the raw display name.
+    # VIEW (not TEMP TABLE) carrying both raw and sanitized receiver so we can
+    # (a) partition on the sanitized name to get the directory layout the viewer
+    # expects and (b) emit pair_metadata. The union is re-scanned per consumer
+    # (count, COPY, pair_metadata) — I/O-bound but memory-flat.
     con.execute(f"""
-        CREATE TEMP TABLE staged AS
+        CREATE VIEW staged AS
         SELECT *, replace(replace(receiver, '/', '-'), ' ', '_') AS receiver_part
         FROM ({union_sql})
     """)

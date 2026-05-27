@@ -315,6 +315,9 @@ def _configure_duckdb_tempdir(con) -> None:
     d = os.environ.get("DUCKDB_TEMP_DIR", os.path.expanduser("~/.cache/duckdb"))
     os.makedirs(d, exist_ok=True)
     con.execute(f"SET temp_directory='{d}';")
+    # Cap spill so a large sort (e.g. the per-sender ORDER BY over the 181M-row
+    # nboot=0 pair-mode set) fails fast instead of filling the shared disk.
+    con.execute("SET max_temp_directory_size='40GiB';")
 
 
 def _measurement_trace_columns() -> list[str]:
@@ -2042,6 +2045,7 @@ def _write_incytr_pair_pathways() -> dict | None:
     # p-value (`p_value_ma_<age>mo_<geno>`) as the `pvalue` proxy — pair-mode
     # has no factorial-OLS pooled p-value.
     selects = []
+    has_pvalue = False  # nboot=0 outputs omit p_value_* entirely.
     for fpath, contrast in file_to_contrast:
         sch = pq.read_schema(fpath)
         names = {f.name for f in sch}
@@ -2049,6 +2053,7 @@ def _write_incytr_pair_pathways() -> dict | None:
         for n in names:
             if n.startswith("p_value_") and not n.endswith("_WTyp"):
                 pcol_disease = n
+                has_pvalue = True
                 break
         if pcol_disease is None:
             print(f"    (warn) no disease-arm p_value col in "
@@ -2091,11 +2096,14 @@ def _write_incytr_pair_pathways() -> dict | None:
                    dir_clauses, path_clauses, fc_clauses, label_clauses]
         extra_select = ",\n          ".join(c for c in clauses if c)
 
-        # Pre-filter: keep rows with |PDS| >= 0.01 (gating signal — pvalue is
-        # untrustworthy in pair-mode) AND drop rows with clearly-no-signal
-        # disease-arm pvalue > 0.75 (coarse no-signal cut, not a ranking gate).
-        pval_drop_clause = (
-            f"AND ({pcol_clause} IS NULL OR {pcol_clause} <= 0.75)"
+        # No |PDS| pre-filter here: significance is now applied upstream in the
+        # driver pipeline (alz/incytr_pair/filter_significant_paths.py:
+        # SigProb>0.1 AND |PDS|>=0.2), so the inputs are already the significant
+        # set. For nboot=100 inputs we still drop clearly-no-signal rows by
+        # disease-arm pvalue > 0.75 (coarse no-signal cut, not a ranking gate);
+        # nboot=0 has no pvalue column so nothing is dropped here.
+        where_clause = (
+            f"WHERE {pcol_clause} IS NULL OR {pcol_clause} <= 0.75"
             if pcol_disease is not None else ""
         )
         selects.append(f"""
@@ -2108,19 +2116,18 @@ def _write_incytr_pair_pathways() -> dict | None:
           CAST(PDS AS DOUBLE) AS PDS,
           {extra_select}
         FROM read_parquet('{fpath}')
-        WHERE COALESCE(ABS(CAST(PDS AS DOUBLE)), 0) >= 0.30
-          {pval_drop_clause}
+        {where_clause}
         """)
     union_sql = "\nUNION ALL\n".join(selects)
     # VIEW (not TEMP TABLE) — DuckDB re-reads parquet on demand for each query,
-    # avoiding a 57M-row in-memory materialization that OOMs the box. The
-    # per-file WHERE pre-filter (|PDS| >= 0.30 AND disease-arm pvalue <= 0.75)
-    # cuts ~22% of rows that carry no actionable signal. Pair-mode pvalue is
-    # untrustworthy for ranking, but pvalue > 0.75 is a coarse no-signal cut.
+    # avoiding a large in-memory materialization that OOMs the box. Significance
+    # filtering happens upstream (SigProb>0.1 AND |PDS|>=0.2); the only per-file
+    # WHERE retained here is the nboot=100 disease-arm pvalue <= 0.75 coarse
+    # no-signal cut (pair-mode pvalue is untrustworthy for ranking).
     con.execute(f"CREATE VIEW src AS {union_sql}")
     n_src = con.execute("SELECT COUNT(*) FROM src").fetchone()[0]
     print(f"  incytr_pair_pathways: loaded {n_src:,} rows across "
-          f"{len(file_to_contrast)} contrast(s) (pre-filtered |PDS|>=0.30 AND p<=0.75)",
+          f"{len(file_to_contrast)} contrast(s) (upstream-filtered SigProb>0.1 & |PDS|>=0.2)",
           flush=True)
 
     # Sender/receiver canonical lists from the data itself (Levy-t5, already
@@ -2138,18 +2145,23 @@ def _write_incytr_pair_pathways() -> dict | None:
     # --- heatmap_counts cube (same shape contract as factorial) ----------
     n_thr = len(_INCYTR_PATHWAY_PVALUES)
     n_ap = len(_INCYTR_PATHWAY_ABS_PDS)
+    # nboot=0 has no pvalue: count every row (|PDS| does the gating) instead of
+    # gating on a NULL column, which would zero out the whole cube. nboot=100
+    # keeps the pvalue gate unchanged.
+    pval_filter = (lambda tp: f"pvalue < {tp}") if has_pvalue else (lambda tp: "TRUE")
+    pval_where = "WHERE pvalue IS NOT NULL" if has_pvalue else ""
     hm_thr_clauses_list = []
     for ip, tp in enumerate(_INCYTR_PATHWAY_PVALUES):
         for iap, tap in enumerate(_INCYTR_PATHWAY_ABS_PDS):
             hm_thr_clauses_list.append(
-                f"COUNT(*) FILTER (WHERE pvalue < {tp} "
+                f"COUNT(*) FILTER (WHERE {pval_filter(tp)} "
                 f"AND COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
             )
     hm_thr_clauses = ", ".join(hm_thr_clauses_list)
     hm_rows = con.execute(f"""
         SELECT sender, receiver, contrast, {hm_thr_clauses}
         FROM src
-        WHERE pvalue IS NOT NULL
+        {pval_where}
         GROUP BY sender, receiver, contrast
     """).fetchall()
     grid = np.zeros((n_s, n_r, n_c, n_thr, n_ap), dtype=np.uint32)
@@ -2189,7 +2201,7 @@ def _write_incytr_pair_pathways() -> dict | None:
     for ip, tp in enumerate(_INCYTR_PATHWAY_PVALUES):
         for iap, tap in enumerate(_INCYTR_PATHWAY_ABS_PDS):
             thr_clauses.append(
-                f"COUNT(*) FILTER (WHERE pvalue < {tp} "
+                f"COUNT(*) FILTER (WHERE {pval_filter(tp)} "
                 f"AND COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
             )
     pathway_rows = con.execute(f"""
@@ -2199,7 +2211,7 @@ def _write_incytr_pair_pathways() -> dict | None:
                     ELSE 1 END AS s,
                {", ".join(thr_clauses)}
         FROM src
-        WHERE pvalue IS NOT NULL
+        {pval_where}
         GROUP BY contrast, s
     """).fetchall()
     pathway_arr = np.zeros((n_c, 3, n_thr, n_ap), dtype=np.uint32)
@@ -2352,34 +2364,50 @@ def _write_incytr_pair_pathways() -> dict | None:
             max_shard_bytes = sz
             max_shard_name = fname
 
-    # Per-sender streaming: 31 queries (one per sender) instead of one global
-    # sort over 42M rows (OOMs DuckDB) or one query per (sender, receiver)
-    # pair (961 queries × 9 parquet rescans). Each sender query is ~1.4M rows,
-    # well within memory; sort is local to one sender.
+    # Per-sender streaming via Arrow record batches. One query per sender (31
+    # total) — not one global sort (OOMs DuckDB) nor one query per
+    # (sender, receiver) pair (961 queries × 9 parquet rescans). The
+    # ORDER BY receiver is a blocking sort that spills to temp under
+    # memory_limit, then streams sorted batches; we accumulate one
+    # receiver-run at a time and flush at each receiver boundary. This bounds
+    # peak RAM to a single (sender, receiver) shard's rows rather than a whole
+    # sender — the largest sender (Cholinergic, 11.6M rows at nboot=0) would be
+    # ~8 GB if materialized with fetchdf(), which risks OOM on the shared box.
     stream_cols = ["receiver"] + shard_select_cols
     for s in senders_canonical:
-        df = con.execute(
+        reader = con.execute(
             f"""SELECT {', '.join(stream_cols)}
                 FROM src
                 WHERE sender = ?
-                ORDER BY receiver, contrast, pvalue NULLS LAST""",
+                ORDER BY receiver""",
             [s],
-        ).fetchdf()
-        if df.empty:
-            continue
-        receivers = df["receiver"].tolist()
-        # Run-length partition by receiver.
-        starts = [0]
-        for i in range(1, len(receivers)):
-            if receivers[i] != receivers[i - 1]:
-                starts.append(i)
-        starts.append(len(receivers))
-        for j in range(len(starts) - 1):
-            a, b = starts[j], starts[j + 1]
-            r = receivers[a]
-            run = df.iloc[a:b].drop(columns=["receiver"])
-            _flush((s, r), [run])
-        del df
+        ).fetch_record_batch(1_000_000)
+        cur_receiver: str | None = None
+        buf: list[pd.DataFrame] = []
+        for batch in reader:
+            bdf = batch.to_pandas()
+            receivers = bdf["receiver"].to_numpy()
+            # Run-length partition by receiver within this batch; receivers are
+            # globally contiguous because of the ORDER BY, so a run may span
+            # batch boundaries (handled by carrying cur_receiver across batches).
+            starts = [0]
+            for i in range(1, len(receivers)):
+                if receivers[i] != receivers[i - 1]:
+                    starts.append(i)
+            starts.append(len(receivers))
+            for j in range(len(starts) - 1):
+                a, b = starts[j], starts[j + 1]
+                r = receivers[a]
+                seg = bdf.iloc[a:b].drop(columns=["receiver"])
+                if cur_receiver is None:
+                    cur_receiver = r
+                elif r != cur_receiver:
+                    _flush((s, cur_receiver), buf)
+                    buf = []
+                    cur_receiver = r
+                buf.append(seg)
+        if buf and cur_receiver is not None:
+            _flush((s, cur_receiver), buf)
     con.close()
 
     index = {

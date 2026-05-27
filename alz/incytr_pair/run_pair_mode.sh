@@ -66,10 +66,17 @@ run_one() {
   # chunks. The in-process mclapply path OOM'd within a single 90-pair
   # chunk on 2mo Ttau (RSS 18.8 GB at chunk 1/4) even with 1 worker
   # because R's gc does not return memory to the OS reliably. With
-  # NPAIR_WORKERS=1 × N_CHUNK_MULT=8 = 8 chunks of ~120 pairs each,
-  # every chunk subprocess starts at baseline and peaks well under
-  # the 30 GB system ceiling.
-  NBOOT="$nboot" NPAIR_WORKERS=1 N_CHUNK_MULT=8 CHUNK_PARALLEL="${CHUNK_PARALLEL:-2}" \
+  # NPAIR_WORKERS=1 × N_CHUNK_MULT=8 = 8 chunks of ~120 pairs each.
+  # On the 30 GB box main R RSS grows ~600 MB per pair within a chunk
+  # (cond_mats heap-fragmentation), so heavy contrasts blow past 24G
+  # before chunk end at this chunk size — set N_CHUNK_MULT=48 from the
+  # caller (~20 pairs/chunk, peak ~19 GB). Caller may also override
+  # NPAIR_WORKERS / NPERM_WORKERS to trade speed against headroom.
+  NBOOT="$nboot" \
+  NPAIR_WORKERS="${NPAIR_WORKERS:-1}" \
+  N_CHUNK_MULT="${N_CHUNK_MULT:-8}" \
+  NPERM_WORKERS="${NPERM_WORKERS:-1}" \
+  CHUNK_PARALLEL="${CHUNK_PARALLEL:-2}" \
     pixi run Rscript "$DRIVER" "$c1" "$c2" "$INPUTS_DIR/input_gene_list.csv" \
     || { echo "  FAIL: $c1 vs $c2 (continuing)"; return 1; }
 
@@ -109,5 +116,13 @@ LOG="$LOG_DIR/pair_run.log"
   else
     echo "All 9 comparisons succeeded."
   fi
+
+  # Apply the collaborator significance filter downstream of the driver
+  # (override #5 emits all paths at cutoff=0; this is the downstream half):
+  # (SigProb_disease > 0.1 OR SigProb_WTyp > 0.1) AND |PDS| >= 0.2. Pure row
+  # subset, parity-preserving, idempotent.
+  echo "=== $(date -Is) significance filter ==="
+  pixi run python alz/incytr_pair/filter_significant_paths.py --dir "$OUTPUT_DIR"
+
   ls -lh "$OUTPUT_DIR/"
 } 2>&1 | tee "$LOG"
