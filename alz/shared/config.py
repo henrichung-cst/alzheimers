@@ -447,7 +447,7 @@ SONG_CONCORDANCE_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "song_concord
 SONG_LFC_MIN = 0.1       # minimum |song_lfc| for concordance (same as SEA_AD_LFC_MIN)
 SONG_CONCORDANCE_WEIGHT = 3.0
 SEA_AD_CONCORDANCE_WEIGHT = 1.0
-SONG_MIN_CELLS = 5        # minimum cells per animal×cluster for pseudobulk (Levy-t5 spine gate)
+SONG_MIN_CELLS = int(os.environ.get("SONG_MIN_CELLS", "5"))   # min cells per animal×cluster (Levy-t5 spine gate); overridable via env for bench sweeps
 SONG_MIN_ANIMALS = 10     # minimum animals per cluster for concordance DE
 
 

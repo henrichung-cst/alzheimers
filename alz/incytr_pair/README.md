@@ -44,7 +44,7 @@ bash alz/incytr_pair/build_pair_inputs.sh
 | `build_pair_inputs.sh` | Input-prep orchestrator: calls `build_pair_seurat.R`, `export_decomposition_for_pair.py`, and `build_input_gene_list.R`; writes to `data/derived/incytr_inputs/`. |
 | `build_pair_seurat.R` | Builds `incytr_obj.rds` from the snRNA-seq data. Writes to `data/derived/incytr_inputs/incytr_obj.rds`. |
 | `build_input_gene_list.R` | Builds `input_gene_list.csv` for the driver. Writes to `data/derived/incytr_inputs/`. |
-| `export_decomposition_for_pair.py` | Reshapes `{protein,phospho,phospho_pY}_per_cluster.parquet` into yuyu CSV format for the R driver. Writes `{pr,ps,py}_yuyu_deconvoluted.csv` to `data/derived/incytr_inputs/`. |
+| `export_decomposition_for_pair.py` | Runs the **provenance deconvolution** `P_c = (N_total/N_c)×bulk×(specific_c/Σ_46 specific)` (min/10000 imputation): transcript share from frozen `aggexp.csv`, size factors from the Song h5ad, bulk from frozen `pr/imac/py_median.csv`. Emits 31-spine × 12 male-group `{pr,ps,py}_yuyu_deconvoluted.csv`. Replaces the prior levy_t5 parquet-reshape (see `docs/plans/sce4_decomposition_reconciliation_2026-05-24.md`). |
 | `pair_to_receiver_cache.py` | Reshapes the 9 wide driver outputs from `outputs/reports/incytr_pair_mode/wide/` into the long-form `receiver_cache/` layout the unified viewer consumes. Invoked by `alz/runners/main/run_pair_mode_viewer_build.sh`. |
 
 ## Data layout
@@ -84,3 +84,85 @@ outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet
 - **Pair pvalue is untrustworthy** — filter/rank on `|PDS|`, not pvalue.
 - **Transcript substrate is contrast-invariant.** `emit_expr_bygroup.R` runs once per spine build, not per contrast.
 - **Paths are resolved from repo root** via `git rev-parse --show-toplevel`; scripts can be invoked from any cwd.
+
+## Running on this box (memory-bounded, cgroup-wrapped)
+
+The host has **30 GiB total RAM**. A pair-mode contrast's peak working set
+(main R + Permutation_test allocations) can reach ~24 GB on heavy contrasts.
+A bare `bash alz/runners/main/run_pair_mode_pipeline.sh` will OOM-kill Claude
+or the desktop session if it runs away. Always launch inside a systemd user
+scope so the cgroup contains a runaway to itself.
+
+### Canonical invocation
+
+```bash
+rm -f outputs/reports/change_requests/.state/E2.done   # if re-running E2
+systemd-run --user --scope --slice=alz-incytr.slice \
+  -p MemoryMax=24G -p MemorySwapMax=0 \
+  --unit=alz-incytr-$(date +%s) \
+  --description="Pair-mode regen" \
+  bash -c 'NPERM_WORKERS=1 NPAIR_WORKERS=1 CHUNK_PARALLEL=1 N_CHUNK_MULT=48 \
+           bash alz/runners/main/run_pair_mode_pipeline.sh --rerun E2 --workers 1' \
+  > /tmp/pair_mode_capped.log 2>&1 &
+```
+
+### Why these flags (do not change without a reason and a test)
+
+- `MemoryMax=24G` — hard wall. Above this the cgroup OOM-kills *inside the
+  scope only*; the host (and Claude) stay alive.
+- **No `MemoryHigh`.** A soft throttle of 20G caused 30 % of wall time to be
+  spent in kernel reclaim — pairs ran at 38 min/pair vs the 1–2 min/pair
+  bench precedent. The kernel hit `memory.high` 3.4 M times in 2.5 h.
+- `MemorySwapMax=0` — shared box, no swap thrash.
+- `NPERM_WORKERS=1` — single-core permutation. Each perm fork inherits the
+  main R's ~12 GB via COW and writes private pages during scoring; 4 forks
+  push the cgroup past 24 G on heavy pairs. Going to 2 *might* work; do not
+  go to 4.
+- `N_CHUNK_MULT=48` (~20 pairs/chunk) — smaller than the upstream default
+  `N_CHUNK_MULT=8` (~121 pairs/chunk). The default was sized for a 30+ GB
+  host without a cgroup cap; under 24 G it OOMs around pair 14 of 20 because
+  `chunk_fn` writes one sub-parquet per pair (rather than accumulating the
+  full chunk in memory), but R's own heap-fragmentation residue still grows.
+- `CHUNK_PARALLEL=1`, `NPAIR_WORKERS=1` — one chunk subprocess at a time, one
+  pair at a time inside the chunk. Two simultaneous chunks at ~13–15 GB each
+  blow the cap.
+
+### Monitoring
+
+- Per-pair progress: `tail -f /tmp/pair_mode_capped.log | grep pair-driver`
+- Live cgroup state:
+  ```bash
+  scope=$(systemctl --user list-units --type=scope --no-legend --state=active \
+          'alz-incytr-*.scope' | awk '{print $1}' | head -1)
+  cgdir=/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/alz.slice/alz-incytr.slice/$scope
+  cat $cgdir/memory.events    # high/oom counters; should all stay 0
+  cat $cgdir/memory.current   # current RSS in bytes
+  ```
+- Sub-shards landing on disk:
+  `find outputs/reports/incytr_pair_mode/wide/.shards -type f | wc -l`
+
+### Killing a runaway
+
+```bash
+scope=$(systemctl --user list-units --type=scope --no-legend --state=active \
+        'alz-incytr-*.scope' | awk '{print $1}' | head -1)
+systemctl --user stop "$scope"
+```
+
+This terminates *only* the cgroup. Claude and any other user processes are
+unaffected.
+
+### Wall-time expectation
+
+Bench-precedent per-pair time on this box (NPERM_WORKERS=1): ~60–90 s for
+typical pairs, up to ~4–5 min on the densest sender×receiver combinations
+(large excitatory clusters with ~1.3 M output rows). Full 9-contrast run is
+8 649 pairs × ~75 s ≈ **~180 h wall (~7.5 days)**, plus chunk-startup
+overhead. Plan accordingly.
+
+### After the run
+
+```bash
+pixi run verify-incytr-sce4   # regression gate: confirms sce4 parity on two known pairs
+bash alz/runners/main/run_pair_mode_pipeline.sh   # picks up sentinels; runs E3/E4/I/V
+```

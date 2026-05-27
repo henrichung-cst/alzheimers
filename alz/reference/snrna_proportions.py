@@ -129,7 +129,14 @@ def _compute_animal_weights(
     expr_sub = expr_sub.reindex(spine_clusters)
     counts_sub = counts_sub.reindex(spine_clusters)
     if expr_sub.isna().all(axis=1).any() or counts_sub["n_cells"].isna().any():
-        # Some clusters absent from this animal's pseudobulk → set to 0
+        # Per-animal sparsity: this animal genuinely captured 0 cells in some
+        # spine cluster (legitimate sampling). Zero contribution to f_c is the
+        # correct behaviour — the cluster gets f_percell=0 for this animal and
+        # downstream median-across-animals picks up signal from animals that
+        # did capture cells. The vocabulary-level invariant (every spine
+        # cluster must appear SOMEWHERE in the pseudobulk file) is enforced
+        # by `_load_pseudobulk` above and is what would catch a stale
+        # pseudobulk file with the wrong spine cardinality.
         expr_sub = expr_sub.fillna(0.0)
         counts_sub = counts_sub.fillna(0)
 

@@ -62,7 +62,7 @@ STEP_IDX=0
 # N_STEPS is the count of planned steps after skip-* flags. We compute it
 # by listing the keys that will run.
 PLANNED_KEYS=(A B C D-st D-py)
-if [[ $SKIP_INCYTR -eq 0 ]]; then PLANNED_KEYS+=(E1 E2 E3); fi
+if [[ $SKIP_INCYTR -eq 0 ]]; then PLANNED_KEYS+=(E1 E2 E3 E4); fi
 PLANNED_KEYS+=(F1 F2)
 if [[ $SKIP_ATLAS -eq 0 ]]; then PLANNED_KEYS+=(G1 G2); fi
 PLANNED_KEYS+=(H1 H2 I V)
@@ -131,7 +131,7 @@ run_step D-py "per-cluster MEA (py)" \
   pixi run python -m alz.decomposition_mea.enrich_celltype --spine "$SPINE" --track py
 
 if [[ $SKIP_INCYTR -eq 0 ]]; then
-  incytr_dir="alz/incytr"
+  incytr_dir="alz/incytr_pair"
   inputs_dir="data/derived/incytr_inputs"
   # Mouse ligand-receptor DB layers ship as package data in the upstream
   # Incytr package (loaded via `Incytr::DB_Layer*_mouse_filtered`); no
@@ -157,6 +157,12 @@ if [[ $SKIP_INCYTR -eq 0 ]]; then
   # invalidates the transcript_trace shards on schema version bump.
   run_step E3 "emit_expr_bygroup parquet (transcript trace substrate)" \
     pixi run Rscript alz/incytr_pair/emit_expr_bygroup.R
+  # Regression gate: confirms the six sce4-parity call-site overrides in
+  # incytr_commandline.R (see CLAUDE.md §Pair-mode Incytr) still hold. If
+  # any override is reverted, this step exits non-zero and prints a
+  # per-position max-|Δ| table for the two known-good pairs.
+  run_step E4 "sce4 parity regression (verify_sce4_parity.py)" \
+    pixi run python alz/incytr_pair/verify_sce4_parity.py --all-known-pairs
 fi
 
 run_step F1 "human ingest (reshape)" \

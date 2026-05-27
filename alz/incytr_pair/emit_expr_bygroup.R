@@ -4,10 +4,16 @@
 # the same numbers that feed `*_sclog2FC`.
 #
 # Substrate: `Data.input@assays$originalexp@data` (LogNormalize log1p-CP10K),
-# averaged by (Type, Group) — bit-for-bit equivalent to what
-# `Expr_bygroup(..., mean_method = "mean")` → `compute_group_expr` produces
-# inside the pair-mode driver. The matching reader is
-# `alz/integration/build_transcript_trace.py`.
+# aggregated by (Type, Group) with the WEIGHTED-QUARTILE TRIMEAN
+# (0.25*Q1 + 0.5*Q2 + 0.25*Q3, quantile type=7) — the exact per-group
+# aggregation `Cal_scFC` consumes. Cal_scFC reads `object@expr.bygroup`
+# (analysis.R:266), which `Cal_pairwise_grid` fills via a single
+# `Expr_bygroup(mean_method = NULL)` call (grid.R:187); both Cal_SigProb and
+# Cal_scFC (grid.R:209-210) read that one trimean-filled slot. The arithmetic
+# mean does NOT reproduce `*_sclog2FC`: sparse genes whose trimean collapses to
+# ~0 (Q1=Q2=0) but whose mean is positive diverge by several log2. We reuse
+# Incytr's own kernel (`grouped_weighted_quartile`) for bitwise parity.
+# Matching reader: `alz/integration/build_transcript_trace.py`.
 #
 # Output: outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet
 #   columns: cluster (Type level), group (Group level), gene, value
@@ -47,36 +53,39 @@ cat("[emit_expr_bygroup] cells:", ncol(mat),
     "  (Type x Group) levels present:", length(levels_present),
     "  genes:", nrow(mat), "\n")
 
-# Build a sparse cell -> level indicator, then column-mean per level. This is
-# equivalent to: for each (Type, Group), mean of `originalexp@data` across the
-# member cells — i.e. exactly what compute_group_expr computes.
+# Per-(Type, Group) trimean via Incytr's own kernel, for bitwise parity with
+# the `expr.bygroup` slot Cal_scFC consumes. Densify one level's cells at a
+# time (genes × cells_in_level) to stay under the shared-box memory budget;
+# partitioning per (Type,Group) level is identical to one Expr_bygroup call
+# with Type labels per Group, since each cell's trimean depends only on the
+# cells in its own (gene, group, type) set.
+suppressPackageStartupMessages(library(Incytr))
 idx <- match(key, levels_present)
-n_per_level <- as.integer(table(factor(idx, levels = seq_along(levels_present))))
-indic <- sparseMatrix(
-  i = seq_along(idx),
-  j = idx,
-  x = 1 / n_per_level[idx],
-  dims = c(ncol(mat), length(levels_present))
-)
-group_mean <- mat %*% indic   # gene × level, dense-ish
-
 genes <- rownames(mat)
 n_g <- length(genes)
 n_l <- length(levels_present)
-
-# Long-form pivot. Avoid building a huge intermediate dense matrix: write the
-# columns one level at a time and rbind.
-chunks <- vector("list", n_l)
 parts <- strsplit(levels_present, "\t", fixed = TRUE)
+# Gene-chunk size: bounds the dense submatrix to (GENE_CHUNK × cells_in_level).
+# Trimean is per-gene independent, so chunking genes is exact.
+GENE_CHUNK <- 4000L
+gene_starts <- seq.int(1L, n_g, by = GENE_CHUNK)
+chunks <- vector("list", n_l)
 for (j in seq_len(n_l)) {
-  vals <- as.numeric(group_mean[, j])
+  cols <- which(idx == j)
+  tri  <- numeric(n_g)
+  for (gs in gene_starts) {
+    ge <- min(gs + GENE_CHUNK - 1L, n_g)
+    sub <- as.matrix(mat[gs:ge, cols, drop = FALSE])   # gene_chunk × cells, dense
+    tri[gs:ge] <- Incytr:::grouped_weighted_quartile(sub, rep("g", length(cols)))[, 1]
+  }
   chunks[[j]] <- data.frame(
     cluster = parts[[j]][1],
     group   = parts[[j]][2],
     gene    = genes,
-    value   = vals,
+    value   = as.numeric(tri),
     stringsAsFactors = FALSE
   )
+  if (j %% 25 == 0) cat("[emit_expr_bygroup] trimean level", j, "/", n_l, "\n")
 }
 long <- do.call(rbind, chunks)
 

@@ -21,19 +21,28 @@ cd "$REPO_ROOT"
 INPUTS_DIR="data/derived/incytr_inputs"
 LOG_DIR="outputs/reports/incytr_pair_mode"
 LOG="$LOG_DIR/build.log"
-DEC_DIR="outputs/reports/decomposition/levy_t5"
 SPINE_CSV="data/incytr_frozen/v2_46clusters/spines/levy_t5/cluster_spine.csv"
+PROV="data/incytr_frozen/v2_46clusters/provenance"
 
 mkdir -p "$INPUTS_DIR" "$LOG_DIR"
 
-# Pre-flight: confirm source data and decomposition parquets exist.
+# Pre-flight: confirm source data for the provenance deconvolution exists.
+# export_decomposition_for_pair.py consumes the frozen transcript share
+# (aggexp.csv — the one unrecoverable upstream SCT normalization) + per-group
+# MS bulk medians, and regenerates cell-count size factors from the Song h5ad.
+# It no longer reads the levy_t5 decomposition parquets. See
+# docs/plans/sce4_decomposition_reconciliation_2026-05-24.md.
 echo "=== Pre-flight (spine=levy_t5) ==="
 for f in \
   "data/incytr_frozen/v2_46clusters/incytr input/incytr_obj.rds" \
   "$SPINE_CSV" \
-  "$DEC_DIR/protein_per_cluster.parquet" \
-  "$DEC_DIR/phospho_per_cluster.parquet" \
-  "$DEC_DIR/phospho_per_cluster_pY.parquet" \
+  "$PROV/aggexp.csv" \
+  "$PROV/yuyu_clustersize.csv" \
+  "$PROV/yuyu_samplekey.csv" \
+  "$PROV/pr_median.csv" \
+  "$PROV/imac_median.csv" \
+  "$PROV/py_median.csv" \
+  "data/datasets/song/transcriptomics/170_gex_celltypes_00.h5ad" \
   "$INPUTS_DIR/kldata.csv" \
   ; do
   test -e "$f" || { echo "missing: $f"; exit 1; }

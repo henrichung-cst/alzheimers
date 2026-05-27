@@ -28,6 +28,7 @@ snrna = "python alz/reference/snrna_integration.py --run"
 bubbles = "python alz/plot_attribution_bubbles.py"
 viewer = "python alz/build_unified_viewer.py"
 install-incytr = "R CMD INSTALL --no-multiarch ../incytr"
+verify-incytr-sce4 = "python alz/incytr_pair/verify_sce4_parity.py --all-known-pairs"
 
 [dependencies]
 python = "3.11.*"
