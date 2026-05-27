@@ -24,10 +24,12 @@ LFC formulas mirror the JS ``evidence_row.js`` implementation:
       Epsilon = 1e-3 matches ``incytr_commandline.R:376,381,385,389``
       (``correction = 0.001``).
   - Transcript (sclog2FC):
-      log2((D + 1e-5) / (W + 1e-5))
+      log2((D + 0.01) / (W + 0.01))
       where D, W are per-group means from the transcript pseudobulk shard
       (``audit_sources/transcript_trace/<cluster>.parquet``).
-      Epsilon = 1e-5 matches ``Cal_scFC`` default at ``analysis.R:248``.
+      Epsilon = 0.01 matches ``incytr_commandline.R:435``
+      ``Cal_scFC(correction = 0.01)`` — sce4-parity override of the
+      ``analysis.R:248`` default (1e-5).
 
 Default mode: spot-check ``SAMPLE_ROWS_PER_CONTRAST`` rows per contrast
 (across all (sender, receiver) slices combined), using a deterministic seed
@@ -89,7 +91,7 @@ ROUNDTRIP_TOL = 1e-4
 
 # Epsilon values — must match JS evidence_row.js / incytr_commandline.R.
 EPSILON_OMICS = 1e-3   # protein/phospho: correction=0.001 (incytr_commandline.R:376-389)
-EPSILON_SC = 1e-5       # transcript: Cal_scFC default (analysis.R:248)
+EPSILON_SC = 0.01       # transcript: Cal_scFC(correction = 0.01) at incytr_commandline.R:435 (sce4-parity override of analysis.R:248 default 1e-5)
 
 # Rows sampled per contrast in default mode (deterministic seed).
 SAMPLE_ROWS_PER_CONTRAST = 100
@@ -177,11 +179,10 @@ def _recompute_omics_lfc(
     df = cache.load_normalized(cluster)
     if df is None:
         return None
-    rows = df[
-        (df["layer"] == layer)
-        & (df["gene_symbol"] == gene)
-        & (df["contrast"] == norm_contrast)
+    layer_contrast = df[
+        (df["layer"] == layer) & (df["contrast"] == norm_contrast)
     ]
+    rows = layer_contrast[layer_contrast["gene_symbol"] == gene]
     if rows.empty:
         return None
     d_rows = rows[rows["group"] == disease_group]
@@ -192,7 +193,19 @@ def _recompute_omics_lfc(
     w_val = w_rows["mean_value_normalized"].iloc[0]
     if math.isnan(d_val) or math.isnan(w_val):
         return None
-    return math.log2((d_val + EPSILON_OMICS) / (w_val + EPSILON_OMICS))
+    # Mirror Cal_foldchange (incytr/R/math.R): the correction is added to BOTH
+    # arms only if the normalized column-pair contains an exact zero anywhere;
+    # otherwise it is log2(c1/c2) with no correction. has_zero is evaluated over
+    # the full normalized column-pair for this (cluster, layer, contrast) — the
+    # same set Cal_foldchange sees inside Integr_multiomics. Floored protein has
+    # no zeros (→ no correction); ps/py may (→ +EPSILON_OMICS).
+    pair_vals = layer_contrast[
+        layer_contrast["group"].isin([disease_group, wt_group])
+    ]["mean_value_normalized"]
+    has_zero = bool((pair_vals == 0).any())
+    if has_zero:
+        return math.log2((d_val + EPSILON_OMICS) / (w_val + EPSILON_OMICS))
+    return math.log2(d_val / w_val)
 
 
 def _recompute_sc_lfc(
@@ -201,10 +214,18 @@ def _recompute_sc_lfc(
     disease_group: str,
     wt_group: str,
     cache: _ShardCache,
-) -> float | None:
-    """Recompute transcript sclog2FC from the pseudobulk shard.
+) -> tuple[float, float] | None:
+    """Recompute transcript sclog2FC from the trimean pseudobulk shard.
 
-    Returns None if data are absent or either group is missing.
+    Returns both Cal_foldchange branches as (with_correction, no_correction),
+    or None if data are absent. Cal_scFC calls Cal_foldchange(correction=0.01),
+    which adds the correction to BOTH arms only if the pair's sender/receiver
+    gene set contains a zero-trimean gene, else log2(d/w) raw. That gene set is
+    pair-specific and the significance filter can drop genes from the shard, so
+    we cannot reliably reconstruct which branch fired — instead the caller
+    accepts a match against EITHER branch. The two branches differ by at most
+    ~|log2((d+ε)/(w+ε)) − log2(d/w)| (≤ a few e-3 for well-expressed genes); a
+    genuine drift (routing, sign flip, substrate mismatch) misses BOTH by >>tol.
     """
     df = cache.load_transcript(cluster)
     if df is None:
@@ -220,7 +241,10 @@ def _recompute_sc_lfc(
     w_val = w_rows["value"].mean()
     if math.isnan(d_val) or math.isnan(w_val):
         return None
-    return math.log2((d_val + EPSILON_SC) / (w_val + EPSILON_SC))
+    with_corr = math.log2((d_val + EPSILON_SC) / (w_val + EPSILON_SC))
+    no_corr = (math.log2(d_val / w_val)
+               if d_val > 0 and w_val > 0 else with_corr)
+    return with_corr, no_corr
 
 
 # ---------------------------------------------------------------------------
@@ -335,12 +359,20 @@ def _check_shard(
                 # suppress these spurious 1-ULP mismatches while still
                 # catching genuine bugs (routing error Δ > 0.1, sign flip
                 # Δ ≈ 2×|stored|, substrate drift Δ > 0.5).
-                recomputed_f16 = float(np.float16(recomputed))
-                delta = abs(recomputed_f16 - stored)
                 if metric == "sclog2FC":
                     # Two-ULP tolerance for transcript (R vs Python precision).
                     tol = max(ROUNDTRIP_TOL, abs(stored) * 2**-9)
+                    # _recompute_sc_lfc returns both Cal_foldchange branches
+                    # (with/without the zero-conditional correction); accept the
+                    # closer one — we cannot reconstruct which branch fired from
+                    # the filtered shard, and a real bug misses both by >>tol.
+                    cands = recomputed if isinstance(recomputed, tuple) else (recomputed,)
+                    deltas = [abs(float(np.float16(c)) - stored) for c in cands]
+                    delta = min(deltas)
+                    recomputed_f16 = float(np.float16(cands[deltas.index(delta)]))
                 else:
+                    recomputed_f16 = float(np.float16(recomputed))
+                    delta = abs(recomputed_f16 - stored)
                     tol = ROUNDTRIP_TOL
                 if delta > tol:
                     failures.append(Failure(
@@ -498,59 +530,75 @@ def verify(strict: bool = False) -> dict:
                     flush=True,
                 )
     else:
-        # Default: collect all rows tagged with (sender, receiver), then
-        # sample SAMPLE_ROWS_PER_CONTRAST rows per contrast.
-        #
-        # To keep memory reasonable: read only the columns we need per shard.
-        _NEEDED_COLS = (
+        # Default: deterministic per-contrast spot-check WITHOUT materializing
+        # all shard rows. The original implementation read every shard fully and
+        # pd.concat'd all rows before sampling — at the nboot=0 scale that is
+        # 181M rows (~22 GB) and global-OOM'd the shared box. A DuckDB rewrite
+        # then tripped over the shards' float16 (FIXED_LEN_BYTE_ARRAY +
+        # BYTE_STREAM_SPLIT) FC columns, which DuckDB's parquet reader rejects.
+        # So: stay in pyarrow (which reads float16 fine) but read one shard at a
+        # time, projecting only the needed columns, and keep a bounded
+        # hash-ordered reservoir of SAMPLE_ROWS_PER_CONTRAST rows per contrast.
+        # Peak memory is one shard's projection (≤~55 MB) plus 9×100 sampled
+        # rows. The reservoir keeps the rows with the smallest stable hash of
+        # row identity, so the sample is reproducible run-to-run regardless of
+        # shard iteration order.
+        import zlib  # noqa: E402
+
+        needed_cols = (
             ["Ligand", "Receptor", "EM", "Target", "contrast"]
             + [f"{n}_{m}" for n in ("Ligand", "Receptor", "EM", "Target")
                for m in ("sclog2FC", "pr_log2FC", "ps_log2FC", "py_log2FC")]
         )
-        # (sender, receiver) pair per row — needed for routing
-        collected_rows: list[pd.DataFrame] = []
-        for path in shard_paths:
-            if not os.path.isfile(path):
-                continue  # skip broken symlinks or stale glob entries
-            base = os.path.basename(path).replace(".parquet", "")
-            parts = base.split("__", 1)
-            if len(parts) != 2:
-                continue
-            sender = _canonical(parts[0])
-            receiver = _canonical(parts[1])
+        files = [p for p in shard_paths if os.path.isfile(p)]
+        # contrast -> list of (hashval, row_dict), capped at SAMPLE_ROWS_PER_CONTRAST.
+        reservoir: dict[str, list] = {}
+        seen_files: set[str] = set()
+        for fi, path in enumerate(files):
             try:
-                t = pq.read_table(path, columns=None)
-                avail_cols = [c for c in _NEEDED_COLS if c in t.schema.names]
-                df = t.select(avail_cols).to_pandas()
+                schema_names = set(pq.ParquetFile(path).schema_arrow.names)
+                cols = [c for c in needed_cols if c in schema_names]
+                df = pq.read_table(path, columns=cols).to_pandas()
             except Exception as exc:
                 print(f"  verify_pathway_round_trip: WARN — skipping unreadable shard "
                       f"{os.path.basename(path)}: {exc}", flush=True)
                 continue
-            df["_sender"] = sender
-            df["_receiver"] = receiver
-            collected_rows.append(df)
-            slices_checked += 1
+            seen_files.add(path)
+            base = os.path.basename(path)
+            for rec in df.to_dict("records"):
+                contrast = rec.get("contrast", "")
+                ident = (f"{base}|{rec.get('Ligand','')}{rec.get('Receptor','')}"
+                         f"{rec.get('EM','')}{rec.get('Target','')}{contrast}")
+                h = zlib.crc32(ident.encode())
+                bucket = reservoir.setdefault(contrast, [])
+                bucket.append((h, base, rec))
+                if len(bucket) > SAMPLE_ROWS_PER_CONTRAST * 4:
+                    bucket.sort(key=lambda t: t[0])
+                    del bucket[SAMPLE_ROWS_PER_CONTRAST:]
+            if (fi + 1) % 200 == 0:
+                elapsed = time.time() - t0
+                print(f"  verify_pathway_round_trip [default]: scanned "
+                      f"{fi + 1}/{len(files)} shards, {elapsed:.0f}s elapsed",
+                      flush=True)
 
-        if not collected_rows:
-            raise RuntimeError("No rows collected from incytr_pathways shards.")
-
-        all_df = pd.concat(collected_rows, ignore_index=True)
-
-        # Sample per contrast deterministically.
-        contrasts = sorted(all_df["contrast"].dropna().unique().tolist())
-        for ci, contrast in enumerate(contrasts):
-            rng = random.Random(ci)  # deterministic seed = contrast index
-            c_df = all_df[all_df["contrast"] == contrast]
-            n_take = min(SAMPLE_ROWS_PER_CONTRAST, len(c_df))
-            sample_indices = rng.sample(range(len(c_df)), n_take)
-            sampled = c_df.iloc[sample_indices]
-
-            for _, row in sampled.iterrows():
-                sender = str(row["_sender"])
-                receiver = str(row["_receiver"])
-                failures = _check_shard(sender, receiver, pd.DataFrame([row]), cache)
+        sampled_files: set[str] = set()
+        for contrast, bucket in reservoir.items():
+            bucket.sort(key=lambda t: t[0])
+            for _h, base, rec in bucket[:SAMPLE_ROWS_PER_CONTRAST]:
+                parts = base.replace(".parquet", "").split("__", 1)
+                if len(parts) != 2:
+                    continue
+                sender = _canonical(parts[0])
+                receiver = _canonical(parts[1])
+                row_df = pd.DataFrame([rec])
+                failures = _check_shard(sender, receiver, row_df, cache)
                 all_failures.extend(failures)
                 total_rows_checked += 1
+                sampled_files.add(base)
+
+        if total_rows_checked == 0:
+            raise RuntimeError("No rows collected from incytr_pathways shards.")
+        slices_checked = len(sampled_files)
 
     runtime = time.time() - t0
     result = {

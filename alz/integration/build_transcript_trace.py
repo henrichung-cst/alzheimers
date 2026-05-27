@@ -4,14 +4,14 @@
 
 Substrate is the long-form parquet at
 ``outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet``,
-emitted by ``alz/incytr_pair/emit_expr_bygroup.R``:
-per-(cluster, Group) mean of ``Data.input@assays$originalexp@data`` — bit-for-
-bit the matrix Incytr's ``Cal_scFC`` consumes via
-``Expr_bygroup(..., mean_method = "mean")``. The panel therefore matches the
-FC tab's ``*_sclog2FC`` values: any user can recover
-``log2((WT_arm + 1e-5) / (disease_arm + 1e-5))`` by hand from the shard,
-modulo the sign flip applied in ``pair_to_receiver_cache.py`` so the viewer's
-"positive = up in disease" tooltip stays correct.
+emitted by ``alz/incytr_pair/emit_expr_bygroup.R``: per-(cluster, Group)
+WEIGHTED-QUARTILE TRIMEAN (0.25*Q1 + 0.5*Q2 + 0.25*Q3, quantile type=7) of
+``Data.input@assays$originalexp@data`` — the exact ``expr.bygroup`` slot
+Incytr's ``Cal_scFC`` consumes (``Expr_bygroup(mean_method = NULL)`` at
+grid.R:187, read by both Cal_SigProb and Cal_scFC). The panel therefore
+matches the FC tab's ``*_sclog2FC`` values: a user recovers
+``log2((disease_arm + 0.01) / (WT_arm + 0.01))`` by hand from the shard
+(``Cal_scFC(correction = 0.01)``, "positive = up in disease", no sign flip).
 
 Pathway-side cluster discovery reads the existing
 ``edge_slices/incytr_pathways/index.json`` (unsanitized sender/receiver names
@@ -205,9 +205,11 @@ def build(force: bool = False) -> dict:
             TRANSCRIPT_TRACE_SAMPLEKEY, config.REPO_ROOT
         ),
         "substrate_note": (
-            "Per-(cluster, Group) mean of Data.input@assays$originalexp@data "
-            "(LogNormalize log1p-CP10K) — the same matrix Incytr's Cal_scFC "
-            "consumes via Expr_bygroup(mean_method='mean')."
+            "Per-(cluster, Group) weighted-quartile trimean "
+            "(0.25*Q1+0.5*Q2+0.25*Q3, quantile type=7) of "
+            "Data.input@assays$originalexp@data (LogNormalize log1p-CP10K) — the "
+            "expr.bygroup slot Cal_scFC consumes (Expr_bygroup(mean_method=NULL) "
+            "at grid.R:187, analysis.R:266). NOT the arithmetic mean."
         ),
         "sanitize_rule": "replace('/', '-'); replace(' ', '_')",
         "filename_template": "{cluster}.parquet",

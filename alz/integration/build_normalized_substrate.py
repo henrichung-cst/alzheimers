@@ -71,8 +71,14 @@ from viewer.paths import (  # noqa: E402
     UNIFIED_VIEWER_DIR,
 )
 
-WIDE_DIR = os.path.join(
-    config.REPO_ROOT, "outputs", "reports", "incytr_pair_mode", "wide"
+# Pair-mode wide parquets — the per-group protein/phospho values this substrate
+# normalizes must come from the SAME run that produced the shards the viewer
+# round-trips against. Resolved from INCYTR_PAIR_MODE_INPUT_DIR (the env var the
+# viewer build reads at build_unified_viewer.py:1993), defaulting to the live
+# filtered nboot=0 set. The old nboot=100 `wide/` is superseded — not a fallback.
+WIDE_DIR = os.environ.get(
+    "INCYTR_PAIR_MODE_INPUT_DIR",
+    os.path.join(config.REPO_ROOT, "outputs", "reports", "incytr_pair_mode", "wide_nboot0"),
 )
 YUYU_DIR = os.path.join(config.REPO_ROOT, "data", "derived", "incytr_inputs")
 YUYU_PROTEIN = os.path.join(YUYU_DIR, "pr_yuyu_deconvoluted.csv")
@@ -293,6 +299,15 @@ def _roundtrip_sample(
             take = min(ROUNDTRIP_SAMPLE_PER_CELL, len(valid))
             picks = valid.sample(n=take, random_state=int(rng.integers(0, 2**31)))
             norm_lookup = nm.set_index("gene_symbol")
+            # Mirror Cal_foldchange (incytr/R/math.R): the `correction` is added
+            # to BOTH arms only if the normalized column-pair contains an exact
+            # zero anywhere; otherwise it is log2(c1/c2) with no correction. The
+            # old code added EPSILON unconditionally, which over-corrected every
+            # cluster/layer that had no zero (protein post-floor) and shifted
+            # small normalized values by up to ~1e-3 in log2.
+            has_zero = bool(
+                (norm_lookup[c1] == 0).any() or (norm_lookup[c2] == 0).any()
+            )
             for _, row in picks.iterrows():
                 gene = row["Ligand"]
                 stored = float(row[stored_col])
@@ -308,7 +323,10 @@ def _roundtrip_sample(
                     # Normalized to NaN on either side → stored is undefined;
                     # skip rather than flag (Incytr would also produce NaN/Inf).
                     continue
-                recomputed = math.log2((d_norm + EPSILON) / (w_norm + EPSILON))
+                if has_zero:
+                    recomputed = math.log2((d_norm + EPSILON) / (w_norm + EPSILON))
+                else:
+                    recomputed = math.log2(d_norm / w_norm)
                 if abs(recomputed - stored) > ROUNDTRIP_TOL:
                     failures.append(
                         f"{cluster}/{layer}/{gene}: stored={stored:.6f} "
@@ -368,6 +386,13 @@ def build(force: bool = False) -> dict:
     pr_agg, _ = _load_yuyu_aggregated(YUYU_PROTEIN, "Gene Symbol")
     ps_agg, _ = _load_yuyu_aggregated(YUYU_PS, "gene_symbol")
     py_agg, _ = _load_yuyu_aggregated(YUYU_PY, "gene_symbol")
+    # sce4 parity override #2: floor deconvoluted PROTEIN values <1 to 1 BEFORE
+    # quantile-normalization, mirroring incytr_commandline.R `floor_pr`
+    # (pr_1/pr_2 only — ps/py are NOT floored). Without this the ~1e-5
+    # deconvolution residuals survive into the normalized substrate and produce
+    # ~15-log2 one-sided outliers that the scored pr_log2FC (floored) never sees.
+    _pr_num = [c for c in pr_agg.columns if c != "gene_symbol"]
+    pr_agg[_pr_num] = pr_agg[_pr_num].clip(lower=1.0)
     layer_aggs: dict[str, pd.DataFrame] = {
         "protein": pr_agg, "phospho_ps": ps_agg, "phospho_py": py_agg,
     }
@@ -467,8 +492,10 @@ def build(force: bool = False) -> dict:
             "log2((D + epsilon) / (W + epsilon)). Epsilon = 1e-3 matches "
             "incytr_commandline.R's explicit `correction = 0.001` passed to "
             "Cal_foldchange for all three omics layers (pr/ps/py). "
-            "Transcript uses a separate epsilon = 1e-5 (Cal_scFC default, "
-            "analysis.R:248) applied directly in the JS without this substrate."
+            "Transcript uses a separate epsilon = 0.01 "
+            "(`Cal_scFC(correction = 0.01)` at incytr_commandline.R:435, "
+            "sce4-parity override of the analysis.R:248 default 1e-5) "
+            "applied directly in the JS without this substrate."
         ),
         "normalization": "limma::normalizeQuantiles (ties=TRUE)",
         "aggregation_note": (
