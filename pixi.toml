@@ -13,6 +13,7 @@ ingest-deconvolution-bulk = "rclone copy gdrive_shared:yuyu01/documentation/incy
 ingest-tcells = "bash alz/runners/supporting/ingest_tcells.sh"
 ingest-tcells-scrna = "bash alz/runners/supporting/ingest_tcells.sh --scrna"
 tcells-reshape = "python alz/ingest/tcells.py --reshape"
+tcells-perdonor = "python alz/ingest/tcells_perdonor.py --donor both"
 normalize = "python alz/bulk_mea/normalize.py"
 enrich = "python alz/bulk_mea/enrich.py"
 attribute = "python alz/bulk_mea/attribute.py"
