@@ -66,13 +66,16 @@ dir.create(OUTPUT_DIR, recursive = TRUE, showWarnings = FALSE)
 # The pair loop runs NPAIR_WORKERS pairs concurrently via mclapply over the
 # 961-pair grid (each fork runs one single-pair Cal_pairwise_grid, writes its
 # own shard, returns the path). Forks COW-inherit the post-rm(Data.input) base
-# (~3 GB); fork-gc breaks COW so each worker carries ~4–5 GB private. Measured
-# on this 30 GB box: W=3 peaks ~13–15 GB (zero oom under a 24 G cgroup cap) at
-# a near-linear 2.77× speedup, and is the safe ceiling — W=4 worst-case heavy-
-# pair alignment projects past the 0.7×24 G headroom. ALWAYS run inside the
-# cgroup scope in alz/incytr_pair/README.md. Permutation inside each pair stays
-# single-core (perm.n.cores=NPERM_WORKERS, default 1) to avoid nested forking.
-# See docs/plans/pairmode_perf_oom_2026-05-25.md.
+# (~3 GB). Per audit 2026-05-27 Experiment A, in-fork gc() was REMOVED — it
+# cost ~12% wall and ~400 MB cgroup memory.peak with no compensating reclaim;
+# the parent still gc()s between scheduling waves. Measured on this 30 GB box:
+# W=3 peaks ~13–15 GB (zero oom under a 24 G cgroup cap) at a near-linear
+# 2.77× speedup. Whether the post-gc-removal footprint admits W=4 is pending
+# Experiment B (parallel sweep re-run). ALWAYS run inside the cgroup scope in
+# alz/incytr_pair/README.md. Permutation inside each pair stays single-core
+# (perm.n.cores=NPERM_WORKERS, default 1) to avoid nested forking.
+# See docs/plans/pairmode_perf_oom_2026-05-25.md and
+# docs/plans/pairmode_memory_audit_2026-05-27.md.
 # =====================================================================
 N_PAIR_WORKERS <- as.integer(Sys.getenv("NPAIR_WORKERS", unset = "3"))
 N_PERM_WORKERS <- as.integer(Sys.getenv("NPERM_WORKERS", unset = "1"))
@@ -345,6 +348,12 @@ rss_mb <- function() {
   if (!length(v)) NA_real_ else
     as.numeric(sub("^VmRSS:\\s+([0-9]+)\\s+kB$", "\\1", v)) / 1024
 }
+hwm_mb <- function() {
+  s <- "/proc/self/status"; if (!file.exists(s)) return(NA_real_)
+  v <- grep("^VmHWM:", readLines(s, warn = FALSE), value = TRUE)
+  if (!length(v)) NA_real_ else
+    as.numeric(sub("^VmHWM:\\s+([0-9]+)\\s+kB$", "\\1", v)) / 1024
+}
 
 # Free the redundant full Seurat object before the pair loop. Everything the
 # loop reads — `template`, `dg_by_cluster`, `deg/prg_by_cluster`, `pr/ps/py_*`,
@@ -407,7 +416,11 @@ process_pair <- function(i) {
   obj <- if (!is.null(res)) res[[paste(s, r, sep = "__")]] else NULL
   out <- if (!is.null(obj)) tryCatch(Export_results(obj, indicator = TRUE),
                                      error = function(e) NULL) else NULL
-  rm(res, obj); gc(verbose = FALSE)
+  # No in-fork gc() — see audit 2026-05-27 Experiment A. `rm()` releases the
+  # bindings; fork teardown returns the pages; an explicit gc() here dirties
+  # COW shared pages with no compensating reclaim (measured -3.6% cgroup
+  # memory.peak and -12% wall on W=2 after removal).
+  rm(res, obj)
 
   if (is.null(out) || nrow(out) == 0L) {
     cat(sprintf("[pair-driver] pair %d/%d  %s -> %s  rows=0  %.1fs  rss=%.0fMB\n",
@@ -430,9 +443,10 @@ process_pair <- function(i) {
   tmp_path <- paste0(sub_path, ".tmp")
   arrow::write_parquet(as.data.frame(dt), tmp_path, compression = "zstd")
   file.rename(tmp_path, sub_path)
-  cat(sprintf("[pair-driver] pair %d/%d  %s -> %s  rows=%d  %.1fs  rss=%.0fMB\n",
-              i, nrow(pairs), s, r, nrow(out), dt_sec, rss_mb()))
-  rm(out, dt); gc(verbose = FALSE)
+  cat(sprintf("[pair-driver] pair %d/%d  %s -> %s  rows=%d  %.1fs  rss=%.0fMB  hwm=%.0fMB\n",
+              i, nrow(pairs), s, r, nrow(out), dt_sec, rss_mb(), hwm_mb()))
+  # No in-fork gc() here either — see Experiment A note above.
+  rm(out, dt)
   sub_path
 }
 
