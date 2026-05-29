@@ -58,7 +58,6 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
 | `config_integration.py` | Filter values, design columns, contrast vectors, paths. `load_cluster_spine()` is the single source of truth for the 31-cluster levy_t5 spine; consumed by `alz/snrna_proportions.py`, `alz/decomposition_mea/verify_decomposition.py`, and the viewer. |
 | `build_cluster_spine.py` | Run-once generator: builds the levy_t5 31-cluster spine CSV from the Levy lab cluster key + barcode-to-cluster table. Outputs to `data/incytr_frozen/v2_46clusters/spines/<name>/cluster_spine.csv`. |
 | `extract_cluster_assignments.R` | Run-once generator: emits `barcode_to_cluster.csv` and `cell_metadata.csv` from the legacy `incytr_obj.rds`. |
-| `plot_cluster_spine.py` | Diagnostic plots over `cluster_spine.csv`. |
 | `build_seaad_bridge.py` | One-shot: hand-curated `cluster_to_seaad_supertype.csv` (levy_t5 cluster → SEA-AD supertype). Direct crosswalks only — no chained mappings through intermediate vocabularies. |
 | `build_yuyu_kldata.py` | Builds `kldata_pspy.csv`; symlinked into `data/derived/incytr_inputs/kldata.csv` for the R driver. |
 

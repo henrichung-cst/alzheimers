@@ -26,11 +26,12 @@ uniform schema:
 
 Note on log2_value vs LFC:
   ``log2_value`` stored here is log2(value) with no epsilon correction (NaN
-  when value == 0). Item 3.4's JS-side LFC computation uses
-  ``log2((D + 1e-5) / (W + 1e-5))`` (epsilon = 1e-5 matching
-  ``Cal_foldchange``'s driver-passed correction). Do NOT use the stored
-  ``log2_value`` directly to compute LFCs — it will disagree by 1e-5 at low
-  abundance and produce NaN for zero rows.
+  when value == 0). The JS-side LFC computation uses
+  ``log2((D + 1e-3) / (W + 1e-3))`` (epsilon = 1e-3 matching
+  ``Cal_foldchange``'s driver-passed ``correction = 0.001``,
+  incytr_commandline.R:376-389). Do NOT use the stored ``log2_value`` directly
+  to compute LFCs — it will disagree at low abundance and produce NaN for zero
+  rows.
 
 Shard structure:
   One shard per cluster present in the incytr_pathways index.  A single shard
@@ -311,9 +312,9 @@ def build(force: bool = False) -> dict:
         "layers": ["protein", "phospho_ps", "phospho_py"],
         "log2_value_note": (
             "log2_value = log2(value), NaN when value == 0. "
-            "For LFC computation use log2((D + 1e-5) / (W + 1e-5)) from raw "
+            "For LFC computation use log2((D + 1e-3) / (W + 1e-3)) from raw "
             "value column — not from log2_value — to match Cal_foldchange "
-            "(correction=1e-5 passed by incytr_commandline.R)."
+            "(correction=0.001 passed by incytr_commandline.R:376-389)."
         ),
         "aggregation_note": (
             "Phospho site-to-gene aggregation mirrors incytr_commandline.R: "

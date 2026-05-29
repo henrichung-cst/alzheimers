@@ -36,9 +36,10 @@ Output: ``audit_sources/omics_trace_normalized/<cluster>.parquet``
     group                 : str   one of c1, c2
     mean_value_normalized : float64
 
-Build-time round-trip assertion: a per-layer sample of (gene, contrast)
-recomputations is compared against the stored ``Ligand_*_log2FC`` value in
-the wide parquet. Build aborts if any sampled cell disagrees by >1e-4.
+This module only *produces* the substrate. Correctness of the JS-side LFC
+reconstruction against Incytr's stored ``*_log2FC`` is asserted by the dedicated
+sampled harness ``alz/integration/verify_pathway_round_trip.py`` (run inside the
+viewer build) — the recompute lives there, not duplicated here.
 """
 
 from __future__ import annotations
@@ -46,7 +47,6 @@ from __future__ import annotations
 import argparse
 import glob
 import json
-import math
 import os
 import re
 import shutil
@@ -62,6 +62,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))  # repo root
 
 from alz.shared import config  # noqa: E402
+from alz.shared.incytr_constants import EPSILON_OMICS  # noqa: E402
 
 from incytr_pair.pair_to_receiver_cache import _sanitize_celltype  # noqa: E402
 from viewer.paths import (  # noqa: E402
@@ -84,14 +85,6 @@ YUYU_DIR = os.path.join(config.REPO_ROOT, "data", "derived", "incytr_inputs")
 YUYU_PROTEIN = os.path.join(YUYU_DIR, "pr_yuyu_deconvoluted.csv")
 YUYU_PS = os.path.join(YUYU_DIR, "ps_yuyu_deconvoluted.csv")
 YUYU_PY = os.path.join(YUYU_DIR, "py_yuyu_deconvoluted.csv")
-
-EPSILON = 1e-3  # matches Cal_foldchange's driver-passed `correction = 0.001`
-# (see alz/incytr_pair/incytr_commandline.R:376-389; the original Item 3.1 audit
-# noted 1e-5 in error).
-
-# Round-trip sample size per (contrast, layer) for build-time assertion.
-ROUNDTRIP_SAMPLE_PER_CELL = 5
-ROUNDTRIP_TOL = 1e-4
 
 # Wide-parquet filename pattern: "<c1>_<c2>_incytr_output.parquet" where each
 # group token is "<sex>_<age>_<geno>" e.g. "ma_2mo_ApTt_ma_2mo_WTyp_...".
@@ -246,97 +239,6 @@ def _discover_pathway_clusters(
 
 
 # ---------------------------------------------------------------------------
-# Round-trip verification.
-# ---------------------------------------------------------------------------
-_LAYER_TO_STORED = {
-    "protein": "_pr_log2FC",
-    "phospho_ps": "_ps_log2FC",
-    "phospho_py": "_py_log2FC",
-}
-
-
-def _roundtrip_sample(
-    wide_path: str,
-    c1: str,
-    c2: str,
-    normalized: dict[tuple[str, str], pd.DataFrame],
-    pathway_clusters: set[str],
-    rng: np.random.Generator,
-) -> list[str]:
-    """For each (cluster, layer), sample ROUNDTRIP_SAMPLE_PER_CELL pathway
-    rows from the wide parquet and assert recomputed == stored within tol.
-
-    Uses the ``Ligand_*_log2FC`` column with cluster = Sender, since the
-    aggregation upstream (``analysis.R:385``) operates on the sender-side
-    matrix. (Receiver-side would give the same result with cluster = Receiver
-    and ``Receptor/EM/Target_*_log2FC``, but ligand is sufficient and avoids
-    multiple-cluster-per-row complexity.)
-
-    Returns a list of failure-description strings; empty if all pass.
-    """
-    failures: list[str] = []
-    # Read minimum columns from the wide parquet for ligand sampling.
-    cols = ["Ligand", "Sender"] + [
-        f"Ligand{suffix}" for suffix in _LAYER_TO_STORED.values()
-    ]
-    wide = pq.read_table(wide_path, columns=cols).to_pandas()
-    wide = wide.dropna(subset=["Ligand", "Sender"])
-
-    for cluster in sorted(pathway_clusters):
-        sub_wide = wide[wide["Sender"] == cluster]
-        if sub_wide.empty:
-            continue
-        for layer, suffix in _LAYER_TO_STORED.items():
-            stored_col = f"Ligand{suffix}"
-            nm = normalized.get((cluster, layer))
-            if nm is None or nm.empty:
-                continue
-            # Drop NaN stored rows and dedup on Ligand (which is the gene name).
-            valid = sub_wide.dropna(subset=[stored_col])
-            valid = valid.drop_duplicates(subset=["Ligand"])
-            if valid.empty:
-                continue
-            take = min(ROUNDTRIP_SAMPLE_PER_CELL, len(valid))
-            picks = valid.sample(n=take, random_state=int(rng.integers(0, 2**31)))
-            norm_lookup = nm.set_index("gene_symbol")
-            # Mirror Cal_foldchange (incytr/R/math.R): the `correction` is added
-            # to BOTH arms only if the normalized column-pair contains an exact
-            # zero anywhere; otherwise it is log2(c1/c2) with no correction. The
-            # old code added EPSILON unconditionally, which over-corrected every
-            # cluster/layer that had no zero (protein post-floor) and shifted
-            # small normalized values by up to ~1e-3 in log2.
-            has_zero = bool(
-                (norm_lookup[c1] == 0).any() or (norm_lookup[c2] == 0).any()
-            )
-            for _, row in picks.iterrows():
-                gene = row["Ligand"]
-                stored = float(row[stored_col])
-                if gene not in norm_lookup.index:
-                    failures.append(
-                        f"{cluster}/{layer}: gene {gene!r} stored "
-                        f"{stored:.6f} but absent from normalized substrate"
-                    )
-                    continue
-                d_norm = float(norm_lookup.at[gene, c1])
-                w_norm = float(norm_lookup.at[gene, c2])
-                if math.isnan(d_norm) or math.isnan(w_norm):
-                    # Normalized to NaN on either side → stored is undefined;
-                    # skip rather than flag (Incytr would also produce NaN/Inf).
-                    continue
-                if has_zero:
-                    recomputed = math.log2((d_norm + EPSILON) / (w_norm + EPSILON))
-                else:
-                    recomputed = math.log2(d_norm / w_norm)
-                if abs(recomputed - stored) > ROUNDTRIP_TOL:
-                    failures.append(
-                        f"{cluster}/{layer}/{gene}: stored={stored:.6f} "
-                        f"recomputed={recomputed:.6f} "
-                        f"diff={abs(recomputed - stored):.2e}"
-                    )
-    return failures
-
-
-# ---------------------------------------------------------------------------
 # Build.
 # ---------------------------------------------------------------------------
 def build(force: bool = False) -> dict:
@@ -400,25 +302,19 @@ def build(force: bool = False) -> dict:
     # --- Per-cluster normalize across all contrasts/layers ---
     # Layout: per-cluster long-form rows
     #   (layer, gene_symbol, contrast, group, mean_value_normalized)
-    rng = np.random.default_rng(0)
+    # Correctness of the JS reconstruction against Incytr's stored *_log2FC is
+    # asserted downstream by verify_pathway_round_trip.py (sampled, in the
+    # viewer build) — not recomputed here.
     shards_written: dict[str, str] = {}
-    # Stash normalized DataFrames for the round-trip check (per-contrast).
-    # Cleared/refreshed per contrast.
-    all_failures: list[str] = []
-
-    # Build per-contrast normalized tables first (we need them in memory
-    # for the round-trip sampling against each wide parquet), but emit
-    # per-cluster shards at the end.
     # Map: cluster -> list of rows (dicts) to concat at write time.
     per_cluster_rows: dict[str, list[pd.DataFrame]] = {
         c: [] for c in pathway_clusters
     }
 
-    for (contrast_id, c1, c2, wide_path) in contrasts:
+    for (contrast_id, c1, c2, _wide_path) in contrasts:
         print(
             f"  normalized_substrate: contrast {contrast_id}", flush=True
         )
-        normalized_lookup: dict[tuple[str, str], pd.DataFrame] = {}
         for cluster in sorted(pathway_clusters):
             for layer, agg_full in layer_aggs.items():
                 agg = _extract_cluster_pair(agg_full, cluster, c1, c2)
@@ -429,7 +325,6 @@ def build(force: bool = False) -> dict:
                 normed = pd.DataFrame(
                     norm, columns=[c1, c2], index=agg["gene_symbol"]
                 ).reset_index()
-                normalized_lookup[(cluster, layer)] = normed
                 long = normed.melt(
                     id_vars=["gene_symbol"],
                     value_vars=[c1, c2],
@@ -439,21 +334,6 @@ def build(force: bool = False) -> dict:
                 long.insert(0, "layer", layer)
                 long.insert(2, "contrast", contrast_id)
                 per_cluster_rows[cluster].append(long)
-        # Round-trip check for this contrast
-        failures = _roundtrip_sample(
-            wide_path, c1, c2, normalized_lookup, pathway_clusters, rng
-        )
-        if failures:
-            all_failures.extend(
-                [f"[{contrast_id}] {f}" for f in failures]
-            )
-
-    if all_failures:
-        head = "\n  ".join(all_failures[:20])
-        raise RuntimeError(
-            f"normalized_substrate: {len(all_failures)} round-trip "
-            f"failure(s) exceed tol={ROUNDTRIP_TOL}. First 20:\n  {head}"
-        )
 
     # --- Write per-cluster shards ---
     n_clusters_written = 0
@@ -486,7 +366,7 @@ def build(force: bool = False) -> dict:
             "limma-normalized per-(cluster, contrast, layer) condition means "
             "(mirrors Incytr's normalizeBetweenArrays step pre-Cal_foldchange)"
         ),
-        "epsilon": EPSILON,
+        "epsilon": EPSILON_OMICS,
         "epsilon_note": (
             "JS-side LFC reconstruction: "
             "log2((D + epsilon) / (W + epsilon)). Epsilon = 1e-3 matches "
@@ -505,8 +385,6 @@ def build(force: bool = False) -> dict:
         ),
         "layers": ["protein", "phospho_ps", "phospho_py"],
         "contrasts": [c[0] for c in contrasts],
-        "roundtrip_tol": ROUNDTRIP_TOL,
-        "roundtrip_sample_per_cell": ROUNDTRIP_SAMPLE_PER_CELL,
         "sanitize_rule": "replace('/', '-'); replace(' ', '_')",
         "filename_template": "{cluster}.parquet",
         "relative_path": os.path.relpath(
@@ -520,7 +398,7 @@ def build(force: bool = False) -> dict:
         json.dump(index, f, indent=2)
     print(
         f"  normalized_substrate: wrote {n_clusters_written} cluster shards "
-        f"in {time.time() - t0:.1f}s (round-trip passed)",
+        f"in {time.time() - t0:.1f}s",
         flush=True,
     )
     return index

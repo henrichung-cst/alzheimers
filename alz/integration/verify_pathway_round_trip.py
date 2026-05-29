@@ -67,6 +67,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))  # repo root
 
 from alz.shared import config  # noqa: E402
+from alz.shared.incytr_constants import EPSILON_OMICS, EPSILON_SC  # noqa: E402
 from incytr_pair.pair_to_receiver_cache import _sanitize_celltype  # noqa: E402
 from viewer.paths import (  # noqa: E402
     EDGE_SLICES_INCYTR_PATHWAYS_DIR,
@@ -89,11 +90,11 @@ ROUNDTRIP_TOL = 1e-4
 #   genuine drift (routing bug, substrate mismatch, sign flip, aggregation
 #   mismatch) which will produce deltas >> 1e-4.
 
-# Epsilon values — must match JS evidence_row.js / incytr_commandline.R.
-EPSILON_OMICS = 1e-3   # protein/phospho: correction=0.001 (incytr_commandline.R:376-389)
-EPSILON_SC = 0.01       # transcript: Cal_scFC(correction = 0.01) at incytr_commandline.R:435 (sce4-parity override of analysis.R:248 default 1e-5)
+# Epsilon values (EPSILON_OMICS, EPSILON_SC) are imported from
+# alz.shared.incytr_constants — the single source of truth mirroring the R
+# driver's Cal_foldchange / Cal_scFC `correction` args.
 
-# Rows sampled per contrast in default mode (deterministic seed).
+# Rows sampled per contrast in default mode.
 SAMPLE_ROWS_PER_CONTRAST = 100
 
 TRANSCRIPT_TRACE_DIR = os.path.join(UNIFIED_VIEWER_DIR, "audit_sources", "transcript_trace")
@@ -436,14 +437,20 @@ def _canonical_cluster_names() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # Main verify() entry point
 # ---------------------------------------------------------------------------
-def verify(strict: bool = False) -> dict:
+def verify(strict: bool = False, seed: int = 0) -> dict:
     """Run round-trip assertions on the incytr_pathways edge slices.
 
     Parameters
     ----------
     strict
         If True, check every row in every shard. If False (default), spot-check
-        ``SAMPLE_ROWS_PER_CONTRAST`` rows per contrast (deterministic seed).
+        ``SAMPLE_ROWS_PER_CONTRAST`` rows per contrast.
+    seed
+        Mixes into the per-contrast reservoir hash so the sampled rows rotate
+        across runs while staying reproducible per-seed. ``seed=0`` (default)
+        reproduces the historical deterministic sample; any other value selects
+        a different — but equally reproducible — set of rows. Ignored in strict
+        mode.
 
     Returns
     -------
@@ -545,6 +552,10 @@ def verify(strict: bool = False) -> dict:
         # shard iteration order.
         import zlib  # noqa: E402
 
+        # Mixed into the row-identity hash so a non-zero seed rotates to a
+        # different (still reproducible) sample; seed=0 leaves it untouched.
+        seed_mix = zlib.crc32(str(seed).encode()) if seed else 0
+
         needed_cols = (
             ["Ligand", "Receptor", "EM", "Target", "contrast"]
             + [f"{n}_{m}" for n in ("Ligand", "Receptor", "EM", "Target")
@@ -569,7 +580,7 @@ def verify(strict: bool = False) -> dict:
                 contrast = rec.get("contrast", "")
                 ident = (f"{base}|{rec.get('Ligand','')}{rec.get('Receptor','')}"
                          f"{rec.get('EM','')}{rec.get('Target','')}{contrast}")
-                h = zlib.crc32(ident.encode())
+                h = (zlib.crc32(ident.encode()) ^ seed_mix) & 0xFFFFFFFF
                 bucket = reservoir.setdefault(contrast, [])
                 bucket.append((h, base, rec))
                 if len(bucket) > SAMPLE_ROWS_PER_CONTRAST * 4:
@@ -623,14 +634,22 @@ def main(argv: list[str] | None = None) -> int:
         "--strict", action="store_true",
         help=(
             "Full-grid check (all rows in all shards). "
-            "Default: spot-check ~100 rows per contrast (deterministic seed)."
+            "Default: spot-check ~100 rows per contrast."
+        ),
+    )
+    ap.add_argument(
+        "--seed", type=int, default=0,
+        help=(
+            "Rotate the sampled rows (default mode). seed=0 reproduces the "
+            "historical sample; any other value selects a different, "
+            "reproducible set. Ignored with --strict."
         ),
     )
     args = ap.parse_args(argv)
 
-    mode = "strict" if args.strict else "default"
+    mode = "strict" if args.strict else f"default(seed={args.seed})"
     print(f"verify_pathway_round_trip: mode={mode}", flush=True)
-    result = verify(strict=args.strict)
+    result = verify(strict=args.strict, seed=args.seed)
 
     print(
         f"  slices={result['slices_checked']} "
