@@ -1,0 +1,62 @@
+# Kedro DataCatalog.
+#
+# Reintroduced 2026-05-27. Datasets are declared as each pipeline is migrated
+# to Kedro nodes (Phases 2-5). The catalog grows incrementally; adding entries
+# pre-emptively rots. Cluster I/O resolves against S3 via an env-specific
+# overlay (conf/{local,argo}/catalog.yml, Q2) — base holds the local default.
+#
+# See docs/plans/kedro_argo_reintroduction_2026-05-26.md.
+
+# ---------------------------------------------------------------------------
+# P1 — ingest (song / mouse). Raw vendor Excel in; sample-mapping + phospho-
+# protein matching contracts out. The snRNA sample manifest is read inside the
+# sample_mapping node (optional, returns {} when absent) rather than cataloged.
+# ---------------------------------------------------------------------------
+
+# Raw inputs
+song_sample_list:
+  type: pandas.ExcelDataset
+  filepath: data/datasets/song/primary/metadata/Sample_list_72mice (1).xlsx
+  load_args:
+    sheet_name: TMT plex layout
+
+song_total_proteome:
+  type: pandas.ExcelDataset
+  filepath: data/datasets/song/primary/proteomics/song2024_tmttotal_protein_quant_merged_labeled (2).xlsx
+  load_args:
+    header: 1
+
+song_imac_sitequant:
+  type: pandas.ExcelDataset
+  filepath: data/datasets/song/primary/phospho/song_IMAC_sitequant_merged_labeled (2).xlsx
+  load_args:
+    header: 1
+
+song_imac_composite:
+  type: pandas.ExcelDataset
+  filepath: data/datasets/song/primary/phospho/song_IMAC_compositeSites_merged_labeled (2).xlsx
+  load_args:
+    header: 1
+
+# Outputs (production contracts consumed by P2+ / reference)
+song_sample_mapping:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/data_ingest/sample_mapping.csv
+  save_args:
+    index: false
+
+song_phospho_protein_matching:
+  type: pandas.CSVDataset
+  filepath: outputs/reports/data_ingest/phospho_protein_matching.csv
+  save_args:
+    index: false
+
+song_proteome_gene_list:
+  type: text.TextDataset
+  filepath: outputs/reports/data_ingest/total_proteome_genes.txt
+
+song_matching_summary:
+  type: json.JSONDataset
+  filepath: outputs/reports/data_ingest/matching_summary.json
+  save_args:
+    indent: 2

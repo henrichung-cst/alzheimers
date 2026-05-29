@@ -10,3 +10,18 @@ requires-python = ">=3.11"
 
 [tool.setuptools]
 packages = ["alz"]
+
+[tool.kedro]
+# Reintroduced 2026-05-27 for bioplat/Argo orchestration. The package holds
+# settings.py + pipeline_registry.py; conf overlays are selected by KEDRO_ENV
+# (on-cluster: `kedro run --env={{workflow.namespace}}`).
+# kedro_init_version matches the canonical bioplat Kedro-service pin (0.19.11),
+# so the same image base / API surface applies on-cluster.
+package_name = "alz"
+project_name = "alzheimers"
+kedro_init_version = "0.19.11"
+# This repo is flat (alz/ at root), not the kedro-default src/ layout.
+source_dir = "."
+
+[tool.kedro_telemetry]
+project_id = "617fa76db54f41b98b7b0797bef8abed"

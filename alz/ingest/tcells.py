@@ -75,6 +75,7 @@ from alz.shared import config
 TCELLS_DATA_DIR = os.path.join(config.REPO_ROOT, "data", "datasets", "tcells")
 KINASE_DIR = os.path.join(config.REPO_ROOT, "outputs", "reports", "kinase_attribution_tcells")
 INGEST_DIR = os.path.join(config.REPO_ROOT, "outputs", "reports", "data_ingest_tcells")
+INCYTR_INPUT_DIR = os.path.join(config.REPO_ROOT, "data", "derived", "tcells_incytr_inputs")
 
 PHOSPHO_STY = "Phospho (STY)"
 SITE_PROB_MIN = 0.75  # class-I localization cutoff (IMAC PTM.SiteProbability)
@@ -160,10 +161,39 @@ def _log2_center_collapse(
     return collapsed, n_cells, n_floor
 
 
+def _linear_bulk_collapse(
+    linear: pd.DataFrame, col_day: dict[str, int], donor: str
+) -> pd.DataFrame:
+    """Per-day LINEAR bulk for the multiplicative `P_c` deconvolution.
+
+    The D2 log2-centered matrices cannot feed `P_c = (N_total/N_c)×bulk×share`
+    (which needs positive linear intensities). Here we apply the SAME run-level
+    loading normalization as D2 (per-run median-center in log2) but **re-anchor**
+    to the mean of the per-run log2-medians before exponentiating — so the bulk
+    stays in natural MS-intensity magnitude (the `pmax(pr,1)` Incytr floor would
+    otherwise clobber a median-1 scale) — then averages technical reps within a
+    day in linear space. Undetected (gene,day) cells stay NaN (honestly missing).
+    """
+    vals = linear.where(linear > 0)
+    log2 = np.log2(vals)
+    run_med = log2.median(axis=0, skipna=True)
+    anchor = float(run_med.mean())
+    norm = log2.sub(run_med, axis=1) + anchor           # loading-equalized, scale kept
+    lin = np.power(2.0, norm)
+    lin.columns = [col_day[c] for c in lin.columns]
+    bulk = lin.T.groupby(level=0).mean().T              # rep-average per day (skipna)
+    pref = _donor_prefix(donor)
+    bulk.columns = [f"{pref}_d{int(d)}" for d in bulk.columns]
+    return bulk
+
+
 # --- per-track readers ----------------------------------------------------
 
 
-def _read_total(donor: str, path: str) -> tuple[pd.DataFrame, dict, list[str]]:
+def _parse_total(donor: str, path: str) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Parse the Total-proteome ForPerseus to a per-run LINEAR matrix indexed by
+    gene (duplicate genes mean-collapsed). Shared by the D2 reshape and the
+    decomposition linear-bulk emitter — only the downstream collapse differs."""
     df = pd.read_csv(path, sep="\t", dtype=str)
     col_day = _run_columns(list(df.columns), "Quantity")
     gene = df["PG.Genes"].fillna("").str.split(";").str[0].str.strip()
@@ -171,6 +201,11 @@ def _read_total(donor: str, path: str) -> tuple[pd.DataFrame, dict, list[str]]:
     linear.index = gene.values
     linear = linear[gene.values != ""]
     linear = linear.groupby(level=0).mean()  # collapse duplicate genes (rare)
+    return linear, col_day
+
+
+def _read_total(donor: str, path: str) -> tuple[pd.DataFrame, dict, list[str]]:
+    linear, col_day = _parse_total(donor, path)
     collapsed, n_cells, n_floor = _log2_center_collapse(linear, col_day, donor)
     samples = list(collapsed.columns)
     meta = {"n_genes": int(len(collapsed)), "n_cells": n_cells, "n_floor": n_floor,
@@ -217,9 +252,14 @@ def _isoform_collapse(
     return sub, iso_specific, int(iso_specific.sum())
 
 
-def _read_phospho(
+def _parse_phospho(
     donor: str, track: str, path: str
-) -> tuple[pd.DataFrame, pd.DataFrame, dict, list[str]]:
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, int], dict]:
+    """Parse a phospho ForPerseus (pY or IMAC) to a per-run LINEAR matrix indexed
+    by site_id, plus full per-site meta and parse-stage stats. Applies the
+    localization gate and isoform/window collapse. Shared by the D2 reshape and
+    the decomposition linear-bulk emitter — only the downstream collapse differs.
+    """
     df = pd.read_csv(path, sep="\t", dtype=str)
     cols = list(df.columns)
     col_day = _run_columns(cols, "Quantity")
@@ -289,18 +329,26 @@ def _read_phospho(
     # final uniqueness guard on site_id (keeps first metadata + intensity row)
     dup = meta["site_id"].duplicated().values
     meta, linear = meta[~dup].reset_index(drop=True), linear[~dup]
-
-    collapsed, n_cells, n_floor = _log2_center_collapse(linear, col_day, donor)
-    n_motif = int((meta["motif"].fillna("") != "").sum())
     stats = {
         "rows_raw": n_raw, "rows_phospho_sty": n_phospho,
         "low_localization_rows_dropped": n_gated, "siteprob_gated": bool(sp_cols),
-        "rows_in": n_in, "sites": int(len(collapsed)),
-        "sites_isoform_specific": n_iso,
+        "rows_in": n_in, "sites_isoform_specific": n_iso,
+    }
+    return linear, meta, col_day, stats
+
+
+def _read_phospho(
+    donor: str, track: str, path: str
+) -> tuple[pd.DataFrame, pd.DataFrame, dict, list[str]]:
+    linear, meta, col_day, stats = _parse_phospho(donor, track, path)
+    collapsed, n_cells, n_floor = _log2_center_collapse(linear, col_day, donor)
+    n_motif = int((meta["motif"].fillna("") != "").sum())
+    stats.update({
+        "sites": int(len(collapsed)),
         "sites_with_motif": n_motif, "sites_without_motif": int(len(collapsed) - n_motif),
         "cells": n_cells, "floor_cells": n_floor,
         "samples": list(collapsed.columns),
-    }
+    })
     return collapsed, meta[META_COLS], stats, list(collapsed.columns)
 
 
@@ -400,12 +448,66 @@ def run_reshape() -> None:
     print("\n[tcells] reshape done.")
 
 
+# --- linear bulk for decomposition (D4) -----------------------------------
+
+
+def _export_bulk_donor(donor: str) -> dict:
+    """Emit per-day LINEAR bulk per channel for the `P_c` decomposition:
+        pr_bulk_linear.csv  (gene_symbol + day cols)        — Total proteome
+        py_bulk_linear.csv  (site_id, gene_symbol, motif + day cols) — pY
+        ps_bulk_linear.csv  (site_id, gene_symbol, motif + day cols) — IMAC (donor1)
+    under data/derived/tcells_incytr_inputs/<donor>/.
+    """
+    src = SOURCES[donor]
+    outdir = os.path.join(INCYTR_INPUT_DIR, donor)
+    os.makedirs(outdir, exist_ok=True)
+    print(f"\n=== export linear bulk {donor} ===")
+    summary: dict = {}
+
+    lin_t, cd_t = _parse_total(donor, os.path.join(TCELLS_DATA_DIR, src["total"]))
+    pr = _linear_bulk_collapse(lin_t, cd_t, donor)
+    pr_out = pr.reset_index()
+    pr_out.columns = ["gene_symbol"] + list(pr.columns)
+    pr_out.to_csv(os.path.join(outdir, "pr_bulk_linear.csv"), index=False)
+    summary["pr"] = {"genes": int(len(pr)), "days": list(pr.columns)}
+    print(f"  pr: {len(pr)} genes × {len(pr.columns)} days")
+
+    channels = [("pY", "pY", "py", "py_bulk_linear.csv")]
+    if "imac" in src:
+        channels.append(("IMAC", "imac", "ps", "ps_bulk_linear.csv"))
+    for tname, skey, ch, fname in channels:
+        lin_p, meta, cd_p, _ = _parse_phospho(donor, tname,
+                                              os.path.join(TCELLS_DATA_DIR, src[skey]))
+        bulk = _linear_bulk_collapse(lin_p, cd_p, donor)
+        meta = meta.set_index("site_id").reindex(bulk.index)
+        out = pd.DataFrame({"site_id": bulk.index,
+                            "gene_symbol": meta["gene_symbol"].values,
+                            "motif": meta["motif"].values})
+        for c in bulk.columns:
+            out[c] = bulk[c].values
+        out.to_csv(os.path.join(outdir, fname), index=False)
+        summary[ch] = {"sites": int(len(bulk)), "days": list(bulk.columns)}
+        print(f"  {ch}: {len(bulk)} sites × {len(bulk.columns)} days")
+    return summary
+
+
+def run_export_bulk() -> None:
+    for donor in ("donor1", "donor2"):
+        _export_bulk_donor(donor)
+    print("\n[tcells] linear bulk export done.")
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--reshape", action="store_true", help="ForPerseus → Song-shaped artifacts")
+    p.add_argument("--export-bulk", action="store_true",
+                   help="per-day LINEAR bulk per channel for the P_c decomposition")
     args = p.parse_args(argv)
     if args.reshape:
         run_reshape()
+        return 0
+    if args.export_bulk:
+        run_export_bulk()
         return 0
     p.print_help()
     return 1

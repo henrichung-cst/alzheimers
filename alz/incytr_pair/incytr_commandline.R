@@ -106,36 +106,77 @@ cat(sprintf("[pair-driver] contrast=%s vs %s  nboot=%d  pair_workers=%d  perm_wo
 # =====================================================================
 # Inputs
 # =====================================================================
-DB.M <- list(
-  Incytr::DB_Layer1_mouse_filtered,
-  Incytr::DB_Layer2_mouse_filtered,
-  Incytr::DB_Layer3_mouse_filtered
-)
+# Species-specific Ligand/Receptor/EM/Target DBs. Mouse for the AD cohort,
+# human for the T-cell cohort. Gene symbols in the substrate must match the
+# DB's casing (mouse: title-case `App`; human: upper `APP`); a mismatch
+# silently yields 0 enumerated paths.
+SPECIES <- tolower(Sys.getenv("SPECIES", unset = "mouse"))
+stopifnot(SPECIES %in% c("mouse", "human"))
+DB.M <- if (SPECIES == "human") {
+  list(Incytr::DB_Layer1_human_filtered,
+       Incytr::DB_Layer2_human_filtered,
+       Incytr::DB_Layer3_human_filtered)
+} else {
+  list(Incytr::DB_Layer1_mouse_filtered,
+       Incytr::DB_Layer2_mouse_filtered,
+       Incytr::DB_Layer3_mouse_filtered)
+}
+cat(sprintf("[pair-driver] species=%s\n", SPECIES))
 
 Data.input <- readRDS(file.path(INPUTS_DIR, "incytr_obj.rds"))
-Data.input@meta.data$Type      <- Data.input@active.ident
-Data.input@meta.data$condition <- as.factor(Data.input@meta.data$Group)
+Data.input@meta.data$Type <- Data.input@active.ident
+# Mouse Seurat carries `Group` (= "ma_<age>_<geno>"); T-cell Seurat sets
+# `condition` directly (= "d<day>") in build_tcells_seurat.R. Use Group when
+# present, otherwise trust the builder's `condition`.
+if (!is.null(Data.input@meta.data$Group)) {
+  Data.input@meta.data$condition <- as.factor(Data.input@meta.data$Group)
+} else if (!is.null(Data.input@meta.data$condition)) {
+  Data.input@meta.data$condition <- as.factor(Data.input@meta.data$condition)
+} else {
+  stop("Seurat metadata has neither `Group` nor `condition`", call. = FALSE)
+}
 
-pr <- read_csv(file.path(INPUTS_DIR, "pr_yuyu_deconvoluted.csv"))
-ps <- read_csv(file.path(INPUTS_DIR, "ps_yuyu_deconvoluted.csv"))
-py <- read_csv(file.path(INPUTS_DIR, "py_yuyu_deconvoluted.csv"))
+# Channel set + filenames + gene-key column are env-parameterized so the same
+# driver runs both the mouse cohort (3-channel, "Gene Symbol" key) and the
+# T-cell cohort (donor1 3-channel, donor2 2-channel — no IMAC — with
+# `gene_symbol` key). Defaults reproduce the mouse path byte-exactly.
+CHANNELS    <- strsplit(Sys.getenv("CHANNELS", unset = "pr,py,ps"), ",", fixed = TRUE)[[1]]
+CHANNELS    <- trimws(CHANNELS[nzchar(CHANNELS)])
+stopifnot(all(CHANNELS %in% c("pr", "py", "ps")))
+stopifnot("pr" %in% CHANNELS)  # pr drives prG receiver gene-set — required
+PR_FILE     <- Sys.getenv("PR_FILE", unset = "pr_yuyu_deconvoluted.csv")
+PY_FILE     <- Sys.getenv("PY_FILE", unset = "py_yuyu_deconvoluted.csv")
+PS_FILE     <- Sys.getenv("PS_FILE", unset = "ps_yuyu_deconvoluted.csv")
+PR_GENE_COL <- Sys.getenv("PR_GENE_COL", unset = "Gene Symbol")
+PY_GENE_COL <- Sys.getenv("PY_GENE_COL", unset = "gene_symbol")
+PS_GENE_COL <- Sys.getenv("PS_GENE_COL", unset = "gene_symbol")
+cat(sprintf("[pair-driver] channels=[%s]  pr_file=%s  pr_gene_col=%s\n",
+            paste(CHANNELS, collapse = ","), PR_FILE, PR_GENE_COL))
+
+pr <- read_csv(file.path(INPUTS_DIR, PR_FILE))
+py <- if ("py" %in% CHANNELS) read_csv(file.path(INPUTS_DIR, PY_FILE)) else NULL
+ps <- if ("ps" %in% CHANNELS) read_csv(file.path(INPUTS_DIR, PS_FILE)) else NULL
 
 # Slice pr/ps/py into condition1 / condition2 wide-by-cluster tables.
 # Each table is one row per gene_symbol, one column per cluster, suffixed
-# `_pr` / `_ps` / `_py`. Pr/ps gene_symbol is "Gene Symbol"; ps/py use
-# `gene_symbol`. Mean-collapse duplicate gene rows.
+# `_pr` / `_ps` / `_py`. Mean-collapse duplicate gene rows.
+#
+# Column-name match is anchored: `^<condition>_` (NOT substring), so condition
+# "d2" does not accidentally also pick up "d20_..." / "d13_..." columns on the
+# T-cell cohort. Mouse columns "ma_2mo_AppP_<cluster>" still match cleanly.
 slice_omics <- function(df, gene_col, condition, suffix) {
-  out <- dplyr::select(df, contains(condition))
-  colnames(out) <- paste0(sub(paste0(condition, ".*_"), "", colnames(out)), "_", suffix)
+  pat <- paste0("^", condition, "_")
+  out <- dplyr::select(df, matches(pat))
+  colnames(out) <- paste0(sub(pat, "", colnames(out)), "_", suffix)
   out$gene_symbol <- df[[gene_col]]
   out %>% group_by(gene_symbol) %>% summarise_all(mean, na.rm = TRUE)
 }
-pr_1 <- slice_omics(pr, "Gene Symbol", condition1, "pr")
-pr_2 <- slice_omics(pr, "Gene Symbol", condition2, "pr")
-ps_1 <- slice_omics(ps, "gene_symbol", condition1, "ps")
-ps_2 <- slice_omics(ps, "gene_symbol", condition2, "ps")
-py_1 <- slice_omics(py, "gene_symbol", condition1, "py")
-py_2 <- slice_omics(py, "gene_symbol", condition2, "py")
+pr_1 <- slice_omics(pr, PR_GENE_COL, condition1, "pr")
+pr_2 <- slice_omics(pr, PR_GENE_COL, condition2, "pr")
+ps_1 <- if ("ps" %in% CHANNELS) slice_omics(ps, PS_GENE_COL, condition1, "ps") else NULL
+ps_2 <- if ("ps" %in% CHANNELS) slice_omics(ps, PS_GENE_COL, condition2, "ps") else NULL
+py_1 <- if ("py" %in% CHANNELS) slice_omics(py, PY_GENE_COL, condition1, "py") else NULL
+py_2 <- if ("py" %in% CHANNELS) slice_omics(py, PY_GENE_COL, condition2, "py") else NULL
 
 # sce4 reproduction (driver-side override #2): floor pr values < 1 to 1.
 # pr_yuyu carries ~1e-5 deconvolution residuals where sce4-era values were
@@ -151,8 +192,18 @@ floor_pr <- function(df) {
 pr_1 <- floor_pr(pr_1)
 pr_2 <- floor_pr(pr_2)
 
-kldata          <- read_csv(file.path(INPUTS_DIR, "kldata.csv"))
-kldata          <- kldata[, c("gene", "site_pos", "motif.geneName")]
+# kldata (kinase-substrate library) is mouse-only for the AD cohort. For the
+# T-cell cohort the kinase track lives on bulk (per meeting notes Stream D);
+# pair-mode skips it via kldata=NULL. USE_KLDATA env controls.
+USE_KLDATA <- as.logical(Sys.getenv("USE_KLDATA", unset = "TRUE"))
+stopifnot(!is.na(USE_KLDATA))
+if (USE_KLDATA) {
+  kldata <- read_csv(file.path(INPUTS_DIR, "kldata.csv"))
+  kldata <- kldata[, c("gene", "site_pos", "motif.geneName")]
+} else {
+  kldata <- NULL
+  cat("[pair-driver] USE_KLDATA=FALSE  -> kinase scoring skipped (kldata=NULL)\n")
+}
 input_gene_list <- read_csv(input_gene_path)
 
 # =====================================================================
@@ -232,7 +283,7 @@ cat(sprintf("[pair-driver] precompute-trimean gene union: %d genes\n",
 # sender/receiver here are placeholders — Cal_pairwise_grid overwrites
 # `obj@sender` / `obj@receiver` on each per-pair clone.
 template <- create_Incytr(
-  object     = Data.input@assays$originalexp@data,
+  object     = GetAssayData(Data.input, assay = DefaultAssay(Data.input), layer = "data"),
   meta       = Data.input@meta.data,
   sender     = clusters[1],
   receiver   = clusters[1],

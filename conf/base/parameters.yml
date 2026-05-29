@@ -1,7 +1,7 @@
-# Pipeline parameters. Plain YAML loaded by each CLI script via PyYAML;
-# KEDRO_ENV (legacy env-var name retained) selects an overlay under
-# `conf/<env>/parameters.yml`. Not a Kedro project — see docs/plans/
-# repo_organization_2026-05-21.md for the post-Kedro layout.
+# Pipeline parameters. Loaded both by the legacy CLI scripts via PyYAML and by
+# the Kedro config loader; KEDRO_ENV selects an overlay under
+# `conf/<env>/parameters.yml`. Kedro was reintroduced for Argo orchestration —
+# see docs/plans/kedro_argo_reintroduction_2026-05-26.md (P1 ingest live).
 
 # Cohort selection (males-only primary, full-cohort sensitivity).
 analysis_mode: males_only

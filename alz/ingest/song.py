@@ -201,13 +201,18 @@ def load_total_proteome():
 # ===========================================================================
 
 
-def step_sample_mapping():
-    """Parse TMT plex layout, map channels to animals, cross-ref snRNA-seq."""
-    _ensure_output_dir()
-    print("§1: Building sample mapping...")
+def build_sample_mapping(layout, proteome_columns, snrna_samples):
+    """Pure §1 core: TMT layout + proteome columns + snRNA xref -> mapping df.
 
+    Inputs are pre-loaded (no file I/O) so this runs identically as a Kedro
+    node (catalog supplies the inputs, catalog persists the return) or under
+    the CLI wrapper `step_sample_mapping`.
+
+    layout: raw "TMT plex layout" sheet DataFrame.
+    proteome_columns: iterable of total-proteome column names (for existence check).
+    snrna_samples: dict mouse_id -> snRNA sample string ({} if no manifest).
+    """
     # 1. Parse TMT plex layout
-    layout = pd.read_excel(SAMPLE_LIST_FILE, sheet_name="TMT plex layout")
     # Drop blank separator rows
     layout = layout.dropna(subset=["Plex"]).copy()
     layout["Plex"] = layout["Plex"].astype(int)
@@ -247,8 +252,7 @@ def step_sample_mapping():
 
     # 4. Verify against total proteome columns
     print("  Verifying columns exist in total proteome...")
-    tp = pd.read_excel(TOTAL_PROTEOME_FILE, header=1, nrows=0)
-    tp_cols = set(tp.columns)
+    tp_cols = set(proteome_columns)
     df["column_exists"] = df["column_name"].isin(tp_cols)
     n_missing = (~df["column_exists"]).sum()
     if n_missing > 0:
@@ -262,7 +266,6 @@ def step_sample_mapping():
     df["replicate"] = df.groupby(["sex", "timepoint", "genotype"]).cumcount() + 1
 
     # 6. Cross-reference with snRNA-seq
-    snrna_samples = _discover_snrna_samples()
     df["has_snrna_seq"] = df["mouse_id"].map(
         lambda mid: mid in snrna_samples
     )
@@ -291,14 +294,11 @@ def step_sample_mapping():
     else:
         print("  All 24 groups have exactly 3 replicates (72 animals total)")
 
-    # 9. Save
+    # 9. Select output columns
     out_cols = ["plex", "channel", "column_name", "animal_id", "mouse_id",
                 "sex", "timepoint", "genotype", "replicate", "has_snrna_seq",
                 "snrna_sample_id", "phospho_group_id"]
     df = df[out_cols].reset_index(drop=True)
-    out_path = os.path.join(OUTPUT_DIR, "sample_mapping.csv")
-    df.to_csv(out_path, index=False)
-    print(f"\n  Saved: {out_path}")
 
     # Summary
     print(f"\n  Summary:")
@@ -309,19 +309,44 @@ def step_sample_mapping():
     return df
 
 
+def step_sample_mapping():
+    """CLI §1 wrapper: load raw inputs, build mapping, persist sample_mapping.csv."""
+    _ensure_output_dir()
+    print("§1: Building sample mapping...")
+    layout = pd.read_excel(SAMPLE_LIST_FILE, sheet_name="TMT plex layout")
+    proteome_columns = pd.read_excel(
+        TOTAL_PROTEOME_FILE, header=1, nrows=0).columns
+    snrna_samples = _discover_snrna_samples()
+    df = build_sample_mapping(layout, proteome_columns, snrna_samples)
+    out_path = os.path.join(OUTPUT_DIR, "sample_mapping.csv")
+    df.to_csv(out_path, index=False)
+    print(f"\n  Saved: {out_path}")
+    return df
+
+
 # ===========================================================================
 # §2  Phosphosite-to-Protein Matching
 # ===========================================================================
 
 
-def step_phospho_match():
-    """Match phosphosite parent proteins to the total proteome."""
-    _ensure_output_dir()
-    print("§2: Phosphosite-to-protein matching...")
+def build_phospho_matching(total_proteome, phospho_sitequant, imac_composite=None):
+    """Pure §2 core: match phosphosite parent proteins to the total proteome.
 
-    # 1. Load total proteome gene symbols
-    print("  Loading total proteome...")
-    tp = pd.read_excel(TOTAL_PROTEOME_FILE, header=1)
+    Inputs are pre-loaded (no file I/O) so this runs identically as a Kedro
+    node or under the CLI wrapper `step_phospho_match`.
+
+    total_proteome: total-proteome quant DataFrame (header row already applied).
+    phospho_sitequant: IMAC sitequant DataFrame.
+    imac_composite: optional IMAC composite-sites DataFrame (diagnostic only).
+
+    Returns (matching_df, gene_list, summary) where matching_df is the per-site
+    table, gene_list is the sorted unique proteome gene symbols, and summary is
+    the matching-stats dict.
+    """
+    tp = total_proteome
+    phospho = phospho_sitequant.copy()
+
+    # 1. Total proteome gene symbols
     tp_genes_raw = tp["Gene Symbol"].copy()
     # Filter out non-gene entries (Gene Symbol == 0 for custom/contaminant)
     tp_genes_raw = tp_genes_raw[tp_genes_raw != 0].astype(str)
@@ -329,9 +354,7 @@ def step_phospho_match():
     print(f"  Total proteome: {len(tp)} proteins, "
           f"{len(tp_genes_upper)} unique gene symbols")
 
-    # 2. Load IMAC sitequant phospho data (primary Excel)
-    print("  Loading IMAC sitequant phospho data...")
-    phospho = pd.read_excel(IMAC_SITEQUANT_FILE, header=1)
+    # 2. IMAC sitequant phospho data
     phospho["gene_symbol_upper"] = (
         phospho["gene_symbol"].fillna("").astype(str).str.upper()
     )
@@ -373,12 +396,9 @@ def step_phospho_match():
     print(f"    Median: {sites_per_prot.median():.0f}")
     print(f"    Range: {sites_per_prot.min()}-{sites_per_prot.max()}")
 
-    # 4. Save per-site matching
-    out_df = phospho[["site_id", "protein_id", "gene_symbol",
-                       "matched_in_total_proteome"]].copy()
-    out_path = os.path.join(OUTPUT_DIR, "phospho_protein_matching.csv")
-    out_df.to_csv(out_path, index=False)
-    print(f"\n  Saved: {out_path}")
+    # 4. Per-site matching table
+    matching_df = phospho[["site_id", "protein_id", "gene_symbol",
+                           "matched_in_total_proteome"]].copy()
 
     # 5. Also check composite sites
     summary = {
@@ -399,10 +419,12 @@ def step_phospho_match():
         },
     }
 
-    # Composite sites matching
+    # Composite sites matching (optional diagnostic)
     print("\n  Checking IMAC composite sites...")
     try:
-        comp = pd.read_excel(IMAC_COMPOSITE_FILE, header=1)
+        if imac_composite is None:
+            raise ValueError("no composite-sites DataFrame provided")
+        comp = imac_composite
         comp_genes = comp["gene_symbol"].dropna().astype(str).str.upper()
         n_comp = len(comp)
         n_comp_genes = comp_genes.nunique()
@@ -466,17 +488,42 @@ def step_phospho_match():
         "unique_gene_symbols": int(len(tp_genes_upper)),
     }
 
+    gene_list = sorted(tp_genes_upper)
+    return matching_df, gene_list, summary
+
+
+def step_phospho_match():
+    """CLI §2 wrapper: load raw inputs, match phosphosites, persist outputs."""
+    _ensure_output_dir()
+    print("§2: Phosphosite-to-protein matching...")
+    print("  Loading total proteome...")
+    total_proteome = pd.read_excel(TOTAL_PROTEOME_FILE, header=1)
+    print("  Loading IMAC sitequant phospho data...")
+    phospho_sitequant = pd.read_excel(IMAC_SITEQUANT_FILE, header=1)
+    try:
+        imac_composite = pd.read_excel(IMAC_COMPOSITE_FILE, header=1)
+    except Exception as e:
+        print(f"  Could not read composite sites file: {e}")
+        imac_composite = None
+
+    matching_df, gene_list, summary = build_phospho_matching(
+        total_proteome, phospho_sitequant, imac_composite)
+
+    out_path = os.path.join(OUTPUT_DIR, "phospho_protein_matching.csv")
+    matching_df.to_csv(out_path, index=False)
+    print(f"\n  Saved: {out_path}")
+
     # Export gene list for proteome-wide WMB expression
     gene_list_path = os.path.join(OUTPUT_DIR, "total_proteome_genes.txt")
     with open(gene_list_path, "w") as f:
-        for g in sorted(tp_genes_upper):
+        for g in gene_list:
             f.write(g + "\n")
-    print(f"\n  Saved: {gene_list_path} ({len(tp_genes_upper)} genes)")
+    print(f"  Saved: {gene_list_path} ({len(gene_list)} genes)")
 
     sum_path = os.path.join(OUTPUT_DIR, "matching_summary.json")
     with open(sum_path, "w") as f:
         json.dump(summary, f, indent=2)
-    print(f"\n  Saved: {sum_path}")
+    print(f"  Saved: {sum_path}")
 
 
 # §3 (Marker → composition concordance) lives in

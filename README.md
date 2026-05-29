@@ -49,6 +49,31 @@ A parallel human AD cohort mirrors the mouse stoichiometry pipeline to provide c
 
 Outputs land in `outputs/reports/kinase_attribution_human/` (per-donor NES, recurrence tables, `celltype_specificity.csv`) and surface in the unified viewer alongside the mouse hypothesis table.
 
+### 4. T-cell exhaustion cohort (Donor 1 + Donor 2)
+
+Net-new human T-cell exhaustion cohort (ingested 2026-05-27 from Google Drive folder `1YE_h1jIyBajtm6ArxJqevJ0rt0xLKQgX`). Two donors, each with matched TMT phosphoproteomics and CITE-seq scRNA along a time course (donor1 days 0/2/9/13/17/20, donor2 days 2/5/7/9/11). Donor1 carries Total + pY + IMAC; donor2 carries Total + pY only (no IMAC → no kinase MEA on donor2; Incytr pair-mode runs pr+py on donor2, pr+ps+py on donor1).
+
+Pipeline (run in this order):
+
+```bash
+pixi run ingest-tcells-scrna      # download raw Seurat RDS for both donors (~10 GB)
+pixi run install-projectils       # one-time: install ProjecTILs + cache CD4/CD8 atlases
+pixi run tcells-projectils-map    # per-cell projection onto human CD4/CD8 reference atlases
+pixi run tcells-scrna-extract     # state-keyed aggexp/counts/markers (MUST run after projectils-map)
+pixi run tcells-export-bulk       # linear per-day bulk matrices (pr/py/ps)
+pixi run tcells-decompose         # per-(state, day) substrate via P_s = (N_total/N_s) × bulk × share
+```
+
+**Substrate is keyed on per-cell ProjecTILs `functional.cluster`, not Seurat clusters.** Cluster-level annotation was deleted (anti-shim) after losing 44.5% of donor1 to the Seurat–ProjecTILs partition mismatch. State-keyed aggregation drops only cells with no ProjecTILs call (~13% donor1, ~7% donor2 — scGate `none`-gate + doublets). See [`docs/plans/tcells_percell_aggregation_2026-05-28.md`](docs/plans/tcells_percell_aggregation_2026-05-28.md) for the rationale.
+
+Outputs (under `data/derived/tcells_incytr_inputs/<donor>/`):
+- `scrna/aggexp_data.csv`, `cell_counts.csv`, `allmarkers.csv` — substrate keyed on sanitized ProjecTILs state (`CD8Tex`, `CD4Th17`, `Treg`, …; alphanumeric only — Incytr `<condition>_<cluster>` split constraint).
+- `scrna/projectils_predictions.csv` — per-cell `lineage_gate`, `functional.cluster`, `functional.cluster.conf`.
+- `scrna/state_audit.json`, `extract_manifest.json`, `decompose_manifest.json` — drop accounting and per-state/day cell counts.
+- `{pr,py,ps}_deconvoluted.csv` — per-(state, day) values, columns `d{day}_{state}`. Mass identity `Σ_s P_s × N_s/N_total ≈ bulk` verified to ≤ 2e-15 per channel × day.
+
+ProjecTILs reference atlases (carmonalab figshare doi 10.6084/m9.figshare.23608308) cache at `data/external/projectils/`. The CD4 atlas is tumor-derived — no Tcm/Th1/Tprolif vocabulary. Figshare blocks programmatic download on this network's WAF; references must be hand-downloaded the first time.
+
 ### Per-cluster proportional decomposition (Levy-t5 branch)
 
 Forward projection only — `P_c = f_c × bulk` — **not** statistical deconvolution. See `docs/incytr_deconvolution_pivot.md` for the contract and `docs/plans/change_request_02_spine_rethreshold.md` for the levy19 → levy_t5 rethreshold (per-(cluster, animal) cell gate relaxed from the original `≥50` down to `≥5`, rank-gate dropped — 19 strict-rank clusters → 31 clusters covering 94.5% of nuclei).
@@ -147,18 +172,20 @@ bash alz/runners/supplementary/run_reviewer_diagnostics.sh
 alzheimers/
 ├── alz/
 │   ├── shared/                     # config.py + cross-mode utilities (map_kinases_to_genes.py)
-│   ├── ingest/                     # Layer 1 — bespoke per-dataset modules (song, mukesh, lucie)
+│   ├── ingest/                     # Layer 1 — bespoke per-dataset modules (song, mukesh, lucie, tcells)
 │   ├── reference/                  # Atlas downloads + cross-cohort expression (atlas, wmb_expression, human_expression, snrna_integration, snrna_proportions)
 │   ├── bulk_mea/                   # Mode 1 — normalize → enrich → attribute → recover (+ mechanism, summary)
 │   ├── decomposition_mea/          # Mode 2 — Levy-t5 per-cluster proportional decomposition + per-cluster MEA
 │   ├── incytr_pair/                # Mode 3 — pair-mode Incytr driver + receiver-cache reshaper
 │   ├── cross_reference/            # Mode 4 — SEA-AD/WMB/Song evidence loaders, human cell-type attribution, human↔SEA-AD agreement
 │   ├── integration/                # Cross-mode glue: cluster spine, omics/transcript trace, bridge builders
-│   ├── viewer/, build_unified_viewer.py    # Interactive HTML viewer
+│   ├── pipelines/                  # Kedro pipelines for Argo orchestration (P1 ingest live; registry in pipeline_registry.py + settings.py)
+│   ├── viewer/, build_unified_viewer.py     # Mouse/human unified HTML viewer
+│   ├── tcell_viewer/, build_tcell_viewer.py # T-cell cohort HTML viewer (lifted from viewer/)
 │   ├── supplementary/              # Reviewer-response diagnostics
 │   └── runners/
 │       ├── main/                   # Live + branch pipeline runners
-│       └── supporting/             # Atlas / WMB / snRNA prep runners
+│       └── supporting/             # Atlas / WMB / snRNA / ProjecTILs / T-cell prep runners
 ├── bench/                          # Pair-mode benchmarking (incytr_pair_19/, pair input builders)
 ├── data/
 │   ├── datasets/song/              # Authoritative Song workspace (TMT proteome + phospho + metadata)

@@ -14,6 +14,14 @@ ingest-tcells = "bash alz/runners/supporting/ingest_tcells.sh"
 ingest-tcells-scrna = "bash alz/runners/supporting/ingest_tcells.sh --scrna"
 tcells-reshape = "python alz/ingest/tcells.py --reshape"
 tcells-perdonor = "python alz/ingest/tcells_perdonor.py --donor both"
+tcells-projectils-map = "bash alz/runners/supporting/tcells_projectils_map.sh"
+tcells-scrna-extract = "bash alz/runners/supporting/tcells_scrna_extract.sh"
+tcells-export-bulk = "python alz/ingest/tcells.py --export-bulk"
+tcells-decompose = "python alz/ingest/tcells_decompose.py"
+tcells-build-incytr-seurat = "bash -c 'for d in donor1 donor2; do pixi run Rscript alz/incytr_pair/build_tcells_seurat.R \"$d\"; done'"
+tcells-build-input-gene-list = "bash -c 'for d in donor1 donor2; do pixi run Rscript alz/incytr_pair/build_tcells_input_gene_list.R \"$d\"; done'"
+tcells-incytr = "bash alz/incytr_pair/run_pair_mode_tcells.sh"
+install-projectils = "bash alz/runners/supporting/install_projectils.sh"
 normalize = "python alz/bulk_mea/normalize.py"
 enrich = "python alz/bulk_mea/enrich.py"
 attribute = "python alz/bulk_mea/attribute.py"
@@ -24,6 +32,7 @@ dual = "bash alz/runners/main/run_dual_analysis.sh"
 human-ingest = "python alz/ingest/mukesh.py --reshape"
 human-perdonor = "python alz/ingest/mukesh_perdonor.py --track both"
 human-seaad = "python alz/cross_reference/seaad_human_agreement.py"
+mea-suspect-reanalysis = "python -m alz.cross_reference.human_group_mea_reanalysis"
 human = { depends-on = ["human-ingest", "human-perdonor", "human-seaad"] }
 all = "bash alz/runners/main/run_all.sh"
 atlas = "python alz/reference/atlas.py --run"
@@ -31,12 +40,25 @@ wmb-export = "python alz/reference/wmb_expression.py --run"
 snrna = "python alz/reference/snrna_integration.py --run"
 bubbles = "python alz/plot_attribution_bubbles.py"
 viewer = "python alz/build_unified_viewer.py"
+tcell-viewer = "python alz/build_tcell_viewer.py"
 install-incytr = "R CMD INSTALL --no-multiarch ../incytr"
 verify-incytr-sce4 = "python alz/incytr_pair/verify_sce4_parity.py --all-known-pairs"
 
 [dependencies]
 python = "3.11.*"
 pip = "*"
+# Kedro reintroduced 2026-05-27 for bioplat/Argo orchestration (no kedro-argo:
+# abandoned; no kedro-docker: bioplat builds the image its own way). Version
+# matches the canonical bioplat Kedro-service pin (0.19.x). kedro-datasets 3-4
+# is the 0.19-era line; s3fs backs the S3 catalog (boto3 already present below).
+kedro = "~=0.19.11"
+kedro-datasets = ">=3,<5"
+s3fs = "*"
+# Pin reconciliation: kedro 0.19.x requires rich<14; and kinase-library (PyPI)
+# pulls myst-parser>=4.0,<4.1 which needs markdown-it-py<4. Without these caps
+# the conda solve grabs markdown-it-py 4.x and the PyPI side is unsatisfiable.
+rich = ">=12,<14"
+markdown-it-py = ">=3,<4"
 # Versions pinned to match kinase-library 1.7.0 metadata (scipy/seaborn/sklearn/pandas have strict ~= bounds)
 pandas = "~=2.2.3"
 numpy = "~=1.26.4"
@@ -82,6 +104,17 @@ r-dbi = ">=1.3.0,<2"
 r-arrow = ">=18.0.0,<19"
 duckdb = ">=1.5.2,<2"
 r-readr = ">=2.2.0,<3"
+# ProjecTILs reference-mapping stack for the T-cell exhaustion cohort (D4
+# cluster annotation). UCell/scGate/STACAS/ProjecTILs are GitHub-only and
+# installed via alz/runners/supporting/install_projectils.sh; their conda-
+# available R deps are pulled in here so the GitHub install only compiles the
+# four wrapper packages. glmGamPoi accelerates the SCT step in the reference
+# atlases; BiocManager is the canonical bridge for the few Bioconductor deps
+# (SingleCellExperiment / SummarizedExperiment) that ProjecTILs imports.
+r-biocmanager = "*"
+bioconductor-glmgampoi = "*"
+bioconductor-singlecellexperiment = "*"
+bioconductor-summarizedexperiment = "*"
 
 [pypi-dependencies]
 kinase-library = "*"

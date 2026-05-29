@@ -20,6 +20,53 @@ Status legend: ☐ not started · ◐ in progress · ☑ done · ❓ needs clari
 
 ---
 
+## Refresh — 2026-05-29 (high-recall re-pass)
+
+Re-walked the raw note dump against this doc. Every line maps to an existing
+item except one (now captured as **A15**). Status deltas and best-judgment
+resolutions for the items the notes left under-specified (confirmed: do not
+block on clarification — proceed on the reading below):
+
+**Stream D progress.**
+- D1 ☑ · D2 ☑ (unchanged).
+- D3 ◐ — per-donor/per-timepoint contrast + kinase MEA on donor1 IMAC; folded
+  into the Incytr run plan.
+- D4 ◐ — resolved as **aggregate by ProjecTILs state, not Seurat cluster**
+  (`docs/plans/tcells_percell_aggregation_2026-05-28.md`, approved/in-flight).
+  Closes the D-stream "scRNA → spine" + "cluster spine" open questions.
+- D5 ◐ — planned: `tcells_incytr_pair_2026-05-28.md` (design) +
+  `tcells_incytr_run_2026-05-28.md` (OOM-aware execution, `pixi run tcells-incytr`).
+- **D7. T-cell viewer** (new, not in original notes but now active): lift
+  `alz/viewer/` verbatim and shape T-cell artifacts to its PAYLOAD/Store/
+  TAB_MANIFEST contract — `docs/plans/tcell_viewer_lift_2026-05-29.md` +
+  `tcell_viewer_payload_2026-05-29.md`. A payload + `index.html` are already
+  generated under `outputs/reports/tcell_viewer/`. **All Stream A presentation
+  changes below apply to BOTH `alz/viewer/` (mouse) and the lifted T-cell
+  viewer** — shape the data, never fork the contract
+  (`feedback_no_reimplementing_shared_viewer.md`).
+
+**Stream A is still the un-started bulk** — these notes are mostly viewer/
+crosstable presentation, and no A-item has landed. (`levers_AB_*` /
+`optimization_levers_*` are Incytr-perf, unrelated to Stream A.)
+
+**Resolutions for under-specified notes (stated assumptions, not blocking):**
+- **A9 ranking metric** ("strongest evidence", flagged *extremely important*):
+  primary sort = **magnitude of disease-vs-control NES change** (biggest movers
+  first); secondary = consistency (bulk/deconv agreement + monotonicity). The
+  "sorted visual of kinase up/down in disease" reads off this order.
+- **A10 NES ratio**: show **median control NES** and a **disease ÷ control
+  median-NES ratio** (activity fold) as adjacent columns.
+- **A15 (was missing) — "Just condition, whatever is most up or down":**
+  a timepoint-collapsed ranking — rank kinases purely by disease-condition
+  direction/magnitude (most up / most down), no timepoint faceting. Consistent
+  with A9/A12's "focus on disease direction." Lives next to A9 as the simplest
+  ranked view.
+- **C4 gene list**: the **early-change phosphosite genes** from C3 (flagged on
+  CTRL-07/08/10). Two columns — **present-in-late-control (yes/no)** and the
+  **LFC** — plus a cross-flag for which of those genes also move in AD.
+
+---
+
 ## Stream D — T-cell cohort (ACTIVE)
 
 This is the **T Cell Exhaustion** dataset (Donor 1 + Donor 2). Closest template
@@ -61,9 +108,14 @@ carry no Day-2 FC column, confirming the "(later) − (Day 2)" contrast.
   mix vintages with the 10 Feb ForPerseus and need the R parser).
 - **Contaminant filter:** pY/IMAC ForPerseus tables include Carbamidomethyl (C)
   and Oxidation (M) rows — filter to `PTM.ModificationTitle == "Phospho (STY)"`.
-- **scRNA = Seurat `.rds`** (not h5ad): donor1 `singlets_0425.rds` (5.2 GB, 10x
-  NSCLC), donor2 `Tcells_d2.singlet (1).rds` (4.9 GB). Decomposition (D4) needs
-  an R-side export to h5ad / pseudobulk before the Python spine can consume it.
+- **scRNA = Seurat `.rds`** (not h5ad): donor1 `Tcells.singlet.rds` (5.2 GB,
+  27486×25678, 14 clusters, CITE-seq RNA/Protein/HTO, `sample_ID` days
+  0/2/9/13/17/20), donor2 `Tcells_d2.singlet (1).rds` (4.9 GB). Decomposition (D4)
+  needs an R-side export to h5ad / pseudobulk before the Python spine can consume
+  it. (The earlier donor1 `singlets_0425.rds` was a mislabeled cell-line benchmark
+  — replaced 2026-05-27.) **Memory:** a plain `readRDS` on these objects OOMs the
+  shared box; D4 R steps must extract `meta.data`/counts without holding the full
+  object (subset assays, `gc()`, or stream).
 - **Out of scope:** KGG / AcK / MME enrichments, Flow cytometry.
 - **Landing layout:** `data/datasets/tcells/{donor1,donor2}/{proteomics,scrna}/`,
   original vendor filenames preserved.

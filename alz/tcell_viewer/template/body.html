@@ -1,0 +1,152 @@
+<body>
+<header id="app-header">
+  <h1>T-cell Pathway Viewer</h1>
+  <div class="mode-toggle" id="donor-toggle" role="tablist" aria-label="Donor">
+    <button class="mode-btn" data-donor="donor1" role="tab" aria-selected="true">Donor 1</button>
+    <button class="mode-btn" data-donor="donor2" role="tab" aria-selected="false">Donor 2</button>
+  </div>
+  <label class="filter-label" data-filter="fdr" data-metric="fdr">FDR &lt; <input id="f-fdr" aria-label="FDR threshold" type="number" step="0.05" min="0" max="1"
+    value="0.25" style="width:60px;"></label>
+  <button id="glossary-toggle" aria-controls="glossary-panel" aria-expanded="false" title="Open metric definitions and abbreviations">Glossary</button>
+  <button id="f-selection-kinase-clear" class="chip" hidden>Clear kinase selection</button>
+  <button id="f-selection-celltype-clear" class="chip" hidden>Clear cell-type selection</button>
+</header>
+<nav id="tab-bar" role="tablist" aria-label="Viewer panels"></nav>
+<div id="content-shell">
+<main id="app-main">
+  <div id="file-mode-notice" class="notice">
+    This viewer is open as a local file. Some kinase and pathway drill-down
+    panels fetch parquet sidecar files, which browsers block under file://.
+    Serve this directory over HTTP if those drill-downs are needed.
+  </div>
+  <div id="tab-kinase" class="tab-panel active" role="tabpanel" aria-labelledby="tabbtn-kinase">
+    <div class="explorer-layout kinase-audit-layout">
+      <div class="card">
+        <div class="ke-toolbar ke-toolbar-multi" id="ke-unified-toolbar">
+          <label class="sr-only" for="ke-search">Search kinase or gene</label>
+          <input id="ke-search" aria-label="Search kinase or gene" placeholder="Search kinase or gene…"/>
+          <label class="ke-filter-label" title="Minimum number of significant contrasts (FDR < threshold) the kinase must reach. 0 = no constraint.">n_sig &geq;
+            <input id="ke-filter-nsig-min" type="number" min="0" max="9" step="1" value="0" style="width:48px;"
+                   aria-label="Minimum number of significant contrasts"/>
+          </label>
+          <label class="ke-filter-label" title="Filter by NES trajectory shape across the day-vs-d2 contrasts (in time order). Requires a complete profile — kinases with any NA NES are excluded.">Pattern
+            <select id="ke-filter-pattern" aria-label="NES trajectory pattern">
+              <option value="">any</option>
+              <option value="always_up">always up</option>
+              <option value="always_down">always down</option>
+              <option value="monotonic_up">monotonic up</option>
+              <option value="monotonic_down">monotonic down</option>
+              <option value="peak">single peak</option>
+              <option value="trough">single trough</option>
+            </select>
+          </label>
+          <button id="ke-filter-reset" class="ke-filter-reset" title="Reset all kinase filters">Reset</button>
+          <span class="muted" id="ke-count"></span>
+        </div>
+        <div class="ke-table-wrap">
+          <table class="data-table" id="ke-table">
+            <thead><tr>
+              <th data-col="name" data-metric="kinaseName" title="Display label: Kinase&#10;Raw column: name&#10;Definition: Kinase identifier from the MEA / integration tables.">Kinase</th>
+              <th data-col="gene_symbol" data-metric="kinaseGene" title="Display label: Gene&#10;Raw column: gene_symbol&#10;Definition: Gene symbol associated with the kinase.">Gene</th>
+              <th data-col="family" data-metric="kinaseFamily" title="Display label: Family&#10;Raw column: family&#10;Definition: Kinase family from kinase-library metadata. Click to sort.">Family</th>
+              <th data-col="nes_profile" data-metric="nesProfile" title="NES profile across day-vs-baseline (d2) contrasts. Color = direction (red up, blue down), saturation = |NES|, black outline = FDR < threshold. Click to sort by max |NES|.">NES Profile</th>
+              <th data-col="peak_NES" data-metric="peakNes" title="Peak |NES| — max absolute NES across timepoint contrasts. Click to sort.">|NES|</th>
+              <th data-col="n_sig" data-metric="nSig" title="n_sig — count of contrasts where FDR < threshold. Click to sort.">n_sig</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="ka-splitter" id="ka-splitter" title="Drag to resize"></div>
+      <section class="detail-card" id="ke-detail">
+        <div class="muted">Select a kinase to see details.</div>
+      </section>
+    </div>
+  </div>
+  <div id="tab-incytrheatmap" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytrheatmap" hidden>
+    <div class="card">
+      <div class="ke-toolbar ke-toolbar-multi">
+        <label class="ke-filter-label" title="Day vs d2 baseline. Per-donor vocabulary: donor1 = d13/d17/d20; donor2 = d5/d7/d9/d11.">Day
+          <select id="ih-disease" aria-label="Day vs baseline"></select>
+        </label>
+        <label class="ke-filter-label" title="Baseline reference day (always d2 for T-cell).">Baseline
+          <select id="ih-timepoint" aria-label="Baseline"></select>
+        </label>
+        <label class="ke-filter-label" title="Keep paths with pvalue &lt; threshold. Snapped to the precomputed grid (0.001 / 0.005 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0). Blank or 1.0 = no gate. (Per-animal SigProb Wald-t is unreliable in this cohort; prefer |PDS|.)">pvalue &lt;
+          <input id="ih-pvalue" type="number" step="0.005" min="0.001" max="1" style="width:64px;"/>
+        </label>
+        <label class="ke-filter-label" title="Keep paths with |PDS| ≥ threshold (composite multimodel effect-size magnitude). Snapped to the precomputed grid (0 / 0.001 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0). 0 = no gate.">|PDS| ≥
+          <input id="ih-abs-pds" type="number" step="0.01" min="0" max="2" style="width:64px;"/>
+        </label>
+        <button id="ih-reset" class="ke-filter-reset" title="Reset heatmap filters">Reset</button>
+        <span class="muted" id="ih-count"></span>
+      </div>
+      <div id="ih-plot" role="img" aria-label="Incytr candidate-path heatmap"
+           style="width:100%;"></div>
+    </div>
+  </div>
+  <div id="tab-incytrpathways" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytrpathways" hidden>
+    <div class="card">
+      <div class="ke-toolbar ke-toolbar-multi">
+        <span id="ip-ms-sender"   class="ke-filter-label"
+              title="Filter rows by sender cell type. Empty = any. Picking values shards-load every matching (sender, receiver) pair."></span>
+        <span id="ip-ms-receiver" class="ke-filter-label"
+              title="Filter rows by receiver cell type. Empty = any."></span>
+        <span id="ip-ms-disease"  class="ke-filter-label"
+              title="Filter rows by disease contrast prefix. Empty = any."></span>
+        <span id="ip-ms-time"     class="ke-filter-label"
+              title="Filter rows by timepoint contrast suffix. Empty = any."></span>
+        <span id="ip-ms-recur"    class="ke-filter-label"
+              title="AND-filter: keep only pathways that appear as significant in ALL selected disease contrasts (at the active pvalue/|PDS| gates). Empty = no recur constraint."></span>
+        <label class="ke-filter-label" title="Keep rows with pvalue &lt; threshold. Blank = no constraint. (Per-animal SigProb Wald-t is unreliable in this cohort; prefer |PDS|.)">pvalue &lt;
+          <input id="ip-slider-p" type="number" step="0.005" min="0" max="1" style="width:64px;"/>
+        </label>
+        <label class="ke-filter-label" title="Keep rows with |PDS| &gt;= threshold. Blank = no constraint.">|PDS| ≥
+          <input id="ip-slider-pds" type="number" step="0.05" min="0" style="width:64px;"/>
+        </label>
+        <label class="ke-filter-label" title="Substring search across Ligand / Receptor / EM / Target / Path / Sender / Receiver / contrast. Case-insensitive. Space-separated tokens are AND'd.">search
+          <input id="ip-search" type="search" placeholder="gene or path…" style="width:140px;"/>
+        </label>
+        <button id="ip-reset" class="ke-filter-reset" title="Reset all pathway filters">Reset</button>
+        <span class="muted" id="ip-count"></span>
+      </div>
+      <!-- Trajectory chip bar (CR-04): one toggleable chip per coarse label.
+           Chips are rendered by incytr_pathways.js once trajectory_index loads. -->
+      <div id="ip-traj-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 4px 0;min-height:28px;"
+           title="Filter by coarse trajectory label. Hover a chip to see the sign-vector meaning. Multiple chips = OR within labels. Empty = any."></div>
+      <div class="muted" style="margin:4px 0 8px 0;font-size:11px;"
+           title="Each node carries a {DEG, prG} badge marking the seed list that admitted the gene.">
+        Evidence-source badges:
+        <span style="display:inline-block;padding:0 4px;font-size:10px;font-family:ui-monospace,monospace;
+                     border-radius:2px;background:#e8eefc;color:#1f4ea3;">DEG</span>
+        = single-cell differentially-expressed gene ·
+        <span style="display:inline-block;padding:0 4px;font-size:10px;font-family:ui-monospace,monospace;
+                     border-radius:2px;background:#e7f4ec;color:#1f7a3a;">prG</span>
+        = proteomics-significant gene
+      </div>
+      <div id="ip-table-wrap"></div>
+    </div>
+  </div>
+</main>
+<div id="drawer-resizer" title="Drag to resize"></div>
+<button id="howto-drawer-toggle" type="button" aria-label="Toggle how-to drawer" aria-expanded="false" title="Show/hide the 'How to read' drawer">?</button>
+<aside id="howto-drawer"></aside>
+</div>
+<aside id="glossary-panel" aria-hidden="true">
+  <h3>Glossary</h3>
+  <dl>
+    <dt>Backbone</dt><dd>A receiver-specific Receptor &rarr; EM &rarr; Target route. It summarizes the receiver-side signaling route shared across one or more sender ligands.</dd>
+    <dt>Receiver</dt><dd>The cell type whose receptor, EM, and target genes define the intracellular side of the modeled pathway.</dd>
+    <dt>Sender</dt><dd>The cell type providing the ligand side of a sender-to-receiver pathway.</dd>
+    <dt>TPDS</dt><dd>Transcript-level pathway differential score: modeled disease-associated change in log signaling probability. Positive and negative signs indicate opposite directions of modeled signaling change.</dd>
+    <dt>Passed both nulls</dt><dd>For a specific backbone and contrast, both permutation checks passed: kinase enrichment and receiver-specific wiring.</dd>
+    <dt>Passing contrasts</dt><dd>Count of genotype-by-timepoint contrasts, out of 9, where the backbone passed both nulls. A value of 3 means three contrasts passed, not three null models.</dd>
+    <dt>NES</dt><dd>Normalized Enrichment Score from bulk kinase MEA on ForPerseus log2FC.</dd>
+    <dt>FDR</dt><dd>False discovery rate used to threshold kinase MEA significance.</dd>
+    <dt>n_sig</dt><dd>Count of contrasts where FDR &lt; the active threshold.</dd>
+    <dt>Pathway support</dt><dd>Backbone-level provenance derived from full pathways: expression-confirmed, kinase-imputed, or mixed when both appear across contributing paths or contrasts.</dd>
+    <dt>Support</dt><dd>Kinase contribution to a pathway backbone edge; larger absolute values indicate stronger phosphoproteomic support for that modeled route.</dd>
+    <dt>Observed score</dt><dd>Permutation-tested pathway score used for backbone-level additivity and graph edge summaries.</dd>
+    <dt>Contrast</dt><dd>Day vs d2 baseline. Kinase MEA contrasts are donor1-only (no IMAC for donor2); Incytr pair-mode contrasts vary per donor. Active vocabulary is set by the donor toggle.</dd>
+  </dl>
+</aside>

@@ -44,7 +44,7 @@ rc "T Cell Exhaustion Donor 2/Proteomics Data/pY/10Feb2026_Donor2_pY_ForPerseus.
 if [[ "${1:-}" == "--scrna" ]]; then
   mkdir -p "$DEST/donor1/scrna" "$DEST/donor2/scrna"
   echo "[tcells] scRNA — ~10 GB, this takes a while"
-  rc "T Cell Exhaustion Donor 1/Single Cell Data/singlets_0425.rds" "$DEST/donor1/scrna/"
+  rc "T Cell Exhaustion Donor 1/Single Cell Data/Tcells.singlet.rds" "$DEST/donor1/scrna/"
   rc "T Cell Exhaustion Donor 2/Single Cell Data/Tcells_d2.singlet (1).rds" "$DEST/donor2/scrna/"
 fi
 

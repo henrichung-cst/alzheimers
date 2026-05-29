@@ -26,3 +26,7 @@ alz/integration/intermediates/
 /docs/archive/
 /docs/**/*.pdf
 /docs/**/*.html
+# bench/ is bulk reference data on disk; track only the parity-audit log.
+!/bench/
+/bench/*
+!/bench/bench.md
