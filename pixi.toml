@@ -27,7 +27,7 @@ enrich = "python alz/bulk_mea/enrich.py"
 attribute = "python alz/bulk_mea/attribute.py"
 mechanism = "python alz/bulk_mea/mechanism.py"
 recover = "python alz/bulk_mea/recover.py"
-live = { depends-on = ["ingest", "normalize", "enrich", "attribute", "recover"] }
+live = { depends-on = ["ingest", "normalize", "enrich", "attribute", "mechanism", "recover"] }
 dual = "bash alz/runners/main/run_dual_analysis.sh"
 human-ingest = "python alz/ingest/mukesh.py --reshape"
 human-perdonor = "python alz/ingest/mukesh_perdonor.py --track both"

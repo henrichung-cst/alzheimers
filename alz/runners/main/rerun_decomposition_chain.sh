@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regenerate the per-cluster decomposition chain against the active Levy-t5
-# spine. Use after rerun_mouse_kinase_chain.sh and before rebuilding the
+# spine. Use after the kinase chain (`pixi run live`) and before rebuilding the
 # viewer. The hardfail gates in snrna_integration.py / snrna_proportions.py
 # prevent silently dropping clusters from a stale pseudobulk; this script
 # rebuilds the chain end-to-end so the gates can verify it.
@@ -37,7 +37,7 @@ echo
 echo "=== done in $((T1 - T0))s ==="
 
 # Success condition: all 31 spine clusters present in mea_per_cluster, no skips.
-SPINE="$SPINE" .pixi/envs/default/bin/python - <<'PY'
+SPINE="$SPINE" pixi run python - <<'PY'
 import json, os, sys
 spine = os.environ["SPINE"]
 audit = json.load(open(f"outputs/reports/decomposition/{spine}/enrich_audit.json"))

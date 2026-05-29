@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Phase-2 clean rerun for change requests 01-04.
-# See docs/plans/change_requests_sequencing.md for the model.
+# Full pair-mode Incytr pipeline: decomposition inputs → Incytr (9 contrasts) →
+# viewer reshape, on the levy_t5 31-cluster spine. The canonical pair-mode build.
 #
 # Resumable: each step writes a sentinel under outputs/reports/change_requests/.state/.
 # Re-running the wrapper skips steps whose sentinel exists.

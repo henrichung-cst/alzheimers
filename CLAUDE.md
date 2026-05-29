@@ -60,7 +60,7 @@ Known residual: the App transgene (27 App-ligand misses on Microglia→Cholinerg
 
 - **`analysis_mode` flow** — Kedro parameter in `conf/base/parameters.yml`, default `males_only`. `KEDRO_ENV=full_cohort` overlays the sensitivity config. Affects `enrich.py`, `attribute.py`, `mechanism.py` — **not** `normalize.py` (always uses all 72 samples). Legacy `ANALYSIS_MODE` env var was retired and is silently ignored.
 - **Outlier detection requires stoichiometry** — `alz/ingest/song.py --outliers` reads `stoichiometry_matrix.csv`, so `normalize.py` must run first. Falls back to total proteome if unavailable.
-- **WMB prerequisite** — `run_live_pipeline.sh` gates on `wmb_kinase_expression.csv` / `wmb_proteome_expression.csv`; run `run_wmb_expression.sh` first.
+- **WMB prerequisite** — the bulk pipeline needs `wmb_kinase_expression.csv` / `wmb_proteome_expression.csv`; run `run_wmb_expression.sh` (or `pixi run wmb-export`) first. `run_all.sh` auto-resolves the upstream WMB h5ad + SEA-AD downloads unless `--skip-atlas`.
 - **WMB region scope** — `WMB_REGION_SCOPE` defaults to `whole_brain` (correct for the specificity score's brain-wide denominator). `cortex_hpf` is a sensitivity toggle only. Active scope is stamped to `wmb_kinase_expression.scope.json`; a scope mismatch forces recompute.
 - **Atlas cache compressed** — raw h5ads under `data/external/allen_abc/` are zstd-compressed (~115 GB → ~26 GB). Decompress with `bash alz/runners/supporting/decompress_atlas_cache.sh` before re-running `wmb_expression.py`. Provenance in `data/external/allen_abc/MANIFEST.json`.
 - **WMB expression memory** — `wmb_expression.py --proteome` processes 6,308 genes × 13 regions; use `skip_regional=True`, `chunk_size=2000` to stay under ~30 GB RAM.

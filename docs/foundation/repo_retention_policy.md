@@ -52,11 +52,20 @@ Generated caches (`alz/__pycache__/`, etc.) are excluded from this index.
 | `alz/pipelines/{ingest_mapping,normalize,enrich,attribute,mechanism,recovery}/` | Kedro pipeline definitions registered in `alz/pipeline_registry.py` |
 | `alz/pipeline_registry.py`, `alz/settings.py`, `pyproject.toml` | Kedro project bootstrap |
 | `conf/base/{catalog,parameters}.yml`, `conf/full_cohort/parameters.yml` | Kedro Data Catalog + parameters (cohort selection lives here) |
-| `alz/runners/main/run_data_ingest.sh` | Operational wrapper for data ingestion |
-| `alz/runners/main/run_kinase_attribution.sh` | Operational wrapper for normalize → enrich → attribute |
-| `alz/runners/main/run_attribution_recovery.sh` | Operational wrapper for recovery |
-| `alz/runners/main/run_live_pipeline.sh` | Bundled end-to-end live runner |
-| `alz/runners/main/run_dual_analysis.sh` | Dual-track (males-only primary + full-cohort sensitivity) |
+| `alz/runners/main/run_all.sh` | Canonical full end-to-end build (kinase + decomposition + Incytr + human + viewer); resumable sentinels; `pixi run all`. Auto-resolves WMB/SEA-AD downloads unless `--skip-atlas` |
+| `alz/runners/main/run_dual_analysis.sh` | Dual-track (males-only primary + full-cohort sensitivity); `pixi run dual` |
+| `alz/runners/main/run_pair_mode_pipeline.sh` | Canonical pair-mode Incytr build (inputs → Incytr → viewer reshape) |
+| `alz/runners/main/rerun_decomposition_chain.sh` | Standalone per-cluster decomposition rebuild + hard verification gate |
+| `alz/runners/main/run_levy_t5_attribution_rebuild.sh` | Targeted rerun: attribute → recover → viewer |
+| `alz/runners/main/run_pair_mode_viewer_build.sh` | Targeted rerun: pair receiver cache → viewer |
+| `alz/runners/main/run_mukesh_perdonor.sh` | Targeted human per-donor rerun |
+
+> The granular kinase-chain wrappers (`run_data_ingest.sh`, `run_kinase_attribution.sh`,
+> `run_attribution_recovery.sh`), the bundled `run_live_pipeline.sh`, `rerun_mouse_kinase_chain.sh`,
+> the completed `run_phase2_spine_pivot.sh`, and the lighter `run_pivot_smoke.sh` were archived
+> 2026-05-29 (runners audit). `pixi run {ingest,normalize,enrich,attribute,mechanism,recover}` /
+> `pixi run all` and `rerun_decomposition_chain.sh` cover their function; `run_data_ingest.sh` was
+> also stale (called the removed `song.py --markers` step).
 
 ### Outputs that must remain reproducible
 

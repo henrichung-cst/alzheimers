@@ -9,6 +9,6 @@ if [[ $# -gt 0 ]]; then donors=("$@"); else donors=(donor1 donor2); fi
 
 for d in "${donors[@]}"; do
   echo "=== [tcells-scrna-extract] $d ==="
-  Rscript alz/ingest/tcells_scrna_extract.R "$d"
+  pixi run Rscript alz/ingest/tcells_scrna_extract.R "$d"
 done
 echo "[tcells-scrna-extract] done -> data/derived/tcells_incytr_inputs/<donor>/scrna/"

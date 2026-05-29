@@ -53,7 +53,7 @@ if [[ $FORCE -eq 1 ]]; then rm -f "$STATE_DIR"/*.done; fi
 exec > >(tee -a "$MAIN_LOG") 2>&1
 T_START=$(date +%s)
 STEP_IDX=0
-PLANNED=(K-map A-wmb A-snrna K-norm K-enrich K-mech K-attr K-recover
+PLANNED=(K-map A-wmb A-snrna K-norm K-enrich K-attr K-mech K-recover
          D-prop D-decomp D-enrich-st D-enrich-py D-perout D-verify
          H-ingest H-perdonor H-seaad V-viewer)
 if [[ $SKIP_INCYTR -eq 0 ]]; then
@@ -83,14 +83,33 @@ run_step() {
   echo "  DONE in $(fmt $(($(date +%s)-t0)))"
 }
 
+# --- raw-reference prerequisites (migrated from the retired run_live_pipeline.sh) ---
+# run_all assumes the WMB h5ads + SEA-AD effect sizes are on disk; the A-wmb/A-snrna
+# steps below consume them. Auto-resolve the downloads unless --skip-atlas.
+if [[ $SKIP_ATLAS -eq 0 ]]; then
+  if [[ ! -d data/external/sea_ad ]] || [[ -z "$(ls -A data/external/sea_ad 2>/dev/null)" ]]; then
+    echo "  prereq: SEA-AD effect sizes missing — running atlas reference acquisition"
+    bash alz/runners/supporting/run_atlas_reference.sh
+  fi
+  n_h5ad=$(find data/external/allen_abc/expression_matrices/WMB-10Xv3/ \
+      -name "*-log2.h5ad" 2>/dev/null | wc -l)
+  if [[ "$n_h5ad" -lt 13 ]]; then
+    echo "  prereq: only $n_h5ad/13 WMB region h5ads — running WMB download"
+    bash alz/runners/supporting/run_wmb_download.sh
+  fi
+fi
+
 # --- mouse kinase chain ---
 run_step K-map     "kinase→gene mapping cache"        pixi run python alz/shared/map_kinases_to_genes.py
 run_step A-wmb     "WMB expression export"            pixi run python alz/reference/wmb_expression.py --run
 run_step A-snrna   "Song snRNA integration"           pixi run python alz/reference/snrna_integration.py --run
 run_step K-norm    "kinase_normalize (IRS + stoich)"  pixi run python alz/bulk_mea/normalize.py
 run_step K-enrich  "kinase_enrich (OLS + MEA)"        pixi run python alz/bulk_mea/enrich.py
-run_step K-mech    "kinase_mechanism (raw MEA)"       pixi run python alz/bulk_mea/mechanism.py
+# mechanism MUST run after attribute: mechanism.py merges its annotations into
+# unified_attribution.csv (which attribute.py writes). Reversed order silently
+# drops the merge — attribute then overwrites with no mechanism columns.
 run_step K-attr    "kinase_attribute"                 pixi run python alz/bulk_mea/attribute.py
+run_step K-mech    "kinase_mechanism (raw MEA)"       pixi run python alz/bulk_mea/mechanism.py
 run_step K-recover "attribution_recovery"             pixi run python alz/bulk_mea/recover.py
 
 # --- per-cluster decomposition ---

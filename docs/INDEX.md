@@ -118,14 +118,14 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 | Stage | Script | Runner | Output dir |
 |:---|:---|:---|:---|
 | Config | `config.py` | — | — |
-| 1. Ingest | `data_ingest.py` / `kedro run --pipeline=ingest_mapping` | `runners/main/run_data_ingest.sh` | `outputs/reports/data_ingest/` |
-| 2. Normalize | `kinase_normalize.py` / `kedro run --pipeline=normalize` | `runners/main/run_kinase_attribution.sh` (2–4) | `outputs/reports/kinase_attribution/` |
-| 3. Enrich | `kinase_enrich.py` / `kedro run --pipeline=enrich` | (above) | `outputs/reports/kinase_attribution/` |
-| 4. Attribute | `kinase_attribute.py` / `kedro run --pipeline=attribute` | (above) | `outputs/reports/kinase_attribution/` |
-| 5. Recovery | `attribution_recovery.py` / `kedro run --pipeline=recovery` | `runners/main/run_attribution_recovery.sh` | `outputs/reports/attribution_recovery/` |
-| Optional: mechanism | `kinase_mechanism.py` / `kedro run --pipeline=mechanism` | — | `outputs/reports/kinase_attribution/` |
+| 1. Ingest | `data_ingest.py` / `kedro run --pipeline=ingest_mapping` | `pixi run ingest` | `outputs/reports/data_ingest/` |
+| 2. Normalize | `kinase_normalize.py` / `kedro run --pipeline=normalize` | `pixi run normalize` | `outputs/reports/kinase_attribution/` |
+| 3. Enrich | `kinase_enrich.py` / `kedro run --pipeline=enrich` | `pixi run enrich` | `outputs/reports/kinase_attribution/` |
+| 4. Attribute | `kinase_attribute.py` / `kedro run --pipeline=attribute` | `pixi run attribute` | `outputs/reports/kinase_attribution/` |
+| 5. Mechanism | `kinase_mechanism.py` / `kedro run --pipeline=mechanism` | `pixi run mechanism` (after attribute; merges into `unified_attribution.csv`) | `outputs/reports/kinase_attribution/` |
+| 6. Recovery | `attribution_recovery.py` / `kedro run --pipeline=recovery` | `pixi run recover` | `outputs/reports/attribution_recovery/` |
 | Plots | `plot_attribution_bubbles.py` | — | `outputs/reports/attribution_recovery/bubble_plots/` |
-| Bundled | — | `runners/main/run_live_pipeline.sh` | all of the above |
+| Bundled | — | `pixi run live` | all of the above |
 | Dual-track | — | `runners/main/run_dual_analysis.sh` | `*_males_only/`, `*_full_cohort/` |
 | End-to-end | — | `runners/main/run_all.sh` (= `pixi run all`) | everything |
 

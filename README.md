@@ -78,10 +78,10 @@ ProjecTILs reference atlases (carmonalab figshare doi 10.6084/m9.figshare.236083
 
 Forward projection only — `P_c = f_c × bulk` — **not** statistical deconvolution. See `docs/incytr_deconvolution_pivot.md` for the contract and `docs/plans/change_request_02_spine_rethreshold.md` for the levy19 → levy_t5 rethreshold (per-(cluster, animal) cell gate relaxed from the original `≥50` down to `≥5`, rank-gate dropped — 19 strict-rank clusters → 31 clusters covering 94.5% of nuclei).
 
-End-to-end smoke run:
+End-to-end decomposition rebuild (pseudobulk → proportions → decompose → per-cluster MEA → verify, with a hard skipped-cluster / `all_pass` gate):
 
 ```bash
-bash alz/runners/main/run_pivot_smoke.sh [--skip-normalize]
+bash alz/runners/main/rerun_decomposition_chain.sh
 ```
 
 Verification harness (`alz/decomposition_mea/verify_decomposition.py`) checks mass identity, spine coverage, per-cluster vs bulk MEA agreement, and pair coverage.
@@ -112,11 +112,12 @@ All commands run from the repo root.
 ### Bulk pipeline
 
 ```bash
-pixi run live   # ingest → normalize → enrich → attribute → recover
+pixi run live   # ingest → normalize → enrich → attribute → mechanism → recover
 pixi run dual   # males-only (primary) + full-cohort (sensitivity)
+pixi run all    # full end-to-end build (kinase + decomposition + Incytr + human + viewer), resumable
 ```
 
-Individual stages: `pixi run {ingest,normalize,enrich,attribute,recover}`. Sample filtering is controlled by `analysis_mode` in `conf/base/parameters.yml` (default `males_only`); set `KEDRO_ENV=full_cohort` for the sensitivity overlay.
+Individual stages: `pixi run {ingest,normalize,enrich,attribute,mechanism,recover}`. `mechanism` runs after `attribute` — it merges mechanism annotations into `unified_attribution.csv`. Sample filtering is controlled by `analysis_mode` in `conf/base/parameters.yml` (default `males_only`); set `KEDRO_ENV=full_cohort` for the sensitivity overlay. `pixi run all` (the resumable `run_all.sh` superset) auto-downloads the WMB/SEA-AD references if missing; pass `--skip-atlas` to assume they are on disk.
 
 ### Supporting prerequisites
 
@@ -131,7 +132,7 @@ pixi run snrna        # Song within-cohort snRNA-seq pseudobulk + concordance
 ### Per-cluster + pair-mode Incytr
 
 ```bash
-bash alz/runners/main/run_pivot_smoke.sh     # per-cluster decomposition + verification (Levy-t5 spine)
+bash alz/runners/main/rerun_decomposition_chain.sh   # per-cluster decomposition + verification (Levy-t5 spine)
 bash alz/runners/main/run_pair_mode_pipeline.sh   # full pair-mode pipeline (inputs → Incytr → viewer reshape)
 bash alz/incytr_pair/run_pair_mode.sh        # Incytr invocation only (9 contrasts)
 ```

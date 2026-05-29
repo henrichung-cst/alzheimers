@@ -3,8 +3,7 @@
 # Prerequisite: 170_gex_celltypes_00.h5ad must exist
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-cd "$SCRIPT_DIR/.."
+cd "$(git rev-parse --show-toplevel)"
 
 H5AD="data/datasets/song/transcriptomics/170_gex_celltypes_00.h5ad"
 if [[ ! -f "$H5AD" ]]; then
@@ -14,5 +13,5 @@ if [[ ! -f "$H5AD" ]]; then
 fi
 
 echo "=== Song snRNA Integration ==="
-python alz/reference/snrna_integration.py --run
+pixi run python alz/reference/snrna_integration.py --run
 echo "=== Done ==="
