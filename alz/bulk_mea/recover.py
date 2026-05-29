@@ -20,6 +20,7 @@ Outputs (all under outputs/reports/attribution_recovery/):
 """
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -399,25 +400,7 @@ def print_summary():
     print()
 
 
-def _load_params():
-    """Load parameters from conf/base/parameters.yml with optional KEDRO_ENV overlay."""
-    import yaml
-    project_root = Path(__file__).resolve().parent.parent.parent
-    params_path = project_root / "conf" / "base" / "parameters.yml"
-    with open(params_path) as f:
-        params = yaml.safe_load(f)
-    env = os.environ.get("KEDRO_ENV")
-    if env:
-        overlay_path = project_root / "conf" / env / "parameters.yml"
-        if overlay_path.exists():
-            with open(overlay_path) as f:
-                params.update(yaml.safe_load(f))
-    return params
-
-
 def main():
-    import json
-
     parser = argparse.ArgumentParser(
         description="Attribution Recovery: Kinase and cell-type hypothesis tables",
     )

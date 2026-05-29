@@ -28,7 +28,6 @@ if _PROJECT_ROOT not in sys.path:
 
 import numpy as np
 import pandas as pd
-import yaml
 from scipy import stats as sp_stats
 from statsmodels.stats.multitest import multipletests
 
@@ -55,16 +54,6 @@ def _ensure_output_dir():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
-def load_sample_mapping():
-    """Load sample mapping from data ingestion stage."""
-    path = os.path.join(DATA_INGEST_DIR, "sample_mapping.csv")
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"Sample mapping not found at {path}. Run data_ingest.py --mapping first."
-        )
-    return pd.read_csv(path)
-
-
 def load_sample_exclusions():
     """Load excluded mouse IDs from outlier analysis."""
     path = os.path.join(DATA_INGEST_DIR, "sample_exclusions.csv")
@@ -88,28 +77,6 @@ def _filter_samples(mapping, analysis_mode=None):
     print(f"  Sample filter ({analysis_mode}): {n0} -> {n_final} "
           f"({n_excl} outliers excluded, {n0 - n_excl - n_final} sex-filtered)")
     return filt
-
-
-def _resolve_track(track):
-    """Look up a phospho-track config by name; return the dict from config."""
-    if isinstance(track, dict):
-        return track
-    if track not in config.PHOSPHO_TRACKS:
-        raise ValueError(
-            f"Unknown phospho track {track!r}; "
-            f"valid: {list(config.PHOSPHO_TRACKS)}"
-        )
-    return config.PHOSPHO_TRACKS[track]
-
-
-def _track_output(filename, track_cfg):
-    """Compose an output path with the track's suffix appended before the extension."""
-    cfg = _resolve_track(track_cfg)
-    suffix = cfg["output_suffix"]
-    if not suffix:
-        return os.path.join(OUTPUT_DIR, filename)
-    base, ext = os.path.splitext(filename)
-    return os.path.join(OUTPUT_DIR, f"{base}{suffix}{ext}")
 
 
 def _bh_fdr(pvals):
@@ -248,7 +215,7 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
     from kinase_library import RankedPhosData, create_kin_sub_sets
     from kinase_library.utils._global_vars import kl_method_comp_direction_dict
 
-    track_cfg = _resolve_track(track)
+    track_cfg = config.resolve_track(track)
     enrichment_results = {}
     outlier_records = []
     shift_records = []
@@ -372,25 +339,27 @@ def _prepare_raw_ols(mapping, bio_cols, raw_df):
 # CLI
 # ===========================================================================
 
-def _load_params():
-    """Load parameters from conf/base/parameters.yml with optional KEDRO_ENV overlay."""
-    project_root = Path(__file__).resolve().parent.parent.parent
-    params_path = project_root / "conf" / "base" / "parameters.yml"
-    with open(params_path) as f:
-        params = yaml.safe_load(f)
-    env = os.environ.get("KEDRO_ENV")
-    if env:
-        overlay_path = project_root / "conf" / env / "parameters.yml"
-        if overlay_path.exists():
-            with open(overlay_path) as f:
-                params.update(yaml.safe_load(f))
-    return params
+def _contrast_stats(Y, betas, xtxinv, nobs, c_vec, X_np, n_params):
+    """Per-contrast LFC / two-sided p / BH-FDR for one OLS fit.
+
+    Shared by the stoichiometry and raw-phospho passes. ``xtxinv`` carries each
+    site's own design covariance (global for complete-data sites, per-site for
+    partial), so the contrast SE is correct in both regimes.
+    """
+    lfc = betas @ c_vec
+    var_c = np.einsum("p,ipq,q->i", c_vec, xtxinv, c_vec)
+    residuals = Y - (X_np @ betas.T).T
+    dof = nobs - n_params
+    dof[dof <= 0] = 1
+    sigma2 = np.nansum(residuals ** 2, axis=1) / dof
+    se_contrast = np.sqrt(var_c * sigma2)
+    t_contrast = lfc / se_contrast
+    p_contrast = 2 * sp_stats.t.sf(np.abs(t_contrast), df=dof)
+    return lfc, p_contrast, _bh_fdr(p_contrast)
 
 
 def _fit_and_contrast(stoich_df, raw_df, mapping, analysis_mode, contrast_coefs):
     """Build design matrix, run OLS on stoich + raw, compute per-contrast LFC/SE/FDR."""
-    from scipy import stats as sp_stats
-
     bio_cols = mapping["column_name"].tolist()
     X = _build_design_matrix(mapping, bio_cols, analysis_mode=analysis_mode)
     X_np = X.values
@@ -409,33 +378,17 @@ def _fit_and_contrast(stoich_df, raw_df, mapping, analysis_mode, contrast_coefs)
     betas_r, pvals_r, nobs_r, xtxinv_r = _run_ols_all_sites(Y_raw, X_np)
 
     print("  --- Computing per-contrast LFC/SE/FDR ---")
+    n_params = len(param_names)
     results_by_contrast = {}
     for contrast_name, coefs in contrast_coefs.items():
-        c_vec = np.zeros(len(param_names))
+        c_vec = np.zeros(n_params)
         for param, weight in coefs.items():
             c_vec[param_names.index(param)] = weight
 
-        lfc_s = betas_s @ c_vec
-        var_c_s = np.einsum("p,ipq,q->i", c_vec, xtxinv_s, c_vec)
-        residuals_s = Y_stoich - (X_np @ betas_s.T).T
-        dof_s = nobs_s - len(param_names)
-        dof_s[dof_s <= 0] = 1
-        sigma2_s = np.nansum(residuals_s ** 2, axis=1) / dof_s
-        se_contrast_s = np.sqrt(var_c_s * sigma2_s)
-        t_contrast_s = lfc_s / se_contrast_s
-        p_contrast_s = 2 * sp_stats.t.sf(np.abs(t_contrast_s), df=dof_s)
-        fdr_s = _bh_fdr(p_contrast_s)
-
-        lfc_r = betas_r @ c_vec
-        var_c_r = np.einsum("p,ipq,q->i", c_vec, xtxinv_r, c_vec)
-        residuals_r = Y_raw - (X_np @ betas_r.T).T
-        dof_r = nobs_r - len(param_names)
-        dof_r[dof_r <= 0] = 1
-        sigma2_r = np.nansum(residuals_r ** 2, axis=1) / dof_r
-        se_contrast_r = np.sqrt(var_c_r * sigma2_r)
-        t_contrast_r = lfc_r / se_contrast_r
-        p_contrast_r = 2 * sp_stats.t.sf(np.abs(t_contrast_r), df=dof_r)
-        fdr_r = _bh_fdr(p_contrast_r)
+        lfc_s, p_contrast_s, fdr_s = _contrast_stats(
+            Y_stoich, betas_s, xtxinv_s, nobs_s, c_vec, X_np, n_params)
+        lfc_r, p_contrast_r, fdr_r = _contrast_stats(
+            Y_raw, betas_r, xtxinv_r, nobs_r, c_vec, X_np, n_params)
 
         results_by_contrast[contrast_name] = {
             "stoich_lfc": lfc_s, "stoich_pval": p_contrast_s, "stoich_fdr": fdr_s,
@@ -469,20 +422,20 @@ def _fit_and_contrast(stoich_df, raw_df, mapping, analysis_mode, contrast_coefs)
 def main():
     """Run OLS + MEA enrichment directly for both tracks."""
     _ensure_output_dir()
-    params = _load_params()
+    params = config.load_params()
     analysis_mode = params.get("analysis_mode", config.ANALYSIS_MODE)
 
     print(f"\n=== Stage 2: OLS + MEA Kinase Enrichment ({analysis_mode}) ===\n")
 
-    mapping_full = load_sample_mapping()
+    mapping_full = config.load_sample_mapping()
     filtered_mapping = _filter_samples(mapping_full, analysis_mode=analysis_mode)
 
     for track_name in config.PHOSPHO_TRACKS:
         track_cfg = config.PHOSPHO_TRACKS[track_name]
         print(f"\n--- Track: {track_name} ({track_cfg['label']}) ---")
 
-        stoich_path = _track_output("stoichiometry_matrix.csv", track_cfg)
-        raw_path = _track_output("raw_phospho_normalized.csv", track_cfg)
+        stoich_path = config.track_output("stoichiometry_matrix.csv", track_cfg)
+        raw_path = config.track_output("raw_phospho_normalized.csv", track_cfg)
 
         if not os.path.exists(stoich_path):
             print(f"  {stoich_path} not found; skipping track.")
@@ -506,16 +459,16 @@ def main():
             track=track_name,
         )
 
-        site_ols.to_csv(_track_output("site_level_ols.csv", track_cfg), index=False)
+        site_ols.to_csv(config.track_output("site_level_ols.csv", track_cfg), index=False)
         if mea_df is not None and len(mea_df) > 0:
             mea_df.to_csv(
-                _track_output("mea_stoichiometry.csv", track_cfg), index=False)
+                config.track_output("mea_stoichiometry.csv", track_cfg), index=False)
         shift_df.to_csv(
-            _track_output("mea_global_shift.csv", track_cfg), index=False)
+            config.track_output("mea_global_shift.csv", track_cfg), index=False)
         winsorized_df.to_csv(
-            _track_output("winsorized_sites.csv", track_cfg), index=False)
+            config.track_output("winsorized_sites.csv", track_cfg), index=False)
         substrate_df.to_csv(
-            _track_output("mea_substrate_sets.csv", track_cfg), index=False)
+            config.track_output("mea_substrate_sets.csv", track_cfg), index=False)
 
         print(f"  [{track_name}] Saved site_level_ols, mea_stoichiometry, "
               "mea_global_shift, winsorized_sites, mea_substrate_sets")

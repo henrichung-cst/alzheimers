@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Print a cached-results summary of the kinase attribution pipeline.
 
-Reads outputs already produced by the four modular stages
-(``normalize`, `enrich`, `attribute`,
-`mechanism`). Does not run any analysis.
+Reads outputs already produced by the modular stages
+(`normalize` → `enrich` → `attribute` → `mechanism` → `recover`).
+Does not run any analysis.
 """
 
 import argparse

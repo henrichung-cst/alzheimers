@@ -34,7 +34,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import yaml
 
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
@@ -148,7 +147,6 @@ def _map_kinases_to_genes(sig, k2g_df):
     kinase_to_gene = dict(zip(k2g_df["kinase_abbreviation"], k2g_df["gene_symbol"]))
     sig["gene_symbol"] = sig["kinase"].map(lambda k: kinase_to_gene.get(k, k))
     return sig
-
 
 
 def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
@@ -305,26 +303,11 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
 # CLI
 # ===========================================================================
 
-def _load_params():
-    """Load parameters from conf/base/parameters.yml with optional KEDRO_ENV overlay."""
-    project_root = Path(__file__).resolve().parent.parent.parent
-    params_path = project_root / "conf" / "base" / "parameters.yml"
-    with open(params_path) as f:
-        params = yaml.safe_load(f)
-    env = os.environ.get("KEDRO_ENV")
-    if env:
-        overlay_path = project_root / "conf" / env / "parameters.yml"
-        if overlay_path.exists():
-            with open(overlay_path) as f:
-                params.update(yaml.safe_load(f))
-    return params
-
-
 def main():
     """Run unified cell-type attribution directly (no Kedro)."""
     print("\n=== Stage 3: Unified Cell-Type Attribution ===\n")
 
-    params = _load_params()
+    params = config.load_params()
     sea_ad_paths = params["sea_ad_paths"]
     wmb_expression_path = params["wmb_expression_path"]
     song_specificity_path = params["song_specificity_path"]
@@ -346,7 +329,7 @@ def main():
             mea_by_track.append((track_cfg, pd.read_csv(path)))
 
     # Load kinase-to-gene mapping
-    k2g_path = "data/datasets/song/analysis_cache/kinase_to_gene_mapping.csv"
+    k2g_path = config.MAPPING_CACHE_FILE
     if not os.path.exists(k2g_path):
         raise FileNotFoundError(
             f"kinase_to_gene_mapping.csv not found at {k2g_path}")

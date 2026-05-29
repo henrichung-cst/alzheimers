@@ -50,7 +50,7 @@ sys.path.insert(0, os.path.join(HERE, "cross_reference"))
 
 from alz.shared import config  # noqa: E402
 import config_integration as icfg  # noqa: E402
-import normalize as kattr  # noqa: E402  (alz.bulk_mea.normalize — Stage 1 helpers + load_sample_mapping)
+import normalize as kattr  # noqa: E402  (alz.bulk_mea.normalize — Stage 1 phospho-track + IRS helpers)
 try:
     from human_celltype_attribution import build_celltype_specificity_payload  # noqa: E402
     _HAS_HUMAN_CELLTYPE = True
@@ -112,7 +112,7 @@ RECEIVER_TO_TISSUE = {r: t for t, rs in TISSUE_CATEGORIES.items() for r in rs}
 
 # Per-track audit tables: identical schema, separate files per analysis track.
 # ST (serine/threonine) is the default suffix (none); pY tables carry the
-# `_pY` suffix produced by `kinase_attribution._track_output`.
+# `_pY` suffix produced by `config.track_output`.
 _PER_TRACK_AUDIT = [
     ("raw_phospho_normalized", "Raw phospho normalized"),
     ("stoichiometry_matrix", "Stoichiometry matrix"),
@@ -338,7 +338,7 @@ def ensure_measurement_trace_sources() -> dict:
         shutil.rmtree(MEASUREMENT_TRACE_DIR)
 
     os.makedirs(MEASUREMENT_TRACE_DIR, exist_ok=True)
-    mapping = kattr.load_sample_mapping()
+    mapping = config.load_sample_mapping()
     sample_to_plex = dict(zip(mapping["column_name"], mapping["plex"]))
     bio_cols = mapping["column_name"].tolist()
 
@@ -376,7 +376,7 @@ def ensure_measurement_trace_sources() -> dict:
     # measurement-trace CSVs into a track subdir. ST keeps the legacy unsuffixed
     # filenames for backward compatibility; pY lands under measurement_trace/py/.
     for track_key, residue_label in (("st", "ST"), ("py", "Y")):
-        track_cfg = kattr._resolve_track(track_key)
+        track_cfg = config.resolve_track(track_key)
         try:
             sq = kattr._load_phospho_track(track_cfg)
         except FileNotFoundError:

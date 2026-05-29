@@ -62,16 +62,6 @@ def _ensure_output_dir():
     os.makedirs(os.path.join(OUTPUT_DIR, "pca_plots"), exist_ok=True)
 
 
-def load_sample_mapping():
-    """Load sample mapping from data ingestion stage."""
-    path = os.path.join(DATA_INGEST_DIR, "sample_mapping.csv")
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"Sample mapping not found at {path}. Run data_ingest.py --mapping first."
-        )
-    return pd.read_csv(path)
-
-
 def _proteome_ref_col(plex):
     return f"plex{plex}_{REF_CHANNEL}_sn_mean"
 
@@ -88,21 +78,9 @@ def _proteome_to_phospho_col(col):
     return f"p{plex_num}_{rest}_sn_sum"
 
 
-def _resolve_track(track):
-    """Look up a phospho-track config by name; return the dict from config."""
-    if isinstance(track, dict):
-        return track
-    if track not in config.PHOSPHO_TRACKS:
-        raise ValueError(
-            f"Unknown phospho track {track!r}; "
-            f"valid: {list(config.PHOSPHO_TRACKS)}"
-        )
-    return config.PHOSPHO_TRACKS[track]
-
-
 def _load_phospho_track(track_cfg):
     """Load a phospho-track xlsx and normalize it to the canonical IMAC schema."""
-    cfg = _resolve_track(track_cfg)
+    cfg = config.resolve_track(track_cfg)
     path = cfg["input_file"]
     if not os.path.exists(path):
         raise FileNotFoundError(
@@ -119,7 +97,7 @@ def _postprocess_phospho_df(df, track_cfg):
     the rename / site-id synthesis / residue-purity check that the legacy
     script bundled with the disk read.
     """
-    cfg = _resolve_track(track_cfg)
+    cfg = config.resolve_track(track_cfg)
     df = df.copy()
 
     # Rename sample columns: plex{N}_* → p{N}_* (only when prefix differs).
@@ -165,16 +143,6 @@ def _postprocess_phospho_df(df, track_cfg):
             print(f"  Track {cfg['name']} motif residue purity: "
                   f"{purity*100:.1f}% {cfg['residue']}")
     return df
-
-
-def _track_output(filename, track_cfg):
-    """Compose an output path with the track's suffix appended before the extension."""
-    cfg = _resolve_track(track_cfg)
-    suffix = cfg["output_suffix"]
-    if not suffix:
-        return os.path.join(OUTPUT_DIR, filename)
-    base, ext = os.path.splitext(filename)
-    return os.path.join(OUTPUT_DIR, f"{base}{suffix}{ext}")
 
 
 def _irs_normalize(quant_df, ref_cols, sample_to_plex):
@@ -268,7 +236,7 @@ def step_normalize(track, mapping, tp, sq):
     DataFrames into this function.
     """
     _ensure_output_dir()
-    track_cfg = _resolve_track(track)
+    track_cfg = config.resolve_track(track)
     print(f"\n=== Stage 1: Cross-Plex Normalization + Stoichiometry "
           f"(track={track_cfg['name']}/{track_cfg['label']}) ===\n")
 
@@ -381,7 +349,6 @@ def step_normalize(track, mapping, tp, sq):
             gene_to_tp_idx.setdefault(g, []).append(idx)
 
     n_sites = len(sq)
-    n_matched = 0
     ph_to_tp_col = {}
     for tp_col in bio_cols:
         ph_col = _proteome_to_phospho_col(tp_col)
@@ -525,7 +492,7 @@ def step_normalize(track, mapping, tp, sq):
 def main():
     """Run IRS normalization + stoichiometry for both tracks directly (no Kedro)."""
     print("\n=== Stage 1: Cross-Plex Normalization + Stoichiometry ===\n")
-    mapping = load_sample_mapping()
+    mapping = config.load_sample_mapping()
 
     tp_path = TOTAL_PROTEOME_FILE
     if not os.path.exists(tp_path):
@@ -546,17 +513,15 @@ def main():
             step_normalize(track_cfg, mapping, tp, sq)
 
         stoich_df.to_csv(
-            _track_output("stoichiometry_matrix.csv", track_cfg), index=False)
+            config.track_output("stoichiometry_matrix.csv", track_cfg), index=False)
         raw_phospho_df.to_csv(
-            _track_output("raw_phospho_normalized.csv", track_cfg), index=False)
+            config.track_output("raw_phospho_normalized.csv", track_cfg), index=False)
         total_proteome_df.to_csv(
-            _track_output("total_proteome_normalized.csv", track_cfg), index=False)
+            config.track_output("total_proteome_normalized.csv", track_cfg), index=False)
         qc_df.to_csv(
-            _track_output("stoichiometry_qc.csv", track_cfg), index=False)
+            config.track_output("stoichiometry_qc.csv", track_cfg), index=False)
 
-        summary_path = _track_output("normalization_summary.csv", track_cfg)
-        # normalization_summary is JSON
-        summary_path = summary_path.replace(".csv", ".json")
+        summary_path = config.track_output("normalization_summary.json", track_cfg)
         with open(summary_path, "w") as f:
             json.dump(norm_summary, f, indent=2)
 

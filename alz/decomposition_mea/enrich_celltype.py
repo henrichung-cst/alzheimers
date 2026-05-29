@@ -43,7 +43,6 @@ from alz.bulk_mea.enrich import (  # noqa: E402
     _filter_samples,
     _run_mea,
     _run_ols_all_sites,
-    _resolve_track,
 )
 from scipy import stats as sp_stats  # noqa: E402
 
@@ -312,7 +311,7 @@ def main():
                     help="override config.ANALYSIS_MODE (males_only / full_cohort)")
     args = ap.parse_args()
 
-    track_cfg = _resolve_track(args.track)
+    track_cfg = config.resolve_track(args.track)
     analysis_mode = args.analysis_mode or config.ANALYSIS_MODE
     out_dir = _spine_dir(args.spine)
     suffix = track_cfg["output_suffix"]

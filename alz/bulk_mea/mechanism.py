@@ -35,10 +35,7 @@ from alz.bulk_mea.enrich import (
     CONTRAST_COEFS,
     _filter_samples,
     _prepare_raw_ols,
-    _resolve_track,
     _run_mea,
-    _track_output,
-    load_sample_mapping,
 )
 
 OUTPUT_DIR = config.KINASE_ATTRIBUTION_OUTPUT_DIR
@@ -121,13 +118,13 @@ def step_mechanism_annotation():
     _ensure_output_dir()
     print(f"\n=== Mechanism Annotation ({config.ANALYSIS_MODE}) ===\n")
 
-    mapping_full = load_sample_mapping()
+    mapping_full = config.load_sample_mapping()
     mapping = _filter_samples(mapping_full)
 
-    tracks = [_resolve_track(t) for t in ("st", "py")]
+    tracks = [config.resolve_track(t) for t in ("st", "py")]
     raw_mea_by_track = {}
     for track_cfg in tracks:
-        raw_path = _track_output("raw_phospho_normalized.csv", track_cfg)
+        raw_path = config.track_output("raw_phospho_normalized.csv", track_cfg)
         if not os.path.exists(raw_path):
             print(f"  [{track_cfg['name']}] {raw_path} missing; skip raw MEA "
                   "(run --normalize for this track first).")
@@ -137,7 +134,7 @@ def step_mechanism_annotation():
         if mea_raw is None:
             print(f"  [{track_cfg['name']}] raw normalized file empty; skip.")
             continue
-        mea_raw_path = _track_output("mea_raw_phospho.csv", track_cfg)
+        mea_raw_path = config.track_output("mea_raw_phospho.csv", track_cfg)
         mea_raw.to_csv(mea_raw_path, index=False)
         print(f"  Saved {mea_raw_path} ({len(mea_raw)} rows)")
         raw_mea_by_track[track_cfg["name"]] = mea_raw
@@ -147,7 +144,7 @@ def step_mechanism_annotation():
         return
 
     mea_raw = pd.concat(list(raw_mea_by_track.values()), ignore_index=True)
-    stoich_paths = [_track_output("mea_stoichiometry.csv", t) for t in tracks]
+    stoich_paths = [config.track_output("mea_stoichiometry.csv", t) for t in tracks]
     stoich_paths = [p for p in stoich_paths if os.path.exists(p)]
     if not stoich_paths:
         raise FileNotFoundError("No mea_stoichiometry*.csv found. Run --enrich first.")

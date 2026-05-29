@@ -294,6 +294,74 @@ KINASE_ATTRIBUTION_OUTPUT_DIR = os.path.join("outputs", "reports", "kinase_attri
 ATTRIBUTION_RECOVERY_OUTPUT_DIR = os.path.join("outputs", "reports", "attribution_recovery")
 SUPPLEMENTARY_OUTPUT_DIR = os.path.join("outputs", "reports", "supplementary")
 
+
+# ---------------------------------------------------------------------------
+# Shared bulk-MEA helpers (centralized; formerly duplicated across
+# normalize.py / enrich.py / attribute.py / recover.py).
+# ---------------------------------------------------------------------------
+
+def load_params() -> dict:
+    """Load conf/base/parameters.yml with optional KEDRO_ENV overlay.
+
+    Same path/overlay logic as `_load_analysis_mode`, but returns the whole
+    parameter dict. Used by the bulk-MEA stage CLIs.
+    """
+    from pathlib import Path
+
+    import yaml
+
+    base = Path(REPO_ROOT) / "conf" / "base" / "parameters.yml"
+    with open(base) as f:
+        params = yaml.safe_load(f) or {}
+    env = os.environ.get("KEDRO_ENV")
+    if env:
+        overlay_path = Path(REPO_ROOT) / "conf" / env / "parameters.yml"
+        if overlay_path.exists():
+            with open(overlay_path) as f:
+                params.update(yaml.safe_load(f) or {})
+    return params
+
+
+def resolve_track(track):
+    """Look up a phospho-track config by name; return the dict from PHOSPHO_TRACKS.
+
+    Accepts either a track name (``"st"``/``"py"``) or an already-resolved
+    track-config dict (returned unchanged).
+    """
+    if isinstance(track, dict):
+        return track
+    if track not in PHOSPHO_TRACKS:
+        raise ValueError(
+            f"Unknown phospho track {track!r}; valid: {list(PHOSPHO_TRACKS)}"
+        )
+    return PHOSPHO_TRACKS[track]
+
+
+def track_output(filename, track_cfg):
+    """Compose a KINASE_ATTRIBUTION output path with the track suffix appended.
+
+    The suffix goes before the extension, e.g.
+    ``stoichiometry_matrix.csv`` + track ``py`` → ``stoichiometry_matrix_pY.csv``.
+    """
+    cfg = resolve_track(track_cfg)
+    suffix = cfg["output_suffix"]
+    if not suffix:
+        return os.path.join(KINASE_ATTRIBUTION_OUTPUT_DIR, filename)
+    base, ext = os.path.splitext(filename)
+    return os.path.join(KINASE_ATTRIBUTION_OUTPUT_DIR, f"{base}{suffix}{ext}")
+
+
+def load_sample_mapping():
+    """Load the sample mapping produced by the data-ingest stage."""
+    import pandas as pd
+
+    path = os.path.join(DATA_INGEST_OUTPUT_DIR, "sample_mapping.csv")
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Sample mapping not found at {path}. Run song.py --mapping first."
+        )
+    return pd.read_csv(path)
+
 ALLEN_ABC_CACHE_DIR = os.path.join(EXTERNAL_DATA_DIR, "allen_abc")
 SEA_AD_DIR = os.path.join(EXTERNAL_DATA_DIR, "sea_ad")
 SEA_AD_EFFECT_SIZES = {
