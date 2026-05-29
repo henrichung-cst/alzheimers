@@ -73,10 +73,11 @@ Library modules with no `main()` become node-internal calls, not nodes:
 
 These are investigations / reporters / gates with no place in the production DAG:
 
-- `cross_reference/ctrl_outlier_audit.py`, `..._kinases.py`, `..._report_figs.py`
-  — human CTRL outlier investigation (untracked; tied to
-  `docs/plans/human_ctrl_outlier_audit_*`). Figures + audit JSON. **One-off.**
-- `cross_reference/human_group_mea.py` — clean-CTRL sensitivity. **One-off.**
+- `ctrl_outlier_audit/ctrl_outlier_audit.py`, `..._kinases.py`, `..._report_figs.py`,
+  `ctrl_outlier_suspect_lfc_table.py`, `human_group_mea_reanalysis.py`
+  — human CTRL outlier investigation (moved out of `cross_reference/` 2026-05-29; tied to
+  `docs/plans/human_ctrl_outlier_audit_*`). Figures + audit JSON + clean-baseline group MEA.
+  **One-off.** (`human_group_mea.py` archived 2026-05-29 — superseded by the reanalysis twin.)
 - `cross_reference/seaad_human_agreement.py` — human SEA-AD agreement. **One-off.**
   (decided 2026-05-26)
 - `cross_reference/human_celltype_attribution.py` — human celltype specificity.

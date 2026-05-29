@@ -1,5 +1,8 @@
 # alz/cross_reference/ — Mode 4: cross-cohort / cross-reference evidence.
 #
-# Holds the modules that compare per-cohort kinase MEA results against
-# external transcriptomic references (SEA-AD MTG, Allen HBCA, WMB-10Xv3,
-# Song snRNA-seq within-cohort) to attribute findings to cell types.
+# Compares per-cohort kinase MEA results against external transcriptomic
+# references (SEA-AD MTG, Allen HBCA, WMB-10Xv3, Song snRNA-seq) to attribute
+# or sanity-check findings at cell-type resolution. Three modules: evidence.py
+# (mouse Stage 3 loaders), human_celltype_attribution.py, seaad_human_agreement.py.
+#
+# The human CTRL-outlier investigation moved to alz/ctrl_outlier_audit/ (2026-05-29).

@@ -6,14 +6,14 @@ the all-control baseline. This script re-runs the human group-level kinase MEA u
 perturbation, as four explicit contrasts on the same 17 samples:
 
   suspect_vs_cleanCTRL        SUSPECT (3)        vs CLEAN (4)   -- analysis A (comparison)
-  AD_vs_cleanCTRL             AD (10)            vs CLEAN (4)   -- analysis A (= production)
+  AD_vs_cleanCTRL             AD (10)            vs CLEAN (4)   -- analysis A (canonical baseline)
   ADwithSuspect_vs_cleanCTRL  AD u SUSPECT (13)  vs CLEAN (4)   -- analysis B (merged)
   AD_vs_allCTRL               AD (10)            vs ALLCTRL (7) -- analysis C (pre-audit ref)
 
 Analysis C resurrects the pre-audit all-7-control baseline ONLY as a labeled hard-line
 reference -- it is not a live fallback and does not reopen the contaminated baseline.
 
-Method is identical to production `human_group_mea.py`: per contrast, per track (st/py),
+Method: per contrast, per track (st/py),
 ranking metric = NaN-aware per-site LFC mean(A) - mean(B), fed to the same MEA helper
 (`alz.bulk_mea.enrich._run_mea`: median-center -> winsorize -> GSEA). Sign convention is
 pipeline-wide `+ = up in disease/suspect direction`: +NES = higher kinase activity in
@@ -23,9 +23,8 @@ Outputs one CSV per contrast (both tracks) + MANIFEST.md under
 outputs/reports/kinase_attribution_human/ctrl_audit/reanalysis_mea/. The filename token
 matches the in-file `contrast` value verbatim so they cannot drift.
 
-`mea_AD_vs_cleanCTRL.csv` is the investigation-scoped twin of the production
-`human_group_mea_clean_ctrl.csv`, produced by the same code path (regression-guarded in
-verification). The production file remains canonical.
+`mea_AD_vs_cleanCTRL.csv` (AD vs clean CTRL-01/02/03/04) is the canonical clean-baseline
+human group MEA; the other three contrasts are labeled sensitivity references around it.
 """
 from __future__ import annotations
 
@@ -38,7 +37,10 @@ from alz.shared import config
 from alz.bulk_mea import enrich as kinase_enrich
 from alz.ingest.mukesh import SAMPLE_MAPPING_CSV
 from alz.ingest.mukesh_perdonor import _load_track_matrix, PERDONOR_DIR
-from alz.cross_reference.human_group_mea import AD_LIKE_CTRL
+
+# Audit verdict (2026-05-25): these three controls carry a genuine AD-like phospho
+# signature; drop them from the clean-control baseline.
+AD_LIKE_CTRL = {"CTRL-07", "CTRL-08", "CTRL-10"}
 
 OUT_DIR = Path("outputs/reports/kinase_attribution_human/ctrl_audit/reanalysis_mea")
 LFC_KEY = "stoich_lfc"
@@ -47,7 +49,7 @@ TRACKS = ("st", "py")
 # (contrast label, group-A set, group-B set, analysis bucket). Label == filename token.
 CONTRASTS = [
     ("suspect_vs_cleanCTRL", "SUSPECT", "CLEAN", "A (comparison)"),
-    ("AD_vs_cleanCTRL", "AD", "CLEAN", "A (comparison; = production)"),
+    ("AD_vs_cleanCTRL", "AD", "CLEAN", "A (canonical clean baseline)"),
     ("ADwithSuspect_vs_cleanCTRL", "ADSUSP", "CLEAN", "B (merged)"),
     ("AD_vs_allCTRL", "AD", "ALLCTRL", "C (pre-audit reference)"),
 ]
@@ -176,7 +178,7 @@ def write_manifest(sets: dict[str, list[str]], summaries: dict[str, dict]):
         "# Suspect-control kinase MEA reanalysis — MANIFEST",
         "",
         f"**Generated:** {today}  ",
-        "**Generator:** `alz/cross_reference/human_group_mea_reanalysis.py` "
+        "**Generator:** `alz/ctrl_outlier_audit/human_group_mea_reanalysis.py` "
         "(`pixi run mea-suspect-reanalysis`)  ",
         "**Substrate:** human NBB phosphosite log2 stoichiometry matrices "
         "(`stoichiometry_matrix.csv` = st, `stoichiometry_matrix_pY.csv` = py)  ",

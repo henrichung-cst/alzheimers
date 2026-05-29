@@ -21,3 +21,9 @@ kinase signal against a transcriptomic atlas*. The mouse-side functions
 (`cluster_to_seaad_supertype.csv`, etc.), pathway-strata mappings, and
 the "weighted mean across many-to-many supertype links" idiom. Keeping
 them in one module makes that vocabulary easy to find and re-use.
+
+## See also
+
+The human CTRL-outlier investigation (CTRL-07/08/10 contamination audit, clean-baseline
+group MEA reanalysis) lived here until 2026-05-29; it now has its own package,
+[`alz/ctrl_outlier_audit/`](../ctrl_outlier_audit/README.md).

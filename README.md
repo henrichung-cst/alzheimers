@@ -179,6 +179,7 @@ alzheimers/
 │   ├── decomposition_mea/          # Mode 2 — Levy-t5 per-cluster proportional decomposition + per-cluster MEA
 │   ├── incytr_pair/                # Mode 3 — pair-mode Incytr driver + receiver-cache reshaper
 │   ├── cross_reference/            # Mode 4 — SEA-AD/WMB/Song evidence loaders, human cell-type attribution, human↔SEA-AD agreement
+│   ├── ctrl_outlier_audit/         # Human CTRL-07/08/10 AD-like contamination audit + clean-baseline group MEA reanalysis
 │   ├── integration/                # Cross-mode glue: cluster spine, omics/transcript trace, bridge builders
 │   ├── pipelines/                  # Kedro pipelines for Argo orchestration (P1 ingest live; registry in pipeline_registry.py + settings.py)
 │   ├── viewer/, build_unified_viewer.py     # Mouse/human unified HTML viewer

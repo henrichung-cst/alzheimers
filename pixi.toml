@@ -32,7 +32,7 @@ dual = "bash alz/runners/main/run_dual_analysis.sh"
 human-ingest = "python alz/ingest/mukesh.py --reshape"
 human-perdonor = "python alz/ingest/mukesh_perdonor.py --track both"
 human-seaad = "python alz/cross_reference/seaad_human_agreement.py"
-mea-suspect-reanalysis = "python -m alz.cross_reference.human_group_mea_reanalysis"
+mea-suspect-reanalysis = "python -m alz.ctrl_outlier_audit.human_group_mea_reanalysis"
 human = { depends-on = ["human-ingest", "human-perdonor", "human-seaad"] }
 all = "bash alz/runners/main/run_all.sh"
 atlas = "python alz/reference/atlas.py --run"
