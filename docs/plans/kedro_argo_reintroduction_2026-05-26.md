@@ -67,7 +67,10 @@ Derived from a full data-flow contract map (agent recon, 2026-05-26).
 | P6 | **viewer** (terminal) | `build_unified_viewer.py` | `index.html` payload |
 
 Library modules with no `main()` become node-internal calls, not nodes:
-`cross_reference/evidence.py`, `decomposition_mea/{cohort_concordance,confidence,factorial_ols,load_deconvoluted,snrna_concordance}.py`.
+`cross_reference/evidence.py`. (The `decomposition_mea` WMB-class statistical-deconvolution
+cluster — `cohort_concordance`, `confidence`, `factorial_ols`, `load_deconvoluted`,
+`snrna_concordance`, `paths`, `per_animal_extension`, `cohort_concordance_audit` — was
+deleted 2026-05-29 as a closed path; nothing to factor.)
 
 ### ONE-OFF — stay flat scripts, NOT Kedro
 

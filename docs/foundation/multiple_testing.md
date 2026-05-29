@@ -25,8 +25,6 @@ between similar-sized universes.
 | Bulk MEA (raw phospho, mechanism) | `alz/pipelines/mechanism/` (helpers in `alz/kinase_mechanism.py`) | ~78 kinases × 9 contrasts | BH (gseapy internal) | FDR < 0.25 |
 | Site-level OLS | `alz/pipelines/enrich/` (helpers in `alz/kinase_enrich.py`) | ~7,000 sites × 9 contrasts | BH per-contrast | FDR < 0.25 |
 | snRNA concordance | `alz/snrna_integration.py` | ~385 kinase genes × (cell_type × contrast) | BH per (cell_type, contrast), restricted to kinase universe | FDR < 0.25 (informational; cohort underpowered, see below) |
-| Cohort concordance (deconvolution) | `alz/deconvolution/cohort_concordance.py` | ~43 strata | BH | FDR < 0.25 |
-| Per-cell-type kinase MEA (deconvolution) | `alz/deconvolution/mea_per_celltype.py` | ~78 kinases × strata | BH (gseapy internal) | FDR < 0.25 |
 | Backbone permutation recurrence | `integration/adapters/aggregate_factorial.py` (archived 2026-05-08 — see `docs/archive/kinase_incytr_integration_pre_remediation.md`) | thousands of backbones | **Storey's q** | q < 0.05 |
 | Marker-protein assessment | `alz/data_ingest.py` | ~6,300 proteins × 10 cell types | **Storey's q** | q < 0.10 |
 | Cross-pair pathway integration | `integration/adapters/aggregate_cross_pair.py` (archived 2026-05-08) | varies (often 100s) | BH | FDR < 0.25 |

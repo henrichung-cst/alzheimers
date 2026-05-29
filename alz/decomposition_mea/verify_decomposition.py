@@ -1,6 +1,6 @@
 """Verification harness for the Levy-t5 per-cluster decomposition.
 
-Four contracts (see docs/incytr_deconvolution_pivot.md §Verification):
+Four contracts:
   1. Mass identity: Σ_c [P_c × (N_c / N_total)] ≈ bulk per (gene, animal)
   2. Coverage: all spine clusters present in Stage 6 outputs
   3. Per-cluster vs bulk MEA agreement under f_c-weighting
@@ -21,9 +21,6 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from alz.shared import config  # noqa: E402
-from decomposition_mea.build_celltype_decomposition import (  # noqa: E402
-    _bulk_to_long, _load_sample_mapping,
-)
 
 sys.path.insert(0, os.path.join(config.REPO_ROOT, "alz", "integration"))
 import config_integration as icfg  # noqa: E402
@@ -39,6 +36,32 @@ CHECKS = ("mass", "coverage", "mea", "incytr")
 
 def _spine_dir(spine: str) -> Path:
     return REPO / "outputs/reports/decomposition" / spine
+
+
+def _load_sample_mapping() -> pd.DataFrame:
+    mp = pd.read_csv(SAMPLE_MAPPING_FILE)
+    if not {"column_name", "animal_id"}.issubset(mp.columns):
+        raise KeyError(f"{SAMPLE_MAPPING_FILE}: missing column_name / animal_id")
+    return mp[["column_name", "animal_id"]]
+
+
+def _bulk_to_long(
+    df: pd.DataFrame, value_cols: list[str], id_cols: list[str],
+    col_to_animal: dict[str, str], value_name: str,
+) -> pd.DataFrame:
+    """Wide bulk → long (id_cols..., animal_id, value)."""
+    long = df.melt(
+        id_vars=id_cols,
+        value_vars=value_cols,
+        var_name="column_name",
+        value_name=value_name,
+    )
+    long["animal_id"] = long["column_name"].map(col_to_animal)
+    if long["animal_id"].isna().any():
+        miss = sorted(long.loc[long["animal_id"].isna(), "column_name"].unique())
+        raise KeyError(f"Sample mapping missing for columns: {miss[:5]} ...")
+    long = long.drop(columns=["column_name"]).dropna(subset=[value_name])
+    return long
 
 
 def _cluster_weights(clusters: set[str]) -> pd.DataFrame:
