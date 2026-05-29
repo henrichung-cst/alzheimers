@@ -233,24 +233,31 @@ input_gene_list <- read_csv(input_gene_path)
 # a per-cluster tight set where proteomics is differentially regulated.
 # Investigation history in bench/bench.md A31–A35.
 
-# For each cluster, quantile-normalize the [cond1, cond2] pr columns then
-# keep genes with |log2FC| > 1. pr_1 / pr_2 share columns named <cluster>_pr.
-# Clusters present in pr may be a superset of Data.input clusters — we
-# intersect with rownames(Data.input) at the end.
+# prG = proteomically-regulated genes per cluster: |pr_log2FC| > 1 where
+# pr_log2FC is computed the way the Incytr scorer computes it — quantile
+# normalization (limma::normalizeBetweenArrays) on the cluster's [cond1, cond2]
+# pr columns then log2, NOT the raw column ratio. This gene-selection is method
+# logic and lives in the package: Incytr::proteomics_gene(style="log2FC"). The
+# AD app supplies only the floored pr tables, the strict |log2FC| > 1 cutoff
+# (strict=TRUE), and the rownames intersect. floor_pr guarantees values >= 1, so
+# Cal_foldchange's zero-correction never fires (pure log2 ratio). pr_1 / pr_2
+# share columns named <cluster>_pr; clusters absent from pr get character(0).
 clusters <- as.character(unique(Data.input@meta.data$Type))
 
-prg_by_cluster <- lapply(setNames(clusters, clusters), function(cl) {
+pr_clusters <- clusters[vapply(clusters, function(cl) {
   col <- paste0(cl, "_pr")
-  if (!col %in% colnames(pr_1) || !col %in% colnames(pr_2)) return(character(0))
-  # Merge on gene_symbol to align rows (pr_1/pr_2 are tibbles from slice_omics)
-  v1 <- pr_1[, c("gene_symbol", col)]
-  v2 <- pr_2[, c("gene_symbol", col)]
-  m  <- merge(as.data.frame(v1), as.data.frame(v2),
-              by = "gene_symbol", suffixes = c("_c1", "_c2"))
-  c1 <- m[[paste0(col, "_c1")]]; c2 <- m[[paste0(col, "_c2")]]
-  yn <- limma::normalizeBetweenArrays(cbind(c1, c2))
-  abs_lfc <- abs(log2(yn[, 1] / yn[, 2]))
-  intersect(m$gene_symbol[is.finite(abs_lfc) & abs_lfc > 1], rownames(Data.input))
+  col %in% colnames(pr_1) && col %in% colnames(pr_2)
+}, logical(1))]
+pg <- if (length(pr_clusters)) {
+  Incytr::proteomics_gene(
+    as.data.frame(pr_1), as.data.frame(pr_2),
+    cell_group = pr_clusters, style = "log2FC", cutoff = 1,
+    pr.correction = 0.001, strict = TRUE
+  )
+} else NULL
+prg_by_cluster <- lapply(setNames(clusters, clusters), function(cl) {
+  if (is.null(pg)) return(character(0))
+  intersect(pg$gene_symbol[pg$cluster == cl], rownames(Data.input))
 })
 
 deg_by_cluster <- lapply(setNames(clusters, clusters), function(cl) {
@@ -331,31 +338,6 @@ multiomics_args <- list(
   py.data_condition1 = py_1, py.data_condition2 = py_2, py.correction = 0.001, py.q = NULL
 )
 
-# One-time per-(gene, cluster, condition) trimean over gene_union, mirroring
-# Incytr's Expr_bygroup(mean_method = NULL) per condition so each per-pair
-# Cal_pairwise_grid call injects the slice it needs (expr_bygroup =) instead of
-# recomputing trimeans. Gene-chunked to bound the dense submatrix (genes_chunk x
-# cells_in_condition). Reuses Incytr's own kernel for bitwise parity with the
-# @expr.bygroup slot the internal Expr_bygroup would have produced.
-build_expr_substrate <- function(data, idents, cond_cells, genes,
-                                 gene_chunk = 4000L) {
-  n_g <- length(genes)
-  starts <- seq.int(1L, n_g, by = gene_chunk)
-  lapply(cond_cells, function(bc) {
-    if (length(bc) == 0L) return(data.frame())
-    labels <- as.character(idents[bc])
-    parts <- vector("list", length(starts))
-    for (k in seq_along(starts)) {
-      gs <- starts[k]; ge <- min(gs + gene_chunk - 1L, n_g)
-      sub <- as.matrix(data[genes[gs:ge], bc, drop = FALSE])
-      parts[[k]] <- Incytr:::grouped_weighted_quartile(sub, labels)
-    }
-    df <- as.data.frame(do.call(rbind, parts))
-    df$Gene <- rownames(df)
-    df
-  })
-}
-
 # Condition->barcodes split must be captured before rm(Data.input) below.
 cond_cells <- lapply(c(condition1, condition2), function(cc) {
   rownames(Data.input@meta.data)[
@@ -417,13 +399,17 @@ cat(sprintf("[pair-driver] rss before rm(Data.input): %.0f MB\n", rss_mb()))
 rm(Data.input); gc(verbose = FALSE)
 cat(sprintf("[pair-driver] rss after  rm(Data.input): %.0f MB\n", rss_mb()))
 
-# Build the pair-invariant trimean substrate once (Improvement 3). template@data
-# shares the expression matrix (refcount) with the dropped Data.input, so this
-# reads the same values. Forks below COW-inherit it read-only; the slot is tiny
-# (gene_union x clusters x 2 conditions doubles).
+# Build the pair-invariant trimean substrate once (Improvement 3): the per-(gene,
+# cluster, condition) trimean is pair-invariant, so it is computed ONCE over
+# gene_union and injected into every per-pair Cal_pairwise_grid call
+# (expr_bygroup =) instead of recomputing Expr_bygroup 961x. This is the method's
+# Expr_bygroup, batched over an explicit gene set — it lives in the package
+# (Incytr::precompute_expr_bygroup), gene-chunked to bound the dense submatrix.
+# template@data shares the expression matrix (refcount) with the dropped
+# Data.input, so this reads the same values. Forks below COW-inherit it read-only.
 t_sub <- proc.time()[["elapsed"]]
-expr_substrate <- build_expr_substrate(template@data, template@idents,
-                                       cond_cells, gene_union)
+expr_substrate <- Incytr::precompute_expr_bygroup(template@data, template@idents,
+                                                  cond_cells, gene_union)
 cat(sprintf("[pair-driver] built expr substrate in %.1fs  rss=%.0fMB\n",
             proc.time()[["elapsed"]] - t_sub, rss_mb()))
 

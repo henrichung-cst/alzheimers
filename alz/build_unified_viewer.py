@@ -2238,9 +2238,8 @@ def _write_incytr_pair_pathways() -> dict | None:
     os.makedirs(EDGE_SLICES_INCYTR_PATHWAYS_DIR, exist_ok=True)
 
     # Materialize once; group + write. Pair-mode now supplies per-node FC
-    # (driver Cal_scFC + post-hoc reconstruct_node_fc.R) and labels (driver
-    # DEG/prG assignment); fall back to NULL if the source parquet was
-    # produced by an older driver.
+    # (driver Cal_scFC, written inline) and labels (driver DEG/prG assignment);
+    # fall back to NULL if the source parquet was produced by an older driver.
     src_cols_pair = set(
         con.execute("DESCRIBE SELECT * FROM src LIMIT 0").fetchdf()["column_name"]
     )

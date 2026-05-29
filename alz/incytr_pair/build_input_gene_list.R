@@ -19,7 +19,7 @@ suppressPackageStartupMessages({
   library(Seurat)
   library(stringr)
   library(Matrix)
-  library(matrixStats)
+  library(Incytr)  # Find_highexp_gene_batch (HEG is method logic, not app glue)
   # presto: C++ Wilcoxon. Seurat::FindAllMarkers auto-detects it via
   # requireNamespace and swaps in the vectorized backend. Loading here
   # makes the dependency explicit and fails fast if uninstalled.
@@ -41,32 +41,6 @@ plan(multisession, workers = N_WORKERS)
 options(future.globals.maxSize = 8 * 1024^3)
 cat("[input_gene_list] future plan: multisession, workers=", N_WORKERS, "\n",
     sep = "")
-
-# Vectorized HEG: trimean per gene, threshold = 75th-pct of nonzero entries
-# in the condition's full matrix. Mirrors legacy Find_highexp_gene defaults.
-find_highexp_vec <- function(data_cond, meta_cond, group_col, cutoff_percentile = 0.75) {
-  nz <- data_cond@x[data_cond@x > 0]
-  cutoff_exp <- as.numeric(quantile(nz, cutoff_percentile))
-  groups <- sort(unique(as.character(meta_cond[[group_col]])))
-  out <- vector("list", length(groups))
-  for (i in seq_along(groups)) {
-    g <- groups[i]
-    cells <- rownames(meta_cond)[meta_cond[[group_col]] == g]
-    if (length(cells) == 0) next
-    m <- as.matrix(data_cond[, cells, drop = FALSE])
-    qs <- matrixStats::rowQuantiles(m, probs = c(0.25, 0.5, 0.75))
-    tri <- 0.25 * qs[, 1] + 0.5 * qs[, 2] + 0.25 * qs[, 3]
-    keep <- which(tri >= cutoff_exp)
-    if (length(keep) == 0) next
-    out[[i]] <- data.frame(
-      gene_symbol = rownames(m)[keep],
-      ave.exp     = unname(tri[keep]),
-      cluster     = g,
-      stringsAsFactors = FALSE
-    )
-  }
-  do.call(rbind, out)
-}
 
 cat("[input_gene_list] reading", OBJ_PATH, "\n")
 obj <- readRDS(OBJ_PATH)
@@ -108,8 +82,16 @@ for (k in seq_along(conditions)) {
       conditions[k], " ", sep = "")
   sub <- subset(obj, subset = condition == conditions[k])
   data_mat <- GetAssayData(sub, layer = "data", assay = "originalexp")
-  HE <- find_highexp_vec(data_mat, sub@meta.data, group_col = "Type",
-                         cutoff_percentile = 0.75)
+  # High-expression genes (DEG-union partner): per-(gene, Type) weighted-quartile
+  # trimean kept above the 75th pct of the condition's nonzero entries (one
+  # global cutoff for all clusters). This is method logic — it lives in the
+  # Incytr package; the AD app only supplies the matrix, labels and scope.
+  HE <- Incytr::Find_highexp_gene_batch(
+    data_mat,
+    group_labels      = sub@meta.data[colnames(data_mat), "Type"],
+    cutoff_percentile = 0.75,
+    cutoff_scope      = "global"
+  )
   if (!is.null(HE) && nrow(HE) > 0) {
     HE$condition <- conditions[k]
     HEG.list[[k]] <- HE

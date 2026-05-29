@@ -136,13 +136,11 @@ if [[ $SKIP_INCYTR -eq 0 ]]; then
   # Mouse ligand-receptor DB layers ship as package data in the upstream
   # Incytr package (loaded via `Incytr::DB_Layer*_mouse_filtered`); no
   # bench-side symlinks needed.
-  for f in incytr_commandline.R reconstruct_labels.R reconstruct_node_fc.R; do
-    if [[ ! -e "$incytr_dir/$f" ]]; then
-      echo "ERROR: required driver script $incytr_dir/$f missing" >&2
-      echo "       driver scripts must live under alz/incytr_pair/." >&2
-      exit 1
-    fi
-  done
+  if [[ ! -e "$incytr_dir/incytr_commandline.R" ]]; then
+    echo "ERROR: required driver script $incytr_dir/incytr_commandline.R missing" >&2
+    echo "       driver scripts must live under alz/incytr_pair/." >&2
+    exit 1
+  fi
   if [[ ! -e "$inputs_dir/kldata.csv" ]]; then
     echo "ERROR: $inputs_dir/kldata.csv missing — run alz/incytr_pair/build_pair_inputs.sh first." >&2
     exit 1

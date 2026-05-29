@@ -42,9 +42,7 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
 
 | File | Role |
 |---|---|
-| `incytr_commandline.R` | R driver: calls `Incytr::Cal_pairwise_grid`; writes one wide parquet per contrast to `outputs/reports/incytr_pair_mode/wide/`. |
-| `reconstruct_labels.R` | Post-processing helper: re-attaches cluster labels to driver output. |
-| `reconstruct_node_fc.R` | Post-processing helper: adds node LFC columns to driver output. |
+| `incytr_commandline.R` | R driver: calls `Incytr::Cal_pairwise_grid`; writes one wide parquet per contrast to `outputs/reports/incytr_pair_mode/wide/`. Node labels and per-node FC are written inline by the driver. |
 | `emit_expr_bygroup.R` | Transcript-substrate emitter: per-(cluster, Group) mean of `originalexp@data`; writes `outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet`. |
 | `build_pair_inputs.sh` | Input-prep orchestrator: calls `build_pair_seurat.R`, `export_decomposition_for_pair.py`, and `build_input_gene_list.R`; writes to `data/derived/incytr_inputs/`. |
 | `build_pair_seurat.R` | Builds `incytr_obj.rds` from the snRNA-seq data. Writes to `data/derived/incytr_inputs/`. |

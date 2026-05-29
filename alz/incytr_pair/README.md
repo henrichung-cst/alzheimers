@@ -13,6 +13,35 @@ reshape outputs.
 | `alz/incytr_pair/` | Run-time drivers: build Seurat inputs, run `Incytr::Cal_pairwise_grid`, emit transcript substrate, orchestrate the per-contrast loop |
 | `alz/integration/` | Consume outputs: reshape wide parquets into `receiver_cache/` for the viewer; build transcript-trace shards; manage config and cluster-spine loading |
 
+## Separation of concerns: method (`../incytr`) vs application (this dir)
+
+**`Incytr` is the method (a public package we release); `alz` is one application
+of it.** Anything intrinsic to the method — scoring, fold-change, gene-set
+selection, expression aggregation — must be **called** from the `Incytr` package,
+never copied or reimplemented here. This directory holds only AD-specific glue:
+loading AD inputs, file paths, the contrast loop, and call-site parameter overrides
+for sce4 parity. Do not re-inline method logic to avoid a package change — that is
+the exact "secret duplication" this boundary exists to prevent.
+
+Method functions this app calls (all from `Incytr::`):
+
+| What | Package function |
+|---|---|
+| Pairwise grid scoring (SigProb, PDS, scFC, kinase) | `Cal_pairwise_grid` |
+| High-expression genes (HEG), global cutoff scope | `Find_highexp_gene_batch` |
+| Per-cluster proteomically-regulated genes (prG) | `proteomics_gene(strict=TRUE)` |
+| Pair-invariant trimean substrate (`expr_bygroup`) | `precompute_expr_bygroup` |
+| Trimean kernel for the transcript substrate | `Incytr:::grouped_weighted_quartile` (in `emit_expr_bygroup.R`) |
+| Core-budget assertion, results export | `assert_core_budget`, `Export_results` |
+
+Legitimately app-side (stays here): `slice_omics`, the `pmax(pr,1)` floor
+(`floor_pr`), `dg_by_cluster = DEG ∪ prG` assembly, `label_node`, the DuckDB shard
+concat, per-pair scheduling, RSS monitors, and the sce4 call-site overrides
+(`mean_method=NULL`, `correction=0.01`, `cutoff_*=0`, `pr.correction=0.001`,
+`fold_threshold=10`, strict `>1` prG cutoff). Three method computations were
+reimplemented inline and moved to the package on 2026-05-29 (byte-identical swap;
+audit: `docs/plans/incytr_pair_reorg_2026-05-29.md`).
+
 ## Entry point
 
 ```bash
@@ -34,18 +63,25 @@ bash alz/incytr_pair/build_pair_inputs.sh
 
 ## File inventory
 
+Mouse AD cohort (9 contrasts) and T-cell cohort (per-donor) share `incytr_commandline.R`
+and `filter_significant_paths.py`; the cohorts differ only in their input builders.
+
 | File | Role |
 |---|---|
-| `run_pair_mode.sh` | Per-contrast loop driver; calls `incytr_commandline.R` for each of 9 contrasts. Reads from `data/derived/incytr_inputs/`; writes to `outputs/reports/incytr_pair_mode/wide/`. |
-| `incytr_commandline.R` | R driver: calls `Incytr::Cal_pairwise_grid`; writes one wide parquet per contrast to `outputs/reports/incytr_pair_mode/wide/`. |
-| `reconstruct_labels.R` | Post-processing helper: re-attaches cluster labels to driver output. |
-| `reconstruct_node_fc.R` | Post-processing helper: adds node LFC columns to driver output. |
-| `emit_expr_bygroup.R` | Transcript-substrate emitter: per-(cluster, Group) mean of `originalexp@data`; writes `outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet`. Run once per spine build, not per contrast. |
-| `build_pair_inputs.sh` | Input-prep orchestrator: calls `build_pair_seurat.R`, `export_decomposition_for_pair.py`, and `build_input_gene_list.R`; writes to `data/derived/incytr_inputs/`. |
-| `build_pair_seurat.R` | Builds `incytr_obj.rds` from the snRNA-seq data. Writes to `data/derived/incytr_inputs/incytr_obj.rds`. |
-| `build_input_gene_list.R` | Builds `input_gene_list.csv` for the driver. Writes to `data/derived/incytr_inputs/`. |
-| `export_decomposition_for_pair.py` | Runs the **provenance deconvolution** `P_c = (N_total/N_c)×bulk×(specific_c/Σ_46 specific)` (min/10000 imputation): transcript share from frozen `aggexp.csv`, size factors from the Song h5ad, bulk from frozen `pr/imac/py_median.csv`. Emits 31-spine × 12 male-group `{pr,ps,py}_yuyu_deconvoluted.csv`. Replaces the prior levy_t5 parquet-reshape (see `docs/plans/sce4_decomposition_reconciliation_2026-05-24.md`). |
-| `pair_to_receiver_cache.py` | Reshapes the 9 wide driver outputs from `outputs/reports/incytr_pair_mode/wide/` into the long-form `receiver_cache/` layout the unified viewer consumes. Invoked by `alz/runners/main/run_pair_mode_viewer_build.sh`. |
+| `run_pair_mode.sh` | Per-contrast loop driver (mouse AD); calls `incytr_commandline.R` then `filter_significant_paths.py` for each of 9 contrasts. Reads `data/derived/incytr_inputs/`; writes `outputs/reports/incytr_pair_mode/wide/`. |
+| `run_pair_mode_tcells.sh` | Per-contrast loop driver (T-cell cohort); reuses the same `incytr_commandline.R`. pixi task `tcells-incytr`. |
+| `incytr_commandline.R` | R driver: calls `Incytr::Cal_pairwise_grid`; writes one wide parquet per contrast. Node labels (DEG/prG) and per-node FC are written inline. Env-parameterized for mouse vs human (`SPECIES`, `CHANNELS`, file/gene-col vars). |
+| `filter_significant_paths.py` | Row-subset significance filter applied after each contrast: `(SigProb_<disease> > 0.1 OR SigProb_<WTyp> > 0.1) AND abs(PDS) >= 0.2`. Parity-preserving. |
+| `emit_expr_bygroup.R` | Transcript-substrate emitter: per-(cluster, Group) trimean of `originalexp@data` via `Incytr:::grouped_weighted_quartile`; writes `outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet`. Run once per spine build, not per contrast. |
+| `build_pair_inputs.sh` | Input-prep orchestrator (mouse): calls `build_pair_seurat.R`, `export_decomposition_for_pair.py`, `build_input_gene_list.R`; writes `data/derived/incytr_inputs/`. |
+| `build_pair_seurat.R` | Builds `incytr_obj.rds` from the snRNA-seq data. |
+| `build_input_gene_list.R` | Builds `input_gene_list.csv` (DEG ∪ HEG). HEG via `Incytr::Find_highexp_gene_batch(cutoff_scope="global")`. |
+| `build_tcells_seurat.R` | T-cell-cohort Seurat builder (per donor). pixi `tcells-build-incytr-seurat`. |
+| `build_tcells_input_gene_list.R` | T-cell-cohort gene-list builder (per donor). pixi `tcells-build-input-gene-list`. |
+| `export_decomposition_for_pair.py` | Runs the **provenance deconvolution** `P_c = (N_total/N_c)×bulk×(specific_c/Σ_46 specific)` (min/10000 imputation): transcript share from frozen `aggexp.csv`, size factors from the Song h5ad, bulk from frozen `pr/imac/py_median.csv`. Emits 31-spine × 12 male-group `{pr,ps,py}_yuyu_deconvoluted.csv`. See `docs/plans/sce4_decomposition_reconciliation_2026-05-24.md`. |
+| `pair_to_receiver_cache.py` | Reshapes the 9 wide driver outputs into the long-form `receiver_cache/` layout the unified viewer consumes. Also exports `_sanitize_celltype`, imported by 4 `alz/integration/` modules. |
+| `verify_sce4_parity.py` | Regression gate (`pixi run verify-incytr-sce4`): confirms the sce4-parity overrides still reproduce 573/600 + max \|Δ sclog2FC\|=0 on the two benchmark pairs by reading the existing wide parquets. |
+| `__init__.py` | Package marker (enables `from incytr_pair.* import` in `alz/integration/`). |
 
 ## Data layout
 
