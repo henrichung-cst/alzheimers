@@ -1399,6 +1399,16 @@ def _build_celltypes_slice(data: UnifiedData) -> dict:
     }
 
 
+def _with_single_context(block: dict | None, context_id: str) -> dict | None:
+    """Attach v2 by_context while preserving the legacy flat block."""
+    if block is None:
+        return None
+    legacy = {k: v for k, v in block.items() if k != "by_context"}
+    out = dict(block)
+    out["by_context"] = {context_id: legacy}
+    return out
+
+
 
 def _build_subclass_breakdown(kid: dict[str, int]) -> dict:
     """Per-kinase subclass composition tooltips for verdict-table rows.
@@ -2561,10 +2571,59 @@ def build_payload(data: UnifiedData) -> dict:
     # significant-pathway heatmap + table tabs. Pair-mode (Levy-t5) is the
     # only active source — factorial Incytr was archived 2026-05-18.
     incytr_pathways_block = _write_incytr_pair_pathways()
+    context_id = "song_ad"
 
     meta = {
         "schema_version": SCHEMA_VERSION,
+        "viewer_payload_schema_version": 2,
         "generated_at": pd.Timestamp.utcnow().isoformat(),
+        "cohort": "song_ad",
+        "default_context": context_id,
+        "contexts": [
+            {
+                "id": context_id,
+                "label": "Song AD",
+                "cohort": "song_ad",
+                "axis_kind": "cohort",
+                "contrasts": list(contrasts),
+                "contrast_axis": {
+                    "primary": "disease_timepoint",
+                    "groups": list(config.DISEASE_GROUPS),
+                    "timepoints": list(config.TIMEPOINTS),
+                },
+                "celltypes": list(data.edge_metadata["celltypes"]),
+                "capabilities": {
+                    "kinases": True,
+                    "celltypes": True,
+                    "incytr": incytr_pathways_block is not None,
+                    "decomp_ols": decomp_ols_slice_index.get("slice_count", 0) > 0,
+                    "song_concordance": bool(
+                        song_concordance_slice_index.get("present_genes")
+                    ),
+                    "human_reference": False,
+                    "subclass_breakdown": True,
+                    "audit_tables": True,
+                    "transcript_trace": True,
+                    "omics_trace": True,
+                },
+                "notes": [],
+            }
+        ],
+        "capabilities": {
+            "contexts": True,
+            "kinases": True,
+            "celltypes": True,
+            "incytr": incytr_pathways_block is not None,
+            "decomp_ols": decomp_ols_slice_index.get("slice_count", 0) > 0,
+            "song_concordance": bool(
+                song_concordance_slice_index.get("present_genes")
+            ),
+            "human_reference": False,
+            "subclass_breakdown": True,
+            "audit_tables": True,
+            "transcript_trace": True,
+            "omics_trace": True,
+        },
         "contrasts": contrasts,
         "diseaseGroups": list(config.DISEASE_GROUPS),
         "timepoints": list(config.TIMEPOINTS),
@@ -2664,6 +2723,8 @@ def build_payload(data: UnifiedData) -> dict:
 
     human_slice, human_perdonor_substrate_index = build_human_slice()
     if human_slice is not None:
+        meta["capabilities"]["human_reference"] = True
+        meta["contexts"][0]["capabilities"]["human_reference"] = True
         print(f"  human slice: {len(human_slice['kinases']['id']):,} kinase rows "
               f"× {len(human_slice['donors'])} donors", flush=True)
 
@@ -2673,9 +2734,9 @@ def build_payload(data: UnifiedData) -> dict:
     kinase_motifs = _build_kinase_motifs(sorted(motif_names))
 
     payload = {
-        "kinases": kinases_slice,
+        "kinases": _with_single_context(kinases_slice, context_id),
         "kinase_motifs": kinase_motifs,
-        "celltypes": celltypes_slice,
+        "celltypes": _with_single_context(celltypes_slice, context_id),
         "kinase_celltype_evidence": kinase_celltype_evidence,
         "attribution_index": attribution_index,
         "decomposition_index": decomposition_index,
@@ -2701,7 +2762,7 @@ def build_payload(data: UnifiedData) -> dict:
             "human_perdonor_index": "edge_slices/human_perdonor/index.json",
             "present_human_perdonor_kinase_ids": [],
         },
-        "incytr_pathways": incytr_pathways_block,
+        "incytr_pathways": _with_single_context(incytr_pathways_block, context_id),
         "meta": meta,
     }
     if human_slice is not None:
@@ -2829,6 +2890,16 @@ def validate(data: UnifiedData) -> str:
 
     # Structural
     if payload is not None:
+        meta = payload.get("meta", {})
+        if meta.get("viewer_payload_schema_version") != 2:
+            errors.append("meta.viewer_payload_schema_version != 2")
+        context_ids = [c.get("id") for c in meta.get("contexts", [])]
+        if meta.get("default_context") not in context_ids:
+            errors.append("meta.default_context is not present in meta.contexts")
+        for key in ("kinases", "celltypes", "incytr_pathways"):
+            if "by_context" not in (payload.get(key) or {}):
+                errors.append(f"{key}.by_context missing")
+
         pk = payload["kinases"]
         pc_ = payload["celltypes"]
 
@@ -2951,11 +3022,18 @@ def _assert_input_provenance(skip_verify: bool = False) -> None:
     elif os.path.exists(verify_path):
         with open(verify_path) as f:
             verif = json.load(f)
-        if verif.get("all_pass") is False:
-            failed = [c.get("check") for c in (verif.get("checks") or [])
-                      if isinstance(c, dict) and not c.get("pass", False)]
+        hard_pass = verif.get("hard_pass", verif.get("all_pass"))
+        if hard_pass is False:
+            failed = [
+                c.get("check") for c in (verif.get("checks") or [])
+                if (
+                    isinstance(c, dict)
+                    and c.get("severity", "hard") == "hard"
+                    and not c.get("pass", False)
+                )
+            ]
             raise SystemExit(
-                f"Decomposition verification did not pass: failed checks = "
+                f"Decomposition hard verification did not pass: failed checks = "
                 f"{failed}. See {verify_path}."
             )
 

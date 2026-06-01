@@ -416,10 +416,6 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
                    dir_clauses, path_clauses, fc_clauses, label_clauses]
         extra_select = ",\n          ".join(c for c in clauses if c)
 
-        where_clause = (
-            f"WHERE {pcol_clause} IS NULL OR {pcol_clause} <= 0.75"
-            if pcol_disease is not None else ""
-        )
         selects.append(f"""
         SELECT
           "Sender.group"   AS sender,
@@ -430,7 +426,6 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
           CAST(PDS AS DOUBLE) AS PDS,
           {extra_select}
         FROM read_parquet('{fpath}')
-        {where_clause}
         """)
     con.execute(f"CREATE VIEW src AS {' UNION ALL '.join(selects)}")
     n_src = con.execute("SELECT COUNT(*) FROM src").fetchone()[0]
@@ -632,6 +627,14 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         "label_vocab": list(_INCYTR_LABEL_VOCAB),
         "direction_flag_columns": list(dir_flag_cols),
         "path_metric_columns": list(extra_path_cols),
+        "slice_index": {
+            "schema_version": SCHEMA_VERSION,
+            "filename_template": "{context}__{sender}__{receiver}.parquet",
+            "sanitize_rule": "replace('/', '-'); replace(' ', '_'); replace('.', '')",
+            "present": sorted(present_pairs),
+            "n_total_rows": total_rows,
+            "pair_row_counts": pair_row_counts,
+        },
     }
 
 
@@ -656,7 +659,7 @@ def _write_tcell_pair_pathways() -> dict:
     # Single index.json listing every donor-scoped shard.
     index = {
         "schema_version": SCHEMA_VERSION,
-        "filename_template": "{donor}__{sender}__{receiver}.parquet",
+        "filename_template": "{context}__{sender}__{receiver}.parquet",
         "sanitize_rule": "replace('/', '-'); replace(' ', '_'); replace('.', '')",
         "donors": sorted(by_donor.keys()),
         "by_donor": {
@@ -669,6 +672,10 @@ def _write_tcell_pair_pathways() -> dict:
             for d, block in by_donor.items()
         },
     }
+    index["by_context"] = {
+        d: dict(block["slice_index"])
+        for d, block in by_donor.items()
+    }
     with open(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, "index.json"), "w") as f:
         json.dump(index, f)
 
@@ -679,6 +686,7 @@ def _write_tcell_pair_pathways() -> dict:
         "source_mode": "pair_mode_tcells",
         "donors": sorted(by_donor.keys()),
         "by_donor": by_donor,
+        "by_context": by_donor,
         "senders": sorted(all_senders),
         "receivers": sorted(all_receivers),
         "contrasts": sorted(all_contrasts, key=lambda x: int(x.split("_")[0][1:])),
@@ -1076,7 +1084,7 @@ def _write_tcell_transcript_trace() -> dict:
         }
         print(f"  ({donor}) wrote {len(donor_slugs)} transcript_trace shard(s)",
               flush=True)
-    return {"by_donor": by_donor}
+    return {"by_donor": by_donor, "by_context": by_donor}
 
 
 # ---------------------------------------------------------------------------
@@ -1112,6 +1120,7 @@ def build_tcell_payload() -> dict:
 
     kinases_slice = {
         "by_donor": by_donor_kinases,
+        "by_context": by_donor_kinases,
         # Top-level fallback used by tab modules that index PAYLOAD.kinases.<col>
         # directly: defaults to donor1 (the MEA-bearing donor). The slice cache
         # swaps via PAYLOAD.kinases.by_donor[currentDonor].
@@ -1121,6 +1130,19 @@ def build_tcell_payload() -> dict:
     print("[build_tcell_payload] celltypes slice:", flush=True)
     donor_clusters = {d: _load_donor_clusters(d) for d in DONORS}
     celltypes_slice = _build_celltypes_slice(donor_clusters)
+    celltype_id_by_name = {
+        name: idx for idx, name in zip(celltypes_slice["id"], celltypes_slice["name"])
+    }
+    celltypes_by_context: dict[str, dict] = {}
+    for donor, clusters in donor_clusters.items():
+        ordered = [c for c in celltypes_slice["name"] if c in set(clusters)]
+        celltypes_by_context[donor] = {
+            "id": [celltype_id_by_name[c] for c in ordered],
+            "name": ordered,
+            "tissue_category": ["T-cell"] * len(ordered),
+            "available_donors": [[donor] for _ in ordered],
+        }
+    celltypes_slice["by_context"] = celltypes_by_context
     print(f"  {len(celltypes_slice['id'])} cluster(s) across {len(DONORS)} donors",
           flush=True)
 
@@ -1168,10 +1190,64 @@ def build_tcell_payload() -> dict:
     palette = {tp: TIMEPOINT_COLOR_MAP.get(tp, "#808080")
                for tp in sorted(timepoint_set)}
 
+    contexts: list[dict] = []
+    for donor in DONORS:
+        ip_block = incytr_pathways_block.get("by_context", {}).get(donor, {})
+        donor_contrasts = ip_block.get("contrasts") or []
+        capabilities = {
+            "kinases": donor in DONOR_WITH_MEA and len(
+                by_donor_kinases.get(donor, {}).get("id", [])
+            ) > 0,
+            "celltypes": len(celltypes_by_context.get(donor, {}).get("id", [])) > 0,
+            "incytr": bool(ip_block.get("slice_index", {}).get("present")),
+            "decomp_ols": False,
+            "song_concordance": False,
+            "human_reference": False,
+            "subclass_breakdown": False,
+            "audit_tables": True,
+            "transcript_trace": donor in transcript_trace_meta.get("by_donor", {}),
+            "omics_trace": False,
+        }
+        notes = []
+        if not capabilities["kinases"]:
+            notes.append("No IMAC kinase MEA is available for this donor.")
+        contexts.append({
+            "id": donor,
+            "label": donor.replace("donor", "Donor "),
+            "cohort": "tcell",
+            "axis_kind": "donor",
+            "contrasts": donor_contrasts,
+            "contrast_axis": {
+                "primary": "day",
+                "baseline": "d2",
+                "groups": ip_block.get("diseases", []),
+                "timepoints": ip_block.get("timepoints", []),
+            },
+            "celltypes": celltypes_by_context.get(donor, {}).get("name", []),
+            "capabilities": capabilities,
+            "notes": notes,
+        })
+
     meta = {
         "schema_version": SCHEMA_VERSION,
+        "viewer_payload_schema_version": 2,
         "generated_at": pd.Timestamp.utcnow().isoformat(),
         "cohort": "tcell",
+        "default_context": "donor1",
+        "contexts": contexts,
+        "capabilities": {
+            "contexts": True,
+            "kinases": any(c["capabilities"]["kinases"] for c in contexts),
+            "celltypes": any(c["capabilities"]["celltypes"] for c in contexts),
+            "incytr": any(c["capabilities"]["incytr"] for c in contexts),
+            "decomp_ols": False,
+            "song_concordance": False,
+            "human_reference": False,
+            "subclass_breakdown": False,
+            "audit_tables": True,
+            "transcript_trace": any(c["capabilities"]["transcript_trace"] for c in contexts),
+            "omics_trace": False,
+        },
         "donors": list(DONORS),
         "donors_with_mea": list(DONOR_WITH_MEA),
         "contrasts": contrast_union or sorted(timepoint_set),
@@ -1288,6 +1364,16 @@ def validate(payload: dict | None = None) -> str:
         errors.append(f"payload gzip {gzip_bytes/1e6:.1f} MB exceeds 20 MB cap")
 
     if payload is not None:
+        meta = payload.get("meta", {})
+        if meta.get("viewer_payload_schema_version") != 2:
+            errors.append("meta.viewer_payload_schema_version != 2")
+        context_ids = [c.get("id") for c in meta.get("contexts", [])]
+        if meta.get("default_context") not in context_ids:
+            errors.append("meta.default_context is not present in meta.contexts")
+        for key in ("kinases", "celltypes", "incytr_pathways"):
+            if "by_context" not in (payload.get(key) or {}):
+                errors.append(f"{key}.by_context missing")
+
         # Donor1 must have MEA.
         by_donor = payload.get("kinases", {}).get("by_donor", {})
         d1_rows = len(by_donor.get("donor1", {}).get("id", []))

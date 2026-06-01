@@ -55,7 +55,7 @@ const _HASH_DEFAULTS = {
   fdr: 0.25,
   k: null, b: null, ct: null,
   m: "mouse", kh: null,
-  d: "donor1",
+  ctx: "donor1", d: "donor1",
 };
 let _hashApplying = false;
 
@@ -66,7 +66,7 @@ function _serializeHash() {
     fdr: f.fdr,
     k: s.kinase, b: s.backbone, ct: s.celltype,
     m: v.mode, kh: s.kinaseHuman,
-    d: s.donor,
+    ctx: s.context || s.donor,
   };
   const parts = [];
   for (const k in cur) {
@@ -104,10 +104,13 @@ function applyHash() {
     if (map.ct != null) Store.dispatch({type:"SET_SELECTION", key:"celltype", value:parseInt(map.ct,10)});
     if (map.kh != null) Store.dispatch({type:"SET_SELECTION", key:"kinaseHuman", value:parseInt(map.kh,10)});
     if (map.m != null && HAS_HUMAN) Store.dispatch({type:"SET_VIEW", key:"mode", value:map.m});
-    if (map.d != null) Store.dispatch({type:"SET_SELECTION", key:"donor", value:map.d});
+    const ctx = map.ctx || map.d;
+    if (ctx != null) {
+      Store.dispatch({type:"SET_SELECTION", key:"context", value:ctx});
+      Store.dispatch({type:"SET_SELECTION", key:"donor", value:ctx});
+    }
     if (map.t != null) Store.dispatch({type:"SET_VIEW", key:"activeTab", value:map.t});
   } finally {
     _hashApplying = false;
   }
 }
-

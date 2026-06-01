@@ -90,13 +90,14 @@ function boot() {
     const celltypeSelChanged = next.selection.celltype  !== prev.selection.celltype;
     const backboneSelChanged = next.selection.backbone  !== prev.selection.backbone;
     const kinaseHumanSelChanged = next.selection.kinaseHuman !== prev.selection.kinaseHuman;
+    const contextChanged     = next.selection.context   !== prev.selection.context;
     const donorChanged       = next.selection.donor      !== prev.selection.donor;
     const modeChanged        = next.view.mode           !== prev.view.mode;
     const tabChanged         = next.view.activeTab      !== prev.view.activeTab;
     const viewChanged        = next.view                !== prev.view;
 
     if (!filtersChanged && !kinaseSelChanged && !celltypeSelChanged
-        && !backboneSelChanged && !kinaseHumanSelChanged && !donorChanged
+        && !backboneSelChanged && !kinaseHumanSelChanged && !contextChanged && !donorChanged
         && !modeChanged && !tabChanged && !viewChanged) return;
 
     if (modeChanged) {
@@ -107,11 +108,20 @@ function boot() {
       return;
     }
 
-    if (donorChanged) {
-      // Donor switch: clear donor-scoped selections, refresh prereq cards,
-      // and re-render the active tab against the new donor's vocab/shards.
+    if (contextChanged || donorChanged) {
+      // Context switch: clear context-scoped selections, refresh prereq cards,
+      // and re-render the active tab against the new context's vocab/shards.
+      if (typeof resetKinaseContextCaches === "function") resetKinaseContextCaches();
+      RECEIVERS = ViewerPayload.celltypes().name;
+      if (next.selection.kinase != null)
+        Store.dispatch({type:"SET_SELECTION", key:"kinase", value:null});
+      if (next.selection.backbone != null)
+        Store.dispatch({type:"SET_SELECTION", key:"backbone", value:null});
+      if (next.selection.celltype != null)
+        Store.dispatch({type:"SET_SELECTION", key:"celltype", value:null});
       pushHash();
       syncTabsFromStore();
+      syncHeaderFromStore();
       _activeTabRender();
       return;
     }

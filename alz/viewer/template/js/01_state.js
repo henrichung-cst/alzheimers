@@ -49,7 +49,7 @@ async function _loadPayload() {
   PAYLOAD = JSON.parse(text);
   META = PAYLOAD.meta;
   CONTRASTS = META.contrasts;
-  RECEIVERS = PAYLOAD.celltypes.name;
+  RECEIVERS = ViewerPayload.celltypes().name;
   DISEASE_COLORS = META.diseaseColors;
   HAS_HUMAN = !!(PAYLOAD && PAYLOAD.human);
   // Populate human-tab cached refs (declared in kinase_human.js).
@@ -65,7 +65,8 @@ async function _loadPayload() {
 // Populated after _loadPayload() resolves.
 let HAS_HUMAN = false;
 const INITIAL_STATE = {
-  selection: { kinase:null, backbone:null, celltype:null, kinaseHuman:null },
+  selection: { kinase:null, backbone:null, celltype:null, kinaseHuman:null,
+               context:"song_ad" },
   filters:   { contrast:"ALL", fdr:0.25 },
   view:      { mode:"mouse", activeTab:"kinase", glossaryOpen:false,
                kinaseAuditTab:"measurement-trace",
@@ -507,4 +508,3 @@ class AuditTable {
     });
   }
 }
-

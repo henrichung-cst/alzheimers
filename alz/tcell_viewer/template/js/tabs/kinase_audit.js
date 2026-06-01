@@ -307,7 +307,7 @@ function _renderMeaTrajectory(hostId, kinase_id, ctx) {
   const host = document.getElementById(hostId);
   if (!host) return;
   _ensureKinaseIndexes();
-  const K = PAYLOAD.kinases;
+  const K = ViewerPayload.kinases();
   const i = _kinaseIdxById.get(kinase_id);
   if (i == null) return;
   const fdrThresh = (Store.state.filters && Store.state.filters.fdr) || 0.25;
@@ -485,7 +485,7 @@ function _renderKinaseNesPlot(hostId, kinase_id) {
   const host = document.getElementById(hostId);
   if (!host) return;
   _ensureKinaseIndexes();
-  const K = PAYLOAD.kinases;
+  const K = ViewerPayload.kinases();
   const i = _kinaseIdxById.get(kinase_id);
   if (i == null) return;
   const fdr = Store.state.filters.fdr;
@@ -648,7 +648,7 @@ function _renderAttributionVerdict(hostId, ctx) {
 
   // Attach decomposition NES/FDR for sorting + render. Also compute bulk-NES
   // sign agreement once (same bulk NES/FDR for every row in this kinase × contrast).
-  const _K = PAYLOAD.kinases;
+  const _K = ViewerPayload.kinases();
   const _bulkNes = (_K && _K["NES_" + ctx.contrast]) ? _K["NES_" + ctx.contrast][ctx.kinase_id] : null;
   const _bulkFdr = (_K && _K["FDR_" + ctx.contrast]) ? _K["FDR_" + ctx.contrast][ctx.kinase_id] : null;
   for (const r of rows) {
@@ -1137,7 +1137,7 @@ function _setAuditSelectors(ctx) {
 
 async function _loadKinaseAuditContext(kinase_id, seq) {
   _ensureKinaseIndexes();
-  const K = PAYLOAD.kinases;
+  const K = ViewerPayload.kinases();
   const ki = _kinaseIdxById.get(kinase_id);
   if (ki == null) return null;
   const name = K.name[ki];
@@ -1403,4 +1403,3 @@ async function renderActiveKinaseAuditTab(kinase_id) {
     body.innerHTML = `<div class="muted">Audit table load failed: ${_escapeHtml(msg)}</div>`;
   }
 }
-

@@ -9,28 +9,19 @@
 // timepoint into IncytrFilter and switches tabs.
 // ---------------------------------------------------------------------------
 
-// Mouse defaults; T-cell payload supplies block.by_donor.<d>.diseases /
-// block.by_donor.<d>.timepoints so the multiselects/chips reflect the
-// active donor's contrast vocabulary.
+// Mouse defaults; context payloads supply block.diseases / block.timepoints so
+// the multiselects/chips reflect the active context's contrast vocabulary.
 const _IP_DISEASES_FALLBACK = ["App", "Tau", "ApTt"];
 const _IP_TIMEPOINTS_FALLBACK = ["2mo", "4mo", "6mo"];
 
 function _ipDiseases() {
   const block = _ipBlock();
   if (!block) return _IP_DISEASES_FALLBACK;
-  const donor = (Store.state.selection && Store.state.selection.donor) || null;
-  if (donor && block.by_donor && block.by_donor[donor]
-      && block.by_donor[donor].diseases)
-    return block.by_donor[donor].diseases;
   return block.diseases || _IP_DISEASES_FALLBACK;
 }
 function _ipTimepoints() {
   const block = _ipBlock();
   if (!block) return _IP_TIMEPOINTS_FALLBACK;
-  const donor = (Store.state.selection && Store.state.selection.donor) || null;
-  if (donor && block.by_donor && block.by_donor[donor]
-      && block.by_donor[donor].timepoints)
-    return block.by_donor[donor].timepoints;
   return block.timepoints || _IP_TIMEPOINTS_FALLBACK;
 }
 // Per-shard pagination: the table renders at most one (sender, receiver)
@@ -206,7 +197,7 @@ function _ipRowKey(r) {
 }
 
 function _ipBlock() {
-  return (typeof PAYLOAD !== "undefined" && PAYLOAD.incytr_pathways) || null;
+  return ViewerPayload.incytr();
 }
 
 function _ipPairsInScope(block) {
@@ -225,11 +216,7 @@ function _ipPairsInScope(block) {
   const rIn = new Set(f.receiverIn || []);
   const matches = [];
   const si = block.slice_index || {};
-  let present = si.present;
-  if (!present && si.by_donor) {
-    const donor = (Store.state.selection && Store.state.selection.donor) || "donor1";
-    present = (si.by_donor[donor] && si.by_donor[donor].present) || [];
-  }
+  const present = si.present || [];
   for (const [s, r] of (present || [])) {
     if (sIn.size && !sIn.has(s)) continue;
     if (rIn.size && !rIn.has(r)) continue;

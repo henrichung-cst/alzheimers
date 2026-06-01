@@ -67,9 +67,8 @@ function _tv2DefaultSeries(layer) {
 }
 
 function _tv2PathwayBlock() {
-  return (typeof PAYLOAD !== "undefined"
-          && PAYLOAD.incytr_pathways
-          && PAYLOAD.incytr_pathways.pathway_counts) || null;
+  const block = ViewerPayload.incytr();
+  return (block && block.pathway_counts) || null;
 }
 
 function _tv2SnapPathwayPvalue(p) {
@@ -134,6 +133,14 @@ function _tv2YUnit(series) {
   return series.layer === "pathway" ? "n pathways" : "n kinases";
 }
 
+function _tv2Axis() {
+  const axis = ViewerPayload.contrastAxis();
+  return {
+    groups: axis.groups.length ? axis.groups : (META.diseaseGroups || []),
+    timepoints: axis.timepoints.length ? axis.timepoints : (META.timepoints || []),
+  };
+}
+
 function _tv2InitState() {
   if (_tv2State) return;
   _tv2State = { series: [_tv2DefaultSeries("bulk")], shareY: false };
@@ -142,7 +149,7 @@ function _tv2InitState() {
 function _tv2Eval(series, kid, contrastIdx) {
   // Returns null if the kinase fails the predicate at this contrast,
   // else { sign: -1|0|+1 } based on bulk NES (or decomp NES when bulk absent).
-  const K = PAYLOAD.kinases;
+  const K = ViewerPayload.kinases();
   const cName = CONTRASTS[contrastIdx];
   const bulkNesCol = K["NES_" + cName];
   const bulkFdrCol = K["FDR_" + cName];
@@ -198,9 +205,10 @@ function _tv2Counts(series) {
   // (pathways have no kinase-ID payload; clicks route to the Incytr tab).
   if (series.layer === "pathway") return _tv2PathwayCounts(series);
   _tv2EnsureAttrIndex();
-  const K = PAYLOAD.kinases;
-  const DG = META.diseaseGroups;
-  const TPS = META.timepoints;
+  const K = ViewerPayload.kinases();
+  const axis = _tv2Axis();
+  const DG = axis.groups;
+  const TPS = axis.timepoints;
   const counts = {};
   // Hoist (g, t) → contrast-index lookup out of the per-kinase loop.
   const gtPairs = [];
@@ -237,8 +245,9 @@ function _tv2PathwayCounts(series) {
   // the composite Pathway Disturbance Score, which aggregates the factorial
   // OLS β across all available omics layers. Rows with PDS == 0 or
   // PDS IS NULL go to "total" but neither up nor down.
-  const DG = META.diseaseGroups;
-  const TPS = META.timepoints;
+  const axis = _tv2Axis();
+  const DG = axis.groups;
+  const TPS = axis.timepoints;
   const counts = {};
   for (const g of DG) {
     counts[g] = {};
@@ -459,8 +468,9 @@ function renderTemporalV2() {
     if (sub) sub.textContent = "No series defined. Click + Add series or pick a preset.";
     return;
   }
-  const DG = META.diseaseGroups;
-  const TPS = META.timepoints;
+  const axis = _tv2Axis();
+  const DG = axis.groups;
+  const TPS = axis.timepoints;
   const traces = [];
   const layout = {
     grid: { rows: series.length, columns: 1, pattern: "independent" },

@@ -18,15 +18,14 @@ const SliceCache = (function(){
     sPresent = new Set(
       (ESR.present_song_concordance_genes || []).map(g => String(g).toUpperCase())
     );
-    const si = (PAYLOAD && PAYLOAD.incytr_pathways && PAYLOAD.incytr_pathways.slice_index) || {};
+    const si = ViewerPayload.incytrSliceIndex();
     iPresent = new Set((si.present || []).map(([s, r]) => s + "||" + r));
     iPresentByDonor = {};
-    if (si.by_donor) {
-      for (const d of Object.keys(si.by_donor)) {
-        iPresentByDonor[d] = new Set(
-          (si.by_donor[d].present || []).map(([s, r]) => s + "||" + r)
-        );
-      }
+    for (const ctx of ViewerPayload.contexts()) {
+      const idx = ViewerPayload.incytrSliceIndex(ctx.id);
+      iPresentByDonor[ctx.id] = new Set(
+        (idx.present || []).map(([s, r]) => s + "||" + r)
+      );
     }
     hPresent = new Set((ESR.present_human_perdonor_kinase_ids || []).map(Number));
   }
@@ -118,27 +117,24 @@ const SliceCache = (function(){
   // "/" with "-" and " " with "_". Sender raw, receiver display name (the
   // payload-side senders/receivers arrays already carry canonical display).
   const iCache = new Map();              // "sender||receiver" -> rows[]
-  function _incytrSanitize(name) {
-    return String(name).replace(/\//g, "-").replace(/ /g, "_").replace(/\./g, "");
-  }
   async function loadIncytrShard(sender, receiver) {
     _ensureInit();
     const skey = sender + "||" + receiver;
     // T-cell: per-donor shards. Mouse: flat shards.
-    const donor = (Store.state.selection && Store.state.selection.donor) || null;
-    const perDonorSet = donor && iPresentByDonor ? iPresentByDonor[donor] : null;
+    const context = ViewerPayload.activeContext();
+    const perDonorSet = context && iPresentByDonor ? iPresentByDonor[context] : null;
     if (perDonorSet) {
       if (!perDonorSet.has(skey)) return [];
     } else if (!iPresent.has(skey)) {
       return [];
     }
-    const lkey = donor ? donor + "||" + skey : skey;
+    const lkey = context ? context + "||" + skey : skey;
     if (iCache.has(lkey)) {
       const v = iCache.get(lkey); _lruTouch(iCache, lkey, v); return v;
     }
     const base = ESR.incytr_pathways_url || "edge_slices/incytr_pathways/";
-    const prefix = donor && perDonorSet ? `${donor}__` : "";
-    const url = `${base}${prefix}${_incytrSanitize(sender)}__${_incytrSanitize(receiver)}.parquet`;
+    const fname = ViewerPayload.incytrShardFilename(sender, receiver, context);
+    const url = `${base}${fname}`;
     const rows = await _fetchParquet(url);
     _lruTouch(iCache, lkey, rows);
     return rows;

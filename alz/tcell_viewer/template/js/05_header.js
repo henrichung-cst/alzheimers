@@ -33,7 +33,7 @@ function syncHeaderFromStore() {
     skClear.hidden = !on;
     if (on) {
       _ensureKinaseIdx();
-      const K = PAYLOAD.kinases;
+      const K = ViewerPayload.kinases();
       const ki = _kinaseIdxById.get(sel.kinase);
       const name = ki != null ? K.name[ki] : ("kid:" + sel.kinase);
       skClear.textContent = "Clear kinase selection (" + name + ")";
@@ -131,8 +131,9 @@ function wireTabs() {
   if (dwrap) {
     dwrap.querySelectorAll("button.mode-btn").forEach(btn => {
       btn.addEventListener("click", () => {
-        const d = btn.dataset.donor;
-        if (d === Store.state.selection.donor) return;
+        const d = btn.dataset.donor || btn.dataset.context;
+        if (d === ViewerPayload.activeContext()) return;
+        Store.dispatch({type:"SET_SELECTION", key:"context", value:d});
         Store.dispatch({type:"SET_SELECTION", key:"donor", value:d});
       });
     });
@@ -155,9 +156,9 @@ function _syncModeToggle() {
 function _syncDonorToggle() {
   const wrap = document.getElementById("donor-toggle");
   if (!wrap) return;
-  const donor = (Store.state.selection && Store.state.selection.donor) || "donor1";
+  const donor = ViewerPayload.activeContext();
   wrap.querySelectorAll("button.mode-btn").forEach(btn => {
-    const on = btn.dataset.donor === donor;
+    const on = (btn.dataset.donor || btn.dataset.context) === donor;
     btn.classList.toggle("active", on);
     btn.setAttribute("aria-selected", on ? "true" : "false");
   });

@@ -54,7 +54,7 @@ function _wmbTierBadge(t) {
 // Decomp step ordinal vs bulk MEA direction:
 //   3 strong-agree (FDR<0.10), 2 sig-agree (FDR<0.25), 1 nominal,
 //   0 absent, -2 sig-disagree (FDR<0.25, sign opposes bulk).
-// bulkNes may be passed in pre-fetched; otherwise read from PAYLOAD.kinases.
+// bulkNes may be passed in pre-fetched; otherwise read from the active context.
 function _decompStep(decompNes, decompFdr, bulkNes) {
   if (decompNes == null || !isFinite(decompNes) || decompNes === 0) return 0;
   if (bulkNes == null || !isFinite(bulkNes) || bulkNes === 0) return 1;
@@ -70,7 +70,7 @@ function _decompStepFor(kid, contrastId, cellType) {
   const d = _decompByKey.get(`${kid}|${contrastId}|${cellType}`);
   if (!d) return 0;
   const cName = CONTRASTS[contrastId];
-  const _K = PAYLOAD.kinases;
+  const _K = ViewerPayload.kinases();
   const bulkNes = (_K && cName && _K["NES_" + cName]) ? _K["NES_" + cName][kid] : null;
   return _decompStep(d.nes, d.fdr, bulkNes);
 }
@@ -169,7 +169,7 @@ function kinaseQualifies(kinaseId, filter) {
 }
 
 function _buildKinaseRowModel() {
-  const K = PAYLOAD.kinases;
+  const K = ViewerPayload.kinases();
   const famMap = META.familyMap || {};
   const idxById = new Map();
   const out = [];
@@ -195,10 +195,24 @@ function _buildKinaseRowModel() {
 
 function _ensureKinaseIdx() {
   if (_kinaseIdxById !== null) return;
-  const K = PAYLOAD.kinases;
+  const K = ViewerPayload.kinases();
   const m = new Map();
   for (let i = 0; i < K.id.length; i++) m.set(K.id[i], i);
   _kinaseIdxById = m;
+}
+
+function resetKinaseContextCaches() {
+  _keRows = null;
+  _kinaseIdxById = null;
+  _evidenceByKinase = null;
+  _decompByKey = null;
+  _decompByKinCtx = null;
+  _agreementByKey = null;
+  _highlightKinaseIds = null;
+  _highlightForBid = null;
+  _tv2State = null;
+  _tv2DecompCellsCache = null;
+  _tv2AttrTierByKinCtx = null;
 }
 
 function _ensureKinaseIndexes() {
@@ -407,8 +421,9 @@ function _makeKeCompare(scopedCtxIds) {
 // Render the NES profile mini-heatmap (3 diseases × 3 timepoints) for one row.
 // Always shows all 9 cells — this glyph IS the cross-contrast comparison.
 function _renderNesProfile(r, fdrThresh, maxAbs) {
-  const DG = META.diseaseGroups || ["App","Tau","ApTt"];
-  const TPS = META.timepoints || ["2mo","4mo","6mo"];
+  const axis = ViewerPayload.contrastAxis();
+  const DG = axis.groups.length ? axis.groups : ["App","Tau","ApTt"];
+  const TPS = axis.timepoints.length ? axis.timepoints : ["2mo","4mo","6mo"];
   const cells = [];
   for (const d of DG) {
     for (const t of TPS) {
@@ -452,8 +467,9 @@ function _kineDisagreeCountScoped(r, scopedCtxIds) {
 }
 
 function _renderAgreementProfile(r) {
-  const DG = META.diseaseGroups || ["App","Tau","ApTt"];
-  const TPS = META.timepoints || ["2mo","4mo","6mo"];
+  const axis = ViewerPayload.contrastAxis();
+  const DG = axis.groups.length ? axis.groups : ["App","Tau","ApTt"];
+  const TPS = axis.timepoints.length ? axis.timepoints : ["2mo","4mo","6mo"];
   const cells = [];
   for (const d of DG) {
     for (const t of TPS) {

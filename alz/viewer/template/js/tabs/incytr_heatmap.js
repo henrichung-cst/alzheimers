@@ -14,7 +14,7 @@ const _IH_DISEASES = ["App", "Tau", "ApTt"];
 const _IH_TIMEPOINTS = ["2mo", "4mo", "6mo"];
 
 function _ihBlock() {
-  return (typeof PAYLOAD !== "undefined" && PAYLOAD.incytr_pathways) || null;
+  return ViewerPayload.incytr();
 }
 
 function _ihContrastFromState() {

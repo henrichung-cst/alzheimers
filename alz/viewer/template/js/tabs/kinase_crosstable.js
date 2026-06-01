@@ -5,7 +5,7 @@
 // a per-column-group visibility panel.
 //
 // Joins are client-side from existing PAYLOAD keys:
-//   PAYLOAD.kinases                              mouse bulk NES_<contrast>
+//   ViewerPayload.kinases()                     mouse bulk NES_<contrast>
 //   PAYLOAD.decomposition_index                  mouse cluster×contrast NES
 //   PAYLOAD.attribution_index                    WMB specificity per cluster
 //   PAYLOAD.human.kinases                        cohort median, SEA-AD LFC
@@ -65,7 +65,7 @@ function _kxDefaultCols() {
 
 function _kxBuildIndexes() {
   if (_KX_INITIALIZED) return;
-  const K = PAYLOAD.kinases;
+  const K = ViewerPayload.kinases();
   const famMap = (META && META.familyMap) || {};
 
   _KX_ROWS = [];

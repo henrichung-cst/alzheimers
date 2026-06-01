@@ -33,7 +33,7 @@ function renderKinaseDetail(kinase_id) {
     return;
   }
   _ensureKinaseIndexes();
-  const K = PAYLOAD.kinases;
+  const K = ViewerPayload.kinases();
   const i = _kinaseIdxById.get(kinase_id);
   if (i == null) {
     el.innerHTML = '<div class="muted">Kinase not found.</div>';

@@ -11,13 +11,7 @@
 // ---------------------------------------------------------------------------
 
 function _ihBlock() {
-  const root = (typeof PAYLOAD !== "undefined" && PAYLOAD.incytr_pathways) || null;
-  if (!root) return null;
-  if (root.by_donor) {
-    const donor = (Store.state.selection && Store.state.selection.donor) || "donor1";
-    return root.by_donor[donor] || root.by_donor.donor1 || null;
-  }
-  return root;
+  return ViewerPayload.incytr();
 }
 
 function _ihDiseases() { const b = _ihBlock(); return (b && b.diseases) || []; }

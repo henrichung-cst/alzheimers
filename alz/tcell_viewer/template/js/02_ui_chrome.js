@@ -96,7 +96,8 @@ function _exportSelectionChips() {
   if (sel.kinase != null) {
     _ensureKinaseIdx();
     const ki = _kinaseIdxById.get(sel.kinase);
-    chips.push("kinase=" + (ki != null ? PAYLOAD.kinases.name[ki] : ("kid:" + sel.kinase)));
+    const K = ViewerPayload.kinases();
+    chips.push("kinase=" + (ki != null ? K.name[ki] : ("kid:" + sel.kinase)));
   }
   if (sel.backbone != null) chips.push("backbone=BB_" + sel.backbone);
   if (sel.celltype != null) chips.push("celltype=" + (RECEIVERS[sel.celltype] || ("cid:" + sel.celltype)));

@@ -33,7 +33,7 @@ function syncHeaderFromStore() {
     skClear.hidden = !on;
     if (on) {
       _ensureKinaseIdx();
-      const K = PAYLOAD.kinases;
+      const K = ViewerPayload.kinases();
       const ki = _kinaseIdxById.get(sel.kinase);
       const name = ki != null ? K.name[ki] : ("kid:" + sel.kinase);
       skClear.textContent = "Clear kinase selection (" + name + ")";

@@ -184,7 +184,7 @@ function _ipRowKey(r) {
 }
 
 function _ipBlock() {
-  return (typeof PAYLOAD !== "undefined" && PAYLOAD.incytr_pathways) || null;
+  return ViewerPayload.incytr();
 }
 
 function _ipPairsInScope(block) {

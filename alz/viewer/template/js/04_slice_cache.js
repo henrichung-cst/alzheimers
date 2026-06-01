@@ -17,11 +17,8 @@ const SliceCache = (function(){
     sPresent = new Set(
       (ESR.present_song_concordance_genes || []).map(g => String(g).toUpperCase())
     );
-    iPresent = new Set(
-      ((PAYLOAD && PAYLOAD.incytr_pathways && PAYLOAD.incytr_pathways.slice_index
-        && PAYLOAD.incytr_pathways.slice_index.present) || [])
-        .map(([s, r]) => s + "||" + r)
-    );
+    const ipIndex = ViewerPayload.incytrSliceIndex();
+    iPresent = new Set((ipIndex.present || []).map(([s, r]) => s + "||" + r));
     hPresent = new Set((ESR.present_human_perdonor_kinase_ids || []).map(Number));
   }
   const MAX = 16;                          // LRU cap (per side)
@@ -112,9 +109,6 @@ const SliceCache = (function(){
   // "/" with "-" and " " with "_". Sender raw, receiver display name (the
   // payload-side senders/receivers arrays already carry canonical display).
   const iCache = new Map();              // "sender||receiver" -> rows[]
-  function _incytrSanitize(name) {
-    return String(name).replace(/\//g, "-").replace(/ /g, "_");
-  }
   async function loadIncytrShard(sender, receiver) {
     _ensureInit();
     const key = sender + "||" + receiver;
@@ -123,7 +117,8 @@ const SliceCache = (function(){
       const v = iCache.get(key); _lruTouch(iCache, key, v); return v;
     }
     const base = ESR.incytr_pathways_url || "edge_slices/incytr_pathways/";
-    const url = `${base}${_incytrSanitize(sender)}__${_incytrSanitize(receiver)}.parquet`;
+    const fname = ViewerPayload.incytrShardFilename(sender, receiver);
+    const url = `${base}${fname}`;
     const rows = await _fetchParquet(url);
     _lruTouch(iCache, key, rows);
     return rows;
