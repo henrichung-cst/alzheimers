@@ -76,20 +76,21 @@ single matched bundle. Do not mix files from `data/incytr_frozen/v2_46clusters/i
 production run. Those roots are diagnostic/provenance material only unless the output directory and
 documentation explicitly mark the run as forensic.
 
-Default AD output gating is sce4-style:
+Default AD and T-cell output gating is floor-gated and uncapped:
 
 ```text
 (SigProb_condition1 > 0.1 OR SigProb_condition2 > 0.1) AND abs(PDS) >= 0.2
-then per sender/receiver Top300 by PDS up union Top300 by PDS down
 ```
 
-Do not add a p-value/FDR/q-value gate to sce4-style AD deliverables. The frozen sce4 reference did
-not use that arm.
+Do not add a p-value/FDR/q-value gate to canonical deliverables. Do not apply the per
+sender/receiver Top300 up/down cap to canonical Song or T-cell viewer outputs. Top300 is available
+only as an explicit sce4 table-compatibility diagnostic (`filter_significant_paths.py --top300`)
+because it is rank-sensitive to the PDS drift documented in the sce4 reproduction audit.
 
 `filter_significant_paths.py --exclude-transgenes` is available only for the explicit AD/sce4
 transgene-excluded sensitivity analysis. It removes paths touching `App`, `Psen1`, or `Mapt` in
-Ligand/Receptor/EM/Target before the Top300 cap. It is not a hidden default and should be called out
-in downstream results.
+Ligand/Receptor/EM/Target before any optional cap. It is not a hidden default and should be called
+out in downstream results.
 
 Before relying on a run or config, check path provenance:
 
@@ -107,7 +108,7 @@ and `filter_significant_paths.py`; the cohorts differ only in their input builde
 | `run_pair_mode.sh` | Per-contrast loop driver (mouse AD); calls `incytr_commandline.R` then `filter_significant_paths.py` for each of 9 contrasts. Reads `data/derived/incytr_inputs/`; writes `outputs/reports/incytr_pair_mode/wide/`. |
 | `run_pair_mode_tcells.sh` | Per-contrast loop driver (T-cell cohort); reuses the same `incytr_commandline.R`. pixi task `tcells-incytr`. |
 | `incytr_commandline.R` | R driver: calls `Incytr::Cal_pairwise_grid`; writes one wide parquet per contrast. Node labels (DEG/prG) and per-node FC are written inline. Env-parameterized for mouse vs human (`SPECIES`, `CHANNELS`, file/gene-col vars). |
-| `filter_significant_paths.py` | Row-subset significance filter applied after each contrast: `(SigProb_<disease> > 0.1 OR SigProb_<WTyp> > 0.1) AND abs(PDS) >= 0.2`, followed by the sce4 per-pair top-300 up/down cap. Optional `--exclude-transgenes` removes `App`/`Psen1`/`Mapt` paths before the cap for AD sensitivity analyses only. |
+| `filter_significant_paths.py` | Row-subset significance filter applied after each contrast: `(SigProb_<disease> > 0.1 OR SigProb_<WTyp> > 0.1) AND abs(PDS) >= 0.2`, uncapped by default. Optional `--top300` applies the sce4 per-pair top-300 up/down cap for compatibility diagnostics only. Optional `--exclude-transgenes` removes `App`/`Psen1`/`Mapt` paths for AD sensitivity analyses only. |
 | `audit_transgene_excluded_reproduction.R` | Sce4 forensic audit that removes `App`/`Psen1`/`Mapt` paths from both rerun and frozen sce4 references before gated-set and Top300 comparison. |
 | `emit_expr_bygroup.R` | Transcript-substrate emitter: per-(cluster, Group) trimean of `originalexp@data` via `Incytr:::grouped_weighted_quartile`; writes `outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet`. Run once per spine build, not per contrast. |
 | `build_pair_inputs.sh` | Input-prep orchestrator (mouse): calls `build_pair_seurat.R`, `export_decomposition_for_pair.py`, `build_input_gene_list.R`; writes `data/derived/incytr_inputs/`. |

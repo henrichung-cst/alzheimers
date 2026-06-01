@@ -15,8 +15,8 @@ factorial-OLS cluster that used to live here was deleted 2026-05-29 (closed path
 |---|---|---|
 | `build_celltype_decomposition.py` | Stage 6: project bulk phospho (pS/pT, pY) and protein onto `f_c` per-cell-rate weights; writes `protein_per_cluster.parquet`, `phospho_per_cluster{,_pY}.parquet`, `decomposition_audit.json` | `python alz/decomposition_mea/build_celltype_decomposition.py --spine levy_t5 --track both` |
 | `enrich_celltype.py` | Stage 7: per-cluster factorial OLS + GSEA MEA on the projected phospho cube; writes `mea_per_cluster{,_pY}.parquet`, `site_level_ols_per_cluster{,_pY}.parquet`, and CSV sidecars | `python -m alz.decomposition_mea.enrich_celltype --spine levy_t5 --track st` |
-| `build_per_animal_site_ols.py` | Publisher: unions st + py OLS into `per_animal/site_level_ols.parquet`; renames `cluster` → `cell_type`; consumed by the unified viewer | `python alz/decomposition_mea/build_per_animal_site_ols.py --spine levy_t5` |
-| `verify_decomposition.py` | Verification harness. The hard decomposition checks are mass identity and spine coverage. Per-cluster vs bulk MEA agreement is diagnostic concordance, and Incytr pair counts must be evaluated against the correct raw or filtered artifact. | `python alz/decomposition_mea/verify_decomposition.py --spine levy_t5 --checks mass coverage` |
+| `build_per_animal_site_ols.py` | Publisher: unions st + py OLS into `per_animal/site_level_ols.parquet`; renames `cluster` → `cell_type`; casts `site_id` to string across tracks; consumed by the unified viewer's `decomp_ols` edge slices | `python alz/decomposition_mea/build_per_animal_site_ols.py --spine levy_t5` |
+| `verify_decomposition.py` | Verification harness. The default hard gate is mass identity + spine coverage and writes `verification.json` for the viewer. Per-cluster vs bulk MEA agreement is diagnostic concordance, and Incytr pair counts must be evaluated against the correct raw or filtered artifact. | `python alz/decomposition_mea/verify_decomposition.py --spine levy_t5` |
 
 ## Key invariants
 
@@ -37,6 +37,11 @@ different contracts. Filtered `receiver_cache/pair_metadata.parquet` records act
 significance gate/top-N cap, so it is not expected to contain all `31 x 31 = 961` sender/receiver
 pairs.
 
+**Verifier outputs** — the default command writes the hard-gate
+`outputs/reports/decomposition/{spine}/verification.json`. Diagnostic runs, for example
+`--include-diagnostics`, write a separate `verification.*.json` report unless `--output` is provided.
+Diagnostic failures do not affect the exit code unless `--strict-diagnostics` is set.
+
 **Sign convention** — `+` = up in disease, matching `bulk_mea` NES/β and Incytr PDS/sclog2FC.
 
 **Spine** — `levy_t5` (31 clusters). Spine definition lives in
@@ -44,6 +49,13 @@ pairs.
 
 **Track vocabulary** — `st` = IMAC pS/pT (suffix `""`), `py` = pY (suffix `"_pY"`).
 pY requires `raw_phospho_normalized_pY.csv` from Stage 1; tolerates missing pY gracefully.
+
+**Published per-animal OLS** — `per_animal/site_level_ols.parquet` is the canonical combined
+viewer input for per-cell substrate-site evidence. It is derived from
+`site_level_ols_per_cluster.parquet` and `site_level_ols_per_cluster_pY.parquet`, with `cluster`
+renamed to `cell_type` and `site_id` stored as string. The string cast is required because the `st`
+track can carry numeric-looking site IDs while the `py` track carries accession-position IDs such as
+`ENSMUSP..._866`; treating `site_id` as numeric corrupts the mixed-track identifier column.
 
 ## Upstream prerequisites
 
@@ -54,7 +66,9 @@ pY requires `raw_phospho_normalized_pY.csv` from Stage 1; tolerates missing pY g
 
 - `alz/integration/build_normalized_substrate.py` — reads `protein_per_cluster.parquet`, `phospho_per_cluster*.parquet`
 - `alz/integration/build_omics_trace.py` — reads same
-- `alz/build_unified_viewer.py` — reads `mea_per_cluster.parquet`, `per_animal/site_level_ols.parquet`
+- `alz/build_unified_viewer.py` — reads `mea_per_cluster.parquet`, `per_animal/site_level_ols.parquet`;
+  writes lazy `outputs/reports/unified_viewer/edge_slices/decomp_ols/*.parquet` shards for the
+  Kinase Audit / Attribution drawer
 - `alz/viewer/paths.py` — path constant for `per_animal/site_level_ols.parquet`
 
 ## Runner scripts

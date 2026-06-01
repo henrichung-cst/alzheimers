@@ -33,6 +33,15 @@ The live workflow has three major components: the mouse bulk pipeline, the Incyt
 
 Pair-mode is the active Incytr path. It models each intercellular pathway as a four-gene chain (Ligand → Receptor → EM → Target) between sender and receiver cell types, scored against the upstream `incytr` R package (installed via `pixi run install-incytr`). Driven on the **Levy-t5** proportional-decomposition spine (31 clusters × 31 senders/receivers per contrast).
 
+Canonical Incytr outputs are floor-gated and uncapped: the scorer emits all paths, then
+`alz/incytr_pair/filter_significant_paths.py` keeps rows with
+`(SigProb_condition1 > 0.1 OR SigProb_condition2 > 0.1) AND abs(PDS) >= 0.2`. Do not add a
+p-value/FDR gate for canonical outputs. Do not apply the per sender/receiver Top300 up/down cap to
+Song/AD or T-cell viewer outputs; `--top300` is reserved for explicit sce4 table-compatibility
+diagnostics because the cap is rank-sensitive to unresolved `PDS` drift. AD production inputs are
+the matched bundle under `data/derived/incytr_inputs/`; T-cell production inputs are the matched
+per-donor bundles under `data/derived/tcells_incytr_inputs/`.
+
 The legacy factorial Incytr engine was archived 2026-05-18 (`archive/incytr_factorial_2026-05-18/`). It is preserved on disk but no longer wired into any pixi task or runner.
 
 ### 3. Human cross-species cohort (NBB / Mukesh)
@@ -90,6 +99,11 @@ concordance check, not a mathematical reconstruction identity, because MEA/GSEA 
 computed after ranking, centering, winsorization, and enrichment normalization. Incytr pair coverage
 must be interpreted by artifact: raw scorer outputs can be checked for scorer coverage, while
 filtered viewer-ready outputs are expected to contain only active sender/receiver pairs.
+
+`python alz/decomposition_mea/verify_decomposition.py --spine levy_t5` writes the hard-gate
+`verification.json` consumed by the unified viewer. Add `--include-diagnostics` for the MEA and
+Incytr artifact checks; those write a separate diagnostic report by default and do not block the
+viewer unless `--strict-diagnostics` is requested.
 
 ### Important guardrails
 
@@ -232,8 +246,8 @@ Provenance lives in `data/external/allen_abc/MANIFEST.json`.
 | `outputs/reports/kinase_attribution_human/` | Human NBB cohort: per-donor NES, recurrence tables, `celltype_specificity.csv` (cross-species support) |
 | `outputs/reports/wmb_expression/` | WMB per-class kinase/phosphatase expression |
 | `outputs/reports/snrna_integration/` | Song pseudobulk + within-cohort specificity + concordance |
-| `outputs/reports/decomposition/levy_t5/` | Per-cluster decomposition + verification |
-| `outputs/reports/unified_viewer/` | Interactive HTML viewer (`build_unified_viewer.py`) |
+| `outputs/reports/decomposition/levy_t5/` | Per-cluster decomposition + verification; `per_animal/site_level_ols.parquet` is the published st+py per-cell OLS table consumed by the viewer |
+| `outputs/reports/unified_viewer/` | Interactive HTML viewer (`build_unified_viewer.py`) plus lazy edge slices, including `edge_slices/decomp_ols/` for per-kinase substrate-site OLS evidence |
 
 ## Conventions
 

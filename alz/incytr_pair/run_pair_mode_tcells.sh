@@ -114,7 +114,7 @@ LOG="$LOG_DIR/pair_run.log"
         || failed+=("${donor}:d${later}_vs_d2")
     done
 
-    # Significance filter (parity-preserving row subset):
+    # Canonical significance floor (uncapped; no p_adj/FDR arm):
     # (SigProb_<later> > 0.1 OR SigProb_d2 > 0.1) AND |PDS| >= 0.2
     echo "=== $(date -Is) [$donor] significance filter ==="
     pixi run python alz/incytr_pair/filter_significant_paths.py --dir "$OUT_DIR"

@@ -1,27 +1,28 @@
-"""Apply sce4's significance gate to pair-mode output.
+"""Apply the canonical significance floor to pair-mode output.
 
 The driver emits ALL paths (overrides ``cutoff_SigProb=0``, ``cutoff_PDS=0`` in
 ``Cal_SigProb`` / ``Cal_PDS``) so the wide parquets are the unfiltered superset.
-This script reproduces the gate sce4 actually used to build its reference
-``DEG_PRG`` tables — verified byte-for-byte against sce4's own output
-(``Allpathway`` floors + ``Top300`` cap, see below):
+The canonical production gate is the floor that reproduces sce4's pre-cap
+``Allpathway`` universe:
 
     (SigProb_<A> > 0.1  OR  SigProb_<B> > 0.1)      # at least one condition
       AND
     |PDS| >= 0.2                                     # minimum "significant" PDS
-      THEN, per (Sender.group, Receiver.group) pair:
-    top-300 rows by PDS descending  UNION  top-300 rows by PDS ascending
+
+The per-pair Top300 up/down cap is intentionally NOT the default. Our sce4
+forensics showed that Top300 membership is rank-sensitive to PDS drift even
+when the pre-cap row universe is nearly identical. Use ``--top300`` only for
+explicit sce4 table-compatibility diagnostics, not canonical Song or T-cell
+viewer outputs.
 
 For AD transgene-excluded sensitivity analyses, pass ``--exclude-transgenes``.
 That removes paths touching ``App``, ``Psen1``, or ``Mapt`` in any pathway node
-before the per-pair top-300 cap. This is an analysis rule, not sce4's default
-published-table rule.
+before any optional per-pair cap. This is an analysis rule, not a hidden
+default.
 
-The two floors reproduce sce4's ``Allpathway_table`` exactly (it has zero rows
-with ``|PDS| < 0.2`` and zero rows with both SigProb <= 0.1). The per-pair
-top-300-up ∪ top-300-down cap then reproduces sce4's ``Top300_table`` exactly
-(65,750 rows / 418 pairs for the 2mo AppP contrast; reconstructing it from
-``Allpathway`` this way gives a 0-row symmetric set difference).
+The two floors match sce4's ``Allpathway_table`` floor definition (it has zero
+rows with ``|PDS| < 0.2`` and zero rows with both SigProb <= 0.1). Top300 table
+reconstruction remains available via ``--top300``.
 
 NO p-value / FDR arm: sce4 never ran the permutation test — none of its
 artifacts (420 per-pair CSVs, ``Allpathway``, ``Top300``, the two pairwise
@@ -31,14 +32,10 @@ kept (notably cell-sparse pairs whose permutation p is NA, e.g.
 Microglia -> Cholinergic-Neurons at 2mo). The nboot=100 permutation ``p_value_*``
 columns stay in ``wide/`` as informational columns; they do not gate.
 
-The cap is also what keeps the viewer small: without it, the two floors alone
-leave ~300k rows/contrast. The per-pair top-300 cap matches sce4's footprint
-(~66k rows/contrast).
-
 DuckDB-streamed (spill to ``~/.cache/duckdb``), atomic (``.tmp`` + rename),
-idempotent (re-running an already-filtered file is a no-op: the surviving rows
-still satisfy both floors, and a pair with <=600 surviving rows is unchanged by
-the cap).
+idempotent for a given mode when re-running from an uncapped or already
+floor-gated file. A previously Top300-capped or p-adj-filtered file cannot be
+expanded; rerun the R driver to regenerate those rows.
 """
 
 from __future__ import annotations
@@ -71,7 +68,7 @@ def _detect_sigprob(con: duckdb.DuckDBPyConnection, path: str) -> tuple[str, str
     return sigprob[0], sigprob[1]
 
 
-def filter_one(path: str, exclude_transgenes: bool = False) -> tuple[int, int]:
+def filter_one(path: str, exclude_transgenes: bool = False, top300: bool = False) -> tuple[int, int]:
     """Filter one parquet in place. Returns (rows_before, rows_after)."""
     spill = os.environ.get(
         "DUCKDB_TEMP_DIR", os.path.join(os.path.expanduser("~"), ".cache", "duckdb")
@@ -104,8 +101,8 @@ def filter_one(path: str, exclude_transgenes: bool = False) -> tuple[int, int]:
             f")"
         )
     tmp_out = path + ".tmp"
-    con.execute(f"""
-        COPY (
+    if top300:
+        query = f"""
             WITH gated AS (
                 SELECT * FROM read_parquet('{path}') WHERE {floors}
             ),
@@ -121,7 +118,12 @@ def filter_one(path: str, exclude_transgenes: bool = False) -> tuple[int, int]:
             )
             SELECT * EXCLUDE (rn_up, rn_dn) FROM ranked
             WHERE rn_up <= {TOP_N} OR rn_dn <= {TOP_N}
-        )
+        """
+    else:
+        query = f"SELECT * FROM read_parquet('{path}') WHERE {floors}"
+
+    con.execute(f"""
+        COPY ({query})
         TO '{tmp_out}' (FORMAT PARQUET, COMPRESSION ZSTD)
     """)
     n_after = con.execute(
@@ -142,8 +144,17 @@ def main() -> None:
         "--exclude-transgenes",
         action="store_true",
         help=(
-            "Drop paths containing App, Psen1, or Mapt before the top-300 cap. "
+            "Drop paths containing App, Psen1, or Mapt before any optional cap. "
             "Use only for the AD transgene-excluded sensitivity analysis."
+        ),
+    )
+    ap.add_argument(
+        "--top300",
+        action="store_true",
+        help=(
+            "After the SigProb/PDS floors, keep the per-pair top-300 PDS up "
+            "union top-300 PDS down. Use only for explicit sce4 Top300 "
+            "compatibility diagnostics."
         ),
     )
     args = ap.parse_args()
@@ -156,15 +167,20 @@ def main() -> None:
             raise SystemExit(f"no *_incytr_output.parquet under {args.dir!r}")
 
     print(
-        f"sce4 gate: SigProb > {SIGPROB_CUTOFF} (either) AND "
-        f"|PDS| >= {ABS_PDS_CUTOFF}, THEN per-pair top-{TOP_N} PDS up ∪ down "
+        f"canonical gate: SigProb > {SIGPROB_CUTOFF} (either) AND "
+        f"|PDS| >= {ABS_PDS_CUTOFF}"
+        f"{', THEN per-pair top-' + str(TOP_N) + ' PDS up ∪ down' if args.top300 else ', uncapped'} "
         f"{'(excluding App/Psen1/Mapt paths) ' if args.exclude_transgenes else ''}"
         f"({len(targets)} file(s))",
         flush=True,
     )
     grand_before = grand_after = 0
     for path in targets:
-        n_before, n_after = filter_one(path, exclude_transgenes=args.exclude_transgenes)
+        n_before, n_after = filter_one(
+            path,
+            exclude_transgenes=args.exclude_transgenes,
+            top300=args.top300,
+        )
         grand_before += n_before
         grand_after += n_after
         pct = (100.0 * n_after / n_before) if n_before else 0.0

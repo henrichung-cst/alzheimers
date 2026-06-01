@@ -1,12 +1,15 @@
 """Verification harness for the Levy-t5 per-cluster decomposition.
 
-Four contracts:
+Contracts:
   1. Mass identity: Σ_c [P_c × (N_c / N_total)] ≈ bulk per (gene, animal)
   2. Coverage: all spine clusters present in Stage 6 outputs
-  3. Per-cluster vs bulk MEA agreement under f_c-weighting
-  4. Incytr produces |spine|² scored sender × receiver pairs (31² = 961 on Levy-t5)
+  3. Diagnostic: per-cluster vs bulk MEA agreement under f_c-weighting
+  4. Diagnostic: Incytr sender × receiver coverage for a specific artifact
 
-Writes outputs/reports/decomposition/{spine}/verification.json.
+By default, only the hard decomposition gates (mass, coverage) run and write
+outputs/reports/decomposition/{spine}/verification.json. Diagnostic checks can
+be requested explicitly and write a separate report unless an output path is
+provided.
 """
 from __future__ import annotations
 
@@ -31,7 +34,9 @@ INCYTR_PAIRS = REPO / "outputs/reports/incytr_pair_mode/pair_metadata.parquet"
 CELL_COUNTS_FILE = REPO / "outputs/reports/snrna_integration/pseudobulk_cell_counts.csv"
 SAMPLE_MAPPING_FILE = REPO / "outputs/reports/data_ingest/sample_mapping.csv"
 
-CHECKS = ("mass", "coverage", "mea", "incytr")
+HARD_CHECKS = ("mass", "coverage")
+DIAGNOSTIC_CHECKS = ("mea", "incytr")
+CHECKS = HARD_CHECKS + DIAGNOSTIC_CHECKS
 
 
 def _spine_dir(spine: str) -> Path:
@@ -113,6 +118,7 @@ def check_mass_identity(spine_dir: Path, weights: pd.DataFrame) -> dict:
     max_rel = float(rel_err.max()) if len(cmp) else None
     return {
         "check": "mass_identity",
+        "severity": "hard",
         "n_compared": int(len(cmp)),
         "max_rel_err": max_rel,
         "median_rel_err": float(rel_err.median()) if len(cmp) else None,
@@ -140,7 +146,7 @@ def check_coverage(spine_dir: Path) -> dict:
         r.get("missing") == [] and r.get("extra") == []
         for r in results.values() if r.get("status") != "missing"
     )
-    return {"check": "coverage", "spine_size": len(expected),
+    return {"check": "coverage", "severity": "hard", "spine_size": len(expected),
             "results": results, "pass": all_match}
 
 
@@ -148,7 +154,8 @@ def check_per_cluster_vs_bulk_mea(spine_dir: Path, weights: pd.DataFrame) -> dic
     pc_path = spine_dir / "mea_per_cluster.parquet"
     bulk_path = BULK_DIR / "mea_stoichiometry.csv"
     if not pc_path.exists() or not bulk_path.exists():
-        return {"check": "per_cluster_vs_bulk_mea", "status": "skipped",
+        return {"check": "per_cluster_vs_bulk_mea", "severity": "diagnostic",
+                "status": "skipped",
                 "reason": f"missing: pc={pc_path.exists()}, bulk={bulk_path.exists()}",
                 "pass": None}
     pc = pd.read_parquet(pc_path)
@@ -182,6 +189,7 @@ def check_per_cluster_vs_bulk_mea(spine_dir: Path, weights: pd.DataFrame) -> dic
     median_diffs = [p["median_abs_diff"] for p in per_contrast]
     passed = bool(rhos and min(rhos) >= 0.7 and max(median_diffs) <= 0.5)
     return {"check": "per_cluster_vs_bulk_mea",
+            "severity": "diagnostic",
             "per_contrast": per_contrast,
             "min_rho": min(rhos) if rhos else None,
             "max_median_abs_diff": max(median_diffs) if median_diffs else None,
@@ -197,13 +205,15 @@ def check_incytr_pair_count() -> dict:
     # subtracts the diagonal.
     expected_pairs = len(expected) * len(expected)
     if not INCYTR_PAIRS.exists():
-        return {"check": "incytr_pair_count", "status": "missing",
+        return {"check": "incytr_pair_count", "severity": "diagnostic",
+                "status": "missing",
                 "expected_pairs": expected_pairs, "pass": None}
     pm = pd.read_parquet(INCYTR_PAIRS, columns=["sender", "receiver"])
     senders = set(pm["sender"].unique())
     receivers = set(pm["receiver"].unique())
     self_pairs = int((pm["sender"] == pm["receiver"]).sum())
     return {"check": "incytr_pair_count",
+            "severity": "diagnostic",
             "expected_pairs": expected_pairs,
             "n_pairs": int(len(pm)),
             "n_senders": len(senders),
@@ -217,20 +227,45 @@ def check_incytr_pair_count() -> dict:
                     and self_pairs == len(expected)}
 
 
+def _auto_output_path(spine_dir: Path, checks: list[str], include_diagnostics: bool) -> Path:
+    if tuple(checks) == HARD_CHECKS and not include_diagnostics:
+        return spine_dir / "verification.json"
+    suffix = "_".join(checks)
+    if include_diagnostics and tuple(checks) == CHECKS:
+        suffix = "diagnostics"
+    return spine_dir / f"verification.{suffix}.json"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--spine", default="levy_t5")
-    ap.add_argument("--checks", nargs="+", choices=CHECKS, default=list(CHECKS),
-                    help=f"Subset of checks to run (default: all of {CHECKS})")
+    ap.add_argument("--checks", nargs="+", choices=CHECKS, default=list(HARD_CHECKS),
+                    help="Subset of checks to run (default: hard gates only: "
+                         f"{HARD_CHECKS})")
+    ap.add_argument("--include-diagnostics", action="store_true",
+                    help="Append diagnostic checks (MEA concordance and Incytr "
+                         "artifact pair count). Diagnostics are reported but do "
+                         "not affect the default exit code.")
+    ap.add_argument("--strict-diagnostics", action="store_true",
+                    help="Make diagnostic failures affect the exit code. Use for "
+                         "investigations, not the viewer hard gate.")
+    ap.add_argument("--output", type=Path, default=None,
+                    help="Write report to this path. By default, hard-only runs "
+                         "write verification.json; diagnostic runs write a "
+                         "separate verification.*.json file.")
     args = ap.parse_args()
+
+    checks = list(dict.fromkeys(args.checks))
+    if args.include_diagnostics:
+        checks = list(dict.fromkeys(checks + list(DIAGNOSTIC_CHECKS)))
 
     spine_dir = _spine_dir(args.spine)
     spine_clusters = set(icfg.load_cluster_spine())
     weights = (_cluster_weights(spine_clusters)
-               if {"mass", "mea"} & set(args.checks) else None)
+               if {"mass", "mea"} & set(checks) else None)
 
     results = []
-    for name in args.checks:
+    for name in checks:
         print(f"[{name}] running ...")
         if name == "mass":
             r = check_mass_identity(spine_dir, weights)
@@ -243,14 +278,42 @@ def main():
         print(f"      pass={r['pass']}")
         results.append(r)
 
-    out = {"spine": args.spine, "checks": results,
-           "all_pass": all(r.get("pass") is True for r in results)}
-    out_path = spine_dir / "verification.json"
+    hard_results = [r for r in results if r.get("severity") == "hard"]
+    diagnostic_results = [r for r in results if r.get("severity") == "diagnostic"]
+    hard_pass = (
+        all(r.get("pass") is True for r in hard_results)
+        if hard_results else None
+    )
+    diagnostics_pass = (
+        all(r.get("pass") is True for r in diagnostic_results)
+        if diagnostic_results else None
+    )
+    exit_pass = bool(hard_pass is not False)
+    if args.strict_diagnostics and diagnostics_pass is False:
+        exit_pass = False
+
+    out = {
+        "spine": args.spine,
+        "checks_requested": checks,
+        "hard_checks": list(HARD_CHECKS),
+        "diagnostic_checks": list(DIAGNOSTIC_CHECKS),
+        "checks": results,
+        "hard_pass": hard_pass,
+        "diagnostics_pass": diagnostics_pass,
+        "all_checks_pass": all(r.get("pass") is True for r in results),
+        "exit_pass": exit_pass,
+        # Backward-compatible field consumed by older runners/viewer gates.
+        "all_pass": exit_pass,
+    }
+    out_path = args.output or _auto_output_path(
+        spine_dir, checks, args.include_diagnostics,
+    )
     with open(out_path, "w") as fh:
         json.dump(out, fh, indent=2)
     print(f"\nWrote {out_path}")
-    print(f"all_pass={out['all_pass']}")
-    if not out["all_pass"]:
+    print(f"hard_pass={out['hard_pass']} diagnostics_pass={out['diagnostics_pass']}")
+    print(f"exit_pass={exit_pass}")
+    if not exit_pass:
         sys.exit(1)
 
 

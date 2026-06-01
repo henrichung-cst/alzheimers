@@ -143,26 +143,24 @@ FULL_NBOOT="${FULL_NBOOT:-100}"
   fi
 
   # Gate the run on sce4 parity BEFORE filtering: the engine must still
-  # reproduce sce4's Top300 reference, else we do not ship the filtered output.
+  # reproduce sce4's pre-cap Allpathway universe, else we do not ship output.
   # Self-contained (regenerates the two reference pairs unfiltered) — it does
-  # NOT read wide/, because the cap below keeps only the per-pair top-300 PDS.
+  # NOT read wide/, so it is independent of production storage policy.
   # See verify_incytr_sce4.sh.
   echo "=== $(date -Is) sce4 parity gate ==="
   bash alz/incytr_pair/verify_incytr_sce4.sh
 
   # Full reproduction gate over all 9 unfiltered wide parquets against sce4's
   # pre-cap pairwise RDS files. This MUST run before filter_significant_paths.py,
-  # which caps wide/ in place and destroys the pre-cap path-set evidence.
+  # which rewrites wide/ in place and destroys ungated path-set evidence.
   echo "=== $(date -Is) full sce4 path-set gate ==="
   pixi run verify-incytr-sce4-full
 
-  # Apply sce4's significance gate to wide/ in place (the driver emits all paths
-  # at cutoff=0; this is the downstream half): SigProb > 0.1 (either) AND
-  # |PDS| >= 0.2, THEN per (sender, receiver) pair the top-300 PDS up ∪ down.
-  # Reproduces sce4's Allpathway floors + Top300 cap byte-for-byte. No p_adj arm
-  # (sce4 never ran the permutation; its reference has no p-value column). Pure
-  # row subset, idempotent.
-  echo "=== $(date -Is) significance filter (sce4 gate) ==="
+  # Apply the canonical significance floors to wide/ in place (the driver emits
+  # all paths at cutoff=0; this is the downstream half): SigProb > 0.1 (either)
+  # AND |PDS| >= 0.2. No p_adj arm. No Top300 cap by default; Top300 is too
+  # rank-sensitive to PDS drift and is reserved for explicit sce4 diagnostics.
+  echo "=== $(date -Is) significance filter (canonical floors, uncapped) ==="
   pixi run python alz/incytr_pair/filter_significant_paths.py --dir "$OUTPUT_DIR"
 
   ls -lh "$OUTPUT_DIR/"

@@ -37,9 +37,11 @@ run is explicitly labeled forensic/diagnostic:
 - Use `data/derived/incytr_inputs/` as the canonical matched AD input bundle. Do not mix
   transcriptomics, markers, protein, phospho, or kinase files across provenance folders for a
   production claim.
-- Preserve the sce4-style score gate for published/capped AD outputs:
-  `(SigProb_condition1 > 0.1 OR SigProb_condition2 > 0.1) AND abs(PDS) >= 0.2`, then per
-  sender/receiver Top300 up and Top300 down by `PDS`.
+- Preserve the sce4-style score floor for production AD and downstream Incytr outputs:
+  `(SigProb_condition1 > 0.1 OR SigProb_condition2 > 0.1) AND abs(PDS) >= 0.2`, uncapped.
+- Do not apply the per sender/receiver Top300 up/down cap to canonical Song/AD or T-cell viewer
+  outputs. Top300 remains available only as an explicit sce4 table-compatibility diagnostic because
+  it is rank-sensitive to the unresolved `PDS` drift.
 - Do not add a p-value, FDR, or q-value gate to sce4-style AD outputs. The frozen sce4 reference did
   not use that arm.
 - Keep the AD transgene exclusion (`App`, `Psen1`, `Mapt` in Ligand/Receptor/EM/Target) as an
@@ -58,8 +60,20 @@ pixi run python alz/incytr_pair/audit_incytr_input_provenance.py
 ```
 
 The policy consequence is direct: downstream Incytr applications should inherit the canonical input
-root, sce4-style gate, no-pvalue gate, and explicit transgene-sensitivity flag rather than silently
-copying whichever forensic command happened to improve a residual.
+root, sce4-style floor gate, uncapped row universe, no-pvalue gate, and explicit
+transgene-sensitivity flag rather than silently copying whichever forensic command happened to
+improve a residual.
+
+Operational artifact status after applying this policy on 2026-06-01:
+
+- Song/AD central wide outputs: 9 contrasts, 4,480,480 floor-gated uncapped rows.
+- Song/AD unified-viewer Incytr shards: 653 sender/receiver shards, 4,480,480 rows.
+- Song/AD unified-viewer decomp OLS shards: 389 kinase shards, 23,362,857 substrate-site OLS rows,
+  generated from `outputs/reports/decomposition/levy_t5/per_animal/site_level_ols.parquet`.
+- T-cell donor1 wide outputs: 3 contrasts, 737,081 floor-gated uncapped rows.
+- T-cell donor2 wide outputs: 4 contrasts, 1,832,503 floor-gated uncapped rows.
+- T-cell viewer Incytr shards: donor1 165 shards / 737,081 rows; donor2 100 shards /
+  1,832,503 rows.
 
 ## 1. Objective
 

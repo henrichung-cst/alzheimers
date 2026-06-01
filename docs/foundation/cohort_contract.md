@@ -149,6 +149,7 @@ Requires bulk MEA mode 1 outputs **plus** matched snRNA pseudobulk.
 | `phospho_per_cluster{,_pY}.parquet` | adds `site_id` |
 | `mea_per_cluster{,_pY}.parquet` | `cluster`, `kinase`, `contrast`, `NES`, `pval`, `FDR`, `residue_type`, `track` |
 | `site_level_ols_per_cluster{,_pY}.parquet` | `cluster`, `site_id`, `contrast`, `lfc`, `se`, `pval`, `fdr` |
+| `per_animal/site_level_ols.parquet` | Published union of st + pY site-level OLS for the viewer: `cell_type`, `track`, `contrast`, `site_id` (string identifier), `gene_symbol`, `motif`, `lfc`, `se`, `t`, `pval`, `fdr`, `n_obs` |
 | `verification.json` | Verification report. Treat mass identity and spine coverage as hard decomposition gates; treat MEA concordance and Incytr pair counts as artifact-specific diagnostics unless the verifier explicitly labels them hard gates. |
 
 ### 4.3 Invariants
@@ -157,6 +158,9 @@ Verified by `alz/decomposition_mea/verify_decomposition.py`:
 
 - **Mass identity** (per-cell-rate): `Σ_c [P_c × (N_c / N_total)] ≈ bulk`. **Not** literal `Σ_c P_c = bulk` — `f_c` weights are per-cell rates.
 - **Spine coverage**: all clusters in `config.CLUSTER_SPINE` present; rank-deficient clusters emit NaN (no silent drops).
+- **Site identifiers are strings** in the published `per_animal/site_level_ols.parquet`; mixed st/pY
+  tracks include both numeric-looking and accession-position identifiers, so downstream consumers must
+  not infer `site_id` as numeric.
 - **MEA concordance**: per-cluster vs bulk Spearman ρ and median absolute NES drift are diagnostic
   summaries. They are useful for detecting gross disagreement, but they are not reconstruction
   identities because MEA/GSEA NES values are computed after ranking, centering, winsorization, and
@@ -177,9 +181,9 @@ Verified by `alz/decomposition_mea/verify_decomposition.py`:
 
 | Artifact | Schema |
 |---|---|
-| `wide/*_incytr_output.parquet` | Central viewer-ready pair-mode outputs after the configured significance gate/top-N cap. Current AD default is sce4-style: `(SigProb_A > 0.1 OR SigProb_B > 0.1) AND abs(PDS) >= 0.2`, then per sender/receiver Top300 up/down by `PDS`. |
+| `wide/*_incytr_output.parquet` | Central viewer-ready pair-mode outputs after the configured significance floor. Current canonical default for AD and T-cell outputs is `(SigProb_A > 0.1 OR SigProb_B > 0.1) AND abs(PDS) >= 0.2`, uncapped. The per sender/receiver Top300 up/down cap is reserved for explicit sce4 table-compatibility diagnostics because it is rank-sensitive to PDS drift. |
 | raw diagnostic directories, e.g. `_sce4_full_q0/` | Unfiltered or minimally filtered scorer outputs used for reproduction and scorer-coverage checks. Do not confuse these with central viewer-ready `wide/`. |
-| `receiver_cache/receiver={cluster}/data.parquet` | Hive-partitioned for viewer; contains only active filtered pairs and rows that survived the central `wide/` gate/cap. |
+| `receiver_cache/receiver={cluster}/data.parquet` | Hive-partitioned for viewer; contains only active filtered pairs and rows that survived the central `wide/` floor gate. |
 | `pair_metadata.parquet` | Viewer/cache metadata for active filtered sender/receiver pairs, not raw 31×31 scorer coverage. |
 
 ### 5.3 Invariants

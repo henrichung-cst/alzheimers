@@ -85,6 +85,7 @@ def main() -> int:
     parts = [_load_track(spine_dir, t) for t in TRACKS]
     combined = pd.concat(parts, ignore_index=True)
     combined = combined.rename(columns={"cluster": "cell_type"})
+    combined["site_id"] = combined["site_id"].astype(str)
 
     # Keep only the columns the viewer + audits consume.
     cols = ["cell_type", "track", "contrast", "site_id", "gene_symbol", "motif",
