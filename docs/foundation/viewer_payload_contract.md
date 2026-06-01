@@ -159,7 +159,7 @@ Blocks that vary by context must expose `by_context`.
 The slice for a context with no kinase MEA should be column-compatible where practical, but may have
 zero rows. The context's capability flag must explain the absence.
 
-During migration, builders may also emit a flat fallback:
+Older payloads emitted a flat fallback during migration:
 
 ```json
 {
@@ -171,7 +171,8 @@ During migration, builders may also emit a flat fallback:
 }
 ```
 
-New JS should prefer `kinases.by_context[active_context]`.
+New JS should use `kinases.by_context[active_context]`. Current builders emit canonical
+`by_context` blocks; the adapter accepts older flat payloads only for backward compatibility.
 
 ### Cell Types
 
@@ -281,7 +282,7 @@ ViewerPayload.edgeUrl(kind)
 Adapter behavior:
 
 - Prefer v2 `by_context`.
-- Fall back to legacy flat blocks when v2 fields are absent.
+- Fall back to legacy flat blocks only when reading older payloads with no v2 fields.
 - Return explicit empty slices for unavailable features.
 - Surface a reason string from `context.notes` or `meta.notes` when data are intentionally absent.
 
@@ -367,8 +368,8 @@ Current context targets:
 3. Add `by_context` to `kinases`, `celltypes`, and `incytr_pathways`.
 4. Refactor shared JS tabs to read through the adapter.
 5. After both viewers validate, remove cohort-specific direct reads from shared tabs.
-6. Keep legacy flat fallback for single-context AD payloads until at least one additional dataset is
-   onboarded and both current viewers build successfully from v2-only blocks.
+6. Remove emitted flat fallback blocks after both current viewers build successfully from v2-only
+   blocks.
 
 Current status as of 2026-06-01: steps 1-5 are implemented for the AD unified viewer and the T-cell
 viewer. Shared
@@ -376,7 +377,8 @@ viewer modules now read active-context kinases, cell types, Incytr blocks, contr
 filenames through `ViewerPayload`. The T-cell viewer uses `selection.context`, `ctx=`, and
 `by_context` as canonical routing. Legacy `#d=...` URLs are accepted only as an inbound shim and are
 rewritten through context state. The T-cell builder no longer emits `by_donor` aliases for
-`kinases`, `celltypes`, `incytr_pathways`, or `meta.transcript_trace`.
+`kinases`, `celltypes`, `incytr_pathways`, or `meta.transcript_trace`. The AD builder no longer
+duplicates flat `kinases`, `celltypes`, or `incytr_pathways` blocks outside `by_context`.
 
 ## Deprecation Targets
 

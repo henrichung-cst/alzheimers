@@ -1399,14 +1399,11 @@ def _build_celltypes_slice(data: UnifiedData) -> dict:
     }
 
 
-def _with_single_context(block: dict | None, context_id: str) -> dict | None:
-    """Attach v2 by_context while preserving the legacy flat block."""
+def _as_single_context_block(block: dict | None, context_id: str) -> dict | None:
+    """Wrap a single-context block in the schema-v2 by_context shape."""
     if block is None:
         return None
-    legacy = {k: v for k, v in block.items() if k != "by_context"}
-    out = dict(block)
-    out["by_context"] = {context_id: legacy}
-    return out
+    return {"by_context": {context_id: block}}
 
 
 
@@ -2734,9 +2731,9 @@ def build_payload(data: UnifiedData) -> dict:
     kinase_motifs = _build_kinase_motifs(sorted(motif_names))
 
     payload = {
-        "kinases": _with_single_context(kinases_slice, context_id),
+        "kinases": _as_single_context_block(kinases_slice, context_id),
         "kinase_motifs": kinase_motifs,
-        "celltypes": _with_single_context(celltypes_slice, context_id),
+        "celltypes": _as_single_context_block(celltypes_slice, context_id),
         "kinase_celltype_evidence": kinase_celltype_evidence,
         "attribution_index": attribution_index,
         "decomposition_index": decomposition_index,
@@ -2762,7 +2759,7 @@ def build_payload(data: UnifiedData) -> dict:
             "human_perdonor_index": "edge_slices/human_perdonor/index.json",
             "present_human_perdonor_kinase_ids": [],
         },
-        "incytr_pathways": _with_single_context(incytr_pathways_block, context_id),
+        "incytr_pathways": _as_single_context_block(incytr_pathways_block, context_id),
         "meta": meta,
     }
     if human_slice is not None:
@@ -2906,8 +2903,9 @@ def validate(data: UnifiedData) -> str:
             if "by_context" not in (payload.get(key) or {}):
                 errors.append(f"{key}.by_context missing")
 
-        pk = payload["kinases"]
-        pc_ = payload["celltypes"]
+        default_context = meta.get("default_context")
+        pk = payload["kinases"]["by_context"].get(default_context, {})
+        pc_ = payload["celltypes"]["by_context"].get(default_context, {})
 
         if len(pk["id"]) != n_kinases:
             errors.append(f"kinases rows {len(pk['id'])} != vocab {n_kinases}")
