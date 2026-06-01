@@ -1,7 +1,13 @@
 # T-cell viewer: lift `alz/viewer/` verbatim, shape T-cell data to its contract
 
 **Date:** 2026-05-29
-**Status:** Plan — awaiting approval before any code edits
+**Status:** Superseded by schema-v2 viewer payload contract
+
+**Supersession note (2026-06-01):** this plan records the pre-schema-v2 lift strategy and is kept
+only as historical context. Do not follow its `selection.donor`, `by_donor`, direct
+`PAYLOAD.kinases`, or direct `PAYLOAD.incytr_pathways` guidance. Current viewer routing is
+`selection.context` / `ctx=`, and payload blocks are canonical under `*.by_context`; see
+[`docs/foundation/viewer_payload_contract.md`](../foundation/viewer_payload_contract.md).
 
 ## Why this plan exists
 

@@ -1283,11 +1283,15 @@ def write_payload(payload: dict) -> dict:
 from jinja2 import Environment, FileSystemLoader  # noqa: E402
 
 _TEMPLATE_DIR = os.path.join(HERE, "tcell_viewer", "template")
+_SHARED_TEMPLATE_DIR = os.path.join(HERE, "viewer_shared", "template")
 
 
 def _render_template() -> str:
     def _raw(path: str) -> str:
-        with open(os.path.join(_TEMPLATE_DIR, path)) as f:
+        local_path = os.path.join(_TEMPLATE_DIR, path)
+        shared_path = os.path.join(_SHARED_TEMPLATE_DIR, path)
+        source = local_path if os.path.exists(local_path) else shared_path
+        with open(source) as f:
             return f.read()
 
     env = Environment(

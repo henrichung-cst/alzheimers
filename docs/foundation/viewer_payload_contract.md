@@ -288,6 +288,10 @@ Adapter behavior:
 The adapter must not depend on T-cell `by_donor` or `selection.donor`. Those names describe source
 data provenance inside builders, not the frontend payload contract.
 
+The shared adapter source lives at `alz/viewer_shared/template/js/00_payload_adapter.js`. Both viewer
+builders resolve that shared file when rendering `raw("js/00_payload_adapter.js")`; do not recreate
+per-viewer copies unless the adapter behavior actually diverges.
+
 ## Current Mapping
 
 ### Song/AD Unified Viewer
@@ -388,8 +392,8 @@ Deprecated code paths are:
   contexts should carry their own contrast axis.
 - Cohort-name checks such as `PAYLOAD.meta.cohort === "tcell"` when a capability flag or context
   field can express the behavior.
-- Duplicated common JS modules once both viewers read through the adapter and validate from the v2
-  payload shape.
+- Duplicated common JS modules once both viewers read through shared adapters/capability helpers and
+  validate from the v2 payload shape.
 
 ## Validation
 

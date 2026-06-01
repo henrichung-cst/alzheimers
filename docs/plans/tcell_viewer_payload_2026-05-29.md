@@ -2,7 +2,13 @@
 
 **Date:** 2026-05-29
 **Branch:** `perf/pairmode-memory-audit` (viewer work lives downstream of the audit branch)
-**Status:** Plan — implementation not started
+**Status:** Superseded by schema-v2 viewer payload contract
+
+**Supersession note (2026-06-01):** this plan records the earlier T-cell payload proposal and is
+kept only as historical context. Do not follow its `selection.donor`, `by_donor`, or direct
+`PAYLOAD.*` payload guidance. Current viewer routing is `selection.context` / `ctx=`, and shared
+payload blocks are canonical under `*.by_context`; see
+[`docs/foundation/viewer_payload_contract.md`](../foundation/viewer_payload_contract.md).
 
 ## Context
 
