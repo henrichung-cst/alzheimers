@@ -66,7 +66,7 @@ async function _loadPayload() {
 let HAS_HUMAN = false;
 const INITIAL_STATE = {
   selection: { kinase:null, backbone:null, celltype:null, kinaseHuman:null,
-               context:"donor1", donor:"donor1" },
+               context:"donor1" },
   filters:   { contrast:"ALL", fdr:0.25 },
   view:      { mode:"mouse", activeTab:"kinase", glossaryOpen:false,
                kinaseAuditTab:"measurement-trace",

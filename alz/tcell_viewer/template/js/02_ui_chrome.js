@@ -357,14 +357,14 @@ const TAB_GROUP_LABELS = {
   reference: "Reference",
 };
 
-// Kinase tabs gate on donor:donor1 — donor2 has no IMAC/MEA outputs.
-// Incytr tabs render for both donors; the donor selection picks per-donor
-// contrast vocab and shard prefix.
+// Kinase tabs gate on context:donor1 — donor2 has no IMAC/MEA outputs.
+// Incytr tabs render for both contexts; the context selection picks contrast
+// vocab and shard prefix.
 const _KINASE_REQ_DONOR1 = [{
-  type:"selection", key:"donor", equal:"donor1",
+  type:"selection", key:"context", equal:"donor1",
   message:"Kinase MEA is donor1-only — donor2 has no IMAC.",
   cta:"Switch to donor 1",
-  setSelection:{ key:"donor", value:"donor1" },
+  setSelection:{ key:"context", value:"donor1" },
 }];
 
 const TAB_MANIFEST = {

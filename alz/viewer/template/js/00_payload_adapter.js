@@ -1,7 +1,7 @@
 "use strict";
 
-// Shared v2 payload adapter. It prefers context-aware blocks and falls back to
-// the legacy flat / by_donor shapes while the two viewers migrate.
+// Shared v2 payload adapter. Context-aware blocks are canonical; flat blocks
+// remain accepted for single-context AD payloads.
 const ViewerPayload = (function(){
   function _payload() {
     return (typeof PAYLOAD !== "undefined" && PAYLOAD) || {};
@@ -15,17 +15,6 @@ const ViewerPayload = (function(){
   function contexts() {
     const ctx = _meta().contexts;
     if (Array.isArray(ctx) && ctx.length) return ctx;
-    const p = _payload();
-    if (p.kinases && p.kinases.by_donor) {
-      return Object.keys(p.kinases.by_donor).map(id => ({
-        id,
-        label: id.replace(/^donor/, "Donor "),
-        cohort: _meta().cohort || "tcell",
-        axis_kind: "donor",
-        capabilities: {},
-        notes: [],
-      }));
-    }
     return [{
       id: _meta().default_context || "song_ad",
       label: "Song AD",
@@ -40,7 +29,7 @@ const ViewerPayload = (function(){
   }
   function activeContext() {
     const sel = (window.Store && Store.state && Store.state.selection) || {};
-    return sel.context || sel.donor || defaultContext();
+    return sel.context || defaultContext();
   }
   function contextRecord(contextId) {
     const id = contextId || activeContext();
@@ -65,7 +54,6 @@ const ViewerPayload = (function(){
     if (!block) return null;
     const id = contextId || activeContext();
     if (block.by_context && block.by_context[id]) return block.by_context[id];
-    if (block.by_donor && block.by_donor[id]) return block.by_donor[id];
     return block;
   }
   function kinases(contextId) {

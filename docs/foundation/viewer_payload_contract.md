@@ -228,6 +228,20 @@ Incytr pathway payloads should expose context-specific shard indexes:
 The frontend should never hard-code donor prefixes or mouse-only filename templates. It should read
 `filename_template` and the active context's `present` list.
 
+## Verification
+
+Run the payload contract verifier after rebuilding viewer payloads:
+
+```bash
+python alz/viewer/verify_payload_contract.py \
+  outputs/reports/unified_viewer/unified_viewer.payload.json \
+  outputs/reports/tcell_viewer/tcell_viewer.payload.json
+```
+
+The verifier checks schema version, context metadata, canonical `by_context` blocks, Incytr slice
+indexes, and context capability consistency. It also fails if the canonical shared blocks regress to
+deprecated `by_donor` aliases.
+
 ### Edge Slice References
 
 `payload.edge_slice_ref` remains the URL map for lazy shards:
@@ -349,21 +363,22 @@ Current context targets:
 6. Keep legacy flat fallback until at least one additional dataset is onboarded and both current
    viewers build successfully from v2.
 
-Current status: steps 1-4 are implemented for the AD unified viewer and the T-cell viewer. Shared
+Current status: steps 1-5 are implemented for the AD unified viewer and the T-cell viewer. Shared
 viewer modules now read active-context kinases, cell types, Incytr blocks, contrast axes, and shard
-filenames through `ViewerPayload`. The T-cell viewer still keeps `selection.donor` and `by_donor`
-as compatibility aliases, but `selection.context`, `ctx=`, and `by_context` are canonical.
+filenames through `ViewerPayload`. The T-cell viewer uses `selection.context`, `ctx=`, and
+`by_context` as canonical routing. Legacy `#d=...` URLs are accepted only as an inbound shim and are
+rewritten through context state.
 
 ## Deprecation Targets
 
 The migration is intended to remove old routing assumptions, not just add a parallel schema.
 Deprecated code paths are:
 
-- Frontend reads from T-cell `by_donor`; new reads should use `by_context`.
+- Frontend reads from T-cell `by_donor`; use `by_context`.
 - Frontend reads directly from flat `PAYLOAD.kinases`, `PAYLOAD.celltypes`, or
   `PAYLOAD.incytr_pathways`; new shared code should use `ViewerPayload`.
 - `selection.donor` and hash key `d=` as the primary routing state; `selection.context` and
-  `ctx=` are canonical. The donor fields stay temporarily as compatibility aliases.
+  `ctx=` are canonical. `d=` is read only to preserve old inbound links.
 - Hard-coded contrast vocabularies such as App/Tau/ApTt or donor day labels inside shared tabs;
   contexts should carry their own contrast axis.
 - Cohort-name checks such as `PAYLOAD.meta.cohort === "tcell"` when a capability flag or context

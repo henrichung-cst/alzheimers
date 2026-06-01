@@ -105,6 +105,15 @@ filtered viewer-ready outputs are expected to contain only active sender/receive
 Incytr artifact checks; those write a separate diagnostic report by default and do not block the
 viewer unless `--strict-diagnostics` is requested.
 
+Viewer payloads use schema v2. Dataset-specific builders stay separate, but the emitted JSON routes
+shared blocks through `meta.contexts` and `*.by_context`. Check generated payloads with:
+
+```bash
+python alz/viewer/verify_payload_contract.py \
+  outputs/reports/unified_viewer/unified_viewer.payload.json \
+  outputs/reports/tcell_viewer/tcell_viewer.payload.json
+```
+
 ### Important guardrails
 
 - Direct cell-type deconvolution, transcript-only rescue, factor-model, and two-compartment rescue are **closed paths** — see `docs/foundation/analysis_charter.md`

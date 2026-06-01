@@ -643,7 +643,7 @@ def _write_tcell_pair_pathways() -> dict:
     shutil.rmtree(EDGE_SLICES_INCYTR_PATHWAYS_DIR, ignore_errors=True)
     os.makedirs(EDGE_SLICES_INCYTR_PATHWAYS_DIR, exist_ok=True)
 
-    by_donor: dict[str, dict] = {}
+    by_context: dict[str, dict] = {}
     all_senders: set[str] = set()
     all_receivers: set[str] = set()
     all_contrasts: set[str] = set()
@@ -651,7 +651,7 @@ def _write_tcell_pair_pathways() -> dict:
         block = _write_donor_pair_pathways(donor)
         if block is None:
             continue
-        by_donor[donor] = block
+        by_context[donor] = block
         all_senders.update(block["senders"])
         all_receivers.update(block["receivers"])
         all_contrasts.update(block["contrasts"])
@@ -661,20 +661,11 @@ def _write_tcell_pair_pathways() -> dict:
         "schema_version": SCHEMA_VERSION,
         "filename_template": "{context}__{sender}__{receiver}.parquet",
         "sanitize_rule": "replace('/', '-'); replace(' ', '_'); replace('.', '')",
-        "donors": sorted(by_donor.keys()),
-        "by_donor": {
-            d: {
-                "present": block["present_pairs"],
-                "n_total_rows": block["n_total_rows"],
-                "pair_row_counts": block["pair_row_counts"],
-                "contrasts": block["contrasts"],
-            }
-            for d, block in by_donor.items()
+        "contexts": sorted(by_context.keys()),
+        "by_context": {
+            d: dict(block["slice_index"])
+            for d, block in by_context.items()
         },
-    }
-    index["by_context"] = {
-        d: dict(block["slice_index"])
-        for d, block in by_donor.items()
     }
     with open(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, "index.json"), "w") as f:
         json.dump(index, f)
@@ -684,9 +675,9 @@ def _write_tcell_pair_pathways() -> dict:
         "version": 1,
         "source": f"pair_mode_tcells ({os.path.relpath(INCYTR_PAIR_MODE_TCELLS_DIR, config.REPO_ROOT)})",
         "source_mode": "pair_mode_tcells",
-        "donors": sorted(by_donor.keys()),
-        "by_donor": by_donor,
-        "by_context": by_donor,
+        "donors": sorted(by_context.keys()),
+        "contexts": sorted(by_context.keys()),
+        "by_context": by_context,
         "senders": sorted(all_senders),
         "receivers": sorted(all_receivers),
         "contrasts": sorted(all_contrasts, key=lambda x: int(x.split("_")[0][1:])),
@@ -1031,14 +1022,14 @@ def build_tcell_audit_manifest() -> dict:
 def _write_tcell_transcript_trace() -> dict:
     """Generate per-donor, per-cluster transcript pseudobulk parquets.
 
-    Returns {by_donor: {<donor>: {clusters, relative_path}}, ...}.
+    Returns {by_context: {<donor-context>: {clusters, relative_path}}, ...}.
     Donor scoping disambiguates clusters whose names appear in both donors
     (e.g. CD4Naive) but whose pseudobulk values differ.
     """
     rel_path = "audit_sources/transcript_trace"
     out_dir_base = os.path.join(UNIFIED_VIEWER_DIR, rel_path)
 
-    by_donor: dict[str, dict] = {}
+    by_context: dict[str, dict] = {}
     for donor in DONORS:
         agg_path = os.path.join(
             TCELLS_INCYTR_INPUTS_DIR, donor, "scrna", "aggexp_data.csv"
@@ -1049,13 +1040,13 @@ def _write_tcell_transcript_trace() -> dict:
         if not os.path.exists(agg_path):
             print(f"  ({donor}) no aggexp_data.csv; skipping transcript_trace",
                   flush=True)
-            by_donor[donor] = {"clusters": [], "relative_path": donor_rel}
+            by_context[donor] = {"clusters": [], "relative_path": donor_rel}
             continue
         df = pd.read_csv(agg_path)
         if "gene" not in df.columns:
             print(f"  ({donor}) aggexp_data.csv missing `gene` column; skip",
                   flush=True)
-            by_donor[donor] = {"clusters": [], "relative_path": donor_rel}
+            by_context[donor] = {"clusters": [], "relative_path": donor_rel}
             continue
         col_split: dict[str, list[tuple[str, str]]] = {}
         for c in df.columns:
@@ -1078,13 +1069,13 @@ def _write_tcell_transcript_trace() -> dict:
             pq.write_table(pa.Table.from_pandas(long_df, preserve_index=False),
                            out_path, compression="zstd")
             donor_slugs.append(slug)
-        by_donor[donor] = {
+        by_context[donor] = {
             "clusters": sorted(donor_slugs),
             "relative_path": donor_rel,
         }
         print(f"  ({donor}) wrote {len(donor_slugs)} transcript_trace shard(s)",
               flush=True)
-    return {"by_donor": by_donor, "by_context": by_donor}
+    return {"by_context": by_context}
 
 
 # ---------------------------------------------------------------------------
@@ -1092,9 +1083,9 @@ def _write_tcell_transcript_trace() -> dict:
 # ---------------------------------------------------------------------------
 
 def build_tcell_payload() -> dict:
-    """Assemble the T-cell payload — per-donor kinases nested under by_donor."""
+    """Assemble the T-cell payload — donor-scoped data nested under by_context."""
     print("[build_tcell_payload] kinase slices per donor:", flush=True)
-    by_donor_kinases: dict[str, dict] = {}
+    kinases_by_context: dict[str, dict] = {}
     contrast_union: list[str] = []
     fdr_thresh = 0.25
     for donor in DONORS:
@@ -1102,7 +1093,7 @@ def build_tcell_payload() -> dict:
         if block is None:
             print(f"  {donor}: no MEA (expected for donor2)", flush=True)
             continue
-        by_donor_kinases[donor] = block["kinases_slice"]
+        kinases_by_context[donor] = block["kinases_slice"]
         for c in block["contrasts"]:
             if c not in contrast_union:
                 contrast_union.append(c)
@@ -1112,19 +1103,14 @@ def build_tcell_payload() -> dict:
 
     # Empty donor slice: same column names, zero rows. Keeps the JS contract
     # stable (donor swap toggles between two slice objects, never null).
-    if by_donor_kinases:
-        template_cols = next(iter(by_donor_kinases.values()))
+    if kinases_by_context:
+        template_cols = next(iter(kinases_by_context.values()))
         empty_slice = {k: [] for k in template_cols}
         for donor in DONORS:
-            by_donor_kinases.setdefault(donor, empty_slice)
+            kinases_by_context.setdefault(donor, empty_slice)
 
     kinases_slice = {
-        "by_donor": by_donor_kinases,
-        "by_context": by_donor_kinases,
-        # Top-level fallback used by tab modules that index PAYLOAD.kinases.<col>
-        # directly: defaults to donor1 (the MEA-bearing donor). The slice cache
-        # swaps via PAYLOAD.kinases.by_donor[currentDonor].
-        **(by_donor_kinases.get("donor1") or {}),
+        "by_context": kinases_by_context,
     }
 
     print("[build_tcell_payload] celltypes slice:", flush=True)
@@ -1152,7 +1138,7 @@ def build_tcell_payload() -> dict:
     print("[build_tcell_payload] transcript_trace shards:", flush=True)
     transcript_trace_meta = _write_tcell_transcript_trace()
     total = sum(len(b["clusters"])
-                for b in transcript_trace_meta.get("by_donor", {}).values())
+                for b in transcript_trace_meta.get("by_context", {}).values())
     print(f"  {total} cluster shard(s) total across {len(DONORS)} donors",
           flush=True)
 
@@ -1160,7 +1146,7 @@ def build_tcell_payload() -> dict:
     union_kinases: list[str] = []
     seen: set[str] = set()
     for donor in DONORS:
-        for k in (by_donor_kinases.get(donor, {}).get("name") or []):
+        for k in (kinases_by_context.get(donor, {}).get("name") or []):
             if k not in seen:
                 seen.add(k)
                 union_kinases.append(k)
@@ -1182,7 +1168,7 @@ def build_tcell_payload() -> dict:
 
     # Timepoints actually seen across both donors → palette subset.
     timepoint_set: set[str] = set()
-    for block in incytr_pathways_block.get("by_donor", {}).values():
+    for block in incytr_pathways_block.get("by_context", {}).values():
         for c in block.get("contrasts", []):
             timepoint_set.add(_timepoint_label(c))
             timepoint_set.add(c.split("_", 1)[1] if "_" in c else c)
@@ -1196,7 +1182,7 @@ def build_tcell_payload() -> dict:
         donor_contrasts = ip_block.get("contrasts") or []
         capabilities = {
             "kinases": donor in DONOR_WITH_MEA and len(
-                by_donor_kinases.get(donor, {}).get("id", [])
+                kinases_by_context.get(donor, {}).get("id", [])
             ) > 0,
             "celltypes": len(celltypes_by_context.get(donor, {}).get("id", [])) > 0,
             "incytr": bool(ip_block.get("slice_index", {}).get("present")),
@@ -1205,7 +1191,7 @@ def build_tcell_payload() -> dict:
             "human_reference": False,
             "subclass_breakdown": False,
             "audit_tables": True,
-            "transcript_trace": donor in transcript_trace_meta.get("by_donor", {}),
+            "transcript_trace": donor in transcript_trace_meta.get("by_context", {}),
             "omics_trace": False,
         }
         notes = []
@@ -1375,8 +1361,8 @@ def validate(payload: dict | None = None) -> str:
                 errors.append(f"{key}.by_context missing")
 
         # Donor1 must have MEA.
-        by_donor = payload.get("kinases", {}).get("by_donor", {})
-        d1_rows = len(by_donor.get("donor1", {}).get("id", []))
+        kinases_by_context = payload.get("kinases", {}).get("by_context", {})
+        d1_rows = len(kinases_by_context.get("donor1", {}).get("id", []))
         if d1_rows == 0:
             errors.append("donor1 kinases slice is empty — expected MEA outputs")
 

@@ -126,15 +126,14 @@ function wireTabs() {
       });
     });
   }
-  // Donor toggle wiring (T-cell viewer only).
+  // Context toggle wiring (T-cell viewer only; contexts are donor-scoped here).
   const dwrap = document.getElementById("donor-toggle");
   if (dwrap) {
     dwrap.querySelectorAll("button.mode-btn").forEach(btn => {
       btn.addEventListener("click", () => {
-        const d = btn.dataset.donor || btn.dataset.context;
-        if (d === ViewerPayload.activeContext()) return;
-        Store.dispatch({type:"SET_SELECTION", key:"context", value:d});
-        Store.dispatch({type:"SET_SELECTION", key:"donor", value:d});
+        const ctx = btn.dataset.context;
+        if (ctx === ViewerPayload.activeContext()) return;
+        Store.dispatch({type:"SET_SELECTION", key:"context", value:ctx});
       });
     });
   }
@@ -156,9 +155,9 @@ function _syncModeToggle() {
 function _syncDonorToggle() {
   const wrap = document.getElementById("donor-toggle");
   if (!wrap) return;
-  const donor = ViewerPayload.activeContext();
+  const context = ViewerPayload.activeContext();
   wrap.querySelectorAll("button.mode-btn").forEach(btn => {
-    const on = (btn.dataset.donor || btn.dataset.context) === donor;
+    const on = btn.dataset.context === context;
     btn.classList.toggle("active", on);
     btn.setAttribute("aria-selected", on ? "true" : "false");
   });

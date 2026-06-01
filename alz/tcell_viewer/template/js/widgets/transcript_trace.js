@@ -29,21 +29,20 @@ const TranscriptTraceStore = (() => {
     return String(name).replaceAll("/", "-").replaceAll(" ", "_");
   }
 
-  function _activeDonor() {
+  function _activeContext() {
     return ViewerPayload.activeContext();
   }
 
   // Cohort-aware block resolution. Mouse cohort: top-level {clusters,
   // relative_path}. T-cell cohort: by_context[<context>] = {clusters,
   // relative_path} — different donors carry distinct pseudobulk values for
-  // overlapping cluster names, so the shard dir is donor-scoped.
+  // overlapping cluster names, so the shard dir is context-scoped.
   function _meta() {
     const m = (typeof PAYLOAD !== "undefined"
                && PAYLOAD.meta
                && PAYLOAD.meta.transcript_trace) || null;
     if (!m) return null;
-    if (m.by_context) return m.by_context[_activeDonor()] || null;
-    if (m.by_donor) return m.by_donor[_activeDonor()] || null;
+    if (m.by_context) return m.by_context[_activeContext()] || null;
     return m;
   }
 

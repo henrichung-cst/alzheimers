@@ -9,7 +9,7 @@ const SliceCache = (function(){
   let ESR = null;
   let BUCKET_SIZE = 256;
   let dPresent = null, sPresent = null, iPresent = null, hPresent = null;
-  let iPresentByDonor = null;       // T-cell: {donor1: Set, donor2: Set}
+  let iPresentByContext = null;     // T-cell: {donor1: Set, donor2: Set}
   function _ensureInit() {
     if (ESR !== null) return;
     ESR = (typeof PAYLOAD !== "undefined" && PAYLOAD && PAYLOAD.edge_slice_ref) || {};
@@ -20,10 +20,10 @@ const SliceCache = (function(){
     );
     const si = ViewerPayload.incytrSliceIndex();
     iPresent = new Set((si.present || []).map(([s, r]) => s + "||" + r));
-    iPresentByDonor = {};
+    iPresentByContext = {};
     for (const ctx of ViewerPayload.contexts()) {
       const idx = ViewerPayload.incytrSliceIndex(ctx.id);
-      iPresentByDonor[ctx.id] = new Set(
+      iPresentByContext[ctx.id] = new Set(
         (idx.present || []).map(([s, r]) => s + "||" + r)
       );
     }
@@ -120,11 +120,11 @@ const SliceCache = (function(){
   async function loadIncytrShard(sender, receiver) {
     _ensureInit();
     const skey = sender + "||" + receiver;
-    // T-cell: per-donor shards. Mouse: flat shards.
+    // T-cell: context-scoped shards. Mouse: flat shards.
     const context = ViewerPayload.activeContext();
-    const perDonorSet = context && iPresentByDonor ? iPresentByDonor[context] : null;
-    if (perDonorSet) {
-      if (!perDonorSet.has(skey)) return [];
+    const contextSet = context && iPresentByContext ? iPresentByContext[context] : null;
+    if (contextSet) {
+      if (!contextSet.has(skey)) return [];
     } else if (!iPresent.has(skey)) {
       return [];
     }
