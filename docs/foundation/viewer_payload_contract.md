@@ -292,7 +292,8 @@ data provenance inside builders, not the frontend payload contract.
 
 The shared adapter source lives at `alz/viewer_shared/template/js/00_payload_adapter.js`. Both viewer
 builders resolve that shared file when rendering `raw("js/00_payload_adapter.js")`; do not recreate
-per-viewer copies unless the adapter behavior actually diverges.
+per-viewer copies unless the adapter behavior actually diverges. Broader frontend sharing policy is
+tracked in `docs/foundation/viewer_frontend_contract.md`.
 
 ## Current Mapping
 
@@ -379,7 +380,17 @@ filenames through `ViewerPayload`. The T-cell viewer uses `selection.context`, `
 `by_context` as canonical routing. Legacy `#d=...` URLs are accepted only as an inbound shim and are
 rewritten through context state. The T-cell builder no longer emits `by_donor` aliases for
 `kinases`, `celltypes`, `incytr_pathways`, or `meta.transcript_trace`. The AD builder no longer
-duplicates flat `kinases`, `celltypes`, or `incytr_pathways` blocks outside `by_context`.
+duplicates flat `kinases`, `celltypes`, or `incytr_pathways` blocks outside `by_context`. Initial
+frontend deduplication has also moved byte-identical shared modules into `viewer_shared`:
+`tabs/incytr_state.js`, `widgets/multiselect.js`, and `widgets/sequence_logo.js`. `SliceCache`
+is also shared and uses context-scoped Incytr shard indexes by default while retaining legacy flat
+index fallback for older payloads. The Incytr heatmap and pathways tabs are shared as well; they
+derive disease/day and timepoint/baseline vocabularies from each active context instead of
+hard-coding the AD/Song contrast grid. Kinase detail and transcript trace modules are also shared;
+they branch on payload capabilities/context metadata rather than cohort-specific filenames. Hash and
+prerequisite routing is shared through `ctx=` and active-context defaults. Header, boot, and
+evidence-row rendering are shared with optional context-switch and cohort-label support. Manual
+browser smoke for both generated viewers passed on 2026-06-01 after this shared-module refactor.
 
 ## Deprecation Targets
 

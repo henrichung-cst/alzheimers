@@ -21,6 +21,7 @@ Read by analytical role, not creation order.
 | [`foundation/repo_retention_policy.md`](./foundation/repo_retention_policy.md) | Retention policy + active vs archived inventory; banned code paths |
 | [`foundation/cohort_contract.md`](./foundation/cohort_contract.md) | Canonical input/output schemas for the four shared analysis modes; per-cohort parameter knobs |
 | [`foundation/viewer_payload_contract.md`](./foundation/viewer_payload_contract.md) | Shared frontend payload schema for current and future viewers; builders stay separate but emit a common context/capability contract |
+| [`foundation/viewer_frontend_contract.md`](./foundation/viewer_frontend_contract.md) | Frontend sharing policy for AD/Song and T-cell viewers; documents shared modules, intentional forks, and consolidation targets |
 | [`foundation/mukesh_ingest_policies.yml`](./foundation/mukesh_ingest_policies.yml) | Mukesh / NBB human ingest edge-case policies (consumed by `ingest_mukesh.py`) |
 
 ## Reference Guides

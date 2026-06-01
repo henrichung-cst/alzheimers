@@ -3,8 +3,8 @@
 // Mirrors the KinaseFilter contract: localStorage-backed, get(k) / set(patch)
 // / reset() / subscribe(fn). Persistence key: incytrFilter.v3.
 //
-// v3 (per-disease trajectory chips):
-//   trajLabels     — object keyed by disease (App/Tau/ApTt), each value an
+// v3 (per-group trajectory chips):
+//   trajLabels     — object keyed by the active context's contrast group, each value an
 //                    array of selected labels. AND within a disease (path
 //                    must carry every selected label) AND across diseases.
 //                    {App: [], Tau: [], ApTt: []} = no gate.
@@ -59,10 +59,10 @@ window.IncytrFilter = (function() {
         if (!(k in saved)) continue;
         if (_arrKeys.has(k)) _state[k] = Array.isArray(saved[k]) ? saved[k].slice() : [];
         else if (_objKeys.has(k)) {
-          // Merge per-disease object, sanitising each value to an array.
+          // Merge dynamic per-context keys, sanitising each value to an array.
           const cur = Object.assign({}, _defaults[k]);
           if (saved[k] && typeof saved[k] === "object") {
-            for (const d of Object.keys(cur)) {
+            for (const d of Object.keys(saved[k])) {
               cur[d] = Array.isArray(saved[k][d]) ? saved[k][d].slice() : [];
             }
           }

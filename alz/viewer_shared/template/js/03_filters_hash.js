@@ -6,7 +6,11 @@ function _checkRequirement(req) {
     if (req.equal !== undefined) return f[req.key] === req.equal;
     return f[req.key] != null;
   }
-  if (req.type === "selection") return sel[req.key] != null;
+  if (req.type === "selection") {
+    if (req.equal !== undefined) return sel[req.key] === req.equal;
+    return sel[req.key] != null;
+  }
+  if (req.type === "payload") return !!(window.PAYLOAD && PAYLOAD[req.key]);
   return true;
 }
 
@@ -28,6 +32,9 @@ function renderUnmetPrerequisite(panelEl, tab) {
   btn.addEventListener("click", () => {
     if (unmet.goTo) {
       Store.dispatch({type:"SET_VIEW", key:"activeTab", value:unmet.goTo});
+    } else if (unmet.setSelection) {
+      Store.dispatch({type:"SET_SELECTION",
+        key:unmet.setSelection.key, value:unmet.setSelection.value});
     } else if (unmet.focus) {
       const el = document.getElementById(unmet.focus);
       if (el) { el.focus(); if (el.click) try { el.click(); } catch(_){} }
@@ -43,12 +50,15 @@ function renderUnmetPrerequisite(panelEl, tab) {
 // reload and back/forward restore state. Only non-default keys are emitted
 // to keep the URL short. Suppresses re-broadcast while applying inbound.
 // ---------------------------------------------------------------------------
-const _HASH_DEFAULTS = {
-  t: "kinase",
-  fdr: 0.25,
-  k: null, b: null, ct: null,
-  m: "mouse", kh: null,
-};
+function _hashDefaults() {
+  return {
+    t: "kinase",
+    fdr: 0.25,
+    k: null, b: null, ct: null,
+    m: "mouse", kh: null,
+    ctx: ViewerPayload.defaultContext(),
+  };
+}
 let _hashApplying = false;
 
 function _serializeHash() {
@@ -58,12 +68,14 @@ function _serializeHash() {
     fdr: f.fdr,
     k: s.kinase, b: s.backbone, ct: s.celltype,
     m: v.mode, kh: s.kinaseHuman,
+    ctx: s.context,
   };
+  const defaults = _hashDefaults();
   const parts = [];
   for (const k in cur) {
     const val = cur[k];
     if (val == null) continue;
-    if (val === _HASH_DEFAULTS[k]) continue;
+    if (val === defaults[k]) continue;
     parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(String(val)));
   }
   return parts.length ? "#" + parts.join("&") : "";
@@ -95,9 +107,12 @@ function applyHash() {
     if (map.ct != null) Store.dispatch({type:"SET_SELECTION", key:"celltype", value:parseInt(map.ct,10)});
     if (map.kh != null) Store.dispatch({type:"SET_SELECTION", key:"kinaseHuman", value:parseInt(map.kh,10)});
     if (map.m != null && HAS_HUMAN) Store.dispatch({type:"SET_VIEW", key:"mode", value:map.m});
+    const ctx = map.ctx || map.d;
+    if (ctx != null) {
+      Store.dispatch({type:"SET_SELECTION", key:"context", value:ctx});
+    }
     if (map.t != null) Store.dispatch({type:"SET_VIEW", key:"activeTab", value:map.t});
   } finally {
     _hashApplying = false;
   }
 }
-

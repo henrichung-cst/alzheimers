@@ -9,20 +9,42 @@
 // timepoint into IncytrFilter and switches tabs.
 // ---------------------------------------------------------------------------
 
-// Mouse defaults; context payloads supply block.diseases / block.timepoints so
-// the multiselects/chips reflect the active context's contrast vocabulary.
+// Context payloads can supply block.diseases / block.timepoints. Otherwise
+// fall back to the context contrast axis, then to parsing block.contrasts.
 const _IP_DISEASES_FALLBACK = ["App", "Tau", "ApTt"];
 const _IP_TIMEPOINTS_FALLBACK = ["2mo", "4mo", "6mo"];
 
-function _ipDiseases() {
+function _ipAxisParts() {
   const block = _ipBlock();
-  if (!block) return _IP_DISEASES_FALLBACK;
-  return block.diseases || _IP_DISEASES_FALLBACK;
+  const axis = ViewerPayload.contrastAxis();
+  const groups = (block && block.diseases && block.diseases.length)
+    ? block.diseases
+    : (axis.groups || []);
+  const timepoints = (block && block.timepoints && block.timepoints.length)
+    ? block.timepoints
+    : (axis.timepoints || []);
+  if ((groups && groups.length) || (timepoints && timepoints.length) || !block) {
+    return { groups: groups || [], timepoints: timepoints || [] };
+  }
+  const g = [], t = [];
+  const seenG = new Set(), seenT = new Set();
+  for (const c of block.contrasts || []) {
+    const i = String(c).indexOf("_");
+    const a = i < 0 ? String(c) : String(c).slice(0, i);
+    const b = i < 0 ? "" : String(c).slice(i + 1);
+    if (!seenG.has(a)) { seenG.add(a); g.push(a); }
+    if (b && !seenT.has(b)) { seenT.add(b); t.push(b); }
+  }
+  return { groups: g, timepoints: t };
+}
+
+function _ipDiseases() {
+  const v = _ipAxisParts().groups;
+  return v.length ? v : _IP_DISEASES_FALLBACK;
 }
 function _ipTimepoints() {
-  const block = _ipBlock();
-  if (!block) return _IP_TIMEPOINTS_FALLBACK;
-  return block.timepoints || _IP_TIMEPOINTS_FALLBACK;
+  const v = _ipAxisParts().timepoints;
+  return v.length ? v : _IP_TIMEPOINTS_FALLBACK;
 }
 // Per-shard pagination: the table renders at most one (sender, receiver)
 // shard at a time, paginated client-side. Page size bounds DOM render cost;
@@ -32,7 +54,7 @@ function _ipTimepoints() {
 const _IP_PAGE_SIZE = 100;
 
 // Trajectory labels — fixed at build time, derived per (path, disease) from
-// raw PDS at 2/4/6 mo. Non-exclusive: a single (path, disease) tuple can
+// raw PDS across the active context's ordered timepoints. Non-exclusive: a single (path, group) tuple can
 // carry multiple labels (e.g. always-up AND monotonic-up). Shard rows carry
 // a semicolon-joined string in `traj_labels`. Incomplete paths (any
 // timepoint missing in the Incytr output) get an empty string and render
@@ -48,10 +70,10 @@ const _IP_TRAJ_COLORS = {
   "mixed":          { bg: "#f8f0e0", fg: "#705020", border: "#d0b080" },
 };
 const _IP_TRAJ_TIPS = {
-  "always-up":      "PDS > 0 at all three timepoints (uuu).",
-  "always-down":    "PDS < 0 at all three timepoints (ddd).",
-  "monotonic-up":   "PDS strictly increasing: PDS(2mo) < PDS(4mo) < PDS(6mo).",
-  "monotonic-down": "PDS strictly decreasing: PDS(2mo) > PDS(4mo) > PDS(6mo).",
+  "always-up":      "PDS > 0 at every available timepoint.",
+  "always-down":    "PDS < 0 at every available timepoint.",
+  "monotonic-up":   "PDS strictly increasing across the ordered timepoints.",
+  "monotonic-down": "PDS strictly decreasing across the ordered timepoints.",
   "mixed":          "Sign of PDS changes across timepoints (e.g. udu, ddu).",
 };
 

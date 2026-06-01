@@ -9,7 +9,7 @@ const SliceCache = (function(){
   let ESR = null;
   let BUCKET_SIZE = 256;
   let dPresent = null, sPresent = null, iPresent = null, hPresent = null;
-  let iPresentByContext = null;     // T-cell: {donor1: Set, donor2: Set}
+  let iPresentByContext = null;     // context id -> Set("sender||receiver")
   function _ensureInit() {
     if (ESR !== null) return;
     ESR = (typeof PAYLOAD !== "undefined" && PAYLOAD && PAYLOAD.edge_slice_ref) || {};
@@ -46,7 +46,7 @@ const SliceCache = (function(){
       if (window.location.protocol === "file:") {
         throw new Error(
           "Browser blocked local sidecar fetches under file://. " +
-          "Serve outputs/reports/unified_viewer over HTTP and open that URL."
+          "Serve the viewer output directory over HTTP and open that URL."
         );
       }
       throw e;
@@ -116,11 +116,12 @@ const SliceCache = (function(){
   // Sanitize rule matches alz/integration/load.R:sanitize_celltype — replace
   // "/" with "-" and " " with "_". Sender raw, receiver display name (the
   // payload-side senders/receivers arrays already carry canonical display).
-  const iCache = new Map();              // "sender||receiver" -> rows[]
+  const iCache = new Map();              // "context||sender||receiver" -> rows[]
   async function loadIncytrShard(sender, receiver) {
     _ensureInit();
     const skey = sender + "||" + receiver;
-    // T-cell: context-scoped shards. Mouse: flat shards.
+    // Prefer context-scoped shard indexes. Legacy flat indexes remain supported
+    // for older payloads that predate viewer schema v2.
     const context = ViewerPayload.activeContext();
     const contextSet = context && iPresentByContext ? iPresentByContext[context] : null;
     if (contextSet) {

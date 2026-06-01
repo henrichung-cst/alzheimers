@@ -33,10 +33,9 @@ const TranscriptTraceStore = (() => {
     return ViewerPayload.activeContext();
   }
 
-  // Cohort-aware block resolution. Mouse cohort: top-level {clusters,
-  // relative_path}. T-cell cohort: by_context[<context>] = {clusters,
-  // relative_path} — different donors carry distinct pseudobulk values for
-  // overlapping cluster names, so the shard dir is context-scoped.
+  // Context-aware block resolution. Single-context payloads can still use a
+  // top-level {clusters, relative_path}; multi-context payloads can provide
+  // by_context[<context>] with distinct shard directories.
   function _meta() {
     const m = (typeof PAYLOAD !== "undefined"
                && PAYLOAD.meta
@@ -120,7 +119,7 @@ const TranscriptTraceStore = (() => {
     const parts = String(contrast).split("_");
     if (parts.length !== 2) return null;
     // T-cell contrasts are `<day>_<baseline>` (e.g. d13_d2). Shard `group`
-    // column is the day token itself — no `ma_<tp>_<geno>` synthesis.
+    // column is the day token itself.
     if (_cohort() === "tcell") {
       const [day, baseline] = parts;
       return [

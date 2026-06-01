@@ -1,21 +1,43 @@
 // ---------------------------------------------------------------------------
 // Incytr Heatmap tab — sender×receiver candidate-path counts for a chosen
-// contrast. Filter UI: Disease × Timepoint selects, optional pvalue gate,
-// |PDS| effect-size floor, Reset button + live count line. pvalue defaults
-// to off (blank) — per-animal SigProb Wald-t is unreliable in this cohort,
-// so |PDS| is the recommended primary filter.
+// contrast. Filter UI: context group × timepoint/baseline selects, optional
+// pvalue gate, |PDS| effect-size floor, Reset button + live count line.
 //
 // State lives in IncytrFilter (shared with the Pathway table tab) so picks
 // flow across tabs. Click on a heatmap cell → seeds the table tab's
 // senderIn / receiverIn / disease / timepoint filters and switches tabs.
 // ---------------------------------------------------------------------------
 
-const _IH_DISEASES = ["App", "Tau", "ApTt"];
-const _IH_TIMEPOINTS = ["2mo", "4mo", "6mo"];
-
 function _ihBlock() {
   return ViewerPayload.incytr();
 }
+
+function _ihAxisParts() {
+  const block = _ihBlock();
+  const axis = ViewerPayload.contrastAxis();
+  const groups = (block && block.diseases && block.diseases.length)
+    ? block.diseases
+    : (axis.groups || []);
+  const timepoints = (block && block.timepoints && block.timepoints.length)
+    ? block.timepoints
+    : (axis.timepoints || []);
+  if ((groups && groups.length) || (timepoints && timepoints.length) || !block) {
+    return { groups: groups || [], timepoints: timepoints || [] };
+  }
+  const g = [], t = [];
+  const seenG = new Set(), seenT = new Set();
+  for (const c of block.contrasts || []) {
+    const i = String(c).indexOf("_");
+    const a = i < 0 ? String(c) : String(c).slice(0, i);
+    const b = i < 0 ? "" : String(c).slice(i + 1);
+    if (!seenG.has(a)) { seenG.add(a); g.push(a); }
+    if (b && !seenT.has(b)) { seenT.add(b); t.push(b); }
+  }
+  return { groups: g, timepoints: t };
+}
+
+function _ihDiseases() { return _ihAxisParts().groups; }
+function _ihTimepoints() { return _ihAxisParts().timepoints; }
 
 function _ihContrastFromState() {
   const f = IncytrFilter.get();
@@ -25,8 +47,7 @@ function _ihContrastFromState() {
 function _ihSnapPvalue(p) {
   // Snap user input down to the nearest precomputed pvalue threshold. Null
   // (or non-finite) opens the gate by selecting the largest threshold in the
-  // grid — useful because the per-animal SigProb Wald-t is unreliable, so
-  // pvalue is opt-in and |PDS| is the recommended primary filter.
+  // grid.
   const block = _ihBlock();
   const thr = block && block.heatmap_counts && block.heatmap_counts.thresholds;
   if (!thr || !thr.length) return { value: null, index: 0, open: true };
@@ -82,21 +103,32 @@ function _ihCountAt(sIdx, rIdx, cIdx, tIdx, apIdx) {
 function _ihSyncControls() {
   const block = _ihBlock();
   if (!block) return;
-  const f = IncytrFilter.get();
+  const diseases = _ihDiseases();
+  const timepoints = _ihTimepoints();
+  let f = IncytrFilter.get();
+  let snapDisease = f.hmDisease;
+  let snapTimepoint = f.hmTimepoint;
+  if (diseases.length && diseases.indexOf(snapDisease) < 0) snapDisease = diseases[0];
+  if (timepoints.length && timepoints.indexOf(snapTimepoint) < 0) snapTimepoint = timepoints[0];
+  if (snapDisease !== f.hmDisease || snapTimepoint !== f.hmTimepoint) {
+    IncytrFilter.set({hmDisease: snapDisease, hmTimepoint: snapTimepoint});
+    f = IncytrFilter.get();
+  }
 
   const dSel = document.getElementById("ih-disease");
   if (dSel) {
-    dSel.innerHTML = _IH_DISEASES.map(d =>
+    dSel.innerHTML = diseases.map(d =>
       `<option value="${_escapeHtml(d)}">${_escapeHtml(d)}</option>`
     ).join("");
     dSel.value = f.hmDisease;
   }
   const tSel = document.getElementById("ih-timepoint");
   if (tSel) {
-    tSel.innerHTML = _IH_TIMEPOINTS.map(t =>
+    tSel.innerHTML = timepoints.map(t =>
       `<option value="${_escapeHtml(t)}">${_escapeHtml(t)}</option>`
     ).join("");
     tSel.value = f.hmTimepoint;
+    if (tSel.parentElement) tSel.parentElement.style.display = timepoints.length > 1 ? "" : "none";
   }
   const pInput = document.getElementById("ih-pvalue");
   if (pInput) pInput.value = (f.hmPvalue == null) ? "" : f.hmPvalue;
@@ -144,7 +176,11 @@ function wireIncytrHeatmap() {
   });
   const resetBtn = document.getElementById("ih-reset");
   if (resetBtn) resetBtn.addEventListener("click", () => {
-    IncytrFilter.set({ hmDisease: "App", hmTimepoint: "2mo", hmPvalue: null, hmAbsPds: 0.01 });
+    const ds = _ihDiseases(), ts = _ihTimepoints();
+    IncytrFilter.set({
+      hmDisease: ds[0] || null, hmTimepoint: ts[0] || null,
+      hmPvalue: null, hmAbsPds: 0.01,
+    });
     _ihSyncControls();
     _ihRenderPlot();
   });

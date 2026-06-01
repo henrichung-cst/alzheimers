@@ -111,6 +111,11 @@ canonical frontend routing primitives; donor-specific payload aliases such as `b
 emitted by the current T-cell payload. Old `#d=...` T-cell links are accepted only as inbound URL
 compatibility and are translated into context state.
 
+Viewer frontend modules are shared only where behavior is identical or config-driven. The current
+shared template modules live under `alz/viewer_shared/template/js/`; local viewer templates override
+shared files at the same path. See `docs/foundation/viewer_frontend_contract.md` before adding or
+forking viewer JavaScript.
+
 Check generated payloads with:
 
 ```bash

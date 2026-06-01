@@ -126,7 +126,7 @@ function wireTabs() {
       });
     });
   }
-  // Context toggle wiring (T-cell viewer only; contexts are donor-scoped here).
+  // Optional context toggle wiring. Viewers without a context toggle no-op.
   const dwrap = document.getElementById("donor-toggle");
   if (dwrap) {
     dwrap.querySelectorAll("button.mode-btn").forEach(btn => {

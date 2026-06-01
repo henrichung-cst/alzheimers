@@ -24,38 +24,48 @@ per-tab branches to `boot.js`.
 |---|---:|---|
 | `index.html.j2` | 23 | Jinja shell |
 | `head.html` | 17 | HTML head + ESM imports |
-| `body.html` | 165 | Live tab panels (kinase, temporalv2, methods) |
-| `styles.css` | 467 | Shared styles |
+| `body.html` | 152 | Live tab panels |
+| `styles.css` | 652 | Shared styles |
 
 ## JS — shared infrastructure
 
 | File | Lines | Notes |
 |---|---:|---|
-| `js/01_state.js` | 466 | Store + reducer, METRIC_DEFS, TAB_GUIDE (kinase + methods), audit/measurement-trace stores |
-| `js/02_ui_chrome.js` | 414 | how-to drawer, kinase-tab view export, splitter / drawer resizer, TAB_MANIFEST |
-| `js/03_filters_hash.js` | 191 | filter cache, prerequisite check, URL hash |
-| `js/04_slice_cache.js` | 145 | hyparquet lazy loader for kinase edge slices |
-| `js/05_header.js` | 169 | header + tab population |
-| `js/boot.js` | 153 | boot, glossary, cross-tab refresh |
+| `js/01_state.js` | 522 | Store + reducer, METRIC_DEFS, TAB_GUIDE, audit/measurement-trace stores |
+| `js/02_ui_chrome.js` | 431 | how-to drawer, kinase-tab view export, splitter / drawer resizer, TAB_MANIFEST |
 
 ## JS — widgets
 
 | File | Notes |
 |---|---|
-| `js/widgets/multiselect.js` | Multiselect popover used by kinase + incytr filter bars |
-| `js/widgets/transcript_trace.js` | TranscriptTraceStore — per-cluster transcript pseudobulk shards (kinase-audit drawer) |
-| `js/widgets/evidence_row.js` | OmicsTraceStore + EvidencePanel — 4 nodes × 4 layers Evidence tab for Incytr Pathways (Item 3.3) |
 
 ## JS — tabs
 
 | File | Lines | Notes |
 |---|---:|---|
-| `js/tabs/kinase_explorer.js` | 772 | Kinase Explorer scoring + render |
-| `js/tabs/kinase_audit.js` | 1367 | Audit infra + MEA + WMB + SEA-AD + Song panels |
-| `js/tabs/kinase_detail.js` | 42 | renderActiveKinaseAuditTab + renderKinaseDetail |
-| `js/tabs/kinase_wiring.js` | 344 | wireKinaseTable, filter UI |
-| `js/tabs/temporal_v2.js` | 609 | Decomp series builder |
-| `js/tabs/kinase_human.js` | — | Human (Mukesh/NBB) per-donor kinase explorer (active when PAYLOAD.human present) |
+| `js/tabs/kinase_explorer.js` | 827 | T-cell donor1 kinase MEA explorer |
+| `js/tabs/kinase_audit.js` | 1405 | T-cell kinase audit/detail support |
+| `js/tabs/kinase_wiring.js` | 83 | wireKinaseTable, filter UI |
+| `js/tabs/temporal_v2.js` | 793 | Temporal series builder |
+
+## Shared JS fallback
+
+The builder resolves missing local template files from `alz/viewer_shared/template`.
+Current shared modules used by this viewer:
+
+- `js/00_payload_adapter.js`
+- `js/03_filters_hash.js`
+- `js/04_slice_cache.js`
+- `js/05_header.js`
+- `js/boot.js`
+- `js/tabs/incytr_state.js`
+- `js/tabs/incytr_heatmap.js`
+- `js/tabs/incytr_pathways.js`
+- `js/tabs/kinase_detail.js`
+- `js/widgets/multiselect.js`
+- `js/widgets/sequence_logo.js`
+- `js/widgets/transcript_trace.js`
+- `js/widgets/evidence_row.js`
 
 ## Verification
 
