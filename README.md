@@ -78,13 +78,18 @@ ProjecTILs reference atlases (carmonalab figshare doi 10.6084/m9.figshare.236083
 
 Forward projection only — `P_c = f_c × bulk` — **not** statistical deconvolution. See `docs/incytr_deconvolution_pivot.md` for the contract and `docs/plans/change_request_02_spine_rethreshold.md` for the levy19 → levy_t5 rethreshold (per-(cluster, animal) cell gate relaxed from the original `≥50` down to `≥5`, rank-gate dropped — 19 strict-rank clusters → 31 clusters covering 94.5% of nuclei).
 
-End-to-end decomposition rebuild (pseudobulk → proportions → decompose → per-cluster MEA → verify, with a hard skipped-cluster / `all_pass` gate):
+End-to-end decomposition rebuild (pseudobulk → proportions → decompose → per-cluster MEA → verify):
 
 ```bash
 bash alz/runners/main/rerun_decomposition_chain.sh
 ```
 
-Verification harness (`alz/decomposition_mea/verify_decomposition.py`) checks mass identity, spine coverage, per-cluster vs bulk MEA agreement, and pair coverage.
+Verification is split conceptually into hard invariants and diagnostics. The hard decomposition
+invariants are mass identity and spine coverage. Per-cluster-vs-bulk MEA agreement is a diagnostic
+concordance check, not a mathematical reconstruction identity, because MEA/GSEA NES values are
+computed after ranking, centering, winsorization, and enrichment normalization. Incytr pair coverage
+must be interpreted by artifact: raw scorer outputs can be checked for scorer coverage, while
+filtered viewer-ready outputs are expected to contain only active sender/receiver pairs.
 
 ### Important guardrails
 

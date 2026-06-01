@@ -28,7 +28,7 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
                   │
                   ▼
     outputs/reports/incytr_pair_mode/wide/<contrast>_incytr_output.parquet
-                  │  (9 wide parquets, 31² = 961 rows each)
+                  │  (9 central viewer-ready parquets after the configured gate/cap)
                   ▼
     alz/incytr_pair/pair_to_receiver_cache.py
                   │
@@ -46,10 +46,10 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
 | `emit_expr_bygroup.R` | Transcript-substrate emitter: per-(cluster, Group) mean of `originalexp@data`; writes `outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet`. |
 | `build_pair_inputs.sh` | Input-prep orchestrator: calls `build_pair_seurat.R`, `export_decomposition_for_pair.py`, and `build_input_gene_list.R`; writes to `data/derived/incytr_inputs/`. |
 | `build_pair_seurat.R` | Builds `incytr_obj.rds` from the snRNA-seq data. Writes to `data/derived/incytr_inputs/`. |
-| `build_input_gene_list.R` | Builds `input_gene_list.csv` for the driver. Writes to `data/derived/incytr_inputs/`. |
+| `build_input_gene_list.R` | Builds `allmarkers.csv`; the driver derives per-contrast DEG from this file and assembles gene-use with prG. Writes to `data/derived/incytr_inputs/`. |
 | `export_decomposition_for_pair.py` | Reshapes `{protein,phospho,phospho_pY}_per_cluster.parquet` into yuyu CSV format for the R driver. Writes to `data/derived/incytr_inputs/`. |
 | `run_pair_mode.sh` | Per-contrast loop driver; calls `incytr_commandline.R` for each of the 9 contrasts. |
-| `pair_to_receiver_cache.py` | Reshapes pair-mode wide outputs from `outputs/reports/incytr_pair_mode/wide/` (9 contrasts × 961 rows) into the long-form `receiver_cache/` layout the unified viewer consumes. Invoked by `alz/runners/main/run_pair_mode_viewer_build.sh`. |
+| `pair_to_receiver_cache.py` | Reshapes central pair-mode outputs from `outputs/reports/incytr_pair_mode/wide/` into the long-form `receiver_cache/` layout the unified viewer consumes. The row count reflects the configured gate/cap, not raw 31×31 scorer coverage. Invoked by `alz/runners/main/run_pair_mode_viewer_build.sh`. |
 
 ### `alz/integration/` — output consumers + config
 
@@ -74,9 +74,12 @@ R dependencies still required: `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`.
 
 ## Invariants
 
-- **31² = 961 sender × receiver pairs per contrast** — must hold for every one of the 9 contrasts. A drop indicates either a spine-rebuild bug or a silent filter in the upstream call.
+- **Raw scorer coverage is separate from filtered viewer readiness** — raw/unfiltered scorer runs can
+  be checked for expected sender/receiver coverage. Central `wide/`, `receiver_cache/`, and
+  unified-viewer pathway shards are filtered/capped viewer artifacts and are expected to contain only
+  active pairs.
 - **9 contrasts** — disease × timepoint (3 diseases × 3 timepoints; const + App + Tau + Int + time_4mo + time_6mo + App×time4 + App×time6 + Tau×time4 + Tau×time6, contrast list in `config_integration.py`).
-- **Rank-deficient clusters emit NaN, not silent drops** — preserves the 31-cluster spine in every output. Verify with `python alz/decomposition_mea/verify_decomposition.py --spine levy_t5 --all`.
+- **Rank-deficient clusters emit NaN, not silent drops** — preserves the 31-cluster spine in decomposition outputs. Verify the hard decomposition gates with `python alz/decomposition_mea/verify_decomposition.py --spine levy_t5 --checks mass coverage`.
 - **Pair-mode pvalue is untrustworthy** — filter / rank pathways on `|PDS|`, not pvalue. (Reason: pair-mode permutation pvalues conflate enumeration biases with signal; see memory note `project_incytr_pair_pvalue_untrustworthy`.)
 - **Direct levy_t5 crosswalks only** — reference annotations (WMB, SEA-AD, HBCA, Song) map *directly* to levy_t5 clusters. No chained mappings through intermediate vocabularies.
 

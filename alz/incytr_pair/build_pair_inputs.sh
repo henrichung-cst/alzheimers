@@ -5,8 +5,8 @@
 # Order:
 #   1. alz/incytr_pair/build_pair_seurat.R         -> incytr_obj.rds
 #   2. alz/incytr_pair/export_decomposition_for_pair.py -> {pr,ps,py}_yuyu_deconvoluted.csv
-#   3. alz/incytr_pair/build_input_gene_list.R       -> allmarkers.csv, HEG_df.csv,
-#                                                  input_gene_list.csv
+#   3. alz/incytr_pair/build_input_gene_list.R       -> allmarkers.csv
+#      (the driver assembles per-contrast DEG ∪ prG from this)
 #
 # kldata.csv is symlinked in the inputs dir (pointing at
 # data/datasets/song/kinase/kldata_pspy.csv) and does not need rebuilding here.

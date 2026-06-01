@@ -1,8 +1,14 @@
 # Pair-mode Incytr — sce4 reproduction (investigation summary)
 
-> **Status: SOLVED (A37, 2026-05-25).** The derived 31-spine inputs reproduce
-> sce4's `DEG_PRG_Top300` table through the corrected method; the only residual
-> is the App transgene (§3, documented and gate-exempt).
+> **Status: RECALL reproduced; path-COUNT over-emits ~15× (2026-05-31).** The corrected
+> method recovers sce4's `DEG_PRG_Top300` paths (recall 599/600 Micro→Cholin, 599/600
+> Ndnf×Ndnf) with matched values — but the derived gene.use is *broader* than sce4's, so
+> the full per-pair enumeration is a **superset** (19,676 gated vs sce4's 1,283 on
+> Micro→Cholin). The recall gate masks this. **This is NOT "solved"** — see
+> `docs/plans/sce4_reproduction.md` (the single source of truth) §3 / §6. The §6 identity
+> test (2026-05-31) proved the residual is 100% our gene.use *derivation breadth*: fed
+> sce4's literal nodes our engine yields exactly sce4's 1,283 paths, 0 extra. App transgene
+> (§3) remains a separate documented, gate-exempt residual.
 >
 > **Canonical production path:** the parity overrides derived here live in
 > `alz/incytr_pair/incytr_commandline.R` and `alz/incytr_pair/build_input_gene_list.R`.
@@ -51,8 +57,12 @@ is out of the solution space; everything proceeds from artifacts on disk.
   ratio (the A36 fix; see §4). This replaces the disqualified full-proteome receiver.
 - **Sender** `gu_S = sender DEG ∪ sender prG` (DEG = `avg_log2FC>1.5 & p_val<1e-4` ∪ HEG,
   **no top_n(500) cap**).
-- On sce4's own full per-pair enumeration this yields **1,283 paths** for
-  Microglia→Cholin (3 L / 4 R / 6 EM / 1226 T) — receiver nodes are **100% prG**.
+- **`sce4`'s own** literal node sets enumerate to **1,283 paths** for Microglia→Cholin
+  (3 L / 4 R / 6 EM / 1226 T) — receiver nodes are **100% prG**. ⚠️ **Our derived recipe
+  does NOT reproduce that count.** It recovers sce4's 600 (recall pass) but over-emits the
+  full per-pair enumeration to **19,676 gated paths** (~15×): the derived `DEG ∪ prG ∪ HEG`
+  is broader than sce4's effective gene.use. The "1,283" here is sce4's enumeration, not our
+  output. Proof + diff: `docs/plans/sce4_reproduction.md` §6; over-emission standing: §3.
 
 ### 2b. The six parity overrides
 
@@ -83,7 +93,7 @@ pure row subsets — they drop rows, never recompute `SigProb`/`PDS` — so appl
 the filter to existing parquets is mathematically identical to re-running with
 the cutoffs. It is **parity-preserving**: the verifier already applies
 `SigProb>0.1`, and adding `abs(PDS)>=0.2` drops **0** recalled paths
-(Microglia→Cholinergic 573/600, Ndnf×Ndnf 599/600 unchanged); sce4's Top300
+(Microglia→Cholinergic 599/600, Ndnf×Ndnf 599/600 unchanged); sce4's Top300
 survivors sit on or above these cutoffs (§selection-rule dead-ends), so the
 filter reproduces sce4's own gating rather than altering it. Wired into
 `run_pair_mode.sh` and `bench/run_nboot0_w3.sh` after the contrast loop, and
@@ -113,11 +123,15 @@ Per pair: **top-300 highest PDS ∪ top-300 lowest PDS**. On sce4's own 1,283-pa
 emits all paths (cutoff 0,0); Top300 is the published-table selection applied downstream.
 Rank/filter on `|PDS|`, never pvalue.
 
-### 2e. Parity results (final)
+### 2e. Parity results (recall — NOT path count)
+
+These are **recall + value** results (do we contain sce4's 600, with matched values). They
+do **not** measure the derived recipe's path *count*, which over-emits ~15× (§2a, SSOT §3).
+Recall is now 599/600 after the transgene force-include (the 573 below predates it).
 
 | pair | recall | sclog2FC |
 |---|---|---|
-| Microglia → Cholinergic-Neurons | **573/600** (27 misses all App-ligand) | max \|Δ\| = 0 (R/EM/T) |
+| Microglia → Cholinergic-Neurons | **599/600** (lone miss = Depdc5 knife-edge) | max \|Δ\| = 0 (R/EM/T) |
 | Ndnf × Ndnf | **599/600** (PASS) | max \|Δ\| = 0 (R/T) |
 
 Acvr1/Cholinergic ma_2mo = 50.70 / 28.21 (target 50.74 / 28.22; 0.08% float32 floor).
@@ -128,21 +142,30 @@ The frozen 46-cluster inputs (`bench/validate_frozen_parity.sh`) give the same.
 
 ## 3. App transgene residual
 
-**The only residual, documented and gate-exempt.** All 27 Microglia→Cholinergic
-misses are App-ligand paths; all 7 Ndnf×Ndnf `sclog2FC` outliers are App-EM.
+**Candidacy CLOSED (2026-05-30); only the App *value* residual remains, gate-exempt.**
+sce4 force-includes the AD model's human transgenes (App/Psen1/Mapt) into every cluster's
+prG, bypassing `|aFC|>1`. We now do the same (`TRANSGENES` union in `incytr_commandline.R`),
+so the 27 Microglia→Cholinergic App-ligand paths and 7 Ndnf App-EM paths now **enumerate**
+(recall 572→599). What stays wrong is the App *value*: those paths carry our flat App
+`sclog2FC ≈ 0.19` instead of sce4's saturated 7.65.
 
-App is irrecoverable from any pr file on this box:
-- `pr_log2FC = −0.345` → fails prG (`|log2|>1`).
-- `fc2 = 1.157` ranks **4523/6687** in Microglia — far below sce4's top_n(500) cutoff
+App's value is irrecoverable from any pr/scRNA on this box:
+- `pr_log2FC = −0.345` → fails prG `|log2|>1` (hence the force-include is required).
+- `fc2 = 1.157` ranks **4523/6687** in Microglia — far below sce4's effective cutoff
   (its App fc2 ≈ 41.9).
-- App's scRNA `sclog2FC` also diverges (Ndnf EM 0.19 vs sce4 7.65).
+- App's scRNA `sclog2FC` diverges (Ndnf EM 0.19 vs sce4 7.65); `hsAPP`=0 in Microglia,
+  endogenous `App` two-sided — not derivable from our scoring object.
 
-sce4's Oct-2025 run pr ranked the transgene high; that pr is not on this box. This is
-an isolated **input-provenance gap on the transgene**, NOT a method error — the frozen
-46-cluster run also caps at 573. Per user decision, `verify_sce4_parity.py` PASSES a
-sub-595 recall **iff every miss is an App-ligand path**, and tolerates Ligand/EM
-`|Δ sclog2FC|` outliers only when the position gene is App (`--transgene`). **Do not
-fabricate the App paths to force 600.**
+This is an isolated **input-provenance gap on the transgene value**, NOT a method error.
+Per user decision, `verify_sce4_parity.py` requires recall **≥ 599** and, below that floor,
+PASSES only if every additional miss is an App-ligand path (signals the force-include
+regressed); it tolerates Ligand/EM `|Δ sclog2FC|` outliers only when the position gene is
+App (`--transgene`). **Do not fabricate the App paths or value to force exact parity.**
+
+**Lone non-App miss = Depdc5** (Target of `C1qa|Cr1l|Cbfb|Depdc5`): aFC=0.9974 vs sce4's
+recorded 1.000, a `|aFC|=1` knife-edge of the same boundary input-provenance class as Acvr1
+(prG style is the paper-default `|aFC|>1`; CLAUDE.md). C1qa itself is unaffected (a Microglia
+ligand DEG, kept under both styles).
 
 ---
 
@@ -150,7 +173,10 @@ fabricate the App paths to force 600.**
 
 - **sce4's full pre-Top300 enumeration is 1,283 paths/pair, not ~110k.** Our former
   full-proteome receiver over-enumerated to 110,121 (86× too big). The divergence was
-  always at the enumeration/input level, never a downstream selector.
+  always at the enumeration/input level (= gene.use), never a downstream selector — and
+  the §6 identity test confirms this directly: on sce4's literal nodes our engine emits
+  exactly 1,283, 0 extra. **The current derived recipe shrank 110k→19,676 but NOT to 1,283**
+  — gene.use breadth is reduced, not eliminated. Closing the last ~15× is the open work.
 - **prG uses the quantile-normalized `pr_log2FC`, not the raw ratio (A36 — the decisive
   fix).** Acvr1/Cholinergic raw `log2(50.74/28.22) = 0.846` (<1, excluded) but
   `normalizeBetweenArrays` over the full gene column → `2.04 ≈` sce4's reference 1.997
@@ -160,8 +186,13 @@ fabricate the App paths to force 600.**
 - **The frozen pr file is the faithful output of sce4's documented provenance.** A35
   replayed `protein-ms-by-cell-type.py` on `aggexp.csv` + `pr_median.csv` +
   `yuyu_clustersize.csv` and reproduced Acvr1 = 50.74/28.22 to 4 decimals.
-- **Our scoring matches sce4 to corr 1.000** on every published column (SigProb, PDS,
-  TPDS, PPDS, PhPDS) on shared paths. Scoring is NOT the bug.
+- **Scoring is NOT the bug — at the VALUE level, not just correlation.** The §6 identity
+  test (1,283 shared paths, sce4's literal nodes) diffs actual values: TPDS Δ≤8e-5 (1283/1283
+  within 1e-3), SigProb_WTyp Δ=4e-16, PPDS within 1e-3 on 1166 — engine identical on
+  transcript/protein. The only value gap is PhPDS_py/ps, and its deltas are **continuous**
+  (6/1082 py are ±0.25 multiples) → a per-gene difference in our deconvoluted py/ps *substrate*
+  vs sce4's (same provenance class as the closed pr residual), NOT a scoring-formula bug. The
+  old "corr 1.000" claim is superseded by this value-level diff. See SSOT §5.
 - **Cholinergic-Neurons = 1 cell per condition** in ma_2mo. This makes the cell-label
   permutation pvalue degenerate (bimodal {0,1}) and makes Acvr1's ratio a single-cell vs
   single-cell quantity — robust one-sided genes (Sorl1, the EMs) match sce4; two-sided
@@ -189,8 +220,11 @@ Every entry below was tested to a definitive negative. Reopening any is wasted c
 ### Selection-rule dead-ends (the 110k → 600 narrowing)
 
 The narrowing was never a downstream filter on our enumeration — our enumeration was
-*wrong* (full-proteome receiver). With the correct ~1,283-path enumeration the Top300
-PDS ranking reproduces 600 trivially (§2d). The following were all eliminated first:
+*too broad* (gene.use breadth). The Top300 PDS ranking recovers sce4's 600 (recall pass)
+from our enumeration, but note our enumeration is still a 19,676-path superset, not sce4's
+1,283 (§2a) — so the cap reproduces sce4's survivors only because they rank high, not
+because the candidate pool matches. Closing the pool to 1,283 is the open gene.use work
+(SSOT §6). The following downstream-selector theories were all eliminated:
 
 | direction | why refuted |
 |---|---|

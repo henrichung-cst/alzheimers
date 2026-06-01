@@ -41,7 +41,7 @@ mkdir -p "$LOG_DIR"
 preflight() {
   local donor="$1"
   local indir="data/derived/tcells_incytr_inputs/$donor"
-  local need=( "$DRIVER" "$indir/incytr_obj.rds" "$indir/input_gene_list.csv"
+  local need=( "$DRIVER" "$indir/incytr_obj.rds" "$indir/allmarkers.csv"
                "$indir/pr_deconvoluted.csv" "$indir/py_deconvoluted.csv" )
   if [[ "$donor" == "donor1" ]]; then need+=( "$indir/ps_deconvoluted.csv" ); fi
   for f in "${need[@]}"; do
@@ -80,7 +80,7 @@ run_one() {
   NPAIR_WORKERS="${NPAIR_WORKERS:-1}" \
   N_CHUNK_MULT="${N_CHUNK_MULT:-8}" \
   NPERM_WORKERS="${NPERM_WORKERS:-1}" \
-    pixi run Rscript "$DRIVER" "$c1" "$c2" "$indir/input_gene_list.csv" \
+    pixi run Rscript "$DRIVER" "$c1" "$c2" \
     || { echo "FAIL $(date -Is)" > "$status_file"; echo "  FAIL: [$donor] $c1 vs $c2 (continuing)"; return 1; }
   echo "done $(date -Is)" > "$status_file"
 }

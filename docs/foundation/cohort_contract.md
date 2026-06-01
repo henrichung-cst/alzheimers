@@ -149,7 +149,7 @@ Requires bulk MEA mode 1 outputs **plus** matched snRNA pseudobulk.
 | `phospho_per_cluster{,_pY}.parquet` | adds `site_id` |
 | `mea_per_cluster{,_pY}.parquet` | `cluster`, `kinase`, `contrast`, `NES`, `pval`, `FDR`, `residue_type`, `track` |
 | `site_level_ols_per_cluster{,_pY}.parquet` | `cluster`, `site_id`, `contrast`, `lfc`, `se`, `pval`, `fdr` |
-| `verification.json` | `mass_check`, `coverage_check`, `mea_check`, `incytr_check` (pass/fail per invariant) |
+| `verification.json` | Verification report. Treat mass identity and spine coverage as hard decomposition gates; treat MEA concordance and Incytr pair counts as artifact-specific diagnostics unless the verifier explicitly labels them hard gates. |
 
 ### 4.3 Invariants
 
@@ -157,7 +157,10 @@ Verified by `alz/decomposition_mea/verify_decomposition.py`:
 
 - **Mass identity** (per-cell-rate): `Σ_c [P_c × (N_c / N_total)] ≈ bulk`. **Not** literal `Σ_c P_c = bulk` — `f_c` weights are per-cell rates.
 - **Spine coverage**: all clusters in `config.CLUSTER_SPINE` present; rank-deficient clusters emit NaN (no silent drops).
-- **MEA agreement**: per-cluster vs bulk Spearman ρ ≥ 0.7 per contrast under `f_c`-weighting.
+- **MEA concordance**: per-cluster vs bulk Spearman ρ and median absolute NES drift are diagnostic
+  summaries. They are useful for detecting gross disagreement, but they are not reconstruction
+  identities because MEA/GSEA NES values are computed after ranking, centering, winsorization, and
+  enrichment normalization.
 
 ## 5. Incytr pair-mode contract (mode 3, mouse-only)
 
@@ -167,20 +170,22 @@ Verified by `alz/decomposition_mea/verify_decomposition.py`:
 |---|---|
 | `{pr,ps,py}_yuyu_deconvoluted.csv` | wide; rows = (gene_symbol, site_id for ps/py); columns = `{sex}_{timepoint}_{genotype}_{cluster}` (12 conditions × 31 clusters = 372 value cols) |
 | `kldata_pspy.csv` | kinase-substrate library; `kinase`, `substrate_gene`, `substrate_motif`, mouse-mapped via homologene |
-| `allmarkers.csv`, `HEG_df.csv`, `input_gene_list.csv` | spine-side marker tables built by `alz/incytr_pair/build_pair_inputs.sh` |
+| `allmarkers.csv` | spine-side marker table built by `alz/incytr_pair/build_pair_inputs.sh`; the pair-mode driver derives per-contrast DEG from this file |
 | `incytr_obj.rds` | R-side spine snapshot |
 
 ### 5.2 Outputs (`Incytr::Cal_pairwise_grid` via `alz/incytr_pair/incytr_commandline.R`)
 
 | Artifact | Schema |
 |---|---|
-| `wide/{sex}_{age}_{geno}_{sex}_{age}_WTyp_incytr_output.parquet` | 31² = 961 rows per file × 9 files; cols: `Sender`, `Receiver`, `SigProb_{suffix}`, `p_value_{suffix}`, `SiK_score_{suffix}`, `PDS_{suffix}`, FC cols, label cols |
-| `receiver_cache/receiver={cluster}/data.parquet` | Hive-partitioned for viewer; `contrast`, `Sender`, `Receiver`, `SigProb`, `p_value`, `SiK_score`, `PDS`, FC cols, label cols |
-| `pair_metadata.parquet` | provenance |
+| `wide/*_incytr_output.parquet` | Central viewer-ready pair-mode outputs after the configured significance gate/top-N cap. Current AD default is sce4-style: `(SigProb_A > 0.1 OR SigProb_B > 0.1) AND abs(PDS) >= 0.2`, then per sender/receiver Top300 up/down by `PDS`. |
+| raw diagnostic directories, e.g. `_sce4_full_q0/` | Unfiltered or minimally filtered scorer outputs used for reproduction and scorer-coverage checks. Do not confuse these with central viewer-ready `wide/`. |
+| `receiver_cache/receiver={cluster}/data.parquet` | Hive-partitioned for viewer; contains only active filtered pairs and rows that survived the central `wide/` gate/cap. |
+| `pair_metadata.parquet` | Viewer/cache metadata for active filtered sender/receiver pairs, not raw 31×31 scorer coverage. |
 
 ### 5.3 Invariants
 
-- **961 pairs per contrast** (31 × 31), 9 contrasts (or `len(contrast_coefs)` for other cohorts; pair-mode currently hardcodes the Song 9).
+- **Raw scorer coverage**: when testing raw scorer completeness, check the raw/unfiltered artifact or run log for expected sender/receiver coverage. Do not use filtered `receiver_cache/pair_metadata.parquet` for this.
+- **Filtered viewer readiness**: central `wide/`, `receiver_cache/`, and unified-viewer Incytr pathway shards should agree on total row count after the configured gate/cap. Filtered outputs are not expected to contain all 31×31 pairs.
 - **Pair `p_value` is untrustworthy** — filter/rank on `|PDS|`. See [`feedback_no_incytr_pair_pvalue`].
 - Rank-deficient clusters emit NaN.
 

@@ -22,15 +22,21 @@
 # = NULL trimean). Locked by tests/testthat/test-sce4_defaults.R in the
 # Incytr package. The remaining two stay driver-side because they depend
 # on AD-project inputs:
-#   - DG no-cap (build_input_gene_list.R; DEG unioned with per-cluster prG
-#     below — genes with |pr_log2FC|>1 in the cluster's deconvoluted proteome)
+#   - DG no-cap + per-contrast gene.use (assembled here): per cluster, THIS
+#     contrast's two conditions' DEG (one-vs-rest markers from allmarkers.csv,
+#     avg_log2FC > 1) ∪ prG (genes with |aFC| > 1 in the cluster's deconvoluted
+#     proteome). Per-contrast (NOT the union over all 12 genotype x age splits).
+#     NO HEG: sce4 used DEG ∪ prG only (zero HEG labels in its reference);
+#     HEG was a leaky patch for an over-strict DEG cutoff and is removed.
 #   - pmax(pr_*, 1) floor on deconvoluted proteomics (just below)
-# Receiver gene.use = DEG ∪ prG per cluster (replaces former full-proteome
-# receiver). Investigation history: bench/bench.md A31–A33.
+# Receiver gene.use = DEG ∪ prG per cluster (t-cells) / sce4's frozen per-pair
+# node sets (AD, §6.7). Investigation history:
+# bench/bench.md A31–A33; docs/plans/sce4_reproduction.md §6.5/§6.7.
 # Verification gate: `pixi run verify-incytr-sce4`.
 #
 # Usage (from any working directory):
-#   Rscript alz/incytr_pair/incytr_commandline.R <condition1> <condition2> <input_gene_list.csv>
+#   Rscript alz/incytr_pair/incytr_commandline.R <condition1> <condition2>
+# The DEG gene.use is derived per-contrast from allmarkers.csv in INPUTS_DIR.
 
 suppressPackageStartupMessages({
   library(Incytr)
@@ -92,13 +98,11 @@ Incytr::assert_core_budget(
 )
 
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 3L) {
-  stop("Usage: incytr_commandline.R <condition1> <condition2> <input_gene_list.csv>",
-       call. = FALSE)
+if (length(args) < 2L) {
+  stop("Usage: incytr_commandline.R <condition1> <condition2>", call. = FALSE)
 }
-condition1      <- args[1]
-condition2      <- args[2]
-input_gene_path <- args[3]
+condition1 <- args[1]
+condition2 <- args[2]
 
 cat(sprintf("[pair-driver] contrast=%s vs %s  nboot=%d  pair_workers=%d  perm_workers=%d  pair_limit=%d\n",
             condition1, condition2, NBOOT, N_PAIR_WORKERS, N_PERM_WORKERS, PAIR_LIMIT))
@@ -204,15 +208,49 @@ if (USE_KLDATA) {
   kldata <- NULL
   cat("[pair-driver] USE_KLDATA=FALSE  -> kinase scoring skipped (kldata=NULL)\n")
 }
-input_gene_list <- read_csv(input_gene_path)
+# Per-contrast DEG substrate, condition-keyed so the gene.use is assembled from
+# only THIS contrast's two conditions (not all 12 genotype x age splits — that
+# union was the dominant over-emission source vs sce4; see
+# docs/plans/sce4_reproduction.md §6.2). Built per cluster below
+# once `clusters` is known.
+#   allmarkers.csv  one-vs-rest FindAllMarkers, cluster = "<cluster>_<condition>",
+#                   run BROAD (logfc.threshold = 0.1) to match sce4's frozen
+#                   table. DEG = the two contrast conditions' markers
+#                   (avg_log2FC > 1 & p_val < 1e-4).
+# sce4 used DEG ∪ prG, NO HEG (zero HEG labels across its ma_2mo + ma_4mo
+# reference); HEG was a leaky patch for an over-strict DEG cutoff and is removed.
+# See docs/plans/sce4_reproduction.md §6.5.
+# Gene.use SOURCE (per-cohort, not a fallback toggle). When SCE4_GENEUSE_DIR is
+# set and holds this contrast's reconstructed sce4 gene.use, the AD run CONSUMES
+# sce4's own per-PAIR node sets (alz/incytr_pair/extract_sce4_geneuse.R, read off
+# sce4's pre-cap per-pair pathway rds) INSTEAD of deriving DEG∪prG — this is what
+# reproduces sce4's Allpathway exactly (the engine is monotonic in the gene set;
+# feeding sce4's per-pair nodes yields 0 extra / 0 missing). The T-cell cohort has
+# no sce4 reference, leaves SCE4_GENEUSE_DIR unset, and derives. Two legitimate
+# sources for two datasets, selected by data availability — NOT a "switch back" flag.
+# Record: docs/plans/sce4_reproduction.md §6.7
+SCE4_GENEUSE_DIR <- Sys.getenv("SCE4_GENEUSE_DIR", unset = "")
+geneuse_csv <- if (nzchar(SCE4_GENEUSE_DIR))
+  file.path(SCE4_GENEUSE_DIR, paste0(condition1, "_", condition2, ".csv")) else ""
+use_frozen_geneuse <- nzchar(geneuse_csv) && file.exists(geneuse_csv)
+if (nzchar(SCE4_GENEUSE_DIR) && !use_frozen_geneuse) {
+  stop(sprintf("SCE4_GENEUSE_DIR is set but no frozen gene.use for contrast %s_%s at %s",
+               condition1, condition2, geneuse_csv), call. = FALSE)
+}
+
+# DEG markers are only needed when deriving gene.use (T-cell cohort).
+if (!use_frozen_geneuse) {
+  allmarkers <- read_csv(file.path(INPUTS_DIR, "allmarkers.csv"))
+  stopifnot(all(c("gene", "cluster", "avg_log2FC", "p_val") %in% colnames(allmarkers)))
+}
 
 # =====================================================================
 # Gene-set construction (per-cluster, tight)
 # =====================================================================
 # sce4 reproduction (driver-side override #1, "DG no-cap"): per-cluster DG
-# is the union of the input gene list's per-cluster DEGs with the
-# proteomically-regulated gene set (prG): genes with |pr_log2FC| > 1 for
-# that cluster.
+# is the union of this contrast's per-cluster DEGs (the two contrast conditions'
+# markers, built below) with the proteomically-regulated gene set (prG): genes
+# with |pr_log2FC| > 1 for that cluster.
 #
 # CRITICAL: prG must use the SAME pr_log2FC that the Incytr scorer computes,
 # not a raw column ratio. Incytr::integrate_omics_layer (analysis.R) runs
@@ -233,17 +271,67 @@ input_gene_list <- read_csv(input_gene_path)
 # a per-cluster tight set where proteomics is differentially regulated.
 # Investigation history in bench/bench.md A31–A35.
 
-# prG = proteomically-regulated genes per cluster: |pr_log2FC| > 1 where
-# pr_log2FC is computed the way the Incytr scorer computes it — quantile
-# normalization (limma::normalizeBetweenArrays) on the cluster's [cond1, cond2]
-# pr columns then log2, NOT the raw column ratio. This gene-selection is method
-# logic and lives in the package: Incytr::proteomics_gene(style="log2FC"). The
-# AD app supplies only the floored pr tables, the strict |log2FC| > 1 cutoff
-# (strict=TRUE), and the rownames intersect. floor_pr guarantees values >= 1, so
-# Cal_foldchange's zero-correction never fires (pure log2 ratio). pr_1 / pr_2
-# share columns named <cluster>_pr; clusters absent from pr get character(0).
+# prG = proteomically-regulated genes per cluster via the package/paper-default
+# aFC: |aFC| > 1, where aFC = quantile-normalized pr_log2FC * a magnitude
+# adjustment (min(2*Vmax^2/(Vmax^2+a^2), 1), a = pr.q quantile) — see
+# Incytr::proteomics_gene / R/math.R. pr_log2FC itself is computed the way the
+# Incytr scorer computes it: quantile normalization (limma::normalizeBetweenArrays)
+# on the cluster's [cond1, cond2] pr columns then log2, NOT the raw column ratio.
+# This gene-selection is method logic and lives in the package. The AD app supplies
+# only the floored pr tables, the strict |aFC| > 1 cutoff (strict=TRUE), and the
+# rownames intersect. floor_pr guarantees values >= 1, so Cal_foldchange's
+# zero-correction never fires. pr_1 / pr_2 share columns named <cluster>_pr;
+# clusters absent from pr get character(0).
+#
+# WHY aFC, not log2FC (2026-05-30): aFC is the paper/package default. Its
+# magnitude term down-weights only modest-abundance genes near the pr.q quantile
+# (for most prG genes Vmax >> pr.q so adj saturates to 1 and aFC == log2FC), so
+# the enumeration narrowing is modest, NOT dramatic: Cholinergic prG 2109->1965
+# (~7% fewer genes), Microglia->Cholinergic enumerated paths 30067->19758 (~1.5x;
+# over-emission vs sce4's 1283 goes 23x->15x). Its one cost on that benchmark is
+# Depdc5 — the Target of C1qa|Cr1l|Cbfb|Depdc5 — which lands at aFC=0.9974 vs sce4's
+# recorded 1.000, a 0.003 input-provenance gap of the SAME class as Acvr1/App (our
+# deconvolution differs from sce4's off-box pr at the third decimal on a boundary
+# gene). This drops Micro->Cholin recall 573->572; the verify-incytr-sce4 recall
+# floor was lowered 595->572 to accept this documented residual. We adopt aFC as
+# the canonical (paper-default) style despite the modest narrowing. See §6i.
 clusters <- as.character(unique(Data.input@meta.data$Type))
 
+if (use_frozen_geneuse) {
+  # AD reproduction: gene.use IS sce4's own per-cluster node set (REPLACES the
+  # DEG∪prG derivation below for the AD cohort). label = sce4's own DEG/prG label
+  # (DEG-priority), so label_node() stays faithful to the reference. App/Psen1
+  # are already present here as prG nodes (sce4's transgene force-include is baked
+  # into the reconstructed set) — no separate TRANSGENES add.
+  cat(sprintf("[pair-driver] gene.use SOURCE = frozen sce4 per-pair (%s)\n", geneuse_csv))
+  gu <- read_csv(geneuse_csv)
+  stopifnot(all(c("sender", "receiver", "gene", "role", "label") %in% colnames(gu)))
+  bad <- setdiff(unique(c(gu$sender, gu$receiver)), clusters)
+  if (length(bad) > 0L) {
+    stop("frozen gene.use references clusters absent from the data spine: ",
+         paste(bad, collapse = ", "), call. = FALSE)
+  }
+  gu <- gu[gu$gene %in% rownames(Data.input), , drop = FALSE]
+  # PER-PAIR gene.use. The engine gates all receiver positions by ONE flat
+  # gene.use_Receiver; sce4's per-cluster INPUT set is not recoverable from its
+  # gated artifacts, and a per-cluster appearing-node union recombines cross-pair
+  # nodes into chains sce4 never enumerated (the gate can't remove them on
+  # cell-sparse receivers). Feeding each pair its OWN node set reproduces sce4's
+  # Allpathway pair-for-pair (1283/699; bench/perf/sce4_identity_test.R, §6). The
+  # engine call below keys gus/gur by the (sender, receiver) pair.
+  pkey <- paste(gu$sender, gu$receiver, sep = "\t")
+  is_s <- gu$role == "S"
+  gus_by_pair <- split(gu$gene[is_s],  pkey[is_s])
+  gur_by_pair <- split(gu$gene[!is_s], pkey[!is_s])
+  # per-cluster DEG/prG membership for label_node()'s .label output: a gene's
+  # cluster is its sender in role S, its receiver in role R; DEG-priority.
+  cl_of <- ifelse(is_s, gu$sender, gu$receiver)
+  deg_by_cluster <- lapply(setNames(clusters, clusters), function(cl)
+    unique(gu$gene[cl_of == cl & gu$label == "DEG"]))
+  prg_by_cluster <- lapply(setNames(clusters, clusters), function(cl)
+    unique(gu$gene[cl_of == cl & gu$label != "DEG"]))
+  gus_by_cluster <- NULL; gur_by_cluster <- NULL
+} else {
 pr_clusters <- clusters[vapply(clusters, function(cl) {
   col <- paste0(cl, "_pr")
   col %in% colnames(pr_1) && col %in% colnames(pr_2)
@@ -251,36 +339,75 @@ pr_clusters <- clusters[vapply(clusters, function(cl) {
 pg <- if (length(pr_clusters)) {
   Incytr::proteomics_gene(
     as.data.frame(pr_1), as.data.frame(pr_2),
-    cell_group = pr_clusters, style = "log2FC", cutoff = 1,
+    cell_group = pr_clusters, style = "aFC", cutoff = 1,
     pr.correction = 0.001, strict = TRUE
   )
 } else NULL
+# Transgene force-inclusion (sce4 parity). The AD model's human transgenes
+# (App / Psen1 / Mapt) are the disease drivers, and sce4 force-includes them
+# into prG for EVERY cluster regardless of their |aFC|, bypassing the |aFC|>1
+# rule (App aFC ~= -0.01 in the deconvoluted proteome). Without this, App is a
+# candidate ligand only in the 28/31 clusters where it happens to be a
+# transcriptomic marker — NOT Microglia/Astrocytes/OPC — so the 27 App-ligand
+# Microglia->Cholinergic paths sce4 reports never enumerate from the Microglia
+# sender. Forcing them in recovers those paths (Micro->Cholin recall 572->599;
+# verified bench/perf/test_parity_levers.sh). The paths carry our (flat) App
+# transcript value, NOT sce4's saturated Ligand sclog2FC=7.65 — that value gap
+# is a separate, documented transcript-provenance residual (the verify gate
+# tolerates Ligand/EM |Δ| outliers when the position gene is App). The
+# intersect with rownames self-gates: cohorts lacking these symbols (e.g. the
+# human T-cell cohort) get an empty add and are unaffected. label_node leaves
+# these as prG (matching sce4's Ligand.label), since they are not in the DEG arm.
+TRANSGENES <- intersect(c("App", "Psen1", "Mapt"), rownames(Data.input))
 prg_by_cluster <- lapply(setNames(clusters, clusters), function(cl) {
-  if (is.null(pg)) return(character(0))
-  intersect(pg$gene_symbol[pg$cluster == cl], rownames(Data.input))
+  if (is.null(pg)) return(TRANSGENES)
+  union(intersect(pg$gene_symbol[pg$cluster == cl], rownames(Data.input)),
+        TRANSGENES)
 })
 
+# Per-contrast DEG: union of the two contrast conditions' one-vs-rest markers
+# (avg_log2FC > 1 & p_val < 1e-4) for this cluster. allmarkers' `cluster` is
+# "<cluster>_<condition>", so the contrast's idents are "<cl>_<condition1/2>".
+# DEG cutoff = avg_log2FC > 1 (symmetric with prG's |aFC| > 1). sce4's DEG-label
+# membership is reproduced at > 1 (80/82 of its Ndnf receiver DEG nodes) and lost
+# at > 1.5 (55/82); the former 1.5 dropped real DEGs HEG then re-admitted.
+deg_keep <- allmarkers$avg_log2FC > 1 & allmarkers$p_val < 1e-4
 deg_by_cluster <- lapply(setNames(clusters, clusters), function(cl) {
-  intersect(unique(input_gene_list$gene[input_gene_list$cluster == cl]),
-            rownames(Data.input))
+  idents <- paste0(cl, "_", c(condition1, condition2))
+  genes  <- allmarkers$gene[deg_keep & allmarkers$cluster %in% idents]
+  intersect(unique(genes), rownames(Data.input))
 })
 # Per-cluster gene.use_* for the per-pair Cal_pairwise_grid calls.
-# Each cluster gets DEG ∪ prG — the correct receiver for pair-mode Incytr.
+# Each cluster gets DEG ∪ prG — sce4's candidate set (no HEG). The T-cell cohort
+# has no per-role reference, so it uses the same set for both roles.
 dg_by_cluster <- lapply(setNames(clusters, clusters), function(cl) {
   union(deg_by_cluster[[cl]], prg_by_cluster[[cl]])
 })
-cat(sprintf("[pair-driver] per-cluster gene.use sizes: median=%d  min=%d  max=%d\n",
-            as.integer(median(lengths(dg_by_cluster))),
-            min(lengths(dg_by_cluster)),
-            max(lengths(dg_by_cluster))))
+gus_by_cluster <- dg_by_cluster
+gur_by_cluster <- dg_by_cluster
+}
+if (use_frozen_geneuse) {
+  cat(sprintf("[pair-driver] per-pair gene.use: %d pairs; sender median=%d/max=%d  receiver median=%d/max=%d\n",
+              length(gus_by_pair),
+              as.integer(median(lengths(gus_by_pair))), max(lengths(gus_by_pair)),
+              as.integer(median(lengths(gur_by_pair))), max(lengths(gur_by_pair))))
+} else {
+  cat(sprintf("[pair-driver] per-cluster gene.use sizes: sender median=%d/max=%d  receiver median=%d/max=%d\n",
+              as.integer(median(lengths(gus_by_cluster))), max(lengths(gus_by_cluster)),
+              as.integer(median(lengths(gur_by_cluster))), max(lengths(gur_by_cluster))))
+}
 
-# Every pair's pathway genes are a subset of (dg_sender u dg_receiver), so the
-# union of all per-cluster DG sets bounds every gene any pair can ever score.
-# The per-(gene, cluster, condition) trimean is pair-invariant, so we compute
-# it ONCE over this union below and inject it into each per-pair grid call
+# Every pair's pathway genes are bounded by the union of all gene.use sets, so the
+# per-(gene, cluster, condition) trimean — which is pair-invariant — is computed
+# ONCE over that union below and injected into each per-pair grid call
 # (Improvement 3), replacing 961 redundant Expr_bygroup passes per contrast.
-gene_union <- intersect(unique(unlist(dg_by_cluster, use.names = FALSE)),
-                        rownames(Data.input))
+gene_union <- if (use_frozen_geneuse) {
+  intersect(unique(gu$gene), rownames(Data.input))
+} else {
+  intersect(unique(c(unlist(gus_by_cluster, use.names = FALSE),
+                     unlist(gur_by_cluster, use.names = FALSE))),
+            rownames(Data.input))
+}
 cat(sprintf("[pair-driver] precompute-trimean gene union: %d genes\n",
             length(gene_union)))
 
@@ -389,7 +516,7 @@ hwm_mb <- function() {
 }
 
 # Free the redundant full Seurat object before the pair loop. Everything the
-# loop reads — `template`, `dg_by_cluster`, `deg/prg_by_cluster`, `pr/ps/py_*`,
+# loop reads — `template`, `gus/gur_by_cluster`, `deg/prg_by_cluster`, `pr/ps/py_*`,
 # `kldata` — is already built; Data.input's counts + scale.data + meta are dead
 # weight (~1.2 GB resident) that every Permutation_test fork would COW-inherit.
 # The expression matrix stays alive via `template` (shared refcount), so this
@@ -419,6 +546,24 @@ cat(sprintf("[pair-driver] built expr substrate in %.1fs  rss=%.0fMB\n",
 process_pair <- function(i) {
   s <- pairs$sender[i]; r <- pairs$receiver[i]
   pair_df <- data.frame(sender = s, receiver = r, stringsAsFactors = FALSE)
+  # Per-pair gene.use in frozen (AD reproduction) mode; per-cluster otherwise
+  # (T-cell). A pair absent from sce4's Allpathway produced no gated chains -> its
+  # gene.use is empty -> the engine emits 0 paths (caught below), matching sce4.
+  # Guard NULL -> character(0): NULL would make pathway_inference default to ALL
+  # genes (analysis.R), silently enumerating the whole genome for an empty pair.
+  if (use_frozen_geneuse) {
+    pk <- paste(s, r, sep = "\t")
+    gene_use_S <- gus_by_pair[[pk]]; gene_use_R <- gur_by_pair[[pk]]
+  } else {
+    gene_use_S <- gus_by_cluster[[s]]; gene_use_R <- gur_by_cluster[[r]]
+  }
+  if (is.null(gene_use_S)) gene_use_S <- character(0)
+  if (is.null(gene_use_R)) gene_use_R <- character(0)
+  if (length(gene_use_S) == 0L || length(gene_use_R) == 0L) {
+    cat(sprintf("[pair-driver] pair %d/%d  %s -> %s  empty gene.use (0 paths)\n",
+                i, nrow(pairs), s, r))
+    return(NA_character_)
+  }
   sub_path <- file.path(shard_dir, sprintf("pair_%04d.parquet", i))
   if (file.exists(sub_path) && file.info(sub_path)$size > 0) {
     cat(sprintf("[pair-driver] pair %d/%d  %s -> %s  RESUME (shard exists)\n",
@@ -431,8 +576,8 @@ process_pair <- function(i) {
       template          = template,
       pairs             = pair_df,
       DB                = DB.M,
-      gene.use_Sender   = dg_by_cluster[[s]],
-      gene.use_Receiver = dg_by_cluster[[r]],
+      gene.use_Sender   = gene_use_S,
+      gene.use_Receiver = gene_use_R,
       multiomics        = multiomics_args,
       kldata            = kldata,
       mean_method       = NULL,
@@ -470,6 +615,43 @@ process_pair <- function(i) {
   out$Receptor.label <- label_node(out$Receptor, r)
   out$EM.label       <- label_node(out$EM,       r)
   out$Target.label   <- label_node(out$Target,   r)
+  if (use_frozen_geneuse && all(c("log2FC", "aFC", "TPDS", "multimodel_score", "PDS") %in% colnames(out))) {
+    # sce4's frozen Pairwise RDS stores path-level SigProb aFC equal to log2FC
+    # (Cal_foldchange q=0 behavior). The package default q=0.75 compresses
+    # TPDS and moves threshold-edge rows across |PDS|=0.2.
+    logi <- function(x, k = 2) 2 / (1 + exp(-k * x)) - 1
+    nz <- function(x) {
+      x[is.na(x)] <- 0
+      x
+    }
+    out$aFC <- out$log2FC
+    out$TPDS <- logi(out$aFC, 2)
+    score_cols <- c("PPDS", "PhPDS_ps", "PhPDS_py",
+                    "Ack_score", "KGG_score", "Rme1_score")
+    for (cc in score_cols) {
+      if (!cc %in% colnames(out)) out[[cc]] <- 0
+    }
+    out$multimodel_score <- out$TPDS +
+      0.5 * (nz(out$PPDS) + nz(out$PhPDS_ps) + nz(out$PhPDS_py) +
+               nz(out$Ack_score) + nz(out$KGG_score) + nz(out$Rme1_score))
+    sik1 <- paste0("SiK_score_", condition1)
+    sik2 <- paste0("SiK_score_", condition2)
+    if (all(c(sik1, sik2) %in% colnames(out))) {
+      s1v <- nz(out[[sik1]])
+      s2v <- nz(out[[sik2]])
+      out$PDS <- ifelse(
+        out$multimodel_score > 0,
+        out$multimodel_score + 0.5 * s1v,
+        ifelse(
+          out$multimodel_score < 0,
+          out$multimodel_score - 0.5 * s2v,
+          out$multimodel_score + 0.5 * (s1v - s2v)
+        )
+      )
+    } else {
+      out$PDS <- out$multimodel_score
+    }
+  }
   out <- out[, !grepl(drop_pat, colnames(out)), drop = FALSE]
   dt <- as.data.table(out)
   for (col in grep(num_pat, names(dt), value = TRUE)) {

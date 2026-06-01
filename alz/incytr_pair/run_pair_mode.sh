@@ -41,12 +41,26 @@ for f in \
   "$INPUTS_DIR/pr_yuyu_deconvoluted.csv" \
   "$INPUTS_DIR/ps_yuyu_deconvoluted.csv" \
   "$INPUTS_DIR/py_yuyu_deconvoluted.csv" \
-  "$INPUTS_DIR/input_gene_list.csv" \
+  "$INPUTS_DIR/allmarkers.csv" \
   "$INPUTS_DIR/kldata.csv" \
   ; do
   test -e "$f" || { echo "missing: $f"; exit 1; }
 done
 echo "  Phase 1 inputs OK"
+
+# AD gene.use IS sce4's own reconstructed per-PAIR node set (reproduction of
+# sce4's Top300), not a re-derivation — see
+# docs/plans/sce4_reproduction.md §6.7. The driver
+# consumes it via SCE4_GENEUSE_DIR; the T-cell runner leaves this unset and
+# derives. Build the 9 frozen artifacts if absent (idempotent).
+GENEUSE_DIR="data/incytr_frozen/sce4_geneuse"
+export SCE4_GENEUSE_DIR="$GENEUSE_DIR"
+if [[ $(ls "$GENEUSE_DIR"/*.csv 2>/dev/null | wc -l) -lt 9 ]]; then
+  echo "=== Building sce4 gene.use artifacts ($GENEUSE_DIR) ==="
+  pixi run Rscript alz/incytr_pair/extract_sce4_geneuse.R \
+    || { echo "sce4 gene.use extraction incomplete (see above) — aborting"; exit 1; }
+fi
+echo "  sce4 gene.use artifacts OK ($(ls "$GENEUSE_DIR"/*.csv 2>/dev/null | wc -l)/9)"
 
 # Confirm upstream Incytr is loadable (catches a stale pixi env before R fires up
 # the 27k-cell Seurat object).
@@ -58,6 +72,15 @@ run_one() {
   local c1="ma_${age}_${geno}"
   local c2="ma_${age}_WTyp"
   local out_parquet="$out_subdir/${c1}_${c2}_incytr_output.parquet"
+
+  # Resumable at the contrast level: a finished contrast's final parquet exists
+  # (its per-pair shards were deleted after the concat), so re-run would redo it
+  # from scratch. Skip it. Within an unfinished contrast the driver still
+  # resumes from surviving per-pair shards.
+  if [[ "${FORCE_RERUN:-0}" != "1" && -s "$out_parquet" ]]; then
+    echo "=== $(date -Is) SKIP $c1 vs $c2 (exists, $(du -h "$out_parquet" | cut -f1)) ==="
+    return 0
+  fi
 
   echo "=== $(date -Is) $c1 vs $c2 (nboot=$nboot) ==="
   # Subprocess-per-chunk mode (driver default SUBPROCESS_CHUNKS=1):
@@ -77,7 +100,7 @@ run_one() {
   N_CHUNK_MULT="${N_CHUNK_MULT:-8}" \
   NPERM_WORKERS="${NPERM_WORKERS:-1}" \
   CHUNK_PARALLEL="${CHUNK_PARALLEL:-2}" \
-    pixi run Rscript "$DRIVER" "$c1" "$c2" "$INPUTS_DIR/input_gene_list.csv" \
+    pixi run Rscript "$DRIVER" "$c1" "$c2" \
     || { echo "  FAIL: $c1 vs $c2 (continuing)"; return 1; }
 
   # Driver writes to OUTPUT_DIR (resolved via REPO_ROOT inside the R script).
@@ -91,9 +114,10 @@ if [[ "$MODE" == "smoke" ]]; then
   LOG="$LOG_DIR/pair_run_smoke.log"
   SMOKE_DIR="outputs/reports/incytr_pair_mode/wide_smoke"
   mkdir -p "$SMOKE_DIR"
+  SMOKE_NBOOT="${SMOKE_NBOOT:-2}"
   {
-    echo "=== Smoke run: nboot=2, single comparison ==="
-    run_one AppP 2mo "$SMOKE_DIR" 2 || true
+    echo "=== Smoke run: nboot=$SMOKE_NBOOT, single comparison ==="
+    run_one AppP 2mo "$SMOKE_DIR" "$SMOKE_NBOOT" || true
     echo "=== $(date -Is) Smoke done. Output: $SMOKE_DIR/ ==="
     ls -lh "$SMOKE_DIR/"
   } 2>&1 | tee "$LOG"
@@ -101,12 +125,13 @@ if [[ "$MODE" == "smoke" ]]; then
 fi
 
 LOG="$LOG_DIR/pair_run.log"
+FULL_NBOOT="${FULL_NBOOT:-100}"
 {
-  echo "=== Full run: nboot=100, 9 comparisons ==="
+  echo "=== Full run: nboot=$FULL_NBOOT, 9 comparisons ==="
   failed=()
   for geno in AppP Ttau ApTt; do
     for age in 2mo 4mo 6mo; do
-      run_one "$geno" "$age" "$OUTPUT_DIR" 100 || failed+=("${age}_${geno}")
+      run_one "$geno" "$age" "$OUTPUT_DIR" "$FULL_NBOOT" || failed+=("${age}_${geno}")
     done
   done
   echo
@@ -117,11 +142,27 @@ LOG="$LOG_DIR/pair_run.log"
     echo "All 9 comparisons succeeded."
   fi
 
-  # Apply the collaborator significance filter downstream of the driver
-  # (override #5 emits all paths at cutoff=0; this is the downstream half):
-  # (SigProb_disease > 0.1 OR SigProb_WTyp > 0.1) AND |PDS| >= 0.2. Pure row
-  # subset, parity-preserving, idempotent.
-  echo "=== $(date -Is) significance filter ==="
+  # Gate the run on sce4 parity BEFORE filtering: the engine must still
+  # reproduce sce4's Top300 reference, else we do not ship the filtered output.
+  # Self-contained (regenerates the two reference pairs unfiltered) — it does
+  # NOT read wide/, because the cap below keeps only the per-pair top-300 PDS.
+  # See verify_incytr_sce4.sh.
+  echo "=== $(date -Is) sce4 parity gate ==="
+  bash alz/incytr_pair/verify_incytr_sce4.sh
+
+  # Full reproduction gate over all 9 unfiltered wide parquets against sce4's
+  # pre-cap pairwise RDS files. This MUST run before filter_significant_paths.py,
+  # which caps wide/ in place and destroys the pre-cap path-set evidence.
+  echo "=== $(date -Is) full sce4 path-set gate ==="
+  pixi run verify-incytr-sce4-full
+
+  # Apply sce4's significance gate to wide/ in place (the driver emits all paths
+  # at cutoff=0; this is the downstream half): SigProb > 0.1 (either) AND
+  # |PDS| >= 0.2, THEN per (sender, receiver) pair the top-300 PDS up ∪ down.
+  # Reproduces sce4's Allpathway floors + Top300 cap byte-for-byte. No p_adj arm
+  # (sce4 never ran the permutation; its reference has no p-value column). Pure
+  # row subset, idempotent.
+  echo "=== $(date -Is) significance filter (sce4 gate) ==="
   pixi run python alz/incytr_pair/filter_significant_paths.py --dir "$OUTPUT_DIR"
 
   ls -lh "$OUTPUT_DIR/"

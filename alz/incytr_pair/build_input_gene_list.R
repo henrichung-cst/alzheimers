@@ -1,5 +1,19 @@
 #!/usr/bin/env Rscript
-# Build input_gene_list.csv (DEG ∪ HEG) for the levy_t5 males-only Seurat.
+# Build the per-cluster gene.use ingredients for the levy_t5 males-only Seurat.
+# Emits the raw, condition-keyed marker substrate; the pair-mode driver assembles
+# the per-CONTRAST gene.use from it (the two contrast conditions' DEG ∪ prG):
+#   allmarkers.csv  one-vs-rest FindAllMarkers (Type_condition idents), run BROAD
+#                   (logfc.threshold = 0.1) to match sce4's frozen marker table
+#                   (floor avg_log2FC ≈ 0.10). The driver takes the two contrast
+#                   conditions' markers (avg_log2FC > 1 & p < 1e-4) as the
+#                   per-contrast DEG arm — symmetric with prG's |aFC| > 1.
+#
+# sce4 reproduction (2026-05-31, docs/plans/sce4_reproduction.md §6.5):
+# sce4 used DEG ∪ prG, NO HEG (zero HEG labels across its ma_2mo + ma_4mo
+# reference). The former DEG>1.5 cutoff + logfc.threshold=1.2 pre-prune dropped
+# real DEGs (Prkca/Grm5/Robo2, FC 1.0-1.2) that sce4 kept; HEG was the leaky
+# patch that re-admitted them along with hundreds of non-DE genes (~15x
+# over-emission). Broad markers + DEG>1 make HEG unnecessary, so it is removed.
 #
 # Adapted from data/incytr/v2_46clusters/provenance/run_input_gene_list.R.
 # Two changes vs that source:
@@ -9,17 +23,10 @@
 #      pair-mode runs disease vs WT at the *same* timepoint. Using bare
 #      Genotype like the v2 script would average across timepoints.
 #
-# Outputs (under data/derived/incytr_inputs/):
-#   allmarkers.csv      raw FindAllMarkers output
-#   HEG_df.csv          per-(condition, cluster) high-expression genes
-#   input_gene_list.csv (gene, cluster) union, dedup
-#
 # Run from any working directory (paths resolved via git rev-parse).
 suppressPackageStartupMessages({
   library(Seurat)
-  library(stringr)
   library(Matrix)
-  library(Incytr)  # Find_highexp_gene_batch (HEG is method logic, not app glue)
   # presto: C++ Wilcoxon. Seurat::FindAllMarkers auto-detects it via
   # requireNamespace and swaps in the vectorized backend. Loading here
   # makes the dependency explicit and fails fast if uninstalled.
@@ -56,74 +63,19 @@ cat("[input_gene_list] Type_condition idents (n=",
 
 t0 <- Sys.time()
 cat("[input_gene_list] FindAllMarkers (only.pos=TRUE, presto + future)\n")
-# logfc.threshold = 1.2 < the post-filter cutoff (1.5), so we skip Wilcoxon
-# tests on genes that could not pass downstream anyway. min.pct stays at the
-# Seurat 5 default (0.01).
+# logfc.threshold = 0.1 reproduces sce4's broad frozen marker table (floor
+# avg_log2FC ~= 0.10). The driver applies the avg_log2FC > 1 DEG cutoff at
+# gene.use assembly; a higher FindAllMarkers threshold here would pre-prune
+# real DEGs (Prkca/Grm5/Robo2, FC 1.0-1.2) that sce4 kept. min.pct stays at
+# the Seurat 5 default (0.01).
 markers <- FindAllMarkers(
   obj,
   only.pos       = TRUE,
-  logfc.threshold = 1.2,
+  logfc.threshold = 0.1,
   verbose        = FALSE
 )
 cat("[input_gene_list] markers rows:", nrow(markers), "\n")
 dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
-write.csv(markers, file.path(OUT_DIR, "allmarkers.csv"))
-
-Idents(obj) <- "Type"
-cell.groups <- sort(unique(obj$Type))
-conditions  <- sort(unique(obj$condition))
-cat("[input_gene_list] HEG loop:", length(conditions), "conditions x ",
-    length(cell.groups), "clusters\n")
-
-HEG.list <- vector("list", length(conditions))
-for (k in seq_along(conditions)) {
-  t_k <- Sys.time()
-  cat("[input_gene_list]  condition ", k, "/", length(conditions), ": ",
-      conditions[k], " ", sep = "")
-  sub <- subset(obj, subset = condition == conditions[k])
-  data_mat <- GetAssayData(sub, layer = "data", assay = "originalexp")
-  # High-expression genes (DEG-union partner): per-(gene, Type) weighted-quartile
-  # trimean kept above the 75th pct of the condition's nonzero entries (one
-  # global cutoff for all clusters). This is method logic — it lives in the
-  # Incytr package; the AD app only supplies the matrix, labels and scope.
-  HE <- Incytr::Find_highexp_gene_batch(
-    data_mat,
-    group_labels      = sub@meta.data[colnames(data_mat), "Type"],
-    cutoff_percentile = 0.75,
-    cutoff_scope      = "global"
-  )
-  if (!is.null(HE) && nrow(HE) > 0) {
-    HE$condition <- conditions[k]
-    HEG.list[[k]] <- HE
-  }
-  cat("rows=", if (is.null(HE)) 0 else nrow(HE),
-      " (", round(as.numeric(difftime(Sys.time(), t_k, units = "secs")), 1),
-      "s)\n", sep = "")
-}
-HEG.df <- do.call(rbind, HEG.list)
-if (is.null(HEG.df)) {
-  HEG.df <- data.frame(
-    gene_symbol = character(), ave.exp = numeric(),
-    cluster = character(), condition = character(),
-    stringsAsFactors = FALSE
-  )
-}
-cat("[input_gene_list] HEG rows:", nrow(HEG.df), "\n")
-write.csv(HEG.df, file.path(OUT_DIR, "HEG_df.csv"))
-
-# Combine markers + HEG, dedupe to (gene, cluster).
-HEG.unique <- unique(HEG.df[, c("gene_symbol", "cluster")])
-names(HEG.unique) <- c("gene", "cluster")
-
-m <- markers[markers$avg_log2FC > 1.5 & markers$p_val < 1e-4, ]
-# `cluster` here is Type_condition like "Astrocytes_ma_2mo_WTyp" — strip suffix.
-# Cluster names contain no underscores (asserted in build_pair_seurat.R),
-# so the prefix up to the first "_" recovers the cluster.
-m$cluster <- str_extract(as.character(m$cluster), "[^_]+")
-m <- unique(m[, c("gene", "cluster")])
-
-out <- unique(rbind(m, HEG.unique))
-cat("[input_gene_list] combined unique (gene, cluster):", nrow(out), "\n")
-write.csv(out, file.path(OUT_DIR, "input_gene_list.csv"))
+write.csv(markers, file.path(OUT_DIR, "allmarkers.csv"), row.names = FALSE)
 cat("[input_gene_list] DONE in",
     round(difftime(Sys.time(), t0, units = "mins"), 2), "min\n")

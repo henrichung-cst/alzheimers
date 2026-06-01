@@ -16,13 +16,26 @@ factorial-OLS cluster that used to live here was deleted 2026-05-29 (closed path
 | `build_celltype_decomposition.py` | Stage 6: project bulk phospho (pS/pT, pY) and protein onto `f_c` per-cell-rate weights; writes `protein_per_cluster.parquet`, `phospho_per_cluster{,_pY}.parquet`, `decomposition_audit.json` | `python alz/decomposition_mea/build_celltype_decomposition.py --spine levy_t5 --track both` |
 | `enrich_celltype.py` | Stage 7: per-cluster factorial OLS + GSEA MEA on the projected phospho cube; writes `mea_per_cluster{,_pY}.parquet`, `site_level_ols_per_cluster{,_pY}.parquet`, and CSV sidecars | `python -m alz.decomposition_mea.enrich_celltype --spine levy_t5 --track st` |
 | `build_per_animal_site_ols.py` | Publisher: unions st + py OLS into `per_animal/site_level_ols.parquet`; renames `cluster` → `cell_type`; consumed by the unified viewer | `python alz/decomposition_mea/build_per_animal_site_ols.py --spine levy_t5` |
-| `verify_decomposition.py` | Verification harness (4 contracts: mass identity, coverage, per-cluster vs bulk MEA, Incytr pair count); exits non-zero on failure | `python alz/decomposition_mea/verify_decomposition.py --spine levy_t5` |
+| `verify_decomposition.py` | Verification harness. The hard decomposition checks are mass identity and spine coverage. Per-cluster vs bulk MEA agreement is diagnostic concordance, and Incytr pair counts must be evaluated against the correct raw or filtered artifact. | `python alz/decomposition_mea/verify_decomposition.py --spine levy_t5 --checks mass coverage` |
 
 ## Key invariants
 
 **Mass identity** — `Σ_c [P_c × (N_c / N_total)] ≈ bulk`, not `Σ_c P_c = bulk`.
 The `f_c` weight is a per-cell-rate (`share_c × N_total / N_c`), so literal
 summation overshoots. Verified by the `mass` check (threshold `max_rel_err < 1e-6`).
+
+**Spine coverage** — every `levy_t5` cluster is present in the protein and phospho decomposition
+artifacts. This is verified by the `coverage` check and is part of the viewer hard gate.
+
+**MEA concordance is diagnostic** — weighted per-cluster MEA NES should be reported against bulk
+MEA NES as a sanity check, but it should not hardfail the viewer. MEA/GSEA NES is not additive under
+cell-fraction weighting because it is produced after ranked LFC transforms, centering, winsorization,
+and enrichment normalization.
+
+**Incytr pair counts are artifact-specific** — raw scorer coverage and filtered viewer readiness are
+different contracts. Filtered `receiver_cache/pair_metadata.parquet` records active pairs after the
+significance gate/top-N cap, so it is not expected to contain all `31 x 31 = 961` sender/receiver
+pairs.
 
 **Sign convention** — `+` = up in disease, matching `bulk_mea` NES/β and Incytr PDS/sclog2FC.
 
