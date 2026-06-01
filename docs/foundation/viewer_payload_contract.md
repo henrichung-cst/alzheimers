@@ -22,10 +22,11 @@ It should not need to know which Python builder produced the payload.
 
 The standardized contract is `viewer_payload_schema_version = 2`.
 
-Legacy payloads may still include flat top-level blocks such as `payload.kinases.id` or
-`payload.incytr_pathways.slice_index.present`. During migration, builders may emit both the legacy
-flat block and the v2 `by_context` block. New frontend code should read through an adapter that
-prefers v2 and falls back to legacy.
+Current builders emit shared domain blocks through v2 `by_context` only. Legacy payloads may still
+include flat top-level blocks such as `payload.kinases.id` or
+`payload.incytr_pathways.slice_index.present`; the shared adapter keeps a backward-compatible flat
+fallback for those older artifacts. New frontend code should read through `ViewerPayload`, which
+prefers v2 and treats legacy flat payloads as compatibility input only.
 
 ## Required Top-Level Keys
 
