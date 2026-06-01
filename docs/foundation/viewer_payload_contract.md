@@ -285,6 +285,9 @@ Adapter behavior:
 - Return explicit empty slices for unavailable features.
 - Surface a reason string from `context.notes` or `meta.notes` when data are intentionally absent.
 
+The adapter must not depend on T-cell `by_donor` or `selection.donor`. Those names describe source
+data provenance inside builders, not the frontend payload contract.
+
 ## Current Mapping
 
 ### Song/AD Unified Viewer
@@ -360,14 +363,16 @@ Current context targets:
 3. Add `by_context` to `kinases`, `celltypes`, and `incytr_pathways`.
 4. Refactor shared JS tabs to read through the adapter.
 5. After both viewers validate, remove cohort-specific direct reads from shared tabs.
-6. Keep legacy flat fallback until at least one additional dataset is onboarded and both current
-   viewers build successfully from v2.
+6. Keep legacy flat fallback for single-context AD payloads until at least one additional dataset is
+   onboarded and both current viewers build successfully from v2-only blocks.
 
-Current status: steps 1-5 are implemented for the AD unified viewer and the T-cell viewer. Shared
+Current status as of 2026-06-01: steps 1-5 are implemented for the AD unified viewer and the T-cell
+viewer. Shared
 viewer modules now read active-context kinases, cell types, Incytr blocks, contrast axes, and shard
 filenames through `ViewerPayload`. The T-cell viewer uses `selection.context`, `ctx=`, and
 `by_context` as canonical routing. Legacy `#d=...` URLs are accepted only as an inbound shim and are
-rewritten through context state.
+rewritten through context state. The T-cell builder no longer emits `by_donor` aliases for
+`kinases`, `celltypes`, `incytr_pathways`, or `meta.transcript_trace`.
 
 ## Deprecation Targets
 
@@ -401,13 +406,16 @@ Every builder emitting this contract must validate:
 For the current repo, run:
 
 ```bash
-pixi run python alz/build_unified_viewer.py --validate
-pixi run python alz/build_tcell_viewer.py --validate
+pixi run python alz/build_unified_viewer.py --payload --html --validate
+pixi run python alz/build_tcell_viewer.py --payload --html --validate
+pixi run python alz/viewer/verify_payload_contract.py \
+  outputs/reports/unified_viewer/unified_viewer.payload.json \
+  outputs/reports/tcell_viewer/tcell_viewer.payload.json
 ```
 
-When UI behavior changes, also rebuild both viewers:
+The expected contract-verifier result after the 2026-06-01 cleanup is:
 
-```bash
-pixi run viewer
-pixi run tcell-viewer
+```text
+outputs/reports/unified_viewer/unified_viewer.payload.json: schema=2 default=song_ad contexts=song_ad pass=True
+outputs/reports/tcell_viewer/tcell_viewer.payload.json: schema=2 default=donor1 contexts=donor1,donor2 pass=True
 ```

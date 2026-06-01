@@ -106,13 +106,21 @@ Incytr artifact checks; those write a separate diagnostic report by default and 
 viewer unless `--strict-diagnostics` is requested.
 
 Viewer payloads use schema v2. Dataset-specific builders stay separate, but the emitted JSON routes
-shared blocks through `meta.contexts` and `*.by_context`. Check generated payloads with:
+shared blocks through `meta.contexts` and `*.by_context`. `selection.context` / `ctx=` are the
+canonical frontend routing primitives; donor-specific payload aliases such as `by_donor` are not
+emitted by the current T-cell payload. Old `#d=...` T-cell links are accepted only as inbound URL
+compatibility and are translated into context state.
+
+Check generated payloads with:
 
 ```bash
 python alz/viewer/verify_payload_contract.py \
   outputs/reports/unified_viewer/unified_viewer.payload.json \
   outputs/reports/tcell_viewer/tcell_viewer.payload.json
 ```
+
+The current validated contexts are `song_ad` for the AD unified viewer and `donor1`/`donor2` for the
+T-cell viewer.
 
 ### Important guardrails
 
