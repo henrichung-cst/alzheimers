@@ -14,6 +14,11 @@
 # Emits data/derived/tcells_incytr_inputs/<donor>/scrna/projectils_predictions.csv
 #   barcode, seurat_clusters, day, lineage_gate, functional.cluster,
 #   functional.cluster.conf
+# Emits optional visualization coordinates when ProjecTILs returns reductions:
+#   projectils_embeddings.csv
+#   barcode, seurat_clusters, day, projection_reference, reduction, axis_1,
+#   axis_2, axis_1_name, axis_2_name, functional.cluster,
+#   functional.cluster.conf
 #
 # Usage:  pixi run tcells-projectils-map <donor1|donor2>
 #         alz/runners/supporting/tcells_projectils_map.sh [donor]
@@ -84,7 +89,38 @@ if (any(is.na(day))) stop("unparsed day labels: ",
 obj$ts_day <- day
 all_barcodes <- colnames(obj)
 all_clusters <- as.character(obj$seurat_clusters)
+day_by_barcode <- setNames(day, all_barcodes)
+cluster_by_barcode <- setNames(all_clusters, all_barcodes)
 memline("after DietSeurat")
+
+extract_embeddings <- function(q, projection_reference, day_map, cluster_map) {
+  if (is.null(q)) return(data.frame())
+  reds <- names(q@reductions)
+  if (!length(reds)) return(data.frame())
+  out <- list()
+  for (red in reds) {
+    emb <- tryCatch(Embeddings(q, red), error = function(e) NULL)
+    if (is.null(emb) || ncol(emb) < 2L || nrow(emb) == 0L) next
+    bc <- rownames(emb)
+    out[[length(out) + 1L]] <- data.frame(
+      barcode = bc,
+      seurat_clusters = unname(cluster_map[bc]),
+      day = as.integer(unname(day_map[bc])),
+      projection_reference = projection_reference,
+      reduction = red,
+      axis_1 = as.numeric(emb[, 1]),
+      axis_2 = as.numeric(emb[, 2]),
+      axis_1_name = colnames(emb)[1],
+      axis_2_name = colnames(emb)[2],
+      functional.cluster = as.character(q$functional.cluster),
+      functional.cluster.conf = as.numeric(q$functional.cluster.conf),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+  }
+  if (!length(out)) return(data.frame())
+  do.call(rbind, out)
+}
 
 # --- CD8 projection ------------------------------------------------------
 cat("\n--- CD8 projection ---\n")
@@ -107,8 +143,13 @@ cat("CD8 projection done in",
 cd8_bc <- if (!is.null(q_cd8)) colnames(q_cd8) else character(0)
 cd8_states <- if (length(cd8_bc)) as.character(q_cd8$functional.cluster) else character(0)
 cd8_conf   <- if (length(cd8_bc)) as.numeric(q_cd8$functional.cluster.conf) else numeric(0)
+emb_cd8 <- extract_embeddings(q_cd8, "CD8", day_by_barcode, cluster_by_barcode)
 cat("CD8: kept", length(cd8_bc), "/", length(all_barcodes), "cells (",
     round(100 * length(cd8_bc) / length(all_barcodes), 1), "%)\n")
+if (nrow(emb_cd8)) {
+  cat("CD8 embeddings:", nrow(emb_cd8), "rows across",
+      length(unique(emb_cd8$reduction)), "reduction(s)\n")
+}
 rm(q_cd8, cd8_ref); gc(full = TRUE)
 memline("after CD8 projection")
 
@@ -130,8 +171,13 @@ cat("CD4 projection done in",
 cd4_bc <- if (!is.null(q_cd4)) colnames(q_cd4) else character(0)
 cd4_states <- if (length(cd4_bc)) as.character(q_cd4$functional.cluster) else character(0)
 cd4_conf   <- if (length(cd4_bc)) as.numeric(q_cd4$functional.cluster.conf) else numeric(0)
+emb_cd4 <- extract_embeddings(q_cd4, "CD4", day_by_barcode, cluster_by_barcode)
 cat("CD4: kept", length(cd4_bc), "/", length(all_barcodes), "cells (",
     round(100 * length(cd4_bc) / length(all_barcodes), 1), "%)\n")
+if (nrow(emb_cd4)) {
+  cat("CD4 embeddings:", nrow(emb_cd4), "rows across",
+      length(unique(emb_cd4$reduction)), "reduction(s)\n")
+}
 rm(q_cd4, cd4_ref, obj); gc(full = TRUE)
 memline("after CD4 projection")
 
@@ -169,6 +215,16 @@ pred <- data.frame(
 out_path <- file.path(outdir, "projectils_predictions.csv")
 write.csv(pred, out_path, row.names = FALSE)
 cat("\nwrote", nrow(pred), "x", ncol(pred), "→", out_path, "\n")
+
+emb_list <- Filter(function(x) nrow(x) > 0L, list(emb_cd8, emb_cd4))
+emb <- if (length(emb_list)) do.call(rbind, emb_list) else data.frame()
+emb_path <- file.path(outdir, "projectils_embeddings.csv")
+if (nrow(emb)) {
+  write.csv(emb, emb_path, row.names = FALSE)
+  cat("wrote", nrow(emb), "x", ncol(emb), "→", emb_path, "\n")
+} else {
+  cat("no ProjecTILs reductions detected; skipping", emb_path, "\n")
+}
 
 cat("\nlineage_gate distribution:\n"); print(table(pred$lineage_gate, useNA = "ifany"))
 cat("\nfunctional.cluster distribution (resolved cells only):\n")
