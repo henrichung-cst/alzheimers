@@ -52,7 +52,7 @@ Animal-level metadata decoding:
   the regex are silently dropped (they are the 72 − 33 = 39 females +
   outliers not used by the Incytr pipeline).
 
-Schema version: 1.  Bump OMICS_TRACE_SCHEMA_VERSION in alz/viewer/paths.py on
+Schema version: 3.  Bump OMICS_TRACE_SCHEMA_VERSION in alz/viewer/paths.py on
 any schema change; the viewer rebuild will invalidate existing shards.
 """
 
@@ -156,6 +156,75 @@ def _load_pathway_clusters(index_path: str) -> set[str]:
     return clusters
 
 
+def _load_evidence_genes_by_cluster(index_path: str) -> dict[str, set[str]]:
+    """Read pair shards and return the routed evidence genes per cluster.
+
+    The Evidence tab only ever asks for Ligand in the sender cluster and
+    Receptor/EM/Target in the receiver cluster. Keeping only those genes avoids
+    shipping all measured omics rows for every cluster to the browser.
+    """
+    if not os.path.exists(index_path):
+        raise FileNotFoundError(
+            f"incytr_pathways index missing at {index_path}; build the "
+            f"pathway shards before the omics-trace step."
+        )
+    with open(index_path) as f:
+        idx = json.load(f)
+    present = idx.get("present") or []
+    out: dict[str, set[str]] = {}
+
+    def add(cluster: str, gene: object) -> None:
+        if gene is None or pd.isna(gene):
+            return
+        gene_s = str(gene)
+        if not gene_s:
+            return
+        out.setdefault(str(cluster), set()).add(gene_s)
+
+    for pair in present:
+        if len(pair) < 2:
+            continue
+        sender, receiver = str(pair[0]), str(pair[1])
+        fname = f"{_sanitize_celltype(sender)}__{_sanitize_celltype(receiver)}.parquet"
+        fpath = os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, fname)
+        if not os.path.exists(fpath):
+            raise FileNotFoundError(
+                f"incytr_pathways shard missing while building omics_trace: {fpath}"
+            )
+        df = pq.read_table(
+            fpath, columns=["Ligand", "Receptor", "EM", "Target"]
+        ).to_pandas()
+        for gene in df["Ligand"].dropna().unique():
+            add(sender, gene)
+        for col in ("Receptor", "EM", "Target"):
+            for gene in df[col].dropna().unique():
+                add(receiver, gene)
+    return out
+
+
+def _filter_to_evidence_genes(
+    df: pd.DataFrame, evidence_genes: dict[str, set[str]], label: str
+) -> pd.DataFrame:
+    """Restrict omics rows to routed pathway evidence genes."""
+    if not evidence_genes:
+        return df
+    allowed = pd.DataFrame(
+        [(cluster, gene)
+         for cluster, genes in evidence_genes.items()
+         for gene in genes],
+        columns=["cluster", "gene_symbol"],
+    ).drop_duplicates()
+    before = len(df)
+    out = df.merge(allowed, on=["cluster", "gene_symbol"], how="inner")
+    print(
+        f"  omics_trace: {label} evidence-gene filter "
+        f"{before:,} -> {len(out):,} rows "
+        f"({len(allowed):,} routed cluster-gene pairs)",
+        flush=True,
+    )
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Substrate loaders.
 # ---------------------------------------------------------------------------
@@ -251,6 +320,12 @@ def build(force: bool = False) -> dict:
     incytr_idx = os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, "index.json")
     pathway_clusters = _load_pathway_clusters(incytr_idx)
     print(f"  omics_trace: {len(pathway_clusters)} pathway clusters", flush=True)
+    evidence_genes = _load_evidence_genes_by_cluster(incytr_idx)
+    n_cluster_genes = sum(len(v) for v in evidence_genes.values())
+    print(
+        f"  omics_trace: {n_cluster_genes:,} routed evidence cluster-gene pairs",
+        flush=True,
+    )
 
     # --- Load substrates (filtered to pathway clusters for memory) ---
     pr = _load_protein(cluster_filter=pathway_clusters)
@@ -273,6 +348,11 @@ def build(force: bool = False) -> dict:
     pr = _add_metadata_columns(pr)
     ps = _add_metadata_columns(ps)
     py = _add_metadata_columns(py)
+
+    # --- Keep only genes that can be requested by the Evidence tab ---
+    pr = _filter_to_evidence_genes(pr, evidence_genes, "protein")
+    ps = _filter_to_evidence_genes(ps, evidence_genes, "phospho_ps")
+    py = _filter_to_evidence_genes(py, evidence_genes, "phospho_py")
 
     # --- Concatenate all layers ---
     combined = pd.concat([pr, ps, py], ignore_index=True)
@@ -322,6 +402,8 @@ def build(force: bool = False) -> dict:
             "across sites per gene. Rows here are per-(site, animal) — "
             "the JS Evidence tab applies the same two-step aggregation."
         ),
+        "gene_scope": "routed_incytr_pathway_evidence_genes",
+        "n_routed_cluster_gene_pairs": n_cluster_genes,
         "sanitize_rule": "replace('/', '-'); replace(' ', '_')",
         "filename_template": "{cluster}.parquet",
         "relative_path": os.path.relpath(OMICS_TRACE_DIR, UNIFIED_VIEWER_DIR),

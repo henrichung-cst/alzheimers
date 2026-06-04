@@ -90,7 +90,7 @@ TRANSCRIPT_TRACE_SCHEMA_VERSION = 3
 # outputs/reports/decomposition/levy_t5/{protein,phospho,phospho_pY}_per_cluster.parquet.
 OMICS_TRACE_DIR = os.path.join(AUDIT_SOURCES_DIR, "omics_trace")
 OMICS_TRACE_INDEX = os.path.join(OMICS_TRACE_DIR, "index.json")
-OMICS_TRACE_SCHEMA_VERSION = 2
+OMICS_TRACE_SCHEMA_VERSION = 3
 
 # Companion limma-normalized condition means (per cluster × contrast × layer)
 # backing the Evidence tab's right-edge LFC recomputation. Mirrors Incytr's
