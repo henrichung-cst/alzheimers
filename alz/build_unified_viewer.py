@@ -2249,18 +2249,37 @@ def _write_incytr_pair_pathways() -> dict | None:
         else:
             pcol_clause = f'CAST("{pcol_disease}" AS DOUBLE)'
 
+        # SiK_score is the lone two-condition score: the wide driver emits
+        # `SiK_score_<disease>` and `SiK_score_<WTyp>` (never a bare
+        # `SiK_score`), so collapse to the disease arm here — same disease-arm
+        # selection as pvalue above, and matching pair_to_receiver_cache.py.
+        sik_disease = next(
+            (n for n in names
+             if n.startswith("SiK_score_") and not n.endswith("_WTyp")),
+            None,
+        )
+        if sik_disease is None:
+            print(f"    (warn) no disease-arm SiK_score col in "
+                  f"{os.path.basename(fpath)}; using NULL", flush=True)
+            sik_clause = "CAST(NULL AS DOUBLE) AS SiK_score"
+        else:
+            sik_clause = f'CAST("{sik_disease}" AS DOUBLE) AS SiK_score'
+
         dir_clauses = ",\n          ".join(
             f"CAST({c} AS DOUBLE) AS {c}" for c in dir_flag_cols
         )
         path_clauses = ",\n          ".join(
             f"CAST({c} AS DOUBLE) AS {c}" for c in extra_path_cols
         )
+        # SiK_score handled via sik_clause (two-condition collapse); the rest
+        # are single-name and emitted verbatim or NULL-filled.
+        generic_scores = [c for c in _INCYTR_SCORE_COLS if c != "SiK_score"]
         score_clauses = ",\n          ".join(
-            f"CAST({c} AS DOUBLE) AS {c}" for c in _INCYTR_SCORE_COLS
+            f"CAST({c} AS DOUBLE) AS {c}" for c in generic_scores
             if c in names
         )
         # Stable column order; missing scores are NULL.
-        missing_scores = [c for c in _INCYTR_SCORE_COLS if c not in names]
+        missing_scores = [c for c in generic_scores if c not in names]
         missing_score_clauses = ",\n          ".join(
             f"CAST(NULL AS DOUBLE) AS {c}" for c in missing_scores
         )
@@ -2279,7 +2298,7 @@ def _write_incytr_pair_pathways() -> dict | None:
              else f'CAST(NULL AS VARCHAR) AS "{dst}"')
             for src, dst in zip(_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS)
         )
-        clauses = [score_clauses, missing_score_clauses,
+        clauses = [score_clauses, missing_score_clauses, sik_clause,
                    dir_clauses, path_clauses, fc_clauses, label_clauses]
         extra_select = ",\n          ".join(c for c in clauses if c)
 
