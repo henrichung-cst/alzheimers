@@ -46,29 +46,52 @@ FDR_COLS = [f"{c}_FDR" for c in CONTRASTS]
 _SUSTAINED_RATIO_THRESH = 1.5
 
 
-def _build_gene_symbol_map(uaf_full, mea):
-    """Build kinase -> gene_symbol dict.
+def _load_gene_symbol_map(kinases) -> dict[str, str]:
+    """Load the canonical kinase-abbreviation -> gene-symbol map."""
+    kinases = sorted({str(k) for k in kinases})
+    gene_map = {k: k for k in kinases}
+    if not os.path.exists(config.MAPPING_CACHE_FILE):
+        raise FileNotFoundError(
+            f"canonical kinase mapping cache not found: {config.MAPPING_CACHE_FILE}"
+        )
 
-    Primary source: unified_attribution_full (curated mapping used by
-    attribution). Fallback for MEA-only kinases: mapping cache CSV.
-    Last resort: kinase name itself.
-    """
-    primary = (uaf_full[["kinase", "gene_symbol"]]
-               .drop_duplicates()
-               .set_index("kinase")["gene_symbol"]
-               .to_dict())
+    cache = pd.read_csv(config.MAPPING_CACHE_FILE)
+    required = {"kinase_abbreviation", "gene_symbol"}
+    missing_cols = required - set(cache.columns)
+    if missing_cols:
+        raise ValueError(
+            f"{config.MAPPING_CACHE_FILE} is missing required columns: "
+            f"{sorted(missing_cols)}"
+        )
+    cache_map = dict(zip(cache["kinase_abbreviation"].astype(str),
+                         cache["gene_symbol"].astype(str)))
+    for k in kinases:
+        gene_map[k] = cache_map.get(k, k)
+    return gene_map
 
-    missing = set(mea["kinase"].unique()) - set(primary.keys())
-    if missing and os.path.exists(config.MAPPING_CACHE_FILE):
-        cache = pd.read_csv(config.MAPPING_CACHE_FILE)
-        fallback = cache.set_index("kinase_abbreviation")["gene_symbol"].to_dict()
-        for k in missing:
-            primary[k] = fallback.get(k, k)
-    else:
-        for k in missing:
-            primary[k] = k
 
-    return primary
+def _validate_gene_symbols(df, gene_map, table_name: str) -> None:
+    """Fail fast if an upstream table was built with stale kinase-gene labels."""
+    if "kinase" not in df.columns or "gene_symbol" not in df.columns:
+        return
+    pairs = df[["kinase", "gene_symbol"]].drop_duplicates().copy()
+    pairs["kinase"] = pairs["kinase"].astype(str)
+    pairs["gene_symbol"] = pairs["gene_symbol"].astype(str)
+    pairs["expected_gene_symbol"] = pairs["kinase"].map(
+        lambda k: gene_map.get(k, k)
+    )
+    mismatches = pairs[
+        pairs["gene_symbol"] != pairs["expected_gene_symbol"]
+    ].sort_values("kinase")
+    if mismatches.empty:
+        return
+
+    preview = mismatches.head(20).to_string(index=False)
+    raise ValueError(
+        f"{table_name} has {len(mismatches)} kinase-gene mapping mismatch(es) "
+        f"against {config.MAPPING_CACHE_FILE}. Re-run "
+        f"alz/bulk_mea/attribute.py before recovery.\n{preview}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +368,8 @@ def step_attribution_recovery(mea, uaf_full):
     kinase_hypothesis_table)``. Side-effect free; callers (CLI shim or
     Kedro nodes) decide where to persist the outputs.
     """
-    gene_map = _build_gene_symbol_map(uaf_full, mea)
+    gene_map = _load_gene_symbol_map(mea["kinase"].unique())
+    _validate_gene_symbols(uaf_full, gene_map, "unified_attribution_full.csv")
     t1 = _build_kinase_activity_matrix(mea, gene_map)
     t2 = _build_celltype_evidence(uaf_full)
     t3 = _build_kinase_hypothesis_table(t1, t2)

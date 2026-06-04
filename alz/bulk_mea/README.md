@@ -131,6 +131,13 @@ Synthesizes the final hypothesis tables:
   synthesis joining the activity profile to its top-3 candidate cell types, with
   a binary "has ≥1 high-confidence attribution" flag.
 
+`recover.py` treats `data/derived/caches/kinase_to_gene_mapping.csv` as the
+authoritative kinase-abbreviation to gene-symbol map. If
+`unified_attribution_full.csv` was built against an older or inconsistent map,
+recovery fails fast and instructs you to rerun `attribute.py` before producing
+final tables. This prevents stale kinase labels from propagating into the
+viewer payload.
+
 ---
 
 ## Design patterns
@@ -196,5 +203,6 @@ There is no unit-test suite. The designated checks are:
 
 ```bash
 python alz/bulk_mea/summary.py                       # read-only: prints cached results across stages
+python alz/bulk_mea/audit_kinase_gene_mapping.py     # fails on generated kinase/gene mapping drift
 python alz/decomposition_mea/verify_decomposition.py --all   # decomposition harness
 ```
