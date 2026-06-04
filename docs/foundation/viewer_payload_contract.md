@@ -230,6 +230,38 @@ Incytr pathway payloads should expose context-specific shard indexes:
 The frontend should never hard-code donor prefixes or mouse-only filename templates. It should read
 `filename_template` and the active context's `present` list.
 
+Song/AD Incytr payloads may also include sparse-cell QC metadata used for interpretation-only
+sensitivity views:
+
+```json
+{
+  "celltype_qc": {
+    "source": "outputs/reports/snrna_integration/pseudobulk_cell_counts.csv",
+    "sample_scope": "samples whose id contains '_ma_'",
+    "low_signal_rule": "median_n <= 3",
+    "low_signal_celltypes": [],
+    "by_celltype": {
+      "Cholinergic-Neurons": {
+        "median_n": 2.0,
+        "mean_n": 2.46,
+        "min_n": 1,
+        "total_n": 32,
+        "n_samples": 13,
+        "low_signal_median_le_3": true
+      }
+    }
+  },
+  "low_signal_celltypes": [],
+  "pathway_counts_low_signal_excluded": {}
+}
+```
+
+The sparse-cell rule is not a canonical output filter. It supports viewer-side sensitivity mode by
+excluding sender-receiver interactions where either endpoint is in `low_signal_celltypes`. Temporal
+pathway counts must use the precomputed `pathway_counts_low_signal_excluded` cube instead of scanning
+lazy pathway shards in the browser. Payloads without this metadata should hide or disable the sparse
+filter and fall back to normal `pathway_counts`.
+
 ## Verification
 
 Run the payload contract verifier after rebuilding viewer payloads:

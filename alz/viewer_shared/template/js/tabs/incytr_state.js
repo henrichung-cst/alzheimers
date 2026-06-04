@@ -1,13 +1,11 @@
 // ---------------------------------------------------------------------------
 // IncytrFilter — shared filter state for the Incytr Heatmap + Pathways tabs.
 // Mirrors the KinaseFilter contract: localStorage-backed, get(k) / set(patch)
-// / reset() / subscribe(fn). Persistence key: incytrFilter.v3.
+// / reset() / subscribe(fn). Persistence key: incytrFilter.v9.
 //
-// v3 (per-group trajectory chips):
-//   trajLabels     — object keyed by the active context's contrast group, each value an
-//                    array of selected labels. AND within a disease (path
-//                    must carry every selected label) AND across diseases.
-//                    {App: [], Tau: [], ApTt: []} = no gate.
+// v9:
+//   trend          — canonical TrendFilter value applied to Incytr PDS
+//                    trajectory labels for the row's disease group.
 //   recurContrasts — diseases that must each have a complete trajectory
 //                    (AND logic). [] = no recur gate. e.g. ["App","Tau"].
 //   detailRowKey   — row key whose expanded panel is currently showing the
@@ -15,21 +13,29 @@
 // ---------------------------------------------------------------------------
 
 window.IncytrFilter = (function() {
-  const _KEY = "incytrFilter.v3";
+  const _KEY = "incytrFilter.v9";
   const _defaults = {
-    // Heatmap projection — single contrast picker, two ordinal selects, and
+    // Heatmap projection — timeline contrast scrubber, ordinal selects, and
     // pvalue + |PDS| gates (snapped to heatmap_counts.thresholds /
     // .abs_pds_thresholds). pvalue defaults to null (no gate) since the
     // per-animal SigProb Wald-t is unreliable in this cohort; |PDS| is the
     // recommended primary filter.
+    hmView:         "timeline",
+    hmTimelineIndex: 0,
     hmDisease:      "App",
     hmTimepoint:    "2mo",
     hmPvalue:       null,
     hmAbsPds:       0.01,
+    hmAxisLimit:    "all",
+    hmScale:        "linear",
+    hmPdsSign:      "both",
+    excludeLowSignalCelltypes: false,
 
     // Pathway table — multiselect filters (empty = any). sliderPds is the
     // |PDS| effect-size floor (primary). sliderP is the pvalue gate (opt-in;
     // legacy sliderSp (sigprob) was retired 2026-05-12).
+    ipMode:         "top",        // "top" = ranked across all pairs; "pair" = one sender/receiver shard
+    topLimit:       500,
     pair:           null,          // {sender, receiver} or null
     disease:        [],            // [] = any
     timepoint:      [],            // [] = any
@@ -39,18 +45,16 @@ window.IncytrFilter = (function() {
     sliderPds:      0.5,
     searchText:     "",
     pairPage:       0,
-    sortKey:        "PDS",
-    sortDir:        -1,
+    sortKey:        "rank",
+    sortDir:        1,
+    trend:          "",
 
     // CR-04 trajectory / recurrence filters.
-    trajLabels:     { App: [], Tau: [], ApTt: [] },   // per-disease chip sets
     recurContrasts: [],            // [] = no gate; ["App","Tau"] = AND both
     detailRowKey:   null,          // expanded detail row key (ephemeral)
   };
   const _arrKeys = new Set(["disease","timepoint","senderIn","receiverIn",
                              "recurContrasts"]);
-  // Per-disease object — needs special merging in set() and on load.
-  const _objKeys = new Set(["trajLabels"]);
   let _state = Object.assign({}, _defaults);
   try {
     const saved = JSON.parse(localStorage.getItem(_KEY) || "null");
@@ -58,16 +62,6 @@ window.IncytrFilter = (function() {
       for (const k of Object.keys(_defaults)) {
         if (!(k in saved)) continue;
         if (_arrKeys.has(k)) _state[k] = Array.isArray(saved[k]) ? saved[k].slice() : [];
-        else if (_objKeys.has(k)) {
-          // Merge dynamic per-context keys, sanitising each value to an array.
-          const cur = Object.assign({}, _defaults[k]);
-          if (saved[k] && typeof saved[k] === "object") {
-            for (const d of Object.keys(saved[k])) {
-              cur[d] = Array.isArray(saved[k][d]) ? saved[k][d].slice() : [];
-            }
-          }
-          _state[k] = cur;
-        }
         else _state[k] = saved[k];
       }
     }
@@ -87,18 +81,6 @@ window.IncytrFilter = (function() {
           const a = Array.isArray(nv) ? nv.slice() : [];
           if (cur.length !== a.length || cur.some((v,i) => v !== a[i])) {
             _state[k] = a; changed = true;
-          }
-        } else if (_objKeys.has(k)) {
-          // Deep-equal compare via JSON; replace wholesale on diff.
-          const cur = _state[k] || {};
-          const merged = Object.assign({}, cur);
-          if (nv && typeof nv === "object") {
-            for (const d of Object.keys(nv)) {
-              merged[d] = Array.isArray(nv[d]) ? nv[d].slice() : [];
-            }
-          }
-          if (JSON.stringify(merged) !== JSON.stringify(cur)) {
-            _state[k] = merged; changed = true;
           }
         } else {
           // Deep-equal for object values (pair = {sender, receiver}).
@@ -120,4 +102,48 @@ window.IncytrFilter = (function() {
       return () => { const i = _subs.indexOf(fn); if (i >= 0) _subs.splice(i, 1); };
     },
   };
+})();
+
+window.IncytrCelltypeQc = (function() {
+  let _cacheBlock = null;
+  let _cacheSet = null;
+
+  function lowSignalSet(block) {
+    const b = block || (window.ViewerPayload && ViewerPayload.incytr && ViewerPayload.incytr());
+    if (!b) return new Set();
+    if (_cacheBlock === b && _cacheSet) return _cacheSet;
+    const names = b.low_signal_celltypes
+      || (b.celltype_qc && b.celltype_qc.low_signal_celltypes)
+      || [];
+    _cacheBlock = b;
+    _cacheSet = new Set(Array.isArray(names) ? names : []);
+    return _cacheSet;
+  }
+
+  function hasLowSignal(block) {
+    return lowSignalSet(block).size > 0;
+  }
+
+  function enabled(block) {
+    return !!(window.IncytrFilter
+      && IncytrFilter.get("excludeLowSignalCelltypes")
+      && hasLowSignal(block));
+  }
+
+  function endpointExcluded(name, block) {
+    return enabled(block) && lowSignalSet(block).has(name);
+  }
+
+  function pairExcluded(sender, receiver, block) {
+    return enabled(block)
+      && (lowSignalSet(block).has(sender) || lowSignalSet(block).has(receiver));
+  }
+
+  function controlText(block) {
+    const set = lowSignalSet(block);
+    if (!set.size) return "";
+    return `excluding ${set.size} sparse cell type${set.size === 1 ? "" : "s"}`;
+  }
+
+  return { lowSignalSet, hasLowSignal, enabled, endpointExcluded, pairExcluded, controlText };
 })();

@@ -368,6 +368,13 @@ const _KINASE_REQ_DONOR1 = [{
 }];
 
 const TAB_MANIFEST = {
+  temporal: {
+    group: "landscape", label: "Temporal",
+    filters: [], requires: [], modes: ["mouse"],
+    wire: () => wireTemporal(),
+    render: () => renderTemporal(),
+    rerenderOn: { filters: false, selection: [] },
+  },
   kinase: {
     group: "drilldown", label: "Kinase",
     modes: ["mouse"],

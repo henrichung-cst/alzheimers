@@ -235,15 +235,16 @@ const TAB_GUIDE = {
     ],
   },
   incytrheatmap: {
-    preamble: "Sender × receiver candidate-path counts from pair-mode Incytr on the per-donor T-cell pseudobulk. One cell = number of pathways surviving the active pvalue / |PDS| gates for a chosen day-vs-baseline contrast.",
+    preamble: "Sender × receiver candidate-path counts from pair-mode Incytr on the per-donor T-cell pseudobulk. One cell = number of pathways surviving the active pvalue / |PDS| gates for a chosen day-vs-baseline contrast; Timeline mode repeats the sender grid across all available days for the active donor.",
     method: [
-      "Pair-mode Incytr was run on each donor's ProjecTILs-annotated clusters, contrasting each day against the d2 baseline. The heatmap reads precomputed counts at every (sender, receiver, contrast, pvalue, |PDS|) gate combination from the payload — no on-the-fly aggregation.",
+      "Pair-mode Incytr was run on each donor's ProjecTILs-annotated clusters, contrasting each day against the d2 baseline. The heatmap reads precomputed counts at every (sender, receiver, contrast, pvalue, |PDS|) gate combination from the payload, including Timeline mode — no on-the-fly aggregation.",
     ],
     shows: {
-      lead: "Where signalling change concentrates across cell-type pairs at the chosen day. Darker = more paths surviving the gate.",
+      lead: "Where signalling change concentrates across cell-type pairs at the chosen day, or how those pair-level counts change across days in Timeline mode. Darker = more paths surviving the gate.",
     },
-    howTo: "Pick a day; tune pvalue (default off — per-animal Wald-t is unreliable in this cohort) and |PDS|. Click any cell to drill into the (sender, receiver) pair on the Pathways tab.",
+    howTo: "Use Single for one day, or Timeline to compare all days side by side for the active donor. Tune pvalue (default off — per-animal Wald-t is unreliable in this cohort) and |PDS|. Click any cell to drill into the (sender, receiver, day) slice on the Pathways tab.",
     toggles: [
+      { name: "Single / Timeline", desc: "single day versus all available day-vs-d2 contrasts for the active donor." },
       { name: "Day", desc: "the day-vs-d2 contrast to show." },
       { name: "pvalue / |PDS|", desc: "snapped to the precomputed grid; blank/0 = open gate." },
     ],

@@ -68,7 +68,24 @@ function _tv2DefaultSeries(layer) {
 
 function _tv2PathwayBlock() {
   const block = ViewerPayload.incytr();
-  return (block && block.pathway_counts) || null;
+  if (!block) return null;
+  if (window.IncytrCelltypeQc
+      && IncytrCelltypeQc.enabled(block)
+      && block.pathway_counts_low_signal_excluded) {
+    return block.pathway_counts_low_signal_excluded;
+  }
+  return block.pathway_counts || null;
+}
+
+function _tv2HasLowSignalPathwayFilter() {
+  const block = ViewerPayload.incytr();
+  return !!(window.IncytrCelltypeQc && IncytrCelltypeQc.hasLowSignal(block));
+}
+
+function _tv2LowSignalPathwayLabel() {
+  const block = ViewerPayload.incytr();
+  return (window.IncytrCelltypeQc && IncytrCelltypeQc.enabled(block))
+    ? IncytrCelltypeQc.controlText(block) : "";
 }
 
 function _tv2SnapPathwayPvalue(p) {
@@ -295,6 +312,8 @@ function _tv2SeriesLabel(series) {
     if (snap && !snap.open) parts.push(`pvalue<${snap.value}`);
     const apSnap = _tv2SnapPathwayAbsPds(series.absPds);
     if (apSnap && apSnap.value > 0) parts.push(`|PDS|≥${apSnap.value}`);
+    const lowTxt = _tv2LowSignalPathwayLabel();
+    if (lowTxt) parts.push(lowTxt);
     if (series.sign !== "signed") parts.push(series.sign);
     return parts.join(" · ");
   }
@@ -338,6 +357,7 @@ function _tv2RenderSeriesRow(series, idx) {
   const showBulkFdr = !isPathway && (series.layer !== "decomp");
   const showDecompFdr = !isPathway && (series.layer !== "bulk");
   const showPathwayPvalue = isPathway;
+  const showPathwayLowSignal = isPathway && _tv2HasLowSignalPathwayFilter();
   const showAttr = !isPathway;
   const showAgree = !isPathway;
   const disParts = [];
@@ -353,6 +373,7 @@ function _tv2RenderSeriesRow(series, idx) {
     ${showDecompFdr ? `<label>Decomp FDR<input class="tv2-fdr-decomp" type="number" min="0" max="1" step="0.01" style="width:54px;"></label>` : ''}
     ${showPathwayPvalue ? `<label title="Incytr pathway pvalue (Wald t-test from factorial OLS on per-animal SigProb). Blank = no pvalue gate (default). Snaps down to: 0.001 / 0.005 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0.">pvalue<input class="tv2-pvalue" type="number" min="0" max="1" step="0.005" style="width:64px;"></label>` : ''}
     ${showPathwayPvalue ? `<label title="Minimum |PDS| — magnitude of the composite Pathway Disturbance Score (multimodel β across all omics layers). ≥0.01 = real composite signal; ≥0.1 = strong. Snaps down to the precomputed grid: 0 / 0.001 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0.">|PDS|≥<input class="tv2-abs-pds" type="number" min="0" step="0.01" style="width:64px;"></label>` : ''}
+    ${showPathwayLowSignal ? `<label title="Sensitivity mode: remove Incytr pathways where sender or receiver has median n_cells <= 3.">Sparse <select class="tv2-low-signal"><option value="include">Include all</option><option value="exclude">Exclude median n≤3</option></select></label>` : ''}
     ${showAttr ? `<label title="Require ≥1 attribution row in scope reaching this confidence tier (very_high = high+decomp agree, high = WMB+concordance, etc.).">Attr <select class="tv2-attr">${attrOpts}</select></label>` : ''}
     ${showAgree ? `<label class="tv2-agree" title="When on, decomp row must match bulk NES sign to count as corroboration."><input class="tv2-agree-cb" type="checkbox"> sign agree</label>` : ''}
     <button class="tv2-rm" title="Remove this series">×</button>
@@ -368,6 +389,7 @@ function _tv2WireSeriesRow(rowEl, idx) {
   const fdrD = rowEl.querySelector(".tv2-fdr-decomp");
   const pvalueEl = rowEl.querySelector(".tv2-pvalue");
   const absPdsEl = rowEl.querySelector(".tv2-abs-pds");
+  const lowSignalEl = rowEl.querySelector(".tv2-low-signal");
   const agreeCb = rowEl.querySelector(".tv2-agree-cb");
   const attrSel = rowEl.querySelector(".tv2-attr");
   const rmBtn = rowEl.querySelector(".tv2-rm");
@@ -378,6 +400,7 @@ function _tv2WireSeriesRow(rowEl, idx) {
   if (fdrD) fdrD.value = s.fdrDecomp;
   if (pvalueEl) pvalueEl.value = (s.pvalue == null ? "" : s.pvalue);
   if (absPdsEl) absPdsEl.value = (s.absPds == null ? "" : s.absPds);
+  if (lowSignalEl) lowSignalEl.value = IncytrFilter.get("excludeLowSignalCelltypes") ? "exclude" : "include";
   if (agreeCb) agreeCb.checked = !!s.agree;
   if (attrSel) attrSel.value = s.attrTier || "";
   layerSel.addEventListener("change", () => {
@@ -411,6 +434,10 @@ function _tv2WireSeriesRow(rowEl, idx) {
       s.absPds = raw;
       renderTemporalV2();
     } else { absPdsEl.value = (s.absPds == null ? "" : s.absPds); }
+  });
+  if (lowSignalEl) lowSignalEl.addEventListener("change", () => {
+    IncytrFilter.set({ excludeLowSignalCelltypes: lowSignalEl.value === "exclude" });
+    renderTemporalV2();
   });
   if (agreeCb) agreeCb.addEventListener("change", () => { s.agree = agreeCb.checked; renderTemporalV2(); });
   if (attrSel) attrSel.addEventListener("change", () => {
@@ -676,10 +703,10 @@ function wireTemporalV2() {
 // ---------------------------------------------------------------------------
 
 // Single filter-state object replacing scattered module-level vars and
-// window._keFilters. Backed by localStorage key kinaseFilter.v4.
+// window._keFilters. Backed by localStorage key kinaseFilter.v5.
 // (v1/v2/v3 keys are intentionally ignored — schema changed.)
 window.KinaseFilter = (function() {
-  const _KEY = "kinaseFilter.v4";
+  const _KEY = "kinaseFilter.v5";
   const _defaults = {
     search: "",
     disease: [],      // [] = any; otherwise array of "App"|"Tau"|"ApTt"
@@ -688,6 +715,7 @@ window.KinaseFilter = (function() {
     confidence: "",   // "" | "high" | "moderate" | "low" — ordinal threshold (≥)
     nSigMin: 0,       // minimum n_sig (count of significant contrasts in scope)
     wmbMin: 0,        // 0 = any; 1/2/5/10 = minimum WMB specificity tier (× uniform)
+    pattern: "",      // TrendFilter value over disease-specific NES time courses.
     fdr: 0.25, sortCol: "nes_profile", sortAsc: false,
   };
   const _arrKeys = new Set(["disease","timepoint","celltype"]);
@@ -769,7 +797,7 @@ Object.defineProperty(window, "_keFilters", {
     const f = KinaseFilter.get();
     const one = a => (Array.isArray(a) && a.length === 1) ? a[0] : "";
     return { disease: one(f.disease), tp: one(f.timepoint),
-             celltype: one(f.celltype), trajectory: "" };
+             celltype: one(f.celltype), trajectory: f.pattern || "" };
   },
   configurable: true,
 });

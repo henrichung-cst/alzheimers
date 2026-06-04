@@ -62,6 +62,18 @@
             <input id="ke-filter-nsig-min" type="number" min="0" max="9" step="1" value="0" style="width:48px;"
                    aria-label="Minimum number of significant contrasts"/>
           </label>
+          <label class="ke-filter-label" title="Filter by NES trend across ordered timepoints. With no disease filter, any disease trajectory may match; with selected diseases, each selected disease must match. Requires a complete finite profile.">Trend
+            <select id="ke-filter-pattern" aria-label="NES trend">
+              <option value="">Any</option>
+              <option value="always_up">always up</option>
+              <option value="always_down">always down</option>
+              <option value="monotonic_up">monotonic up</option>
+              <option value="monotonic_down">monotonic down</option>
+              <option value="mixed">mixed</option>
+              <option value="peak">single peak</option>
+              <option value="trough">single trough</option>
+            </select>
+          </label>
           <button id="ke-filter-reset" class="ke-filter-reset" title="Reset all kinase filters">Reset</button>
           <span class="muted" id="ke-count"></span>
         </div>
@@ -243,16 +255,70 @@
         <label class="ke-filter-label" title="Keep paths with |PDS| ≥ threshold (composite multimodel effect-size magnitude). Snapped to the precomputed grid (0 / 0.001 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0). 0 = no gate.">|PDS| ≥
           <input id="ih-abs-pds" type="number" step="0.01" min="0" max="2" style="width:64px;"/>
         </label>
+        <label class="ke-filter-label" title="Filter heatmap cells by the sign of the composite PDS. Both includes positive and negative pathway changes.">PDS
+          <select id="ih-pds-sign" aria-label="PDS direction">
+            <option value="both">Both</option>
+            <option value="positive">Positive</option>
+            <option value="negative">Negative</option>
+          </select>
+        </label>
+        <label class="ke-filter-label" title="Limit sender and receiver axes to the top cell types by visible path count under the active contrast and gates. Counts are not changed.">Axes
+          <select id="ih-axis-limit" aria-label="Heatmap axis limit">
+            <option value="all">All</option>
+            <option value="10">Top 10</option>
+            <option value="15">Top 15</option>
+            <option value="25">Top 25</option>
+          </select>
+        </label>
+        <label class="ke-filter-label" title="Color transform only. Log1p compresses saturated cells so weaker interactions remain visible; hover and click-through still use raw counts.">Color
+          <select id="ih-scale" aria-label="Heatmap color scale">
+            <option value="linear">Linear</option>
+            <option value="log1p">log1p</option>
+          </select>
+        </label>
+        <label class="ke-filter-label" title="Sensitivity mode: remove cell-cell interactions where either endpoint has median male pseudobulk n_cells <= 3.">Sparse cells
+          <select id="ih-low-signal" aria-label="Sparse cell-type filter">
+            <option value="include">Include all</option>
+            <option value="exclude">Exclude median n &lt;= 3</option>
+          </select>
+        </label>
         <button id="ih-reset" class="ke-filter-reset" title="Reset heatmap filters">Reset</button>
         <span class="muted" id="ih-count"></span>
       </div>
+      <div id="ih-timeline-control" class="ih-timeline-control" style="display:none;">
+        <span class="muted ih-timeline-label" id="ih-timeline-label"></span>
+        <button id="ih-timeline-prev" class="ih-timeline-step" type="button" aria-label="Previous timeline frame">&lt;</button>
+        <div class="ih-timeline-scrubber">
+          <input id="ih-timeline-slider" type="range" min="0" max="0" step="1" value="0"
+                 aria-label="Timeline frame"/>
+          <div id="ih-timeline-ticks" class="muted ih-timeline-ticks"></div>
+        </div>
+        <button id="ih-timeline-next" class="ih-timeline-step" type="button" aria-label="Next timeline frame">&gt;</button>
+      </div>
       <div id="ih-plot" role="img" aria-label="Incytr candidate-path heatmap"
            style="width:100%;"></div>
+      <div id="ih-qc-wrap" style="margin-top:14px;display:none;">
+        <div id="ih-qc-plot" role="img" aria-label="Median cell count versus Incytr pathway burden"
+             style="width:100%;"></div>
+      </div>
     </div>
   </div>
   <div id="tab-incytrpathways" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytrpathways" hidden>
     <div class="card">
       <div class="ke-toolbar ke-toolbar-multi">
+        <label class="ke-filter-label" title="Top overall ranks the packaged top pathway instances across all sender/receiver cell-type pairs. Cell Type loads one sender/receiver pair for detailed evidence inspection.">View
+          <select id="ip-mode" aria-label="Incytr pathway view">
+            <option value="top">Top overall</option>
+            <option value="pair">Cell Type</option>
+          </select>
+        </label>
+        <label class="ke-filter-label" title="Limit the Top overall table to the strongest packaged pathway instances after active filters.">Show
+          <select id="ip-top-limit" aria-label="Top pathway count">
+            <option value="500">Top 500</option>
+            <option value="1000">Top 1000</option>
+            <option value="5000">Top 5000</option>
+          </select>
+        </label>
         <span id="ip-ms-sender"   class="ke-filter-label"
               title="Filter rows by sender cell type. Empty = any. Picking values shards-load every matching (sender, receiver) pair."></span>
         <span id="ip-ms-receiver" class="ke-filter-label"
@@ -261,6 +327,16 @@
               title="Filter rows by disease contrast prefix. Empty = any."></span>
         <span id="ip-ms-time"     class="ke-filter-label"
               title="Filter rows by timepoint contrast suffix. Empty = any."></span>
+        <label class="ke-filter-label" title="Filter rows by PDS trend across ordered timepoints within the row's disease group. Requires complete trajectory labels in the payload.">Trend
+          <select id="ip-trend" aria-label="Incytr PDS trend">
+            <option value="">Any</option>
+            <option value="always_up">always up</option>
+            <option value="always_down">always down</option>
+            <option value="monotonic_up">monotonic up</option>
+            <option value="monotonic_down">monotonic down</option>
+            <option value="mixed">mixed</option>
+          </select>
+        </label>
         <span id="ip-ms-recur"    class="ke-filter-label"
               title="AND-filter: keep only pathways that appear as significant in ALL selected disease contrasts (at the active pvalue/|PDS| gates). Empty = no recur constraint."></span>
         <label class="ke-filter-label" title="Keep rows with pvalue &lt; threshold. Blank = no constraint. (Per-animal SigProb Wald-t is unreliable in this cohort; prefer |PDS|.)">pvalue &lt;
@@ -272,13 +348,15 @@
         <label class="ke-filter-label" title="Substring search across Ligand / Receptor / EM / Target / Path / Sender / Receiver / contrast. Case-insensitive. Space-separated tokens are AND'd.">search
           <input id="ip-search" type="search" placeholder="gene or path…" style="width:140px;"/>
         </label>
+        <label class="ke-filter-label" title="Sensitivity mode: remove cell-cell interactions where either endpoint has median male pseudobulk n_cells <= 3.">Sparse cells
+          <select id="ip-low-signal" aria-label="Sparse cell-type filter">
+            <option value="include">Include all</option>
+            <option value="exclude">Exclude median n &lt;= 3</option>
+          </select>
+        </label>
         <button id="ip-reset" class="ke-filter-reset" title="Reset all pathway filters">Reset</button>
         <span class="muted" id="ip-count"></span>
       </div>
-      <!-- Trajectory chip bar (CR-04): one toggleable chip per coarse label.
-           Chips are rendered by incytr_pathways.js once trajectory_index loads. -->
-      <div id="ip-traj-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 4px 0;min-height:28px;"
-           title="Filter by coarse trajectory label. Hover a chip to see the sign-vector meaning. Multiple chips = OR within labels. Empty = any."></div>
       <div class="muted" style="margin:4px 0 8px 0;font-size:11px;"
            title="Each node carries a {DEG, prG} badge marking the seed list that admitted the gene.">
         Evidence-source badges:

@@ -307,6 +307,53 @@ function _kineSigCountScoped(r, fdr, scopedCtxIds) {
   return n;
 }
 
+function _kineTrendDiseaseOrder(filter) {
+  const selected = _filterSet(filter.disease);
+  if (selected.size) return Array.from(selected);
+  const axis = ViewerPayload.contrastAxis ? ViewerPayload.contrastAxis() : {};
+  if (axis.groups && axis.groups.length) return axis.groups.slice();
+  const out = [];
+  const seen = new Set();
+  for (const c of CONTRASTS) {
+    const d = String(c).split("_")[0];
+    if (!seen.has(d)) { seen.add(d); out.push(d); }
+  }
+  return out;
+}
+
+function _kineTrendTimeOrder() {
+  const axis = ViewerPayload.contrastAxis ? ViewerPayload.contrastAxis() : {};
+  if (axis.timepoints && axis.timepoints.length) return axis.timepoints.slice();
+  const out = [];
+  const seen = new Set();
+  for (const c of CONTRASTS) {
+    const m = String(c).match(/_(.+)$/);
+    const t = m ? m[1] : "";
+    if (t && !seen.has(t)) { seen.add(t); out.push(t); }
+  }
+  return out;
+}
+
+function _kineTrendMatches(r, filter) {
+  const pattern = TrendFilter.normalize(filter.pattern || "");
+  if (!pattern) return true;
+  const diseases = _kineTrendDiseaseOrder(filter);
+  const selected = _filterSet(filter.disease);
+  const timepoints = _kineTrendTimeOrder();
+  let any = false;
+  for (const d of diseases) {
+    const vals = [];
+    for (const t of timepoints) {
+      const ci = CONTRASTS.indexOf(`${d}_${t}`);
+      if (ci >= 0) vals.push(r._nes[ci]);
+    }
+    const ok = TrendFilter.vectorMatches(vals, pattern);
+    if (selected.size && !ok) return false;
+    if (ok) any = true;
+  }
+  return selected.size ? true : any;
+}
+
 // Legacy lens array kept for any remaining references; new code uses
 // getScopedContrastIds via KinaseFilter.
 const NES_PROFILE_LENSES = [
@@ -645,6 +692,7 @@ function renderKinaseExplorer() {
       }
       if (!_ok) continue;
     }
+    if (!q && kf.pattern && !_kineTrendMatches(r, kf)) continue;
     visible.push(r);
   }
 

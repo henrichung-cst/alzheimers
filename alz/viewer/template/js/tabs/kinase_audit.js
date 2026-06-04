@@ -573,16 +573,10 @@ const ATTR_VERDICT_COLS = [
    title:"WMB enrichment: share of total log2 expression across 34 WMB classes (uniform = 1/34 ≈ 0.029). Computed at WMB-class granularity, then attached to each Levy-T5 cluster via the levy_t5→WMB crosswalk — Levy-T5 clusters that map to the same WMB class share this value."},
   {key:"wmb_tier",                     label:"WMB tier",    type:"num", group:"attr",
    title:"WMB specificity as a multiple of uniform (1/34 ≈ 0.029): ≥10× / ≥5× / ≥2× / ≥1×. Empty = below 1× uniform. Inherited from the WMB class this Levy-T5 cluster maps to."},
-  {key:"wmb_mean_log2_expression",     label:"log2 expr",   type:"num", group:"attr",
-   title:"WMB mean log2 expression in this cell type (Allen Whole Mouse Brain 10Xv3, pooled across 13 regions). Absolute level — low values flag the score as potentially noise-driven."},
-  {key:"wmb_fraction_cells_expressing",label:"% cells",     type:"num", group:"attr",
-   title:"WMB fraction of cells of this cell type with non-zero counts for this gene."},
   {key:"sea_ad_lfc",                   label:"SEA-AD LFC",  type:"num", group:"attr",
    title:"SEA-AD log2 fold change in human AD vs control, median across SEA-AD supertypes mapped to this subclass. Stratum (early / late / full CPS) is selected from the contrast pathway. Color: red = up in AD, blue = down."},
   {key:"song_lfc",                     label:"Song LFC",    type:"num", group:"attr",
    title:"Song log2 fold change from within-cohort snRNA-seq factorial OLS (β at this contrast — 10-param design, time-resolved). Color: red = up in disease genotype, blue = down."},
-  {key:"combined_score",               label:"Score",       type:"num", group:"attr",
-   title:"Combined attribution score: effective concordance × (0.5 + WMB specificity). The unified attribution uses this for confidence tiers."},
   {key:"decomp_nes",                   label:"Decomp NES",  type:"num", group:"decomp",
    title:"Decomposition NES from the CTM-native proportional decomposition (per-cell-type kinase MEA on bulk phospho ranking weighted by snRNA share for the kinase's substrate set). Same join key as Song LFC. Hypothesis-strength signal — see Methods."},
   {key:"decomp_fdr",                   label:"Decomp FDR",  type:"num", group:"decomp",
@@ -670,10 +664,10 @@ function _renderAttributionVerdict(hostId, ctx) {
     r.cross_rank = (_CONF_RANK[r.combined_tier] || 0) * 6 + decompStep;
   }
 
-  const sortKey = host.dataset.sortKey || "combined_score";
+  const sortKey = host.dataset.sortKey || "cross_rank";
   const sortAsc = host.dataset.sortAsc === "1";
   const sortCol = ATTR_VERDICT_COLS.find(c => c.key === sortKey)
-    || ATTR_VERDICT_COLS.find(c => c.key === "combined_score")
+    || ATTR_VERDICT_COLS.find(c => c.key === "cross_rank")
     || ATTR_VERDICT_COLS[ATTR_VERDICT_COLS.length - 1];
   rows.sort((a, b) => _attrVerdictCmp(a, b, sortCol.key, sortCol.type, sortAsc));
   const showAllId = `${hostId}-show-all`;
@@ -724,17 +718,13 @@ function _renderAttributionVerdict(hostId, ctx) {
     const _sbk = (PAYLOAD.subclass_breakdown || {})[String(ctx.kinase_id)] || {};
     const _sbTip = _sbk[r.cell_type] || "";
     const _sbAttr = _sbTip ? ` title="WMB subclass breakdown: ${_escapeHtml(_sbTip)}"` : "";
-    const scoreCell = `<td class="attr-num">${num(r.combined_score, 3)}</td>`;
     return `<tr data-cell-type="${_escapeHtml(r.cell_type)}" class="attr-verdict-row${i === 0 ? ' attr-verdict-selected' : ''}">` +
       `<td class="attr-celltype"${_sbAttr}>${_escapeHtml(r.cell_type)}${_sbTip ? ' <span class="attr-subclass-marker" aria-hidden="true">ⓘ</span>' : ''} ${expBadge}</td>` +
       `<td><span class="${_attrConfidenceClass(r.combined_tier)}" title="${_escapeHtml('Attribution: ' + (r.combined_confidence || 'none') + (r.combined_tier === 'very_high' ? ' · upgraded to very_high by significant decomp agreement' : ''))}">${_escapeHtml((r.combined_tier || '').replace('_', ' '))}</span></td>` +
       `<td class="attr-num">${num(r.wmb_specificity, 3)}</td>` +
       `<td class="attr-num">${_wmbTierBadge(_wmbTier(Number(r.wmb_specificity)))}</td>` +
-      `<td class="attr-num">${num(r.wmb_mean_log2_expression, 2)}</td>` +
-      `<td class="attr-num">${num(r.wmb_fraction_cells_expressing, 2)}</td>` +
       seaCell +
       songCell +
-      scoreCell +
       decompNesCell +
       decompFdrCell +
       bulkMatchCell +
@@ -775,9 +765,9 @@ function _renderAttributionVerdict(hostId, ctx) {
       : (showAll && rows.length > 0
         ? `<div class="attr-verdict-toggle"><label><input type="checkbox" id="${showAllId}" checked> Showing all cell types</label></div>`
         : "")) +
-    `<details class="attr-explainer"><summary>How to read <em>Score</em> vs. <em>Confidence</em> in this table</summary>` +
+    `<details class="attr-explainer"><summary>How to read attribution confidence</summary>` +
       `<div class="attr-explainer-body">` +
-      `<p>Score and tier come from the same three evidence sources but answer different questions:</p>` +
+      `<p>Confidence is a categorical evidence label, not a continuous score:</p>` +
       `<table class="attr-explainer-table" style="margin-bottom:8px;">` +
         `<thead><tr><th>Source</th><th>What it tells you</th></tr></thead><tbody>` +
         `<tr><td><strong>Song</strong></td><td>Does this gene go up or down in our own mice? (within-cohort snRNA-seq from the same animals)</td></tr>` +
@@ -793,8 +783,6 @@ function _renderAttributionVerdict(hostId, ctx) {
         `<li><strong><span class="badge lo">low</span></strong> — concordance is positive but the gene isn't expression-specific in WMB and no reference LFC clears the magnitude bar.</li>` +
         `<li><strong>none</strong> — concordance ≤ 0 (signs disagree). Row is excluded from <code>unified_attribution.csv</code> entirely.</li>` +
       `</ul>` +
-      `<p><strong>Higher score does not imply higher tier.</strong> A row with strong magnitudes but no within-cohort Song evidence stays at moderate regardless of score; a row with a modest score but Song support + WMB specificity ≥ 0.059 reaches high. Read tier as evidence <em>type</em>, score as evidence <em>weight</em>.</p>` +
-      `<p><strong>Combined score</strong> = <code>effective_concordance × (0.5 + wmb_specificity)</code> where <code>effective_concordance = sign(NES) × (3·song_lfc + 1·sea_ad_lfc) / 4</code>. Continuous; used to rank cell types within a kinase (tie-break within tier) and to weight kinase support in the Incytr cell–cell integration.</p>` +
       `</div></details>`;
   host.querySelectorAll("tr.attr-verdict-row").forEach(tr => tr.addEventListener("click", () => {
     host.querySelectorAll("tr.attr-verdict-row").forEach(r => r.classList.remove("attr-verdict-selected"));

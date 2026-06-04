@@ -7,18 +7,19 @@ function _filterSet(v) {
 }
 
 function getScopedContrastIds(filter) {
-  // Returns Set of contrast indices matching the filter's disease × timepoint
-  // selection sets. Empty set on a dimension = any.
-  const ds = _filterSet(filter.disease);
-  const ts = _filterSet(filter.timepoint);
+  // T-cell kinase MEA scopes directly by day contrast (d13, d15, ...).
+  // Legacy `timepoint` survives for cross-tab compatibility; if it contains
+  // direct contrast names, treat it as a day selection too.
+  const days = _filterSet(filter.day);
+  if (!days.size) {
+    for (const v of _filterSet(filter.timepoint)) {
+      if (CONTRASTS.indexOf(v) >= 0) days.add(v);
+    }
+  }
   const ids = new Set();
   for (let ci = 0; ci < CONTRASTS.length; ci++) {
     const c = CONTRASTS[ci];
-    const d = c.split("_")[0];
-    const m = c.match(/_(\d+mo)$/);
-    const t = m ? m[1] : "";
-    if (ds.size && !ds.has(d)) continue;
-    if (ts.size && !ts.has(t)) continue;
+    if (days.size && !days.has(c)) continue;
     ids.add(ci);
   }
   return ids;
@@ -32,23 +33,21 @@ function _confPass(rowConf, threshold) {
   return (_CONF_RANK[rowConf] || 0) >= (_CONF_RANK[threshold] || 0);
 }
 
-// WMB specificity tiers expressed as multiples of uniform (1/34 ≈ 0.0294 across
-// 34 WMB classes). 10× / 5× / 2× / 1× → 0.294 / 0.147 / 0.059 / 0.029.
-const _WMB_UNIFORM = 1 / 34;
-const _WMB_TIER_VALUES = [10, 5, 2, 1];
-function _wmbTier(s) {
-  if (s == null || !isFinite(s)) return 0;
-  for (const t of _WMB_TIER_VALUES) {
-    if (s >= t * _WMB_UNIFORM) return t;
-  }
-  return 0;
+// Within-cohort specificity tiers expressed as multiples of the uniform
+// baseline (1/N_states; donor1 = 1/14 ≈ 0.0714). 10× / 5× / 2× / 1×. The tier
+// integer is precomputed in Python (alz/cross_reference/tcell_within_cohort.py)
+// because N_states is donor-dependent; here we only need the uniform value for
+// the badge tooltip.
+function _tcellUniform() {
+  return (typeof PAYLOAD !== "undefined" && PAYLOAD && PAYLOAD.meta &&
+          PAYLOAD.meta.tcell_attribution_uniform) || (1 / 14);
 }
-function _wmbTierLabel(t) { return t > 0 ? "≥" + t + "×" : ""; }
-function _wmbTierBadge(t) {
+function _tcellTierLabel(t) { return t > 0 ? "≥" + t + "×" : ""; }
+function _tcellTierBadge(t) {
   if (!t) return '<span class="muted">—</span>';
   const cls = t >= 10 ? "vhi" : (t >= 5 ? "hi" : (t >= 2 ? "mid" : "lo"));
-  return '<span class="badge ' + cls + '" title="WMB specificity ≥ ' + t +
-         '× uniform (' + (t * _WMB_UNIFORM).toFixed(3) + ')">' + _wmbTierLabel(t) + '</span>';
+  return '<span class="badge ' + cls + '" title="Within-cohort specificity ≥ ' + t +
+         '× uniform (' + (t * _tcellUniform()).toFixed(3) + ')">' + _tcellTierLabel(t) + '</span>';
 }
 
 // Decomp step ordinal vs bulk MEA direction:
@@ -88,40 +87,32 @@ function _combinedTierFor(kid, contrastId, cellType, attrConf) {
 }
 
 function getScopedAttribution(kinaseId, filter) {
-  // Returns filtered rows from PAYLOAD.attribution_index for one kinase.
-  // filter: { disease, timepoint, celltype, confidence } where dimension values
-  // may be string ("" = any) or array ([] = any).
+  // Returns filtered within-cohort attribution rows from
+  // PAYLOAD.attribution_index for one kinase. The T-cell attribution carries
+  // binned specificity (tcell_tier ∈ {0,1,2,5,10}) + pseudobulk concordance vs
+  // bulk NES (no confidence string, no FDR — see
+  // docs/plans/tcell_within_cohort_attribution.md). filter dimensions may be
+  // string ("" = any) or array ([] = any); celltype scopes the cell_type axis.
   const AI = PAYLOAD.attribution_index || {};
   if (!AI.kinase_id) return [];
   const scopedCtx = getScopedContrastIds(filter);
   const ctSet = _filterSet(filter.celltype);
-  const confidence = filter.confidence || "";
   const out = [];
   for (let j = 0; j < AI.kinase_id.length; j++) {
     if (AI.kinase_id[j] !== kinaseId) continue;
     if (scopedCtx.size > 0 && !scopedCtx.has(AI.contrast_id[j])) continue;
     if (ctSet.size && !ctSet.has(AI.cell_type[j]))                continue;
-    const _attrConf = AI.combined_confidence[j];
-    const _tier = _combinedTierFor(kinaseId, AI.contrast_id[j], AI.cell_type[j], _attrConf);
-    // Confidence threshold tests the upgraded tier so "very_high" filters work.
-    if (!_confPass(_tier, confidence))                            continue;
     out.push({
-      contrast_id:               AI.contrast_id[j],
-      cell_type:                 AI.cell_type[j],
-      combined_confidence:       _attrConf,
-      combined_tier:             _tier,
-      combined_score:            AI.combined_score[j],
-      wmb_specificity:           AI.wmb_specificity            ? AI.wmb_specificity[j]            : null,
-      wmb_mean_log2_expression:  AI.wmb_mean_log2_expression   ? AI.wmb_mean_log2_expression[j]   : null,
-      wmb_fraction_cells_expressing: AI.wmb_fraction_cells_expressing ? AI.wmb_fraction_cells_expressing[j] : null,
-      wmb_binary_expressed:      AI.wmb_binary_expressed       ? AI.wmb_binary_expressed[j]       : false,
-      sea_ad_lfc:                AI.sea_ad_lfc                 ? AI.sea_ad_lfc[j]                 : null,
-      song_lfc:                  AI.song_lfc                   ? AI.song_lfc[j]                   : null,
-      song_pval:                 AI.song_pval                  ? AI.song_pval[j]                  : null,
-      song_fdr:                  AI.song_fdr                   ? AI.song_fdr[j]                   : null,
-      concordance_source:        AI.concordance_source         ? AI.concordance_source[j]         : "",
-      nes:                       AI.nes                        ? AI.nes[j]                        : null,
-      fdr:                       AI.fdr                        ? AI.fdr[j]                        : null,
+      contrast_id:        AI.contrast_id[j],
+      cell_type:          AI.cell_type[j],
+      tcell_specificity:  AI.tcell_specificity  ? AI.tcell_specificity[j]  : null,
+      tcell_tier:         AI.tcell_tier         ? AI.tcell_tier[j]         : 0,
+      tcell_lfc:          AI.tcell_lfc          ? AI.tcell_lfc[j]          : null,
+      tcell_concordance:  AI.tcell_concordance  ? AI.tcell_concordance[j]  : null,
+      tcell_concordant:   AI.tcell_concordant   ? AI.tcell_concordant[j]   : null,
+      tcell_consistency:  AI.tcell_consistency  ? AI.tcell_consistency[j]  : 0,
+      nes:                AI.nes                ? AI.nes[j]                : null,
+      fdr:                AI.fdr                ? AI.fdr[j]                : null,
     });
   }
   return out;
@@ -273,56 +264,6 @@ function _refreshSigCounts(fdr) {
   _keSigFdr = fdr;
 }
 
-// NES trajectory shape predicate. CONTRASTS for the T-cell cohort are emitted
-// in day order (d13, d15, d17, d19, d20), so r._nes is index-aligned to time.
-// All patterns require a complete (non-NA) profile — a partial profile cannot
-// be classified as monotonic / always-up etc. without inventing the gaps.
-function _patternMatches(nesVec, pattern) {
-  if (!pattern) return true;
-  const N = nesVec.length;
-  if (N < 2) return false;
-  for (let i = 0; i < N; i++) {
-    const x = nesVec[i];
-    if (x == null || !isFinite(x)) return false;
-  }
-  const v = nesVec;
-  if (pattern === "always_up")   return v.every(x => x > 0);
-  if (pattern === "always_down") return v.every(x => x < 0);
-  if (pattern === "monotonic_up") {
-    let strict = false;
-    for (let i = 1; i < N; i++) {
-      if (v[i] < v[i-1]) return false;
-      if (v[i] > v[i-1]) strict = true;
-    }
-    return strict;
-  }
-  if (pattern === "monotonic_down") {
-    let strict = false;
-    for (let i = 1; i < N; i++) {
-      if (v[i] > v[i-1]) return false;
-      if (v[i] < v[i-1]) strict = true;
-    }
-    return strict;
-  }
-  if (pattern === "peak") {
-    let k = 0;
-    for (let i = 1; i < N; i++) if (v[i] > v[k]) k = i;
-    if (k === 0 || k === N - 1) return false;
-    for (let i = 1; i <= k; i++)      if (v[i] <= v[i-1]) return false;
-    for (let i = k + 1; i < N; i++)   if (v[i] >= v[i-1]) return false;
-    return true;
-  }
-  if (pattern === "trough") {
-    let k = 0;
-    for (let i = 1; i < N; i++) if (v[i] < v[k]) k = i;
-    if (k === 0 || k === N - 1) return false;
-    for (let i = 1; i <= k; i++)      if (v[i] >= v[i-1]) return false;
-    for (let i = k + 1; i < N; i++)   if (v[i] <= v[i-1]) return false;
-    return true;
-  }
-  return true;
-}
-
 function _kineMaxAbsNesScoped(r, scopedCtxIds) {
   // Returns max |NES| among contrast indices in scopedCtxIds (all if empty Set).
   let best = null;
@@ -336,12 +277,13 @@ function _kineMaxAbsNesScoped(r, scopedCtxIds) {
   return best;
 }
 
-// Max WMB specificity tier across attribution rows for this kinase under the
-// active filter scope. Returns 0 when no qualifying rows have wmb_specificity.
-function _kineMaxWmbTierScoped(kinaseId, filter) {
+// Max within-cohort specificity tier across attribution rows for this kinase
+// under the active filter scope. Returns 0 when no qualifying rows. The tier is
+// precomputed (binned in Python), so we read it directly.
+function _kineMaxTcellTierScoped(kinaseId, filter) {
   let best = 0;
   for (const e of getScopedAttribution(kinaseId, filter)) {
-    const t = _wmbTier(Number(e.wmb_specificity));
+    const t = e.tcell_tier || 0;
     if (t > best) best = t;
   }
   return best;
@@ -355,6 +297,18 @@ function _kineSigCountScoped(r, fdr, scopedCtxIds) {
     if (q != null && q < fdr) n++;
   }
   return n;
+}
+
+function _kineSignPassScoped(r, sign, scopedCtxIds) {
+  if (!sign) return true;
+  for (let ci = 0; ci < CONTRASTS.length; ci++) {
+    if (scopedCtxIds.size > 0 && !scopedCtxIds.has(ci)) continue;
+    const v = r._nes[ci];
+    if (v == null || !isFinite(v)) continue;
+    if (sign === "up" && v > 0) return true;
+    if (sign === "down" && v < 0) return true;
+  }
+  return false;
 }
 
 // Legacy lens array kept for any remaining references; new code uses
@@ -412,40 +366,27 @@ function _makeKeCompare(scopedCtxIds) {
     }
     else if (col === "n_attributed_celltypes") {
       // Match what the Cell types pill column displays: dedup by cell_type
-      // keeping best tier, then count rows at moderate-or-better.
+      // keeping best tier, then count cell types specific at ≥ 1× uniform.
       const _bestTierByCT = (kid) => {
         const m = new Map();
         for (const e of getScopedAttribution(kid, kf)) {
-          const r = _CONF_RANK[e.combined_tier] || 0;
-          if (r > (m.get(e.cell_type) || 0)) m.set(e.cell_type, r);
+          const t = e.tcell_tier || 0;
+          if (t > (m.get(e.cell_type) || 0)) m.set(e.cell_type, t);
         }
         let n = 0;
-        for (const r of m.values()) if (r >= 2) n++;
+        for (const t of m.values()) if (t >= 1) n++;
         return n;
       };
       va = _bestTierByCT(a.id);
       vb = _bestTierByCT(b.id);
     }
-    else if (col === "conf") {
-      // Sort by max tier reached in scope: very_high(4) > high(3) > moderate(2) > low(1) > none(0).
-      const _maxTier = (kid) => {
-        let m = 0;
-        for (const e of getScopedAttribution(kid, kf)) {
-          const r = _CONF_RANK[e.combined_tier] || 0;
-          if (r > m) m = r;
-        }
-        return m;
-      };
-      va = _maxTier(a.id);
-      vb = _maxTier(b.id);
-    }
     else if (col === "n_sig") {
       va = _kineSigCountScoped(a, fdr, scopedCtxIds);
       vb = _kineSigCountScoped(b, fdr, scopedCtxIds);
     }
-    else if (col === "wmb_max_tier") {
-      va = _kineMaxWmbTierScoped(a.id, kf);
-      vb = _kineMaxWmbTierScoped(b.id, kf);
+    else if (col === "tcell_max_tier") {
+      va = _kineMaxTcellTierScoped(a.id, kf);
+      vb = _kineMaxTcellTierScoped(b.id, kf);
     }
     else if (col === "agreement_profile") {
       va = _kineDisagreeCountScoped(a, scopedCtxIds);
@@ -468,8 +409,7 @@ function _makeKeCompare(scopedCtxIds) {
   };
 }
 
-// Render the NES profile mini-heatmap (3 diseases × 3 timepoints) for one row.
-// Always shows all 9 cells — this glyph IS the cross-contrast comparison.
+// Render the NES profile mini-strip for one row.
 function _renderNesProfile(r, fdrThresh, maxAbs) {
   // T-cell: one cell per day-vs-baseline contrast, in payload order.
   const cells = [];
@@ -491,10 +431,10 @@ function _renderNesProfile(r, fdrThresh, maxAbs) {
     const dayLabel = c.replace(/_d2$/, "");
     colLabels.push(`<span title="${_escapeHtml(c)}">${_escapeHtml(dayLabel)}</span>`);
   }
-  const gridStyle = `grid-template-columns:repeat(${CONTRASTS.length}, 12px);`;
-  return `<div class="nes-profile-wrap" style="flex-direction:column;align-items:flex-start;gap:1px;">` +
-    `<div class="nes-profile-col-labels" style="grid-template-columns:repeat(${CONTRASTS.length}, 12px);display:grid;">${colLabels.join("")}</div>` +
-    `<div class="nes-profile-cell" style="${gridStyle}">${cells.join("")}</div>` +
+  const countStyle = `--nes-profile-count:${CONTRASTS.length};`;
+  return `<div class="nes-profile-wrap tcell-nes-profile" style="${countStyle}">` +
+    `<div class="nes-profile-col-labels">${colLabels.join("")}</div>` +
+    `<div class="nes-profile-cell">${cells.join("")}</div>` +
     `</div>`;
 }
 
@@ -556,29 +496,33 @@ function _renderAgreementProfile(r) {
 }
 
 function _renderCellTypesCell(r, filter) {
-  // Reflect rows in the active filter scope; if filter is empty, scope = all 9 contrasts.
+  // Cell types this kinase is specific to (≥1× uniform) in the active filter
+  // scope — a compact specificity summary (full per-state rows live in the
+  // Attribution verdict tab). Dedup by cell_type keeping the best tier.
   const rows = getScopedAttribution(r.id, filter || {});
   const byCell = new Map();
   for (const e of rows) {
     const prev = byCell.get(e.cell_type);
-    if (!prev || e.combined_score > prev.combined_score) byCell.set(e.cell_type, e);
+    if (!prev || (e.tcell_tier || 0) > (prev.tcell_tier || 0) ||
+        ((e.tcell_tier || 0) === (prev.tcell_tier || 0)
+         && (e.tcell_concordance || 0) > (prev.tcell_concordance || 0)))
+      byCell.set(e.cell_type, e);
   }
-  const displayRows = Array.from(byCell.values()).filter(e =>
-    e.combined_tier === "very_high" || e.combined_tier === "high" || e.combined_tier === "moderate");
-  // Sort: tier first (very_high → high → moderate), then score desc within tier.
+  const displayRows = Array.from(byCell.values()).filter(e => (e.tcell_tier || 0) >= 1);
+  // Sort: tier first (10 → 5 → 2), then concordance desc within tier.
   displayRows.sort((a, b) => {
-    const dt = (_CONF_RANK[b.combined_tier] || 0) - (_CONF_RANK[a.combined_tier] || 0);
+    const dt = (b.tcell_tier || 0) - (a.tcell_tier || 0);
     if (dt !== 0) return dt;
-    return b.combined_score - a.combined_score;
+    return (b.tcell_concordance || 0) - (a.tcell_concordance || 0);
   });
   const n = displayRows.length;
   if (n === 0) return `<span class="muted">—</span>`;
   const top = displayRows.slice(0, 3);
-  const tip = displayRows.map(e => `${e.cell_type} (${(e.combined_tier || '').replace('_', ' ')}, ${e.combined_score.toFixed(2)})`).join("\n");
+  const tip = displayRows.map(e =>
+    `${e.cell_type} (≥${e.tcell_tier}× uniform, concordance ${Number(e.tcell_concordance).toFixed(3)})`).join("\n");
   const topNames = top.map(e => {
-    const cls = e.combined_tier === "very_high" ? "vhi"
-              : e.combined_tier === "high"      ? "hi"
-              : "mid";
+    const cls = e.tcell_tier >= 10 ? "vhi" : e.tcell_tier >= 5 ? "hi"
+      : e.tcell_tier >= 2 ? "mid" : "lo";
     return `<span class="badge ${cls}">${_escapeHtml(e.cell_type)}</span>`;
   }).join(" ");
   return `<span title="${_escapeHtml(tip)}"><strong>${n}</strong> ${topNames}${displayRows.length > 3 ? ` <span class="muted">+${displayRows.length - 3}</span>` : ""}</span>`;
@@ -631,7 +575,7 @@ function renderKinaseExplorer() {
   const donor = ViewerPayload.activeContext();
   const meaDonor = (PAYLOAD.meta && PAYLOAD.meta.mea_kinase_donor) || "donor1";
   if (donor !== meaDonor) {
-    tbody.innerHTML = '<tr><td colspan="6" class="muted" style="padding:24px;text-align:center;">'
+    tbody.innerHTML = '<tr><td colspan="8" class="muted" style="padding:24px;text-align:center;">'
       + 'Kinase MEA is ' + _escapeHtml(meaDonor) + '-only — ' + _escapeHtml(donor)
       + ' has no IMAC. Switch to ' + _escapeHtml(meaDonor) + ' to see kinase activity.'
       + '</td></tr>';
@@ -651,19 +595,25 @@ function renderKinaseExplorer() {
 
   _refreshSigCounts(fdr);
 
-  // Scoped contrast IDs from the list filter (disease + timepoint) — used for
-  // row inclusion (require ≥1 sig contrast in scope) and sort keys, NOT for
-  // visualization scoping inside a row.
+  // Scoped contrast IDs from the day filter — used for row inclusion, n_sig,
+  // |NES|, sign filtering, and sort keys.
   const scopedCtxIds = getScopedContrastIds(kf);
+  const scopedDenom = scopedCtxIds.size > 0 ? scopedCtxIds.size : CONTRASTS.length;
 
-  // Whether any attribution-grid filter is active (drives full qualification).
+  // Whether any attribution-grid filter is active. The current T-cell payload
+  // does not ship attribution rows, so legacy disease/timepoint/celltype values
+  // should not be allowed to zero the kinase table.
+  const hasAttribution = !!(PAYLOAD.attribution_index
+    && PAYLOAD.attribution_index.kinase_id
+    && PAYLOAD.attribution_index.kinase_id.length);
   const dSet = _filterSet(kf.disease);
   const tSet = _filterSet(kf.timepoint);
   const cSet = _filterSet(kf.celltype);
-  const gridActive = dSet.size > 0 || tSet.size > 0 || cSet.size > 0 || !!kf.confidence;
-  const nSigMin = Math.max(0, parseInt(kf.nSigMin, 10) || 0);
-  const wmbMin = Math.max(0, parseInt(kf.wmbMin, 10) || 0);
-  const wmbMinScore = wmbMin > 0 ? wmbMin * _WMB_UNIFORM : 0;
+  const gridActive = hasAttribution
+    && (dSet.size > 0 || tSet.size > 0 || cSet.size > 0 || !!kf.confidence);
+  const nSigMin = Math.min(scopedDenom, Math.max(0, parseInt(kf.nSigMin, 10) || 0));
+  // Opt-in specificity narrowing. 0 = Any (off) — the default; hides nothing.
+  const tcellMin = Math.max(0, parseInt(kf.tcellMin, 10) || 0);
 
   // Whitelist mode (cross-tab handoff) has two sub-modes:
   //   stack=false (default): whitelist bypasses every other gate. Decomp-only
@@ -685,29 +635,24 @@ function renderKinaseExplorer() {
     if (!q) {
       // n_sig minimum (numeric filter).
       if (scopedSig < nSigMin) continue;
-      // Disease/timepoint scope: require ≥1 sig contrast in scope.
+      // Day scope: require ≥1 significant selected contrast.
       if (scopedCtxIds.size > 0 && scopedSig === 0) continue;
     }
+    if (!q && !_kineSignPassScoped(r, kf.sign || "", scopedCtxIds)) continue;
     // Attribution grid: cross-product AND coverage on disease × timepoint × celltype,
     // with confidence as ordinal threshold (≥). Skipped when text search is
     // active so a targeted lookup (e.g. "EGFR") still surfaces the kinase even
     // if persisted localStorage filters would otherwise disqualify it.
     if (!q && gridActive && !kinaseQualifies(r.id, kf)) continue;
-    // WMB tier minimum: kinase passes if any attribution row in scope has
-    // wmb_specificity ≥ threshold. Independent of grid filters — uses the same
-    // disease/timepoint/celltype scope getScopedAttribution honors.
-    if (!q && wmbMin > 0) {
-      const _rows = getScopedAttribution(r.id, kf);
-      let _ok = false;
-      for (const e of _rows) {
-        const s = Number(e.wmb_specificity);
-        if (isFinite(s) && s >= wmbMinScore) { _ok = true; break; }
-      }
-      if (!_ok) continue;
-    }
+    // Opt-in specificity narrowing (tcellMin > 0, off by default): kinase passes
+    // if any attribution row in scope reaches the requested tier (≥ tcellMin ×
+    // uniform). Specificity only — concordance is never used to filter (de-gate
+    // directive, docs/plans/tcell_attribution_degate_2026-06-03.md). Skipped
+    // under text search so a targeted lookup always surfaces the kinase.
+    if (!q && tcellMin > 0 && _kineMaxTcellTierScoped(r.id, kf) < tcellMin) continue;
     // Trajectory-shape pattern. Skipped under text search so a targeted lookup
     // still surfaces the kinase regardless of its NES shape.
-    if (!q && kf.pattern && !_patternMatches(r._nes, kf.pattern)) continue;
+    if (!q && kf.pattern && !TrendFilter.vectorMatches(r._nes, kf.pattern)) continue;
     visible.push(r);
   }
 
@@ -745,7 +690,7 @@ function renderKinaseExplorer() {
 
   const parts = [];
   const drvSet = _highlightKinaseIds;
-  const sigDenom = scopedCtxIds.size > 0 ? scopedCtxIds.size : CONTRASTS.length;
+  const sigDenom = scopedDenom;
   for (const r of visible) {
     const selCls = r.id === selKid ? " selected" : "";
     // sub-thresh: 0 sig contrasts in the scoped set.
@@ -754,29 +699,9 @@ function renderKinaseExplorer() {
     const subCls = scopedSig === 0 ? " sub-thresh" : "";
     const drvCls = (drvSet && drvSet.has(r.id)) ? " driver" : "";
 
-    // Conf pill: highest tier present in scope, with contributing contrasts as chips.
-    const scopedRows = getScopedAttribution(r.id, colFilter);
-    const ctxByTier = {very_high: new Set(), high: new Set(), moderate: new Set()};
-    for (const e of scopedRows) {
-      if (ctxByTier[e.combined_tier]) ctxByTier[e.combined_tier].add(e.contrast_id);
-    }
-    const tierSpec = [
-      {tier:"very_high", cls:"vhi", label:"VERY HIGH", suffix:" (attribution + decomp agreement)"},
-      {tier:"high",      cls:"hi",  label:"HIGH",      suffix:""},
-      {tier:"moderate",  cls:"mid", label:"MOD",       suffix:""},
-    ];
-    let confBadge;
-    const hit = tierSpec.find(s => ctxByTier[s.tier].size > 0);
-    if (hit) {
-      const ctxs = Array.from(ctxByTier[hit.tier]).map(ci => CONTRASTS[ci]);
-      const shown = ctxs.slice(0, 3).map(c => `<span class="ctx-chip ${hit.cls}">${shortContrast(c)}</span>`).join("");
-      const overflow = ctxs.length > 3 ? `<span class="ctx-overflow">+${ctxs.length - 3}</span>` : "";
-      const tip = `${hit.label} in ${ctxs.length} contrast${ctxs.length===1?"":"s"}${hit.suffix}: ${ctxs.join(", ")}`;
-      confBadge = `<span class="badge ${hit.cls}" title="${_escapeHtml(tip)}">${hit.label}</span>${shown}${overflow}`;
-    } else {
-      const tipScope = gridActive ? "in active filter scope" : "across all 9 contrasts";
-      confBadge = `<span class="badge lo" title="No HIGH or MODERATE attribution ${tipScope}.">low</span>`;
-    }
+    // Specificity tier badge (max within-cohort tier in scope) + cell-types pill.
+    const specBadge = _tcellTierBadge(_kineMaxTcellTierScoped(r.id, colFilter));
+    const cellTypesCell = _renderCellTypesCell(r, colFilter);
 
     const residueBadge = r.residue_type === "Y"
       ? ' <span class="track-badge track-y" title="Tyrosine kinase (pY track)">pY</span>'
@@ -791,6 +716,8 @@ function renderKinaseExplorer() {
       `<td>${profile}</td>` +
       `<td class="attr-num">${peakAbsNes != null ? peakAbsNes.toFixed(2) : '<span class="muted">—</span>'}</td>` +
       `<td class="attr-num">${scopedSig}<span class="muted" style="font-size:10px;"> / ${sigDenom}</span></td>` +
+      `<td>${specBadge}</td>` +
+      `<td>${cellTypesCell}</td>` +
       `</tr>`
     );
   }

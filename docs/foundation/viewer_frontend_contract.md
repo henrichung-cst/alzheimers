@@ -48,11 +48,47 @@ state, while preserving old inbound `d=` links.
 Header and boot handling are shared; context controls are optional DOM affordances and no-op in
 single-context viewers.
 The Incytr tabs are shared and derive contrast groups/timepoints from the payload block, context
-axis, or parsed contrast names. Kinase detail and transcript trace modules are shared through
-capability/context checks so AD/Song keeps the audit workbench path while T-cell gets donor-scoped
-transcript traces and a bulk-only kinase detail summary when audit tables are absent. Evidence-row
-rendering is shared and branches on cohort metadata for contrast arm labels and trace row grouping.
-The remaining shared modules are byte-identical UI/state helpers used by both viewers.
+axis, or parsed contrast names. The Sender × Receiver heatmap has a shared single-contrast mode and
+timeline mode. Timeline mode renders one heatmap frame at a time with a horizontal slider: Song/AD
+scrubs one disease group across timepoints, while T-cell scrubs all day-vs-baseline contrasts for
+the active donor. Both modes read the same precomputed count cube and click through to the shared
+pathway table filters. Dense heatmaps expose display-only controls for axis limiting and log1p color
+scaling. Axis limiting keeps the top sender and receiver cell types by visible path count under the
+active gates; in timeline mode the axes are ranked across the full slider span so they stay stable
+while scrubbing. Log1p color scaling compresses saturated cells while hover text and pathway
+drill-down continue to use raw path counts. A shared sparse-cell sensitivity filter is also
+available when the active Incytr payload supplies `low_signal_celltypes`; it removes sender-receiver
+interactions where either endpoint has median n_cells <= 3 from the heatmap, pathway table, and
+temporal pathway counts. Kinase detail and transcript trace
+modules are shared through capability/context checks so AD/Song keeps the audit workbench path while
+T-cell gets donor-scoped transcript traces and a bulk-only kinase detail summary when audit tables
+are absent. Evidence-row rendering is shared and branches on cohort metadata for contrast arm labels
+and trace row grouping. The remaining shared modules are byte-identical UI/state helpers used by both
+viewers.
+
+### Song/AD Incytr Heatmap Saturation
+
+The Song/AD heatmap is intentionally not renormalized by default. A 2026-06-01 audit found that the
+current canonical Song outputs are heavily concentrated in three receiver/end-point cell types, and
+that the same pattern is present in frozen SCE4 `10302025` outputs after normalizing dotted versus
+hyphenated cell-type names. Current receiver shares are Cholinergic-Neurons 51.39%,
+Glutamatergic-excitatory-neurons-Cortical-layer-2-4-pyramidal-neurons 21.07%, and
+GABAergic-inhibitory-interneurons-VIP-positive 17.90%. Frozen SCE4 receiver shares are 51.15%,
+20.02%, and 17.69%, respectively. The normalized current-vs-SCE4 pair-count correlation is high
+across contrast/sender/receiver cells (Pearson 0.993, Spearman 0.972), so this is not a new viewer or
+canonical-output artifact.
+
+The same audit found a strong inverse relationship between endpoint path count and cell abundance in
+the current male pseudobulk counts (Spearman -0.864 versus receiver paths with |PDS| > 1).
+Cholinergic,
+VIP-positive, and layer-2-4 pyramidal neurons have median per-sample counts of roughly 2, 2, and 3
+cells, respectively. The audit artifact is
+`outputs/reports/incytr_pair_mode/cell_count_qc/median_cells_vs_receiver_paths.png`, with the source
+table at `outputs/reports/incytr_pair_mode/cell_count_qc/cell_count_incytr_pathway_qc.csv`.
+
+Treat log1p color as a visualization aid for this saturated row universe, not as a scoring
+transform. Treat the sparse-cell filter as a sensitivity view; it does not rewrite canonical Incytr
+outputs or scoring.
 
 ## Intentional Viewer Differences
 

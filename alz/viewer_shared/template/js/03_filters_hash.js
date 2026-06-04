@@ -111,7 +111,9 @@ function applyHash() {
     if (ctx != null) {
       Store.dispatch({type:"SET_SELECTION", key:"context", value:ctx});
     }
-    if (map.t != null) Store.dispatch({type:"SET_VIEW", key:"activeTab", value:map.t});
+    if (map.t != null && TAB_MANIFEST[map.t]) {
+      Store.dispatch({type:"SET_VIEW", key:"activeTab", value:map.t});
+    }
   } finally {
     _hashApplying = false;
   }

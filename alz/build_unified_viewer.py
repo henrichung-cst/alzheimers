@@ -544,6 +544,10 @@ def ensure_omics_trace_sources() -> dict:
         "filename_template": index.get("filename_template", "{cluster}.parquet"),
         "sanitize_rule": index.get("sanitize_rule",
                                    "replace('/', '-'); replace(' ', '_')"),
+        "gene_scope": index.get("gene_scope", "all_measured_genes"),
+        "n_routed_cluster_gene_pairs": index.get(
+            "n_routed_cluster_gene_pairs", None
+        ),
         "log2_value_note": index.get("log2_value_note", ""),
     }
 
@@ -1927,11 +1931,94 @@ _INCYTR_PATHWAY_PVALUES = (0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
 # Replaced the legacy sigprob_max filter (outlier-driven mean ratio) on
 # 2026-05-12.
 _INCYTR_PATHWAY_ABS_PDS = (0.0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
+_INCYTR_TOP_INSTANCE_LIMIT = 5000
 
 # Pathway scoring stack — surfaced as table columns in the pathway tab.
 # PDS is already in the shard; these are net-new. log2FC and sigprob_max
 # were retired 2026-05-12 (mean-driven, inconsistent with the OLS pipeline).
 _INCYTR_SCORE_COLS = ("TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "SiK_score")
+
+_INCYTR_LOW_SIGNAL_MEDIAN_N_THRESHOLD = 3
+
+
+def _read_incytr_celltype_qc(celltypes: list[str]) -> dict:
+    """Cell-count QC metadata for Song/AD Incytr interpretation.
+
+    The canonical Incytr rows remain unchanged. This metadata supports a
+    viewer-side sensitivity filter that removes cell-cell interactions where
+    either endpoint has median male pseudobulk n_cells <= 3.
+    """
+    counts_path = os.path.join(
+        config.REPO_ROOT,
+        "outputs",
+        "reports",
+        "snrna_integration",
+        "pseudobulk_cell_counts.csv",
+    )
+    threshold = _INCYTR_LOW_SIGNAL_MEDIAN_N_THRESHOLD
+    out = {
+        "source": os.path.relpath(counts_path, config.REPO_ROOT),
+        "sample_scope": "samples whose id contains '_ma_'",
+        "low_signal_rule": f"median_n <= {threshold}",
+        "low_signal_median_n_threshold": threshold,
+        "by_celltype": {},
+        "low_signal_celltypes": [],
+    }
+    if not os.path.exists(counts_path):
+        print(f"  (warn) Incytr celltype QC counts not found: {counts_path}",
+              flush=True)
+        return out
+
+    counts = pd.read_csv(counts_path)
+    required = {"sample", "cell_type", "n_cells"}
+    if not required.issubset(counts.columns):
+        print(f"  (warn) Incytr celltype QC counts missing columns: "
+              f"{sorted(required - set(counts.columns))}", flush=True)
+        return out
+
+    counts = counts[counts["sample"].astype(str).str.contains("_ma_", regex=False)]
+    counts["n_cells"] = pd.to_numeric(counts["n_cells"], errors="coerce")
+    counts = counts.dropna(subset=["cell_type", "n_cells"])
+    stats = counts.groupby("cell_type", sort=False)["n_cells"].agg(
+        median_n="median",
+        mean_n="mean",
+        min_n="min",
+        total_n="sum",
+        n_samples="count",
+    )
+    cell_set = sorted(set(celltypes))
+    low: list[str] = []
+    by_celltype: dict[str, dict] = {}
+    for ct in cell_set:
+        if ct in stats.index:
+            row = stats.loc[ct]
+            median_n = float(row["median_n"])
+            is_low = median_n <= threshold
+            rec = {
+                "median_n": median_n,
+                "mean_n": float(row["mean_n"]),
+                "min_n": int(row["min_n"]),
+                "total_n": int(row["total_n"]),
+                "n_samples": int(row["n_samples"]),
+                "low_signal_median_le_3": bool(is_low),
+            }
+            if is_low:
+                low.append(ct)
+        else:
+            rec = {
+                "median_n": None,
+                "mean_n": None,
+                "min_n": None,
+                "total_n": 0,
+                "n_samples": 0,
+                "low_signal_median_le_3": False,
+            }
+        by_celltype[ct] = rec
+    out["by_celltype"] = by_celltype
+    out["low_signal_celltypes"] = sorted(low)
+    print(f"  incytr celltype_qc: {len(low)} low-signal endpoint(s) "
+          f"at median_n <= {threshold}", flush=True)
+    return out
 
 # Per-node log2 fold-change columns. Only the four genuine log2FC metrics are
 # shipped — the Hill-shrunk aFC variants emitted by Incytr are NOT log2 fold-
@@ -1958,9 +2045,102 @@ _INCYTR_LABEL_VOCAB = ("DEG", "prG")
 _INCYTR_LABEL_SRC = tuple(f"{n}.label" for n in _INCYTR_LABEL_NODES)
 _INCYTR_LABEL_COLS = tuple(f"{n}_label" for n in _INCYTR_LABEL_NODES)
 
+
+def _json_clean_value(v, digits: int | None = None):
+    """JSON-safe scalar conversion for compact viewer payload rows."""
+    if v is None:
+        return None
+    if pd.isna(v):
+        return None
+    if isinstance(v, (np.integer, int)) and not isinstance(v, bool):
+        return int(v)
+    if isinstance(v, (np.floating, float)):
+        x = float(v)
+        if not np.isfinite(x):
+            return None
+        return round(x, digits) if digits is not None else x
+    if isinstance(v, (np.bool_, bool)):
+        return bool(v)
+    return str(v)
+
 def _incytr_sanitize(name: str) -> str:
     """Match the upstream sanitize in alz/integration/load.R:sanitize_celltype."""
     return name.replace("/", "-").replace(" ", "_")
+
+
+def _build_incytr_gene_node_index(con) -> dict:
+    """Compact exact gene-symbol index over Ligand/Receptor/EM/Target."""
+    roles = list(_INCYTR_FC_NODES)
+    df = con.execute("""
+        WITH long AS (
+          SELECT Ligand AS gene, 'Ligand' AS role, sender, receiver,
+                 pvalue, PDS
+          FROM src WHERE Ligand IS NOT NULL AND Ligand <> ''
+          UNION ALL
+          SELECT Receptor AS gene, 'Receptor' AS role, sender, receiver,
+                 pvalue, PDS
+          FROM src WHERE Receptor IS NOT NULL AND Receptor <> ''
+          UNION ALL
+          SELECT EM AS gene, 'EM' AS role, sender, receiver, pvalue, PDS
+          FROM src WHERE EM IS NOT NULL AND EM <> ''
+          UNION ALL
+          SELECT Target AS gene, 'Target' AS role, sender, receiver,
+                 pvalue, PDS
+          FROM src WHERE Target IS NOT NULL AND Target <> ''
+        )
+        SELECT gene, role, sender, receiver,
+               COUNT(*)::INTEGER AS n_rows,
+               MAX(ABS(PDS)) AS best_abs_pds,
+               arg_max(PDS, ABS(PDS)) AS best_pds,
+               MIN(pvalue) AS best_pvalue
+        FROM long
+        GROUP BY gene, role, sender, receiver
+        ORDER BY gene, role, sender, receiver
+    """).fetchdf()
+    if df.empty:
+        return {
+            "schema_version": 1,
+            "index_type": "gene_node_pair_summary",
+            "match_columns": roles,
+            "genes": [],
+            "roles": roles,
+            "senders": [],
+            "receivers": [],
+            "gene_id": [],
+            "role_id": [],
+            "sender_id": [],
+            "receiver_id": [],
+            "n_rows": [],
+            "best_abs_pds": [],
+            "best_pds": [],
+            "best_pvalue": [],
+        }
+
+    genes = sorted(df["gene"].dropna().astype(str).unique().tolist())
+    senders = sorted(df["sender"].dropna().astype(str).unique().tolist())
+    receivers = sorted(df["receiver"].dropna().astype(str).unique().tolist())
+    gene_to_id = {v: i for i, v in enumerate(genes)}
+    role_to_id = {v: i for i, v in enumerate(roles)}
+    sender_to_id = {v: i for i, v in enumerate(senders)}
+    receiver_to_id = {v: i for i, v in enumerate(receivers)}
+
+    return {
+        "schema_version": 1,
+        "index_type": "gene_node_pair_summary",
+        "match_columns": roles,
+        "genes": genes,
+        "roles": roles,
+        "senders": senders,
+        "receivers": receivers,
+        "gene_id": [gene_to_id[str(v)] for v in df["gene"]],
+        "role_id": [role_to_id[str(v)] for v in df["role"]],
+        "sender_id": [sender_to_id[str(v)] for v in df["sender"]],
+        "receiver_id": [receiver_to_id[str(v)] for v in df["receiver"]],
+        "n_rows": [int(v) for v in df["n_rows"]],
+        "best_abs_pds": [_json_clean_value(v, 4) for v in df["best_abs_pds"]],
+        "best_pds": [_json_clean_value(v, 4) for v in df["best_pds"]],
+        "best_pvalue": [_json_clean_value(v, 6) for v in df["best_pvalue"]],
+    }
 
 
 _INCYTR_PAIR_GENO_NORMALIZE = {
@@ -2148,6 +2328,15 @@ def _write_incytr_pair_pathways() -> dict | None:
     n_s, n_r, n_c = len(senders_canonical), len(receivers_canonical), len(present_contrasts)
     print(f"    senders={n_s}, receivers={n_r}, contrasts={n_c} "
           f"(pair count={n_s * n_r})", flush=True)
+    celltype_qc = _read_incytr_celltype_qc(
+        sorted(set(senders_canonical) | set(receivers_canonical))
+    )
+    low_signal_celltypes = set(celltype_qc.get("low_signal_celltypes") or [])
+    if low_signal_celltypes:
+        con.register(
+            "low_signal_celltypes",
+            pd.DataFrame({"cell_type": sorted(low_signal_celltypes)}),
+        )
 
     # --- heatmap_counts cube (same shape contract as factorial) ----------
     n_thr = len(_INCYTR_PATHWAY_PVALUES)
@@ -2195,6 +2384,42 @@ def _write_incytr_pair_pathways() -> dict | None:
         "counts": grid.flatten().tolist(),
         "total_by_threshold": totals.tolist(),
     }
+    hm_signed_rows = con.execute(f"""
+        SELECT sender, receiver, contrast,
+               CASE WHEN PDS > 0 THEN 2
+                    WHEN PDS < 0 THEN 0
+                    ELSE 1 END AS s,
+               {hm_thr_clauses}
+        FROM src
+        {pval_where}
+        GROUP BY sender, receiver, contrast, s
+    """).fetchall()
+    signed_grid = np.zeros((n_s, n_r, n_c, 3, n_thr, n_ap), dtype=np.uint32)
+    for row in hm_signed_rows:
+        s_raw, r_raw, c, sign_i = row[0], row[1], row[2], int(row[3])
+        if s_raw not in sender_to_idx or r_raw not in receiver_to_idx:
+            continue
+        if c not in contrast_to_idx:
+            continue
+        s_i, r_i, c_i = sender_to_idx[s_raw], receiver_to_idx[r_raw], contrast_to_idx[c]
+        offset = 4
+        for ip in range(n_thr):
+            for iap in range(n_ap):
+                signed_grid[s_i, r_i, c_i, sign_i, ip, iap] = int(row[offset])
+                offset += 1
+    signed_totals = np.zeros((3, n_thr, n_ap), dtype=np.uint64)
+    for sign_i in range(3):
+        for ip in range(n_thr):
+            for iap in range(n_ap):
+                signed_totals[sign_i, ip, iap] = int(signed_grid[:, :, :, sign_i, ip, iap].sum())
+    heatmap_counts_signed = {
+        "thresholds": list(_INCYTR_PATHWAY_PVALUES),
+        "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
+        "shape": [n_s, n_r, n_c, 3, n_thr, n_ap],
+        "counts": signed_grid.flatten().tolist(),
+        "total_by_sign_threshold": signed_totals.tolist(),
+        "sign_source": "PDS",
+    }
     p_005_idx = _INCYTR_PATHWAY_PVALUES.index(0.05)
     ap_zero_idx = _INCYTR_PATHWAY_ABS_PDS.index(0.0)
     ap_001_idx = _INCYTR_PATHWAY_ABS_PDS.index(0.01)
@@ -2204,40 +2429,167 @@ def _write_incytr_pair_pathways() -> dict | None:
           flush=True)
 
     # --- pathway_counts cube ---------------------------------------------
-    thr_clauses = []
-    for ip, tp in enumerate(_INCYTR_PATHWAY_PVALUES):
-        for iap, tap in enumerate(_INCYTR_PATHWAY_ABS_PDS):
-            thr_clauses.append(
-                f"COUNT(*) FILTER (WHERE {pval_filter(tp)} "
-                f"AND COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
+    def _build_pathway_counts(where_extra: str = "") -> dict:
+        thr_clauses = []
+        for ip, tp in enumerate(_INCYTR_PATHWAY_PVALUES):
+            for iap, tap in enumerate(_INCYTR_PATHWAY_ABS_PDS):
+                thr_clauses.append(
+                    f"COUNT(*) FILTER (WHERE {pval_filter(tp)} "
+                    f"AND COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
+                )
+        where_parts = []
+        if has_pvalue:
+            where_parts.append("pvalue IS NOT NULL")
+        if where_extra:
+            where_parts.append(where_extra)
+        where_clause = "WHERE " + " AND ".join(where_parts) if where_parts else ""
+        pathway_rows = con.execute(f"""
+            SELECT contrast,
+                   CASE WHEN PDS > 0 THEN 2
+                        WHEN PDS < 0 THEN 0
+                        ELSE 1 END AS s,
+                   {", ".join(thr_clauses)}
+            FROM src
+            {where_clause}
+            GROUP BY contrast, s
+        """).fetchall()
+        pathway_arr = np.zeros((n_c, 3, n_thr, n_ap), dtype=np.uint32)
+        for row in pathway_rows:
+            contrast, s_idx = row[0], int(row[1])
+            if contrast not in contrast_to_idx:
+                continue
+            c_idx = contrast_to_idx[contrast]
+            for ip in range(n_thr):
+                for iap in range(n_ap):
+                    pathway_arr[c_idx, s_idx, ip, iap] = int(row[2 + ip * n_ap + iap])
+        return {
+            "thresholds": list(_INCYTR_PATHWAY_PVALUES),
+            "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
+            "contrasts": list(present_contrasts),
+            "counts": pathway_arr.flatten().tolist(),
+            "shape": [n_c, 3, n_thr, n_ap],
+            "sign_source": "PDS",
+        }
+
+    pathway_counts = _build_pathway_counts()
+    low_signal_where = (
+        "sender NOT IN (SELECT cell_type FROM low_signal_celltypes) "
+        "AND receiver NOT IN (SELECT cell_type FROM low_signal_celltypes)"
+        if low_signal_celltypes else ""
+    )
+    pathway_counts_low_signal_excluded = (
+        _build_pathway_counts(low_signal_where) if low_signal_where else None
+    )
+
+    def _build_top_instances() -> dict:
+        """Compact cross-pair ranking for the Incytr Pathways overview.
+
+        The detailed table remains shard-backed; this index is only a small
+        rank-and-drilldown surface for the strongest pathway instances across
+        all sender/receiver pairs.
+        """
+        score_cols = [c for c in _INCYTR_SCORE_COLS if c in src_cols_pair]
+        score_select = ", ".join(score_cols)
+        label_cols = [c for c in _INCYTR_LABEL_COLS if c in src_cols_pair]
+        label_select = ", ".join(f'"{c}"' for c in label_cols)
+        opt_cols = ", ".join(c for c in (score_select, label_select) if c)
+        if opt_cols:
+            opt_cols = ", " + opt_cols
+        top = con.execute(f"""
+            SELECT
+              sender, receiver, Path, Ligand, Receptor, EM, Target,
+              contrast, pvalue, PDS, ABS(PDS) AS abs_pds,
+              sender || '||' || receiver || '||' || Path AS path_str
+              {opt_cols}
+            FROM src
+            WHERE PDS IS NOT NULL
+            ORDER BY ABS(PDS) DESC NULLS LAST
+            LIMIT {_INCYTR_TOP_INSTANCE_LIMIT}
+        """).fetchdf()
+        if top.empty:
+            return {
+                "rank_by": "abs(PDS)",
+                "limit": _INCYTR_TOP_INSTANCE_LIMIT,
+                "rows": [],
+            }
+
+        # Trajectory labels require the full time series for each top path, so
+        # pull only those path keys and reuse the shard annotator.
+        keys = top[["path_str"]].drop_duplicates()
+        con.register("top_path_keys", keys)
+        traj_src = con.execute("""
+            SELECT sender, receiver, Path, contrast, PDS
+            FROM src
+            WHERE sender || '||' || receiver || '||' || Path
+                  IN (SELECT path_str FROM top_path_keys)
+        """).fetchdf()
+        traj_map = pd.DataFrame()
+        if not traj_src.empty:
+            traj_annot, _, _ = _annotate_trajectory_columns(
+                traj_src, source_label="top_instances",
             )
-    pathway_rows = con.execute(f"""
-        SELECT contrast,
-               CASE WHEN PDS > 0 THEN 2
-                    WHEN PDS < 0 THEN 0
-                    ELSE 1 END AS s,
-               {", ".join(thr_clauses)}
-        FROM src
-        {pval_where}
-        GROUP BY contrast, s
-    """).fetchall()
-    pathway_arr = np.zeros((n_c, 3, n_thr, n_ap), dtype=np.uint32)
-    for row in pathway_rows:
-        contrast, s_idx = row[0], int(row[1])
-        if contrast not in contrast_to_idx:
-            continue
-        c_idx = contrast_to_idx[contrast]
-        for ip in range(n_thr):
-            for iap in range(n_ap):
-                pathway_arr[c_idx, s_idx, ip, iap] = int(row[2 + ip * n_ap + iap])
-    pathway_counts = {
-        "thresholds": list(_INCYTR_PATHWAY_PVALUES),
-        "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
-        "contrasts": list(present_contrasts),
-        "counts": pathway_arr.flatten().tolist(),
-        "shape": [n_c, 3, n_thr, n_ap],
-        "sign_source": "PDS",
-    }
+            split = traj_annot["contrast"].astype(str).str.split("_", n=1, expand=True)
+            traj_annot["_disease"] = split[0].fillna("")
+            traj_annot["_path_str"] = (
+                traj_annot["sender"].astype(str) + "||"
+                + traj_annot["receiver"].astype(str) + "||"
+                + traj_annot["Path"].astype(str)
+            )
+            traj_map = traj_annot[
+                ["_path_str", "_disease", "traj_labels", "sign_vec"]
+            ].drop_duplicates()
+        if len(traj_map):
+            split_top = top["contrast"].astype(str).str.split("_", n=1, expand=True)
+            top["_disease"] = split_top[0].fillna("")
+            top = top.merge(
+                traj_map,
+                left_on=["path_str", "_disease"],
+                right_on=["_path_str", "_disease"],
+                how="left",
+            )
+        else:
+            top["traj_labels"] = ""
+            top["sign_vec"] = ""
+        top["rank"] = np.arange(1, len(top) + 1, dtype=int)
+        top["low_signal_endpoint"] = top.apply(
+            lambda r: bool(
+                r["sender"] in low_signal_celltypes
+                or r["receiver"] in low_signal_celltypes
+            ),
+            axis=1,
+        )
+
+        row_cols = [
+            "rank", "sender", "receiver", "Path", "Ligand", "Receptor",
+            "EM", "Target", "contrast", "pvalue", "PDS", "abs_pds",
+            "traj_labels", "sign_vec", "low_signal_endpoint",
+            *score_cols, *label_cols,
+        ]
+        rows: list[dict] = []
+        for rec in top[row_cols].to_dict("records"):
+            out = {}
+            for k, v in rec.items():
+                digits = 4 if k in {"PDS", "abs_pds", *score_cols} else None
+                if k == "pvalue":
+                    digits = 6
+                out[k] = _json_clean_value(v, digits)
+            rows.append(out)
+        return {
+            "rank_by": "abs(PDS)",
+            "limit": _INCYTR_TOP_INSTANCE_LIMIT,
+            "rows": rows,
+        }
+
+    src_cols_pair = set(
+        con.execute("DESCRIBE SELECT * FROM src LIMIT 0").fetchdf()["column_name"]
+    )
+    top_instances = _build_top_instances()
+    gene_node_index = _build_incytr_gene_node_index(con)
+    print(
+        f"    gene_node_index: {len(gene_node_index['gene_id']):,} "
+        f"gene-role-pair entries; {len(gene_node_index['genes']):,} genes",
+        flush=True,
+    )
 
     # --- shard the long table per (sender, receiver) ---------------------
     # Wipe-and-recreate to avoid mixing old/new shards on an aborted run.
@@ -2247,9 +2599,6 @@ def _write_incytr_pair_pathways() -> dict | None:
     # Materialize once; group + write. Pair-mode now supplies per-node FC
     # (driver Cal_scFC, written inline) and labels (driver DEG/prG assignment);
     # fall back to NULL if the source parquet was produced by an older driver.
-    src_cols_pair = set(
-        con.execute("DESCRIBE SELECT * FROM src LIMIT 0").fetchdf()["column_name"]
-    )
     fc_select = [
         f'"{c}"' if c in src_cols_pair
         else f'CAST(NULL AS DOUBLE) AS "{c}"'
@@ -2445,8 +2794,12 @@ def _write_incytr_pair_pathways() -> dict | None:
         "senders": senders_canonical,
         "receivers": receivers_canonical,
         "empty_deg_celltypes": [],
+        "celltype_qc": celltype_qc,
+        "low_signal_celltypes": list(celltype_qc.get("low_signal_celltypes") or []),
         "heatmap_counts": heatmap_counts,
+        "heatmap_counts_signed": heatmap_counts_signed,
         "pathway_counts": pathway_counts,
+        "pathway_counts_low_signal_excluded": pathway_counts_low_signal_excluded,
         "slice_index": index,
         "score_columns": list(_INCYTR_SCORE_COLS),
         "label_columns": list(_INCYTR_LABEL_COLS),
@@ -2454,6 +2807,8 @@ def _write_incytr_pair_pathways() -> dict | None:
         "label_vocab": list(_INCYTR_LABEL_VOCAB),
         "direction_flag_columns": list(dir_flag_cols),
         "path_metric_columns": list(extra_path_cols),
+        "top_instances": top_instances,
+        "gene_node_index": gene_node_index,
         # CR-04: traj_labels/sign_vec live in shard rows; summary inline.
         "trajectory_summary": traj_summary,
     }

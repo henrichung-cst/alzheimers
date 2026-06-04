@@ -102,6 +102,15 @@ function wireKinaseTable() {
     });
   }
 
+  const patSel = document.getElementById("ke-filter-pattern");
+  if (patSel) {
+    patSel.value = KinaseFilter.get("pattern") || "";
+    patSel.addEventListener("change", () => {
+      KinaseFilter.set({pattern: TrendFilter.normalize(patSel.value || "")});
+      renderKinaseExplorer();
+    });
+  }
+
   const resetBtn = document.getElementById("ke-filter-reset");
   if (resetBtn) {
     resetBtn.addEventListener("click", () => {
@@ -128,6 +137,7 @@ function _syncKinaseFilterUI() {
   if (wmbSel) wmbSel.value = String(KinaseFilter.get("wmbMin") || 0);
   const nsigInp = document.getElementById("ke-filter-nsig-min");
   if (nsigInp) nsigInp.value = String(KinaseFilter.get("nSigMin") || 0);
+  const patSel = document.getElementById("ke-filter-pattern");
+  if (patSel) patSel.value = KinaseFilter.get("pattern") || "";
 }
-
 

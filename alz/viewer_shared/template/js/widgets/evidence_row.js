@@ -43,10 +43,17 @@ const OmicsTraceStore = (() => {
     return String(name).replaceAll("/", "-").replaceAll(" ", "_");
   }
 
+  function _activeContext() {
+    return ViewerPayload.activeContext();
+  }
+
   function _meta() {
-    return (typeof PAYLOAD !== "undefined"
-            && PAYLOAD.meta
-            && PAYLOAD.meta.omics_trace) || null;
+    const m = (typeof PAYLOAD !== "undefined"
+               && PAYLOAD.meta
+               && PAYLOAD.meta.omics_trace) || null;
+    if (!m) return null;
+    if (m.by_context) return m.by_context[_activeContext()] || null;
+    return m;
   }
 
   function isAvailable() {
@@ -85,21 +92,22 @@ const OmicsTraceStore = (() => {
 
   async function loadCluster(cluster) {
     if (!hasCluster(cluster)) return [];
-    if (cache.has(cluster)) return cache.get(cluster);
-    if (inflight.has(cluster)) return inflight.get(cluster);
     const m = _meta();
     const base = (m && m.relative_path) ? `${m.relative_path}/` : "audit_sources/omics_trace/";
-    const ver = (m && m.omics_schema_version) || 0;
+    const cacheKey = `${base}${cluster}`;
+    if (cache.has(cacheKey)) return cache.get(cacheKey);
+    if (inflight.has(cacheKey)) return inflight.get(cacheKey);
+    const ver = (m && (m.omics_schema_version || m.schema_version)) || 0;
     const url = `${base}${_sanitize(cluster)}.parquet?v=${ver}`;
     const p = _fetchParquet(url).then(rows => {
-      cache.set(cluster, rows);
-      inflight.delete(cluster);
+      cache.set(cacheKey, rows);
+      inflight.delete(cacheKey);
       return rows;
     }).catch(err => {
-      inflight.delete(cluster);
+      inflight.delete(cacheKey);
       throw err;
     });
-    inflight.set(cluster, p);
+    inflight.set(cacheKey, p);
     return p;
   }
 
@@ -230,6 +238,18 @@ const EvidencePanel = (() => {
     phospho_ps:  "log₂(IRS-norm + ε), gene-mean",
     phospho_py:  "log₂(IRS-norm + ε), gene-mean",
   };
+  const _TCELL_LAYER_UNITS = {
+    transcript:  "log-norm pseudobulk mean",
+    protein:     "deconvoluted protein abundance",
+    phospho_ps:  "deconvoluted pS/pT abundance, gene-mean",
+    phospho_py:  "deconvoluted pY abundance, gene-mean",
+  };
+  function _layerUnit(layer) {
+    return (_panelCohort() === "tcell" ? _TCELL_LAYER_UNITS : _LAYER_UNITS)[layer] || "";
+  }
+  function _panelCohort() {
+    return (typeof PAYLOAD !== "undefined" && PAYLOAD.meta && PAYLOAD.meta.cohort) || "";
+  }
 
   // Map layer → stored LFC column suffix in the receiver-cache row.
   const _LAYER_LFC_KEY = {
@@ -311,7 +331,8 @@ const EvidencePanel = (() => {
     perArm.forEach((a, ai) => {
       const cx = padL + ai * colW + colW / 2;
       const isWT = a.arm === "WT";
-      const color = isWT ? _ARM_WT_COLOR : _ARM_DISEASE_COLOR;
+      const isTcellBaseline = _panelCohort() === "tcell" && a.arm === "d2";
+      const color = (isWT || isTcellBaseline) ? _ARM_WT_COLOR : _ARM_DISEASE_COLOR;
       const mean = a.vals.length
         ? a.vals.reduce((s, v) => s + v, 0) / a.vals.length
         : null;
@@ -501,7 +522,7 @@ const EvidencePanel = (() => {
                  html: `<span>n/a</span><span>${_renderLfcChip(stored)}</span>` };
       }
       return { klass: "ev-cell",
-               html: _renderMicroDotBar(perArm, _LAYER_UNITS[layer], _animalIdsByArm(perArm))
+               html: _renderMicroDotBar(perArm, _layerUnit(layer), _animalIdsByArm(perArm))
                  + _renderLfcChip(stored) };
     }
 
@@ -556,7 +577,7 @@ const EvidencePanel = (() => {
       return { klass: "ev-cell ev-cell-na",
                html: `<span>n/a</span><span>${_renderLfcChip(stored)}</span>` };
     }
-    const plotHtml = _renderMicroDotBar(perArm, _LAYER_UNITS[layer], _animalIdsByArm(perArm));
+    const plotHtml = _renderMicroDotBar(perArm, _layerUnit(layer), _animalIdsByArm(perArm));
     return { klass: "ev-cell",
              html: `<div>${plotHtml}${footerHtml}</div>`
                  + _renderLfcChip(stored) };
@@ -623,7 +644,7 @@ const EvidencePanel = (() => {
       const hasSignal = perArm.some(a => a.vals && a.vals.some(v => v > 0));
       if (!hasSignal) { skipped += 1; continue; }
       kept += 1;
-      const plot = _renderMicroDotBar(perArm, _LAYER_UNITS[layer], _animalIdsByArm(perArm));
+      const plot = _renderMicroDotBar(perArm, _layerUnit(layer), _animalIdsByArm(perArm));
       const motif = motifBySite.get(sid);
       const motifHtml = _formatMotif(motif);
       const label = motifHtml
@@ -687,8 +708,8 @@ const EvidencePanel = (() => {
     // Skeleton: matrix with loading cells.
     const headerRowHtml = `<div class="ev-matrix-corner"></div>`
       + _LAYERS.map(l =>
-          `<div class="ev-matrix-head" title="${_esc(_LAYER_UNITS[l])}">`
-          + `${_esc(_LAYER_LABELS[l])}<span class="ev-unit">${_esc(_LAYER_UNITS[l])}</span>`
+          `<div class="ev-matrix-head" title="${_esc(_layerUnit(l))}">`
+          + `${_esc(_LAYER_LABELS[l])}<span class="ev-unit">${_esc(_layerUnit(l))}</span>`
           + `</div>`).join("");
 
     const bodyHtml = nodes.map(nd => {

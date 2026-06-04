@@ -59,9 +59,6 @@ const _IP_PAGE_SIZE = 100;
 // a semicolon-joined string in `traj_labels`. Incomplete paths (any
 // timepoint missing in the Incytr output) get an empty string and render
 // "—" in the table.
-const _IP_TRAJ_LABELS = [
-  "always-up", "always-down", "monotonic-up", "monotonic-down", "mixed",
-];
 const _IP_TRAJ_COLORS = {
   "always-up":      { bg: "#ffe0e0", fg: "#a3203c", border: "#e8a0a0" },
   "always-down":    { bg: "#dde8f8", fg: "#1f4ea3", border: "#a0bee8" },
@@ -74,9 +71,8 @@ const _IP_TRAJ_TIPS = {
   "always-down":    "PDS < 0 at every available timepoint.",
   "monotonic-up":   "PDS strictly increasing across the ordered timepoints.",
   "monotonic-down": "PDS strictly decreasing across the ordered timepoints.",
-  "mixed":          "Sign of PDS changes across timepoints (e.g. udu, ddu).",
+  "mixed":          "Sign of PDS changes across timepoints.",
 };
-
 // Score columns are advertised on the payload block but kept in a module-local
 // fallback so the JS stays usable against an older payload.
 const _IP_SCORE_COLS_FALLBACK = ["TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "SiK_score"];
@@ -127,8 +123,9 @@ const _ipRuntime = {
   detailTab:      {},           // rk → "evidence" | "trajectory" (which sub-tab is active)
   recurFallback:  null,         // { sig, map } cache for fallback recurPathMap
   pathIndex:      null,         // Map<pathStr, rows[]> — built at shard-load
-  pathLabels:     null,         // Map<pathStr, Map<disease, Set<label>>> — for chip filter
-  trajCounts:     null,         // Map<disease, Map<label, count>> — built on demand
+  pathLabels:     null,         // Map<pathStr, Map<disease, Set<label>>> — for trend filter
+  geneIndexBlock: null,
+  geneIndexMap:   null,         // upper-case gene symbol -> [gene ids]
   page:           0,            // 0-indexed current page (post-filter, post-sort)
 };
 
@@ -145,7 +142,10 @@ function _ipRecurIndex() {
 }
 
 function _ipPathStr(r) {
-  return r._pathStr || (`${r._sender}||${r._receiver}||${r.Path}`);
+  const sender = r._sender || r.sender || "";
+  const receiver = r._receiver || r.receiver || "";
+  const path = r.Path || [r.Ligand, r.Receptor, r.EM, r.Target].join("|");
+  return r._pathStr || (`${sender}||${receiver}||${path}`);
 }
 
 // Decode the semicolon-joined traj_labels string into an array. Empty
@@ -185,37 +185,23 @@ function _ipHasTraj() {
   return !!(block && block.version >= 3);
 }
 
-// Per-(disease, label) counts over the loaded shards — for chip UI.
-// Returns Map<disease, Map<label, count>>.
-function _ipTrajCounts() {
-  if (_ipRuntime.trajCounts) return _ipRuntime.trajCounts;
-  const counts = new Map();
-  if (!_ipRuntime.rows) return counts;
-  const seen = new Set();
-  for (const r of _ipRuntime.rows) {
-    if (!r.traj_labels) continue;
-    const c = r.contrast || "";
-    const ui = c.indexOf("_");
-    const dis = ui < 0 ? c : c.substring(0, ui);
-    const k = _ipPathStr(r) + "|" + dis;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    let byLbl = counts.get(dis);
-    if (!byLbl) { byLbl = new Map(); counts.set(dis, byLbl); }
-    for (const lbl of _ipDecodeLabels(r.traj_labels)) {
-      byLbl.set(lbl, (byLbl.get(lbl) || 0) + 1);
-    }
-  }
-  _ipRuntime.trajCounts = counts;
-  return counts;
-}
-
 function _ipScoreCols() {
   const block = _ipBlock();
   return (block && block.score_columns) || _IP_SCORE_COLS_FALLBACK;
 }
 function _ipRowKey(r) {
-  return `${r._sender}||${r._receiver}||${r.Path}||${r.contrast}`;
+  return `${r._sender || r.sender || ""}||${r._receiver || r.receiver || ""}||${r.Path || ""}||${r.contrast}`;
+}
+
+function _ipNormalizeTopRow(r) {
+  if (!r) return r;
+  if (r._sender == null) r._sender = r.sender || "";
+  if (r._receiver == null) r._receiver = r.receiver || "";
+  if (r.Path == null)
+    r.Path = (r.Ligand || "") + "|" + (r.Receptor || "") + "|"
+           + (r.EM || "") + "|" + (r.Target || "");
+  if (r._pathStr == null) r._pathStr = `${r._sender}||${r._receiver}||${r.Path}`;
+  return r;
 }
 
 function _ipBlock() {
@@ -233,13 +219,17 @@ function _ipPairsInScope(block) {
   //   3. Otherwise: return all matches so the renderer can prompt the user
   //      to narrow (caller distinguishes length 0 / 1 / >1).
   const f = IncytrFilter.get();
-  if (f.pair) return [f.pair];
+  if (f.pair) {
+    return IncytrCelltypeQc.pairExcluded(f.pair.sender, f.pair.receiver, block)
+      ? [] : [f.pair];
+  }
   const sIn = new Set(f.senderIn || []);
   const rIn = new Set(f.receiverIn || []);
   const matches = [];
   const si = block.slice_index || {};
   const present = si.present || [];
   for (const [s, r] of (present || [])) {
+    if (IncytrCelltypeQc.pairExcluded(s, r, block)) continue;
     if (sIn.size && !sIn.has(s)) continue;
     if (rIn.size && !rIn.has(r)) continue;
     matches.push({ sender: s, receiver: r });
@@ -294,66 +284,492 @@ function _ipSyncControls(block) {
   set("ip-slider-pds", f.sliderPds);
   const searchEl = document.getElementById("ip-search");
   if (searchEl) searchEl.value = f.searchText || "";
-
-  // CR-04: trajectory chips.
-  _ipRenderTrajChips();
+  const trendSel = document.getElementById("ip-trend");
+  if (trendSel) {
+    trendSel.value = TrendFilter.normalize(f.trend || "");
+    if (trendSel.parentElement) trendSel.parentElement.style.display = _ipHasTraj() ? "" : "none";
+  }
+  const lowSel = document.getElementById("ip-low-signal");
+  if (lowSel) {
+    const hasLow = IncytrCelltypeQc.hasLowSignal(block);
+    lowSel.value = (f.excludeLowSignalCelltypes && hasLow) ? "exclude" : "include";
+    if (lowSel.parentElement) lowSel.parentElement.style.display = hasLow ? "" : "none";
+  }
+  const mode = f.ipMode || "top";
+  const modeSel = document.getElementById("ip-mode");
+  if (modeSel) modeSel.value = mode;
+  const limitSel = document.getElementById("ip-top-limit");
+  if (limitSel) {
+    const topLimit = [500, 1000, 5000].includes(Number(f.topLimit))
+      ? Number(f.topLimit) : 500;
+    limitSel.value = String(topLimit);
+    if (limitSel.parentElement) limitSel.parentElement.style.display = (mode === "top") ? "" : "none";
+  }
+  for (const id of ["ip-ms-sender", "ip-ms-receiver", "ip-ms-recur"]) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = (mode === "top") ? "none" : "";
+  }
 }
 
-// Render trajectory chips — one row per disease (App / Tau / ApTt), each
-// row offering the 5 labels. OR within a row, AND across rows. Counts
-// reflect the loaded shards.
-function _ipRenderTrajChips() {
-  const host = document.getElementById("ip-traj-chips");
-  if (!host) return;
-  if (!_ipHasTraj()) {
-    host.style.display = "none";
+function _ipSameArray(a, b) {
+  const aa = Array.isArray(a) ? a : [];
+  const bb = Array.isArray(b) ? b : [];
+  return aa.length === bb.length && aa.every((v, i) => v === bb[i]);
+}
+
+function _ipKeepValid(values, options) {
+  const allowed = new Set(options || []);
+  return (Array.isArray(values) ? values : []).filter(v => allowed.has(v));
+}
+
+function _ipPairPresent(block, pair) {
+  if (!block || !pair) return false;
+  const present = ((block.slice_index || {}).present || block.present_pairs || []);
+  return present.some(p => p && p[0] === pair.sender && p[1] === pair.receiver);
+}
+
+function _ipSanitizeFilterState(block) {
+  if (!block) return false;
+  const f = IncytrFilter.get();
+  const patch = {};
+  const senders = block.senders || [];
+  const receivers = block.receivers || [];
+  const disease = _ipKeepValid(f.disease, _ipDiseases());
+  const timepoint = _ipKeepValid(f.timepoint, _ipTimepoints());
+  const senderIn = _ipKeepValid(f.senderIn, senders);
+  const receiverIn = _ipKeepValid(f.receiverIn, receivers);
+  const recurContrasts = _ipKeepValid(f.recurContrasts, _ipDiseases());
+  if (!_ipSameArray(f.disease, disease)) patch.disease = disease;
+  if (!_ipSameArray(f.timepoint, timepoint)) patch.timepoint = timepoint;
+  if (!_ipSameArray(f.senderIn, senderIn)) patch.senderIn = senderIn;
+  if (!_ipSameArray(f.receiverIn, receiverIn)) patch.receiverIn = receiverIn;
+  if (!_ipSameArray(f.recurContrasts, recurContrasts)) patch.recurContrasts = recurContrasts;
+  if (!_ipHasTraj() && f.trend) patch.trend = "";
+  if (!["top", "pair"].includes(f.ipMode || "top")) patch.ipMode = "top";
+  if (![500, 1000, 5000].includes(Number(f.topLimit))) patch.topLimit = 500;
+  if (f.pair && (!_ipPairPresent(block, f.pair)
+      || IncytrCelltypeQc.pairExcluded(f.pair.sender, f.pair.receiver, block))) {
+    patch.pair = null;
+  }
+  const keys = Object.keys(patch);
+  if (!keys.length) return false;
+  IncytrFilter.set(patch);
+  return true;
+}
+
+function _ipActiveFilterSummary(f) {
+  const parts = [];
+  if ((f.disease || []).length) parts.push(`Disease: ${(f.disease || []).join(", ")}`);
+  if ((f.timepoint || []).length) parts.push(`Timepoint: ${(f.timepoint || []).join(", ")}`);
+  if ((f.senderIn || []).length) parts.push(`Sender: ${(f.senderIn || []).join(", ")}`);
+  if ((f.receiverIn || []).length) parts.push(`Receiver: ${(f.receiverIn || []).join(", ")}`);
+  if (f.sliderP != null) parts.push(`pvalue < ${f.sliderP}`);
+  if (f.sliderPds != null) parts.push(`|PDS| >= ${f.sliderPds}`);
+  if (f.searchText) parts.push(`search: ${f.searchText}`);
+  if (f.trend) parts.push(`Trend: ${TrendFilter.label(f.trend)}`);
+  if ((f.recurContrasts || []).length) parts.push(`Recur in: ${(f.recurContrasts || []).join(", ")}`);
+  return parts.join("; ");
+}
+
+function _ipGeneSearchTerms(text) {
+  return [...new Set(String(text || "")
+    .split(/[\s,;|>*]+/)
+    .map(s => s.trim())
+    .filter(Boolean)
+    .filter(s => /^[A-Za-z0-9_.-]+$/.test(s))
+    .map(s => s.toUpperCase()))];
+}
+
+function _ipGeneIndexMap(block) {
+  const idx = block && block.gene_node_index;
+  if (!idx || !Array.isArray(idx.genes) || !Array.isArray(idx.gene_id))
+    return null;
+  if (_ipRuntime.geneIndexBlock === block && _ipRuntime.geneIndexMap)
+    return _ipRuntime.geneIndexMap;
+  const map = new Map();
+  idx.genes.forEach((g, id) => {
+    const key = String(g || "").toUpperCase();
+    if (!key) return;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(id);
+  });
+  _ipRuntime.geneIndexBlock = block;
+  _ipRuntime.geneIndexMap = map;
+  return map;
+}
+
+function _ipGeneIndexMatches(block, pairs) {
+  const idx = block && block.gene_node_index;
+  const terms = _ipGeneSearchTerms(IncytrFilter.get("searchText"));
+  if (!idx || !terms.length) return null;
+  const map = _ipGeneIndexMap(block);
+  if (!map) return null;
+  const targetGeneIds = new Set();
+  const canonicalById = {};
+  for (const term of terms) {
+    for (const gid of (map.get(term) || [])) {
+      targetGeneIds.add(gid);
+      canonicalById[gid] = idx.genes[gid];
+    }
+  }
+  const f = IncytrFilter.get();
+  const pairSet = new Set((pairs || []).map(p => `${p.sender}||${p.receiver}`));
+  const senderSet = new Set(f.senderIn || []);
+  const receiverSet = new Set(f.receiverIn || []);
+  const out = [];
+  const n = (idx.gene_id || []).length;
+  for (let i = 0; i < n; i++) {
+    const gid = idx.gene_id[i];
+    if (!targetGeneIds.has(gid)) continue;
+    const sender = idx.senders[idx.sender_id[i]];
+    const receiver = idx.receivers[idx.receiver_id[i]];
+    if (pairSet.size && !pairSet.has(`${sender}||${receiver}`)) continue;
+    if (senderSet.size && !senderSet.has(sender)) continue;
+    if (receiverSet.size && !receiverSet.has(receiver)) continue;
+    if (IncytrCelltypeQc.pairExcluded(sender, receiver, block)) continue;
+    const bestAbs = idx.best_abs_pds[i];
+    const bestP = idx.best_pvalue[i];
+    if (f.sliderPds != null && !(bestAbs != null && Number(bestAbs) >= f.sliderPds))
+      continue;
+    if (f.sliderP != null && !(bestP != null && Number(bestP) < f.sliderP))
+      continue;
+    out.push({
+      gene: canonicalById[gid] || idx.genes[gid],
+      role: idx.roles[idx.role_id[i]],
+      sender,
+      receiver,
+      n_rows: idx.n_rows[i] || 0,
+      best_abs_pds: bestAbs,
+      best_pds: idx.best_pds[i],
+      best_pvalue: bestP,
+    });
+  }
+  out.sort((a, b) => {
+    const ga = String(a.gene), gb = String(b.gene);
+    if (ga !== gb) return ga.localeCompare(gb);
+    const aa = Number(a.best_abs_pds || 0);
+    const bb = Number(b.best_abs_pds || 0);
+    if (aa !== bb) return bb - aa;
+    if (a.n_rows !== b.n_rows) return b.n_rows - a.n_rows;
+    const sa = `${a.sender}||${a.receiver}||${a.role}`;
+    const sb = `${b.sender}||${b.receiver}||${b.role}`;
+    return sa.localeCompare(sb);
+  });
+  return { terms, matches: out };
+}
+
+function _ipRenderGeneIndexSearch(block, pairs) {
+  const countEl = document.getElementById("ip-count");
+  const wrap = document.getElementById("ip-table-wrap");
+  if (!countEl || !wrap) return false;
+  const res = _ipGeneIndexMatches(block, pairs);
+  if (!res) return false;
+  const termsText = res.terms.join(", ");
+  if (!res.matches.length) {
+    countEl.textContent = `No indexed Ligand/Receptor/EM/Target matches for ${termsText}.`;
+    wrap.innerHTML = '<div class="muted" style="padding:16px;">'
+      + 'The cross-pair index uses exact gene-symbol matches over Ligand, Receptor, EM, and Target. '
+      + 'Use Reset or loosen sender/receiver, pvalue, or |PDS| filters.'
+      + '</div>';
+    return true;
+  }
+  const limit = 500;
+  const visible = res.matches.slice(0, limit);
+  countEl.textContent =
+    `Indexed gene search: ${res.matches.length.toLocaleString()} `
+    + `gene-role-pair match${res.matches.length === 1 ? "" : "es"} for ${termsText}`
+    + (res.matches.length > limit ? `; showing first ${limit.toLocaleString()}` : "")
+    + `.`;
+  const rows = visible.map((r, i) => {
+    const pds = r.best_pds == null ? "—" : _ipFmtNum(r.best_pds, 3);
+    const absPds = r.best_abs_pds == null ? "—" : _ipFmtNum(r.best_abs_pds, 3);
+    const pval = r.best_pvalue == null ? "—" : _ipFmtNum(r.best_pvalue, "sci");
+    return `<tr>`
+      + `<td>${_escapeHtml(r.gene)}</td>`
+      + `<td>${_escapeHtml(r.role)}</td>`
+      + `<td>${_escapeHtml(r.sender)}</td>`
+      + `<td>${_escapeHtml(r.receiver)}</td>`
+      + `<td style="text-align:right;">${Number(r.n_rows || 0).toLocaleString()}</td>`
+      + `<td style="text-align:right;">${absPds}</td>`
+      + `<td style="text-align:right;">${pds}</td>`
+      + `<td style="text-align:right;">${pval}</td>`
+      + `<td><button type="button" class="ip-pair-pick" data-ip-sender="${_escapeHtml(r.sender)}" `
+      + `data-ip-receiver="${_escapeHtml(r.receiver)}" data-ip-gene-hit="${i}" `
+      + `style="padding:2px 8px;font-size:12px;cursor:pointer;">Load pair</button></td>`
+      + `</tr>`;
+  }).join("");
+  wrap.innerHTML = '<div class="muted" style="padding:8px 0;">'
+    + 'Exact gene-symbol matches across all currently eligible cell-type pairs. '
+    + 'Load a pair to inspect full pathway rows and omics evidence.'
+    + '</div>'
+    + '<div class="ke-table-wrap"><table class="data-table" id="ip-gene-index-table">'
+    + '<thead><tr>'
+    + '<th>Gene</th><th>Node</th><th>Sender</th><th>Receiver</th>'
+    + '<th>Rows</th><th>best |PDS|</th><th>best PDS</th><th>best pvalue</th><th></th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  wrap.querySelectorAll(".ip-pair-pick").forEach(btn => {
+    btn.addEventListener("click", () => {
+      IncytrFilter.set({
+        senderIn: [btn.dataset.ipSender],
+        receiverIn: [btn.dataset.ipReceiver],
+        pair: null,
+      });
+      _ipInvalidateScope();
+      _ipResetPage();
+      const b = _ipBlock();
+      if (b) _ipSyncControls(b);
+      _ipEnsureShards();
+    });
+  });
+  return true;
+}
+
+function _ipTopRowsFiltered(opts) {
+  const block = _ipBlock();
+  const top = block && block.top_instances;
+  const rowsAll = top && Array.isArray(top.rows) ? top.rows : [];
+  const f = IncytrFilter.get();
+  const diseaseSet = new Set(f.disease || []);
+  const timeSet = new Set(f.timepoint || []);
+  const sP = f.sliderP, sPds = f.sliderPds;
+  const searchTokens = (f.searchText || "").toLowerCase().split(/\s+/).filter(Boolean);
+  const trend = (_ipHasTraj() && (!opts || opts.applyTrajectory !== false))
+    ? TrendFilter.normalize(f.trend || "") : "";
+  const trendLabel = trend ? TrendFilter.payloadLabel(trend) : "";
+  const out = [];
+  for (const r of rowsAll) {
+    _ipNormalizeTopRow(r);
+    if (IncytrCelltypeQc.enabled(block) && r.low_signal_endpoint) continue;
+    const c = r.contrast || "";
+    const ui = c.indexOf("_");
+    const dis = ui < 0 ? c : c.substring(0, ui);
+    const tp = ui < 0 ? "" : c.substring(ui + 1);
+    if (diseaseSet.size && !diseaseSet.has(dis)) continue;
+    if (timeSet.size && !timeSet.has(tp)) continue;
+    if (sP != null && !(r.pvalue != null && r.pvalue < sP)) continue;
+    if (sPds != null && !(Math.abs(Number(r.PDS) || 0) >= sPds)) continue;
+    if (searchTokens.length) {
+      const hay = [
+        r.sender, r.receiver, r.Path, r.Ligand, r.Receptor, r.EM, r.Target, r.contrast,
+      ].join("\n").toLowerCase();
+      let ok = true;
+      for (const t of searchTokens) { if (hay.indexOf(t) < 0) { ok = false; break; } }
+      if (!ok) continue;
+    }
+    if (trendLabel) {
+      const labels = new Set(_ipDecodeLabels(r.traj_labels || ""));
+      if (!labels.has(trendLabel)) continue;
+    }
+    out.push(r);
+  }
+  const key = f.sortKey || "rank";
+  const dir = f.sortDir || 1;
+  const numericKeys = new Set(["rank", "pvalue", "PDS", ..._ipScoreCols()]);
+  out.sort((a, b) => {
+    if (key === "rank") return dir * ((Number(a.rank) || 0) - (Number(b.rank) || 0));
+    const av = a[key], bv = b[key];
+    if (numericKeys.has(key)) {
+      const ax = (av == null || !isFinite(Number(av))) ? null : Number(av);
+      const bx = (bv == null || !isFinite(Number(bv))) ? null : Number(bv);
+      if (ax == null && bx == null) return 0;
+      if (ax == null) return 1;
+      if (bx == null) return -1;
+      return dir * (ax - bx);
+    }
+    const ax = av == null ? "" : String(av);
+    const bx = bv == null ? "" : String(bv);
+    return dir * ax.localeCompare(bx);
+  });
+  const topLimit = [500, 1000, 5000].includes(Number(f.topLimit))
+    ? Number(f.topLimit) : 500;
+  if (opts && opts.applyLimit === false) return out;
+  return out.slice(0, topLimit);
+}
+
+function _ipRenderTopTable() {
+  const countEl = document.getElementById("ip-count");
+  const wrap = document.getElementById("ip-table-wrap");
+  const block = _ipBlock();
+  const top = block && block.top_instances;
+  const rowsAll = top && Array.isArray(top.rows) ? top.rows : [];
+  if (!wrap || !countEl || !block) return;
+  if (!rowsAll.length) {
+    countEl.textContent = "No top Incytr pathway instances are packaged in this payload.";
+    wrap.innerHTML = '<div class="muted" style="padding:16px;">Switch to Cell Type mode to inspect one sender/receiver pair.</div>';
     return;
   }
-  host.style.display = "flex";
-  host.style.flexDirection = "column";
-  host.style.gap = "4px";
-  const trajLabels = IncytrFilter.get("trajLabels") || {};
-  const counts = _ipTrajCounts();
-  const rowHtml = (disease) => {
-    const sel = new Set(trajLabels[disease] || []);
-    const byLbl = counts.get(disease) || new Map();
-    const chips = _IP_TRAJ_LABELS.map(label => {
-      const on = sel.has(label);
-      const c = _IP_TRAJ_COLORS[label] || { bg: "#eee", fg: "#444", border: "#bbb" };
-      const tip = _IP_TRAJ_TIPS[label] || label;
-      const n = byLbl.get(label) || 0;
-      const check = on ? "✓ " : "";
-      return `<button type="button" data-ip-traj-dis="${disease}" data-ip-traj-lbl="${_escapeHtml(label)}"
-        title="${_escapeHtml(disease + ": " + tip)}"
-        style="padding:3px 10px;border-radius:14px;font-size:11px;cursor:pointer;
-               border:${on ? "2px" : "1px"} solid ${on ? c.fg : c.border};
-               background:${on ? c.fg : c.bg};
-               color:${on ? "#fff" : c.fg};
-               font-weight:${on ? "700" : "500"};
-               box-shadow:${on ? "0 0 0 2px " + c.bg : "none"};"
-      >${check}${_escapeHtml(label)} <span style="opacity:0.75;font-weight:400;">(${n.toLocaleString()})</span></button>`;
+  const f = IncytrFilter.get();
+  const topLimit = [500, 1000, 5000].includes(Number(f.topLimit))
+    ? Number(f.topLimit) : 500;
+  const matching = _ipTopRowsFiltered({ applyLimit: false });
+  const filtered = matching.slice(0, topLimit);
+  if (!filtered.length) {
+    countEl.textContent =
+      `Top overall: 0 of ${rowsAll.length.toLocaleString()} packaged rows match the active filters.`;
+    const summary = _ipActiveFilterSummary(f);
+    wrap.innerHTML = '<div class="muted" style="padding:16px;">'
+      + (summary
+          ? `No rows match: ${_escapeHtml(summary)}. Use Reset or loosen the filters.`
+          : 'No rows match the active filters. Use Reset or loosen the filters.')
+      + '</div>';
+    return;
+  }
+  const nPages = Math.max(1, Math.ceil(filtered.length / _IP_PAGE_SIZE));
+  if (_ipRuntime.page >= nPages) _ipRuntime.page = nPages - 1;
+  if (_ipRuntime.page < 0) _ipRuntime.page = 0;
+  const page = _ipRuntime.page;
+  const startIdx = page * _IP_PAGE_SIZE;
+  const endIdx = Math.min(filtered.length, startIdx + _IP_PAGE_SIZE);
+  const visible = filtered.slice(startIdx, endIdx);
+  const fmt = (v, d) => (v == null || !isFinite(Number(v))) ? "—" : Number(v).toFixed(d);
+  const trajBadges = (r) => {
+    const labels = _ipDecodeLabels(r.traj_labels || "");
+    if (!labels.length) return `<span class="muted">—</span>`;
+    return labels.map(label => {
+      const c = _IP_TRAJ_COLORS[label] || { bg: "#eee", fg: "#444" };
+      return `<span style="padding:1px 6px;margin-right:2px;border-radius:10px;`
+        + `font-size:10px;background:${c.bg};color:${c.fg};white-space:nowrap;">`
+        + `${_escapeHtml(label)}</span>`;
     }).join("");
-    return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-        <span style="min-width:42px;font-size:11px;font-weight:600;color:#444;">${disease}:</span>
-        ${chips}
-      </div>`;
   };
-  host.innerHTML = _ipDiseases().map(rowHtml).join("");
-  host.onclick = ev => {
-    const btn = ev.target.closest("button[data-ip-traj-dis]");
-    if (!btn) return;
-    const dis = btn.dataset.ipTrajDis;
-    const lbl = btn.dataset.ipTrajLbl;
-    const cur = Object.assign({}, IncytrFilter.get("trajLabels") || {});
-    const set = new Set(cur[dis] || []);
-    if (set.has(lbl)) set.delete(lbl);
-    else set.add(lbl);
-    cur[dis] = [...set];
-    IncytrFilter.set({ trajLabels: cur });
+  countEl.textContent =
+    `Top overall: showing ${filtered.length.toLocaleString()} of ${matching.length.toLocaleString()} matching rows `
+    + `(top ${topLimit.toLocaleString()} cap; ${rowsAll.length.toLocaleString()} packaged, ranked by ${top.rank_by || "abs(PDS)"}). `
+    + (filtered.length
+        ? `Page ${page + 1} / ${nPages.toLocaleString()} `
+          + `(rows ${(startIdx + 1).toLocaleString()}–${endIdx.toLocaleString()}).`
+        : "")
+    + (IncytrCelltypeQc.enabled(block) ? ` ${IncytrCelltypeQc.controlText(block)}.` : "");
+
+  const scoreCols = _ipScoreCols().map(k => ({ key: k, label: k, numeric: true, digits: 3 }));
+  const cols = [
+    { key: "_sender", label: "Sender" },
+    { key: "_receiver", label: "Receiver" },
+    { key: "Path", label: "Path" },
+    { key: "Ligand", label: "Ligand", labelKey: "Ligand_label" },
+    { key: "Receptor", label: "Receptor", labelKey: "Receptor_label" },
+    { key: "EM", label: "EM", labelKey: "EM_label" },
+    { key: "Target", label: "Target", labelKey: "Target_label" },
+    { key: "contrast", label: "contrast" },
+    { key: "pvalue", label: "pvalue", numeric: true, digits: "sci" },
+    { key: "PDS", label: "PDS", numeric: true, digits: 3 },
+    ...scoreCols,
+    ...(_ipHasTraj() ? [{ key: "_trajectory", label: "trajectory", isTraj: true }] : []),
+  ];
+  const thead = `<th style="width:24px;" title="Toggle evidence detail panel."></th>` + cols.map(c => {
+    if (c.isTraj) return `<th>${_escapeHtml(c.label)}</th>`;
+    const on = (f.sortKey === c.key);
+    const arrow = on ? (f.sortDir > 0 ? " ▲" : " ▼") : "";
+    return `<th data-ip-sort="${c.key}">${_escapeHtml(c.label)}${arrow}</th>`;
+  }).join("");
+  const body = visible.map((r, idx) => {
+    _ipNormalizeTopRow(r);
+    const rk = _ipRowKey(r);
+    const isOpen = _ipRuntime.openKeys.has(rk);
+    const toggle = `<td style="text-align:center;cursor:pointer;" `
+      + `data-ip-toggle="${idx}" title="${isOpen ? "Hide" : "Show"} evidence detail">`
+      + `${isOpen ? "▾" : "▸"}</td>`;
+    const path = r.Path || [r.Ligand, r.Receptor, r.EM, r.Target].join("|");
+    const cells = cols.map(c => {
+      if (c.isTraj) return `<td>${trajBadges(r)}</td>`;
+      const v = c.key === "Path" ? path : r[c.key];
+      if (c.key === "PDS") {
+        const color = Number(v) >= 0 ? "#b91c1c" : "#1d4ed8";
+        const dir = Number(v) >= 0 ? "↑" : "↓";
+        return `<td style="text-align:right;color:${color};font-weight:600;">${dir} ${fmt(v, 3)}</td>`;
+      }
+      if (c.numeric) return `<td style="text-align:right;">${_ipFmtNum(v, c.digits)}</td>`;
+      if (c.labelKey) return `<td>${_ipNodeCell(v, r[c.labelKey])}</td>`;
+      return `<td>${_escapeHtml(v == null ? "" : v)}</td>`;
+    }).join("");
+    let html = `<tr data-ip-row="${idx}">${toggle}${cells}</tr>`;
+    if (isOpen) {
+      html += `<tr class="ip-detail-row" data-ip-detail="${idx}"><td></td>`
+        + `<td colspan="${cols.length}" style="padding:8px 12px;background:#fafafa;">`
+        + _ipRenderDetailPanel(r, rk, "evidence", false)
+        + `</td></tr>`;
+    }
+    return html;
+  }).join("");
+
+  const canPrev = page > 0;
+  const canNext = page < nPages - 1;
+  const pagerHtml =
+    `<div class="ip-pager" style="display:flex;gap:8px;align-items:center;padding:6px 0;font-size:12px;">`
+    + `<button type="button" data-ip-page="first" ${canPrev ? "" : "disabled"}>&laquo; First</button>`
+    + `<button type="button" data-ip-page="prev"  ${canPrev ? "" : "disabled"}>&lsaquo; Prev</button>`
+    + `<span class="muted" style="margin:0 8px;">Page `
+    + `<input type="number" min="1" max="${nPages}" value="${page + 1}" `
+    + `data-ip-page="jump" style="width:64px;text-align:right;"/> / ${nPages.toLocaleString()}</span>`
+    + `<button type="button" data-ip-page="next"  ${canNext ? "" : "disabled"}>Next &rsaquo;</button>`
+    + `<button type="button" data-ip-page="last"  ${canNext ? "" : "disabled"}>Last &raquo;</button>`
+    + `</div>`;
+  wrap.innerHTML = pagerHtml
+    + `<div class="ke-table-wrap"><table class="data-table" id="ip-table">`
+    + `<thead><tr>${thead}</tr></thead><tbody>${body}</tbody></table></div>`
+    + pagerHtml;
+  wrap.querySelectorAll("[data-ip-page]").forEach(el => {
+    const action = el.dataset.ipPage;
+    if (action === "jump") {
+      el.addEventListener("change", () => {
+        const n = parseInt(el.value, 10);
+        if (!isFinite(n)) return;
+        const clamped = Math.max(1, Math.min(nPages, n)) - 1;
+        if (clamped !== _ipRuntime.page) {
+          _ipRuntime.page = clamped;
+          _ipRuntime.openKeys = new Set();
+          _ipRenderTopTable();
+        }
+      });
+    } else {
+      el.addEventListener("click", () => {
+        if (el.disabled) return;
+        let next = _ipRuntime.page;
+        if (action === "first") next = 0;
+        else if (action === "prev") next = Math.max(0, _ipRuntime.page - 1);
+        else if (action === "next") next = Math.min(nPages - 1, _ipRuntime.page + 1);
+        else if (action === "last") next = nPages - 1;
+        if (next !== _ipRuntime.page) {
+          _ipRuntime.page = next;
+          _ipRuntime.openKeys = new Set();
+          _ipRenderTopTable();
+        }
+      });
+    }
+  });
+  const head = wrap.querySelector("#ip-table thead");
+  if (head) head.addEventListener("click", ev => {
+    const th = ev.target.closest("th[data-ip-sort]");
+    if (!th) return;
+    const k = th.dataset.ipSort;
+    if (f.sortKey === k) IncytrFilter.set({ sortDir: -1 * f.sortDir });
+    else IncytrFilter.set({ sortKey: k, sortDir: (k === "rank" || k === "pvalue" ? 1 : -1) });
     _ipResetPage();
-    _ipRenderTrajChips();
-    _ipRenderTable();
-  };
+    _ipRuntime.openKeys = new Set();
+    _ipRenderTopTable();
+  });
+  const bodyEl = wrap.querySelector("#ip-table tbody");
+  if (bodyEl) bodyEl.addEventListener("click", ev => {
+    const cell = ev.target.closest("td[data-ip-toggle]");
+    if (!cell) return;
+    const idx = +cell.dataset.ipToggle;
+    const r = visible[idx];
+    if (!r) return;
+    _ipNormalizeTopRow(r);
+    const rk = _ipRowKey(r);
+    if (_ipRuntime.openKeys.has(rk)) {
+      _ipRuntime.openKeys.delete(rk);
+      delete _ipRuntime.detailTab[rk];
+    } else {
+      _ipRuntime.openKeys.add(rk);
+      _ipRuntime.detailTab[rk] = "evidence";
+    }
+    _ipRenderTopTable();
+  });
+  for (const rk of _ipRuntime.openKeys) {
+    const idx = visible.findIndex(r => _ipRowKey(_ipNormalizeTopRow(r)) === rk);
+    if (idx >= 0) _ipRenderEvidencePanel(rk, visible[idx]);
+  }
 }
 
 function _ipResetPage() {
@@ -379,7 +795,6 @@ function _ipInvalidateScope() {
   _ipRuntime.recurFallback = null;
   _ipRuntime.pathIndex = null;
   _ipRuntime.pathLabels = null;
-  _ipRuntime.trajCounts = null;
   _ipRuntime._didDebugLog = false;
 }
 
@@ -388,6 +803,12 @@ function _ipInvalidateScope() {
 async function _ipEnsureShards() {
   const block = _ipBlock();
   if (!block) return;
+  if ((IncytrFilter.get("ipMode") || "top") === "top") {
+    _ipRuntime.loading = false;
+    _ipRuntime.loadError = null;
+    _ipRenderTable();
+    return;
+  }
   const pairs = _ipPairsInScope(block);
   if (pairs.length !== 1) {
     // 0 pairs: prompt to widen. >1 pairs: prompt to narrow (per-shard
@@ -438,7 +859,7 @@ async function _ipEnsureShards() {
     _ipRuntime.loadedKey = sig;
     // Build two indexes once so per-render filtering is O(1) lookups:
     //   pathIndex  : pathStr → rows[]   (chart, debug)
-    //   pathLabels : pathStr → Map<disease, Set<label>>  (chip filter)
+    //   pathLabels : pathStr → Map<disease, Set<label>>  (trend filter)
     const pathIndex  = new Map();
     const pathLabels = new Map();
     for (const r of rows) {
@@ -459,7 +880,6 @@ async function _ipEnsureShards() {
     }
     _ipRuntime.pathIndex  = pathIndex;
     _ipRuntime.pathLabels = pathLabels;
-    _ipRuntime.trajCounts = null;
   } catch (e) {
     _ipRuntime.loadError = String(e.message || e);
     console.error("incytr shard load failed", e);
@@ -478,16 +898,9 @@ function _ipFilterRows() {
   const timeSet       = new Set(f.timepoint      || []);
   const recurSet      = new Set(f.recurContrasts || []);
   const hasRecur      = recurSet.size > 0;
-  // Per-disease trajectory chip selection: { App: [...], Tau: [...], ApTt: [...] }.
-  // Active when at least one disease has a non-empty array. OR within disease,
-  // AND across diseases.
-  const trajByDis = f.trajLabels || {};
-  const trajGates = [];   // [{ disease, labels: Set<string> }]
-  for (const d of _ipDiseases()) {
-    const arr = trajByDis[d] || [];
-    if (arr.length) trajGates.push({ disease: d, labels: new Set(arr) });
-  }
-  const hasTraj  = trajGates.length > 0 && _ipHasTraj();
+  const trend = TrendFilter.normalize(f.trend || "");
+  const trendLabel = trend ? TrendFilter.payloadLabel(trend) : "";
+  const hasTraj  = !!trendLabel && _ipHasTraj();
   const pathLbl  = hasTraj ? _ipRuntime.pathLabels : null;
   const recurIdx = hasRecur ? _ipRecurIndex() : null;
   const searchTokens  = (f.searchText || "")
@@ -547,19 +960,11 @@ function _ipFilterRows() {
     if (hasTraj) {
       const byDis = pathLbl ? pathLbl.get(_ipPathStr(r)) : null;
       if (!byDis) continue;
-      let passes = true;
-      // AND within disease (path must satisfy every selected label) and
-      // AND across diseases. Picking incompatible labels (always-up +
-      // always-down) is meant to yield zero results.
-      for (const gate of trajGates) {
-        const lbls = byDis.get(gate.disease);
-        if (!lbls) { passes = false; break; }
-        for (const lbl of gate.labels) {
-          if (!lbls.has(lbl)) { passes = false; break; }
-        }
-        if (!passes) break;
-      }
-      if (!passes) continue;
+      const c = r.contrast || "";
+      const ui = c.indexOf("_");
+      const d = ui < 0 ? c : c.substring(0, ui);
+      const lbls = byDis.get(d);
+      if (!lbls || !lbls.has(trendLabel)) continue;
     }
     // One-time diagnostic per filter call: log gate setup + pathLabels stats.
     if (hasTraj && !_ipRuntime._didDebugLog) {
@@ -572,8 +977,7 @@ function _ipFilterRows() {
         for (const [d, s] of byDis) dump[d] = [...s];
         sample.push({ pid, labels: dump });
       }
-      console.log("[ip-filter] trajGates=",
-        trajGates.map(g => ({ disease: g.disease, labels: [...g.labels] })));
+      console.log("[ip-filter] trend=", trendLabel);
       console.log("[ip-filter] pathLabels size=", pathLbl ? pathLbl.size : 0,
         " sample=", sample);
     }
@@ -596,7 +1000,8 @@ function _ipFilterRows() {
 
     out.push(r);
   }
-  const key = f.sortKey, dir = f.sortDir;
+  const key = f.sortKey === "rank" ? "PDS" : f.sortKey;
+  const dir = f.sortKey === "rank" ? -1 : f.sortDir;
   const numericKeys = new Set([
     "pvalue", "PDS", ..._ipScoreCols(),
   ]);
@@ -635,17 +1040,25 @@ function _ipRenderTable() {
   const wrap = document.getElementById("ip-table-wrap");
   const block = _ipBlock();
   if (!wrap || !countEl || !block) return;
+  if ((IncytrFilter.get("ipMode") || "top") === "top") {
+    _ipRenderTopTable();
+    return;
+  }
 
   const pairs = _ipPairsInScope(block);
   const f = IncytrFilter.get();
   if (pairs.length === 0) {
-    countEl.textContent = "No (sender, receiver) pair matches the current selection.";
+    if (_ipRenderGeneIndexSearch(block, pairs)) return;
+    const lowTxt = IncytrCelltypeQc.enabled(block)
+      ? ` after ${IncytrCelltypeQc.controlText(block)}` : "";
+    countEl.textContent = `No (sender, receiver) pair matches the current selection${lowTxt}.`;
     wrap.innerHTML = '<div class="muted" style="padding:16px;">'
       + 'Pick one sender and one receiver from the filters, or click a cell in the heatmap, to load that pair\'s shard.'
       + '</div>';
     return;
   }
   if (pairs.length > 1) {
+    if (_ipRenderGeneIndexSearch(block, pairs)) return;
     // Per-shard pagination: the table renders one (sender, receiver) shard
     // at a time. Show the matching pairs so the user can pick.
     countEl.textContent = `${pairs.length} matching (sender, receiver) pairs — narrow to one to load.`;
@@ -698,6 +1111,20 @@ function _ipRenderTable() {
   }
   const filtered = _ipFilterRows();
   const total = _ipRuntime.rows.length;
+  if (!filtered.length) {
+    const p0 = pairs[0];
+    countEl.textContent =
+      `${p0.sender} → ${p0.receiver}: 0 rows pass filters `
+      + `(of ${total.toLocaleString()} in shard).`
+      + (IncytrCelltypeQc.enabled(block) ? ` ${IncytrCelltypeQc.controlText(block)}.` : "");
+    const summary = _ipActiveFilterSummary(f);
+    wrap.innerHTML = '<div class="muted" style="padding:16px;">'
+      + (summary
+          ? `No rows match: ${_escapeHtml(summary)}. Use Reset or loosen the filters.`
+          : 'No rows match the active filters. Use Reset or loosen the filters.')
+      + '</div>';
+    return;
+  }
   // Pagination math — clamp page in case filter shrinks the row set.
   const nPages = Math.max(1, Math.ceil(filtered.length / _IP_PAGE_SIZE));
   if (_ipRuntime.page >= nPages) _ipRuntime.page = nPages - 1;
@@ -713,7 +1140,8 @@ function _ipRenderTable() {
     + (filtered.length
         ? `Page ${page + 1} / ${nPages.toLocaleString()} `
           + `(rows ${(startIdx + 1).toLocaleString()}–${endIdx.toLocaleString()}).`
-        : "");
+        : "")
+    + (IncytrCelltypeQc.enabled(block) ? ` ${IncytrCelltypeQc.controlText(block)}.` : "");
 
   const hasTrajIdx = _ipHasTraj();
   const scoreCols = _ipScoreCols().map(k => ({
@@ -914,8 +1342,8 @@ function _ipRenderTable() {
 // Cluster routing per evaluation.R:227-230 is enforced in EvidencePanel.render().
 // ---------------------------------------------------------------------------
 
-function _ipRenderDetailPanel(r, rk, activeTab) {
-  const hasTrajIdx = _ipHasTraj();
+function _ipRenderDetailPanel(r, rk, activeTab, allowTrajectory = true) {
+  const hasTrajIdx = allowTrajectory && _ipHasTraj();
   const btn = (tab, label) =>
     `<button type="button" data-ip-detail-tab="${tab}" data-ip-detail-rk="${_escapeHtml(rk)}"
        style="padding:2px 12px;border-radius:4px;font-size:12px;cursor:pointer;
@@ -923,10 +1351,12 @@ function _ipRenderDetailPanel(r, rk, activeTab) {
               background:${activeTab === tab ? "#1f4ea3" : "#f4f4f4"};
               color:${activeTab === tab ? "#fff" : "#444"};"
      >${label}</button>`;
-  const tabBar = `<div style="display:flex;gap:6px;margin-bottom:8px;">`
-    + btn("evidence", "Evidence")
-    + (hasTrajIdx ? btn("trajectory", "Trajectory") : "")
-    + `</div>`;
+  const tabBar = allowTrajectory
+    ? (`<div style="display:flex;gap:6px;margin-bottom:8px;">`
+      + btn("evidence", "Evidence")
+      + (hasTrajIdx ? btn("trajectory", "Trajectory") : "")
+      + `</div>`)
+    : "";
   if (activeTab === "trajectory" && hasTrajIdx) {
     const chartId = `ip-traj-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
     return tabBar
@@ -1075,13 +1505,54 @@ function wireIncytrPathways() {
     _ipRenderTableDebounced();
   });
 
+  const trendSel = document.getElementById("ip-trend");
+  if (trendSel) trendSel.addEventListener("change", () => {
+    IncytrFilter.set({ trend: TrendFilter.normalize(trendSel.value || "") });
+    _ipResetPage();
+    _ipRenderTable();
+  });
+
+  const modeSel = document.getElementById("ip-mode");
+  if (modeSel) modeSel.addEventListener("change", () => {
+    IncytrFilter.set({
+      ipMode: modeSel.value || "top",
+      pair: null,
+    });
+    const block = _ipBlock();
+    if (block) _ipSyncControls(block);
+    _ipInvalidateScope();
+    _ipResetPage();
+    _ipEnsureShards();
+  });
+
+  const limitSel = document.getElementById("ip-top-limit");
+  if (limitSel) limitSel.addEventListener("change", () => {
+    const n = Number(limitSel.value || 500);
+    IncytrFilter.set({ topLimit: [500, 1000, 5000].includes(n) ? n : 500 });
+    _ipResetPage();
+    _ipRuntime.openKeys = new Set();
+    _ipRenderTable();
+  });
+
+  const lowSel = document.getElementById("ip-low-signal");
+  if (lowSel) lowSel.addEventListener("change", () => {
+    IncytrFilter.set({
+      excludeLowSignalCelltypes: lowSel.value === "exclude",
+      pair: null,
+    });
+    const block = _ipBlock();
+    if (block) _ipSyncControls(block);
+    _ipInvalidateScope();
+    _ipResetPage();
+    _ipEnsureShards();
+  });
+
   // Reset.
   const resetBtn = document.getElementById("ip-reset");
   if (resetBtn) resetBtn.addEventListener("click", () => {
     IncytrFilter.reset();
     const block = _ipBlock();
     if (block) _ipSyncControls(block);
-    _ipRenderTrajChips();
     _ipInvalidateScope();
     _ipResetPage();
     _ipEnsureShards();
@@ -1094,6 +1565,10 @@ function renderIncytrPathways() {
   if (!block) {
     if (countEl) countEl.textContent = "No incytr_pathways block in payload.";
     return;
+  }
+  if (_ipSanitizeFilterState(block)) {
+    _ipInvalidateScope();
+    _ipResetPage();
   }
   _ipSyncControls(block);
   _ipEnsureShards();

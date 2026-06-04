@@ -33,7 +33,7 @@ function _activeKinaseAuditTab() {
 }
 
 function _selectedAuditSample() {
-  return document.getElementById("audit-sample-select")?.value || "plex2_130c_sn_mean";
+  return document.getElementById("audit-sample-select")?.value || "D1_d2";
 }
 
 function _selectedAuditSite() {
@@ -570,30 +570,18 @@ function _allenABALink(gene) {
 }
 
 const ATTR_VERDICT_COLS = [
-  {key:"cell_type",                    label:"Cell type",   type:"str", group:"id",
+  {key:"cell_type",                    label:"Cell type",        type:"str", group:"id",
    title:""},
-  {key:"cross_rank",                   label:"Conf",        type:"num", group:"attr",
-   title:"Combined confidence tier. Starts from the attribution-only tier (high / moderate / low / none). Upgraded to 'very high' when the decomposition layer significantly agrees (Decomp FDR < 0.25 with sign matching bulk MEA). Sort uses cross_rank: tier first, decomposition step as tie-breaker."},
-  {key:"wmb_specificity",              label:"WMB enrich",  type:"num", group:"attr",
-   title:"WMB enrichment: share of total log2 expression across 34 WMB classes (uniform = 1/34 ≈ 0.029). Computed at WMB-class granularity, then attached to each Levy-T5 cluster via the levy_t5→WMB crosswalk — Levy-T5 clusters that map to the same WMB class share this value."},
-  {key:"wmb_tier",                     label:"WMB tier",    type:"num", group:"attr",
-   title:"WMB specificity as a multiple of uniform (1/34 ≈ 0.029): ≥10× / ≥5× / ≥2× / ≥1×. Empty = below 1× uniform. Inherited from the WMB class this Levy-T5 cluster maps to."},
-  {key:"wmb_mean_log2_expression",     label:"log2 expr",   type:"num", group:"attr",
-   title:"WMB mean log2 expression in this cell type (Allen Whole Mouse Brain 10Xv3, pooled across 13 regions). Absolute level — low values flag the score as potentially noise-driven."},
-  {key:"wmb_fraction_cells_expressing",label:"% cells",     type:"num", group:"attr",
-   title:"WMB fraction of cells of this cell type with non-zero counts for this gene."},
-  {key:"sea_ad_lfc",                   label:"SEA-AD LFC",  type:"num", group:"attr",
-   title:"SEA-AD log2 fold change in human AD vs control, median across SEA-AD supertypes mapped to this subclass. Stratum (early / late / full CPS) is selected from the contrast pathway. Color: red = up in AD, blue = down."},
-  {key:"song_lfc",                     label:"Song LFC",    type:"num", group:"attr",
-   title:"Song log2 fold change from within-cohort snRNA-seq factorial OLS (β at this contrast — 10-param design, time-resolved). Color: red = up in disease genotype, blue = down."},
-  {key:"combined_score",               label:"Score",       type:"num", group:"attr",
-   title:"Combined attribution score: effective concordance × (0.5 + WMB specificity). The unified attribution uses this for confidence tiers."},
-  {key:"decomp_nes",                   label:"Decomp NES",  type:"num", group:"decomp",
-   title:"Decomposition NES from the CTM-native proportional decomposition (per-cell-type kinase MEA on bulk phospho ranking weighted by snRNA share for the kinase's substrate set). Same join key as Song LFC. Hypothesis-strength signal — see Methods."},
-  {key:"decomp_fdr",                   label:"Decomp FDR",  type:"num", group:"decomp",
-   title:"Decomposition MEA FDR for this (kinase, contrast, cell type) row. < 0.25 is the standard MEA gate."},
-  {key:"bulk_match",                   label:"vs Bulk",     type:"num", group:"decomp",
-   title:"Sign agreement between Decomp NES and the bulk MEA NES for this kinase × contrast. Bold ✓/✗ when Decomp FDR < 0.25; muted when not. Hover any cell for the underlying values."},
+  {key:"tcell_tier",                   label:"Specificity",      type:"num", group:"attr",
+   title:"Within-cohort specificity tier — the kinase's transcript share in this cell-type state as a multiple of the uniform baseline (1/N_states): ≥10× / ≥5× / ≥2× / ≥1×. Empty = below 1× uniform. Pooled across all scRNA days; binned in alz/cross_reference/tcell_within_cohort.py."},
+  {key:"tcell_specificity",            label:"Share",            type:"num", group:"attr",
+   title:"Raw specificity share: this state's mean per-cell log-expression of the kinase transcript ÷ the sum across all states. Uniform = 1/N_states."},
+  {key:"tcell_lfc",                    label:"Δ vs d2",          type:"num", group:"attr",
+   title:"Pseudobulk transcript log2 fold change vs the d2 baseline at this contrast day (mean per-cell log-expression difference). Color: red = up, blue = down. No p-value — a single donor has no biological replicates (see Methods)."},
+  {key:"tcell_concordance",            label:"vs Bulk",          type:"num", group:"attr",
+   title:"sign(bulk NES) · transcript Δ vs d2. Positive = transcript moves with the bulk kinase activity. SHOWN ONLY — never filters: kinase activity is post-translationally decoupled from its own mRNA, so sign-agreement is at chance (OR≈1, same in the mouse Song reference)."},
+  {key:"tcell_consistency",            label:"Timecourse",       type:"num", group:"attr",
+   title:"Count of contrast days {d13, d17, d20} where the transcript moves concordantly with the bulk NES. Credibility comes from timecourse consistency, not a per-day p-value."},
 ];
 function _attrVerdictCmp(a, b, key, type, asc) {
   let va, vb;
@@ -619,130 +607,67 @@ function _renderAttributionVerdict(hostId, ctx) {
   const host = document.getElementById(hostId);
   if (!host) return;
 
-  // Verdict reads attribution_index for the audit picker's contrast. Independent
-  // of the left-list KinaseFilter — the detail panel's job is to inspect this kinase
-  // at the contrast the user picked.
-  const verdictFilter = {
-    disease:   (ctx.contrast || "").split("_")[0] || "",
-    timepoint: ((ctx.contrast || "").match(/_(\d+mo)$/) || ["",""])[1] || "",
-    celltype: "", confidence: "",
-  };
+  // Verdict reads attribution_index for the audit picker's contrast day.
+  // Independent of the left-list KinaseFilter — the detail panel inspects this
+  // kinase at the day the user picked.
+  const verdictFilter = { day: ctx.contrast || "", celltype: "" };
   const allRows = ctx.kinase_id != null
     ? getScopedAttribution(ctx.kinase_id, verdictFilter)
     : [];
 
   if (allRows.length === 0) {
-    host.innerHTML = `<div class="muted">No attribution rows in ${_escapeHtml(ctx.contrast || "")}.</div>`;
+    host.innerHTML = `<div class="muted">No within-cohort attribution in ${_escapeHtml(ctx.contrast || "")} `
+      + `(d15 / d19 have no paired scRNA; or this kinase's transcript is absent from the cohort).</div>`;
     return;
   }
 
-  // Deduplicate by (contrast_id, cell_type), keeping best-score row.
-  const rowKey = r => `${r.contrast_id}|${r.cell_type}`;
+  // One row per cell_type (a single contrast day is in scope, so contrast_id is
+  // constant); keep the best-tier row defensively.
   const deduped = new Map();
   for (const r of allRows) {
-    const k = rowKey(r);
-    const prev = deduped.get(k);
-    if (!prev || r.combined_score > prev.combined_score) deduped.set(k, r);
+    const prev = deduped.get(r.cell_type);
+    if (!prev || (r.tcell_tier || 0) > (prev.tcell_tier || 0)) deduped.set(r.cell_type, r);
   }
   const rows = Array.from(deduped.values());
 
-  // Attach decomposition NES/FDR for sorting + render. Also compute bulk-NES
-  // sign agreement once (same bulk NES/FDR for every row in this kinase × contrast).
+  // Bulk MEA anchor — the same NES/FDR for every row at this kinase × contrast.
   const _K = ViewerPayload.kinases();
   const _bulkNes = (_K && _K["NES_" + ctx.contrast]) ? _K["NES_" + ctx.contrast][ctx.kinase_id] : null;
   const _bulkFdr = (_K && _K["FDR_" + ctx.contrast]) ? _K["FDR_" + ctx.contrast][ctx.kinase_id] : null;
-  for (const r of rows) {
-    const dk = `${ctx.kinase_id}|${r.contrast_id}|${r.cell_type}`;
-    const d = _decompByKey ? _decompByKey.get(dk) : null;
-    r.decomp_nes = d ? d.nes : null;
-    r.decomp_fdr = d ? d.fdr : null;
-    // bulk_match: +2 sig-agree, +1 nonsig-agree, -1 nonsig-disagree, -2 sig-disagree,
-    // null when either side is missing. "Sig" here = Decomp FDR < 0.25.
-    if (r.decomp_nes == null || !isFinite(r.decomp_nes) || r.decomp_nes === 0
-        || _bulkNes == null || !isFinite(_bulkNes) || _bulkNes === 0) {
-      r.bulk_match = null;
-    } else {
-      const agree = (r.decomp_nes > 0) === (_bulkNes > 0);
-      const sig = r.decomp_fdr != null && isFinite(r.decomp_fdr) && r.decomp_fdr < 0.25;
-      r.bulk_match = agree ? (sig ? 2 : 1) : (sig ? -2 : -1);
-    }
-    const decompStep = _decompStep(r.decomp_nes, r.decomp_fdr, _bulkNes);
-    r.decomp_step = decompStep;
-    r.combined_tier = _upgradeTier(r.combined_confidence, decompStep);
-    r.wmb_tier = _wmbTier(Number(r.wmb_specificity));
-    // cross_rank: combine combined_tier (0..4) and decomp step (-2..3) so
-    // reinforcing rows sort first, conflicts demoted, single-layer in between.
-    r.cross_rank = (_CONF_RANK[r.combined_tier] || 0) * 6 + decompStep;
-  }
 
-  const sortKey = host.dataset.sortKey || "combined_score";
+  const sortKey = host.dataset.sortKey || "tcell_tier";
   const sortAsc = host.dataset.sortAsc === "1";
   const sortCol = ATTR_VERDICT_COLS.find(c => c.key === sortKey)
-    || ATTR_VERDICT_COLS.find(c => c.key === "combined_score")
-    || ATTR_VERDICT_COLS[ATTR_VERDICT_COLS.length - 1];
-  rows.sort((a, b) => _attrVerdictCmp(a, b, sortCol.key, sortCol.type, sortAsc));
-  const showAllId = `${hostId}-show-all`;
-  const showAll = !!(host.dataset.showAll === "1");
-  const visibleRows = showAll
-    ? rows
-    : rows.filter(r => r.combined_tier === "very_high"
-                    || r.combined_tier === "high"
-                    || r.combined_tier === "moderate");
-  const hiddenCount = rows.length - visibleRows.length;
+    || ATTR_VERDICT_COLS.find(c => c.key === "tcell_tier")
+    || ATTR_VERDICT_COLS[1];
+  // Default ordering: tier desc, then concordance desc, as a stable secondary key.
+  rows.sort((a, b) => {
+    const primary = _attrVerdictCmp(a, b, sortCol.key, sortCol.type, sortAsc);
+    if (primary !== 0) return primary;
+    return (b.tcell_concordance || 0) - (a.tcell_concordance || 0);
+  });
+  // Show EVERY cell-type state — never hide rows (de-gate directive). All 14
+  // states are listed for the human to read; sorting reorders, nothing drops.
+  const visibleRows = rows;
   const num = (v, d=3) => (v == null || !isFinite(v)) ? "" : Number(v).toFixed(d);
   const tbody = visibleRows.map((r, i) => {
-    const seaCell = r.sea_ad_lfc == null || !isFinite(r.sea_ad_lfc)
+    const lfcCell = r.tcell_lfc == null || !isFinite(r.tcell_lfc)
       ? `<td class="attr-num attr-empty">—</td>`
-      : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(r.sea_ad_lfc)}">${num(r.sea_ad_lfc, 3)}</td>`;
-    const songCell = r.song_lfc == null || !isFinite(r.song_lfc)
+      : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(r.tcell_lfc)}">${num(r.tcell_lfc, 3)}</td>`;
+    const concVal = r.tcell_concordance;
+    const concCell = concVal == null || !isFinite(concVal)
       ? `<td class="attr-num attr-empty">—</td>`
-      : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(r.song_lfc)}">${num(r.song_lfc, 3)}</td>`;
-    const decompNesCell = r.decomp_nes == null || !isFinite(r.decomp_nes)
-      ? `<td class="attr-num attr-empty">—</td>`
-      : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(r.decomp_nes)}">${num(r.decomp_nes, 2)}</td>`;
-    const decompFdrSig = r.decomp_fdr != null && isFinite(r.decomp_fdr) && r.decomp_fdr < 0.25;
-    const decompFdrCell = r.decomp_fdr == null || !isFinite(r.decomp_fdr)
-      ? `<td class="attr-num attr-empty">—</td>`
-      : `<td class="attr-num"${decompFdrSig ? ' style="font-weight:600"' : ''}>${num(r.decomp_fdr, 3)}</td>`;
-    let bulkMatchCell;
-    if (r.bulk_match == null) {
-      bulkMatchCell = `<td class="attr-num attr-empty">—</td>`;
-    } else {
-      const agree = r.bulk_match > 0;
-      const sig = Math.abs(r.bulk_match) === 2;
-      const glyph = agree ? "✓" : "✗";
-      const color = agree ? "#15803d" : "#b91c1c";
-      const style = sig
-        ? `color:${color};font-weight:700`
-        : `color:#94a3b8;font-weight:500`;
-      const tip = `Bulk NES = ${num(_bulkNes, 2)}` +
-        (_bulkFdr != null && isFinite(_bulkFdr) ? ` (FDR ${num(_bulkFdr, 3)})` : "") +
-        ` · Decomp NES = ${num(r.decomp_nes, 2)}` +
-        (r.decomp_fdr != null && isFinite(r.decomp_fdr) ? ` (FDR ${num(r.decomp_fdr, 3)})` : "") +
-        (sig ? "" : " · Decomp not significant (FDR ≥ 0.25)");
-      bulkMatchCell = `<td class="attr-num" style="${style};text-align:center" title="${_escapeHtml(tip)}">${glyph}</td>`;
-    }
-    const binFlag = r.wmb_binary_expressed === true || String(r.wmb_binary_expressed).toLowerCase() === "true";
-    const expBadge = binFlag
-      ? ""
-      : `<span class="attr-badge attr-badge-warn" title="Mean log2 expression < 1 OR fewer than 10% of cells detect the gene in this cell type. The enrichment score may be elevated because the gene is barely expressed anywhere.">low expr</span>`;
-    const _sbk = (PAYLOAD.subclass_breakdown || {})[String(ctx.kinase_id)] || {};
-    const _sbTip = _sbk[r.cell_type] || "";
-    const _sbAttr = _sbTip ? ` title="WMB subclass breakdown: ${_escapeHtml(_sbTip)}"` : "";
-    const scoreCell = `<td class="attr-num">${num(r.combined_score, 3)}</td>`;
+      : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(concVal)}">${num(concVal, 3)}</td>`;
+    const consist = r.tcell_consistency || 0;
+    const consistCell = `<td class="attr-num" title="${consist} of 3 contrast days (d13/d17/d20) move concordantly with bulk.">`
+      + `${consist}<span class="muted" style="font-size:10px;"> / 3</span></td>`;
     return `<tr data-cell-type="${_escapeHtml(r.cell_type)}" class="attr-verdict-row${i === 0 ? ' attr-verdict-selected' : ''}">` +
-      `<td class="attr-celltype"${_sbAttr}>${_escapeHtml(r.cell_type)}${_sbTip ? ' <span class="attr-subclass-marker" aria-hidden="true">ⓘ</span>' : ''} ${expBadge}</td>` +
-      `<td><span class="${_attrConfidenceClass(r.combined_tier)}" title="${_escapeHtml('Attribution: ' + (r.combined_confidence || 'none') + (r.combined_tier === 'very_high' ? ' · upgraded to very_high by significant decomp agreement' : ''))}">${_escapeHtml((r.combined_tier || '').replace('_', ' '))}</span></td>` +
-      `<td class="attr-num">${num(r.wmb_specificity, 3)}</td>` +
-      `<td class="attr-num">${_wmbTierBadge(_wmbTier(Number(r.wmb_specificity)))}</td>` +
-      `<td class="attr-num">${num(r.wmb_mean_log2_expression, 2)}</td>` +
-      `<td class="attr-num">${num(r.wmb_fraction_cells_expressing, 2)}</td>` +
-      seaCell +
-      songCell +
-      scoreCell +
-      decompNesCell +
-      decompFdrCell +
-      bulkMatchCell +
+      `<td class="attr-celltype">${_escapeHtml(r.cell_type)}</td>` +
+      `<td>${_tcellTierBadge(r.tcell_tier || 0)}</td>` +
+      `<td class="attr-num">${num(r.tcell_specificity, 3)}</td>` +
+      lfcCell +
+      concCell +
+      consistCell +
       `</tr>`;
   }).join("");
   const headCells = ATTR_VERDICT_COLS.map(c => {
@@ -750,15 +675,14 @@ function _renderAttributionVerdict(hostId, ctx) {
     const title = c.title ? ` title="${_escapeHtml(c.title)}"` : "";
     return `<th class="attr-verdict-th" data-sort-key="${c.key}"${title}>${c.label}${arrow}</th>`;
   }).join("");
-  // Super-header groups the columns into Layer-1 (attribution) and Layer-2 (decomp).
+  // Super-header groups the id column and the within-cohort attribution columns.
   const _grpCounts = ATTR_VERDICT_COLS.reduce((acc, c) => { acc[c.group] = (acc[c.group]||0)+1; return acc; }, {});
   const superHead =
     `<tr class="attr-verdict-supergroup">` +
       `<th class="attr-supergroup-spacer" colspan="${_grpCounts.id || 0}"></th>` +
-      `<th class="attr-supergroup-attr" colspan="${_grpCounts.attr || 0}" title="Cell-type attribution evidence. Each component is compared against the bulk MEA direction at this contrast.">Attribution (vs bulk direction)</th>` +
-      `<th class="attr-supergroup-decomp" colspan="${_grpCounts.decomp || 0}" title="Per-cell-type pseudo-deconvolution MEA. A second look at the bulk phospho ranking re-projected by snRNA share.">Decomposition cross-check</th>` +
+      `<th class="attr-supergroup-attr" colspan="${_grpCounts.attr || 0}" title="Within-cohort cell-type attribution: transcript specificity in this cohort's own scRNA + concordance vs the bulk kinase-MEA direction at this contrast.">Within-cohort attribution (vs bulk direction)</th>` +
     `</tr>`;
-  // Bulk anchor — both layers compare against this kinase's bulk MEA at this contrast.
+  // Bulk anchor — every row compares against this kinase's bulk MEA at this contrast.
   const _bulkSig = _bulkFdr != null && isFinite(_bulkFdr) && _bulkFdr < 0.25;
   const _bulkDir = (_bulkNes != null && isFinite(_bulkNes))
     ? (_bulkNes > 0 ? `<span class="attr-bulk-up">↑ NES = +${num(_bulkNes, 2)}</span>`
@@ -768,38 +692,26 @@ function _renderAttributionVerdict(hostId, ctx) {
     ? `FDR = ${num(_bulkFdr, 3)}${_bulkSig ? "" : " (n.s.)"}` : "FDR n/a";
   const bulkAnchor =
     `<div class="attr-bulk-anchor">Bulk MEA anchor for ${_escapeHtml(ctx.contrast || "")}: ` +
-    `<span class="attr-bulk-pill" title="Sign convention: + NES = kinase substrates concentrated among sites with higher stoichiometry (log2 phospho − log2 protein) in disease vs WT. Matches the Incytr tab's 'red = up in disease' convention.">${_bulkDir} · ${_bulkFdrTxt}</span> ` +
-    `<span class="muted">— sign of the bulk NES is the reference direction every column below is checked against. <strong>Positive NES = kinase more active in disease; negative = more active in WT.</strong></span></div>`;
+    `<span class="attr-bulk-pill" title="Sign convention: + NES = kinase substrates concentrated among sites with higher stoichiometry (log2 phospho − log2 protein) at this day vs the d2 baseline.">${_bulkDir} · ${_bulkFdrTxt}</span> ` +
+    `<span class="muted">— sign of the bulk NES is the reference direction the concordance column is checked against. <strong>Positive NES = kinase more active at this day than at d2.</strong></span></div>`;
+  const caveat = (PAYLOAD.meta && PAYLOAD.meta.tcell_attribution_caveat) || "";
   host.innerHTML =
     bulkAnchor +
     `<table class="attr-verdict-table">` +
       `<thead>${superHead}<tr>${headCells}</tr></thead><tbody>${tbody}</tbody>` +
     `</table>` +
-    (hiddenCount > 0
-      ? `<div class="attr-verdict-toggle"><label><input type="checkbox" id="${showAllId}"${showAll ? " checked" : ""}> Show all Levy-t5 clusters <span class="muted">(${hiddenCount} hidden — low/none confidence)</span></label></div>`
-      : (showAll && rows.length > 0
-        ? `<div class="attr-verdict-toggle"><label><input type="checkbox" id="${showAllId}" checked> Showing all cell types</label></div>`
-        : "")) +
-    `<details class="attr-explainer"><summary>How to read <em>Score</em> vs. <em>Confidence</em> in this table</summary>` +
+    `<div class="muted attr-verdict-note" style="margin-top:4px;font-size:11px;">All ${rows.length} cell-type states shown — nothing is filtered or hidden. Sort any column to reorder.</div>` +
+    `<details class="attr-explainer"><summary>How to read within-cohort attribution</summary>` +
       `<div class="attr-explainer-body">` +
-      `<p>Score and tier come from the same three evidence sources but answer different questions:</p>` +
+      `<p>This localizes the <strong>bulk</strong> kinase-activity signal to a cell-type state using only this cohort's own paired scRNA — no external disease reference. The axes are <strong>shown for you to read</strong>; none of them filters the table.</p>` +
       `<table class="attr-explainer-table" style="margin-bottom:8px;">` +
-        `<thead><tr><th>Source</th><th>What it tells you</th></tr></thead><tbody>` +
-        `<tr><td><strong>Song</strong></td><td>Does this gene go up or down in our own mice? (within-cohort snRNA-seq from the same animals)</td></tr>` +
-        `<tr><td><strong>SEA-AD</strong></td><td>Does this gene go up or down in human Alzheimer's brains? (human postmortem reference)</td></tr>` +
-        `<tr><td><strong>WMB</strong></td><td>Is this gene normally on in this cell type, in a healthy mouse? (used as a sanity check, not a direction)</td></tr>` +
-        `<tr><td><strong>Decomp NES / FDR</strong></td><td>A per-cell-type version of the bulk phospho signal, reweighted toward each cell type using the snRNA data. Uses the same snRNA data as Song, so treat it as a second look, not independent evidence.</td></tr>` +
+        `<thead><tr><th>Axis</th><th>What it tells you</th></tr></thead><tbody>` +
+        `<tr><td><strong>Specificity</strong></td><td>Is the kinase's transcript preferentially expressed in this state? Share of total expression, binned as a multiple of the uniform baseline (1/N_states). Pooled across all scRNA days — a static descriptor. This is the informative localizer.</td></tr>` +
+        `<tr><td><strong>Δ vs d2 / Concordance</strong></td><td>Does the transcript move the same direction as the bulk kinase activity at this day? Pseudobulk log2 fold change vs the d2 baseline, sign-checked against the bulk NES.</td></tr>` +
+        `<tr><td><strong>Timecourse</strong></td><td>How many of the three contrast days (d13/d17/d20) agree in direction.</td></tr>` +
         `</tbody></table>` +
-      `<p><strong>Confidence tier</strong> grades <em>which sources agree</em>, not how strong any one signal is:</p>` +
-      `<ul>` +
-        `<li><strong><span class="attr-conf attr-conf-very-high">very high</span></strong> — a <em>high</em> attribution row that is also corroborated by the decomposition layer: Decomp FDR < 0.25 with the same sign as the bulk MEA NES. Both evidence streams reinforce one another.</li>` +
-        `<li><strong><span class="badge hi">high</span></strong> — all three of these hold: <em>(a)</em> within-cohort Song supports the direction, <em>(b)</em> the gene is clearly cell-type-specific in WMB (specificity ≥ 2× uniform on the 34-WMB-class reference scale, i.e. ≈ 0.059; inherited by the Levy-t5 cluster from its mapped WMB class), and <em>(c)</em> at least one reference shows real movement (|Song LFC| or |SEA-AD LFC| > 0.1).</li>` +
-        `<li><strong><span class="badge mid">moderate</span></strong> — meaningful evidence but missing one strict gate. Two ways to land here: Song-supported but WMB specificity falls below the high threshold, <em>or</em> only SEA-AD reached concordance (no Song). SEA-AD-only is <strong>always</strong> capped at moderate — we won't promote a cross-species call to high.</li>` +
-        `<li><strong><span class="badge lo">low</span></strong> — concordance is positive but the gene isn't expression-specific in WMB and no reference LFC clears the magnitude bar.</li>` +
-        `<li><strong>none</strong> — concordance ≤ 0 (signs disagree). Row is excluded from <code>unified_attribution.csv</code> entirely.</li>` +
-      `</ul>` +
-      `<p><strong>Higher score does not imply higher tier.</strong> A row with strong magnitudes but no within-cohort Song evidence stays at moderate regardless of score; a row with a modest score but Song support + WMB specificity ≥ 0.059 reaches high. Read tier as evidence <em>type</em>, score as evidence <em>weight</em>.</p>` +
-      `<p><strong>Combined score</strong> = <code>effective_concordance × (0.5 + wmb_specificity)</code> where <code>effective_concordance = sign(NES) × (3·song_lfc + 1·sea_ad_lfc) / 4</code>. Continuous; used to rank cell types within a kinase (tie-break within tier) and to weight kinase support in the Incytr cell–cell integration.</p>` +
+      `<p><strong>No p-value / FDR.</strong> Donor1 is a single donor with one scRNA library per day — there are no biological replicates, so a per-(state, day) significance test would be pseudoreplication (Squair et al. 2021). Direction + magnitude + timecourse consistency are reported instead.</p>` +
+      (caveat ? `<p class="attr-caveat" style="border-left:3px solid #b58900;padding-left:8px;"><strong>On concordance:</strong> ${_escapeHtml(caveat)} <span class="muted">(Verified 2026-06-03: sign-agreement between MEA activity and kinase transcript is statistically independent, OR≈0.98, reproduced in the published mouse Song method at OR≈1.01. It is shown as a label only.)</span></p>` : "") +
       `</div></details>`;
   host.querySelectorAll("tr.attr-verdict-row").forEach(tr => tr.addEventListener("click", () => {
     host.querySelectorAll("tr.attr-verdict-row").forEach(r => r.classList.remove("attr-verdict-selected"));
@@ -818,13 +730,6 @@ function _renderAttributionVerdict(hostId, ctx) {
     }
     _renderAttributionVerdict(hostId, ctx);
   }));
-  const toggleEl = document.getElementById(showAllId);
-  if (toggleEl) {
-    toggleEl.addEventListener("change", () => {
-      host.dataset.showAll = toggleEl.checked ? "1" : "0";
-      _renderAttributionVerdict(hostId, ctx);
-    });
-  }
   // Open drawer on the top row by default
   if (rows[0]) _renderAttributionDrawer("attr-drawer", ctx, rows[0].cell_type);
 }
@@ -833,28 +738,45 @@ function _renderAttributionDrawer(hostId, ctx, cellType) {
   const host = document.getElementById(hostId);
   if (!host) return;
   const gene = ctx.gene || "";
+  // All concordant attribution rows for this kinase × cell-type, across the
+  // contrast days, give the day-vs-d2 transcript trace (tcell_lfc per day) plus
+  // the static specificity. All rows (concordant or not) — built entirely from
+  // attribution_index, no shard load.
+  const cellRows = (ctx.kinase_id != null
+    ? getScopedAttribution(ctx.kinase_id, { day: "", celltype: cellType })
+    : []);
+  const num = (v, d=3) => (v == null || !isFinite(v)) ? "" : Number(v).toFixed(d);
+  let traceBody;
+  if (cellRows.length === 0) {
+    traceBody = `<div class="muted">No within-cohort rows for ${_escapeHtml(cellType)}.</div>`;
+  } else {
+    const spec = cellRows[0].tcell_specificity;
+    const tier = cellRows[0].tcell_tier || 0;
+    const byDay = cellRows.slice().sort((a, b) =>
+      String(CONTRASTS[a.contrast_id]).localeCompare(String(CONTRASTS[b.contrast_id])));
+    const trRows = byDay.map(r => {
+      const day = CONTRASTS[r.contrast_id] || "";
+      const lfc = r.tcell_lfc;
+      const lfcCell = lfc == null || !isFinite(lfc)
+        ? `<td class="attr-num attr-empty">—</td>`
+        : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(lfc)}">${num(lfc, 3)}</td>`;
+      const concCell = `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(r.tcell_concordance)}">${num(r.tcell_concordance, 3)}</td>`;
+      return `<tr><td>${_escapeHtml(day)} vs d2</td><td class="attr-num">${num(r.nes, 2)}</td>${lfcCell}${concCell}</tr>`;
+    }).join("");
+    traceBody =
+      `<p class="muted attr-caption">Specificity ${_tcellTierBadge(tier)} `
+        + `(share ${num(spec, 3)} of total expression; uniform = ${num(_tcellUniform(), 3)}). `
+        + `Each row is one contrast day: bulk NES, the pseudobulk transcript Δ vs d2, and their sign concordance. No p-value (single-donor timecourse).</p>` +
+      `<table class="attr-verdict-table"><thead><tr>` +
+        `<th>Contrast</th><th>Bulk NES</th><th>Δ transcript vs d2</th><th>Concordance</th>` +
+      `</tr></thead><tbody>${trRows}</tbody></table>`;
+  }
   host.innerHTML =
     `<div class="attr-drawer-header"><strong>${_escapeHtml(cellType)}</strong>` +
-    ` &middot; <span class="muted">${_escapeHtml(gene)} / ${_escapeHtml(ctx.contrast)}</span>` +
-    ` &middot; ${_allenABALink(gene)}</div>` +
-    `<div class="attr-drawer-grid">` +
-      `<section class="attr-section"><h5>WMB expression across 34 WMB classes <span class="muted">(wmb_kinase_expression.csv)</span></h5>` +
-        `<p class="muted attr-caption">Seurat-style dot plot for ${_escapeHtml(gene)} in the Allen Whole Mouse Brain reference. Color = mean log2 expression, dot size = fraction of cells expressing. Target cell type is outlined.</p>` +
-        `<div id="attr-wmb-dotplot"></div></section>` +
-      `<section class="attr-section"><h5>SEA-AD supertype log2 fold change <span class="muted">(sea_ad_supertype_lfc.csv)</span></h5>` +
-        `<p class="muted attr-caption">Per-supertype LFC for ${_escapeHtml(gene)} in human AD donors, grouped by subclass. Stratum (early / late / full CPS) follows the contrast pathway. Subclass median is used in the verdict table.</p>` +
-        `<div id="attr-seaad-heatmap"></div></section>` +
-      `<section class="attr-section"><h5>Song within-cohort OLS <span class="muted">(song_concordance.csv)</span></h5>` +
-        `<p class="muted attr-caption">Factorial OLS coefficient on the per-animal pseudobulk for this cell type and pathway. Pathway is derived from the contrast prefix (App / Tau / ApTt).</p>` +
-        `<div id="attr-song-table"></div></section>` +
-    `</div>` +
-    `<section class="attr-section attr-section-wide"><h5>Per-cell substrate-site OLS <span class="muted">(site_level_ols.parquet)</span></h5>` +
-      `<p class="muted attr-caption">Per-(site, contrast, cell type) β / SE / p from the Levy-t5 pseudo-decomposition OLS, restricted to ${_escapeHtml(ctx.name || "")}'s substrate set in ${_escapeHtml(cellType)}. Shows what is driving the Decomp NES in the row above. Bulk β is the same site's stoichiometry β before share-reweighting; |Δβ| measures how much the per-cell estimate diverges from bulk.</p>` +
-      `<div id="attr-decomp-ols-table" class="audit-scroll"></div></section>`;
-  _renderWMBDotPlot("attr-wmb-dotplot", ctx, cellType);
-  _renderSEAADHeatmap("attr-seaad-heatmap", ctx, cellType);
-  _renderSongOLSPanel("attr-song-table", ctx, cellType);
-  _renderDecompOlsTable("attr-decomp-ols-table", ctx, cellType);
+    ` &middot; <span class="muted">${_escapeHtml(gene)} / ${_escapeHtml(ctx.contrast)}</span></div>` +
+    `<section class="attr-section attr-section-wide"><h5>Within-cohort transcript trace ` +
+      `<span class="muted">(unified_attribution_tcells.csv)</span></h5>` +
+      traceBody + `</section>`;
 }
 
 function _renderDecompOlsTable(hostId, ctx, cellType) {
@@ -1127,10 +1049,12 @@ function _setAuditSelectors(ctx) {
   }
   const sampleSelect = document.getElementById("audit-sample-select");
   if (sampleSelect) {
-    const current = sampleSelect.value || "plex2_130c_sn_mean";
-    const cols = Object.keys((ctx.rawMatrix || [])[0] || {}).filter(c => c.endsWith("_sn_mean"));
+    const current = sampleSelect.value || "D1_d2";
+    // T-cell samples are per-day bulk columns (D1_d2 … D1_d20), not mouse TMT
+    // channels — enumerate the day columns of the normalized phospho matrix.
+    const cols = Object.keys((ctx.rawMatrix || [])[0] || {}).filter(c => /^D\d+_d\d+$/.test(c));
     sampleSelect.innerHTML = cols.map(c => `<option value="${_escapeHtml(c)}">${_escapeHtml(c)}</option>`).join("");
-    sampleSelect.value = cols.includes(current) ? current : (cols.includes("plex2_130c_sn_mean") ? "plex2_130c_sn_mean" : cols[0] || "");
+    sampleSelect.value = cols.includes(current) ? current : (cols.includes("D1_d2") ? "D1_d2" : cols[0] || "");
     sampleSelect.onchange = () => renderActiveKinaseAuditTab(Store.state.selection.kinase);
   }
 }
@@ -1156,7 +1080,7 @@ async function _loadKinaseAuditContext(kinase_id, seq) {
     AuditDataStore.load(tk("site_level_ols")),
     AuditDataStore.load(tk("raw_phospho_normalized")),
     AuditDataStore.load(tk("stoichiometry_matrix")),
-    AuditDataStore.load("unified_attribution_full").catch(() => AuditDataStore.load("unified_attribution")),
+    AuditDataStore.load("unified_attribution"),
     AuditDataStore.load("normalization_summary"),
     AuditDataStore.load("sample_mapping"),
     AuditDataStore.load(tk("winsorized_sites")),
@@ -1291,7 +1215,7 @@ async function renderActiveKinaseAuditTab(kinase_id) {
       const motif = (PAYLOAD.kinase_motifs || {})[ctx.name] || null;
       const logoBlock = SequenceLogo.buildBlock(ctx.name, motif, "audit-trace-logo");
       body.innerHTML = logoBlock
-        + `<p class="kinase-stage-note">Raw-to-stoichiometry receipt for the selected kinase and contrast's leading-substrate sites. The Sample control selects one animal/channel column; each row shows raw PTM, raw parent protein, IRS-normalized values, log2 transforms, and the stoichiometry subtraction used downstream. <code>kl_percentile</code> is the kinase-library substrate percentile (0-100; higher = this motif scores stronger than that many sites in the library's reference phosphoproteome for this kinase).</p>`
+        + `<p class="kinase-stage-note">Per-day measurement receipt for the selected kinase and contrast's leading-substrate sites. The Sample control selects one bulk day column (D1_d2 … D1_d20). The T-cell bulk track is ForPerseus-normalized upstream (log2 + per-run median-centered), so there is no pre-normalization raw channel to surface — each row shows the normalized log2 phospho, the gene-matched log2 parent protein, and the median-centered stoichiometry (log2 phospho − log2 protein) fed to MEA. <code>kl_percentile</code> is the kinase-library substrate percentile (0-100; higher = this motif scores stronger than that many sites in the library's reference phosphoproteome for this kinase).</p>`
         + `<div id="audit-measurement-trace"></div>`;
       if (motif) SequenceLogo.render(document.getElementById("audit-trace-logo"), motif);
       const traceRows = await MeasurementTraceStore.load(sample, ctx.residueType);
@@ -1302,7 +1226,7 @@ async function renderActiveKinaseAuditTab(kinase_id) {
         kl_percentile: klBy.get(_normMotif(r.motif)) ?? null,
       }));
       _renderAuditTable("audit-measurement-trace", "measurement_trace", rows,
-        ["site_id","gene_symbol","motif","kl_percentile","protein_gene","matched_protein","raw_phospho","raw_protein","irs_phospho","irs_protein","log2_irs_phospho","log2_irs_protein","stoichiometry"],
+        ["site_id","gene_symbol","motif","kl_percentile","protein_gene","matched_protein","log2_irs_phospho","log2_irs_protein","stoichiometry"],
         false);
     } else if (tab === "site-stats") {
       body.innerHTML = `<p class="kinase-stage-note">OLS contrast details for the selected kinase's leading-substrate phosphosites. Each row is one phosphosite, not one sample. The selected contrast controls which stoichiometry and raw-phospho effect columns are shown; n_obs_stoich is the total count of usable stoichiometry sample columns available for that site.</p><div id="audit-site-stats"></div>`;
@@ -1393,7 +1317,7 @@ async function renderActiveKinaseAuditTab(kinase_id) {
         `<div id="audit-attribution"></div></section>`;
       _renderAttributionVerdict("attr-verdict", ctx);
       _renderAuditTable("audit-attribution", "unified_attribution", ctx.attrRows,
-        ["kinase","gene_symbol","contrast","cell_type","combined_confidence","wmb_specificity","wmb_mean_log2_expression","wmb_fraction_cells_expressing","sea_ad_lfc","song_lfc","combined_score","evidence_basis"],
+        ["kinase","gene_symbol","contrast","cell_type","tcell_specificity","tcell_tier","tcell_lfc","tcell_concordance","tcell_consistency","NES","FDR"],
         "unified_attribution");
     }
   } catch (e) {

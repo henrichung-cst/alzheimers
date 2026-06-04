@@ -82,6 +82,9 @@ function _kxBuildIndexes() {
       family: famMap[K.name[i]] || "",
       residue: (K.residue_type && K.residue_type[i]) || "ST",
       peak_NES: K.peak_NES[i],
+      trajectory: K.trajectory ? (K.trajectory[i] || "") : "",
+      n_sig_contrasts: K.n_sig_contrasts ? (K.n_sig_contrasts[i] || 0) : 0,
+      n_celltype_candidates: K.n_celltype_candidates ? (K.n_celltype_candidates[i] || 0) : 0,
       _nes: nesByC, _fdr: fdrByC,
     });
   }
@@ -470,6 +473,19 @@ function _kxRenderColsPanel() {
 
 // ---------- main render ----------
 
+function _kxFilteredRows(s, fdrGate) {
+  const searchQ = (s.search || "").toLowerCase().trim();
+  const trackQ = (s.residueTrack || "").trim();
+  return _KX_ROWS.filter(r => {
+    if (trackQ && r.residue !== trackQ) return false;
+    if (searchQ) {
+      const hay = (r.name + " " + r.gene).toLowerCase();
+      if (!hay.includes(searchQ)) return false;
+    }
+    return true;
+  });
+}
+
 function _kxRenderTable() {
   _kxBuildIndexes();
   const s = _kxState();
@@ -479,16 +495,7 @@ function _kxRenderTable() {
   const countEl = document.getElementById("kx-count");
   if (!wrap) return;
 
-  const searchQ = (s.search || "").toLowerCase().trim();
-  const trackQ = (s.residueTrack || "").trim();
-  const rows = _KX_ROWS.filter(r => {
-    if (trackQ && r.residue !== trackQ) return false;
-    if (searchQ) {
-      const hay = (r.name + " " + r.gene).toLowerCase();
-      if (!hay.includes(searchQ)) return false;
-    }
-    return true;
-  });
+  const rows = _kxFilteredRows(s, fdrGate);
   _kxSortRows(rows, s);
 
   const head = _kxBuildHeader(s, cols);
