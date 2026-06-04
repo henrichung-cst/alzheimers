@@ -840,10 +840,22 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
                 break
         pcol_clause = f'CAST("{pcol_disease}" AS DOUBLE)' if pcol_disease else "CAST(NULL AS DOUBLE)"
 
+        # SiK_score is emitted per-condition (SiK_score_<cond1> / SiK_score_d2);
+        # collapse to the treatment arm (cond1, the later day), baseline is d2.
+        cond1 = contrast.split("_")[0]
+        sik_disease = f"SiK_score_{cond1}"
+        if sik_disease in names:
+            sik_clause = f'CAST("{sik_disease}" AS DOUBLE) AS SiK_score'
+        else:
+            print(f"    (warn) no disease-arm SiK_score col ({sik_disease}) in "
+                  f"{os.path.basename(fpath)}; using NULL", flush=True)
+            sik_clause = "CAST(NULL AS DOUBLE) AS SiK_score"
+
+        generic_scores = [c for c in _INCYTR_SCORE_COLS if c != "SiK_score"]
         score_clauses = ",\n          ".join(
-            f"CAST({c} AS DOUBLE) AS {c}" for c in _INCYTR_SCORE_COLS if c in names
+            f"CAST({c} AS DOUBLE) AS {c}" for c in generic_scores if c in names
         )
-        missing_scores = [c for c in _INCYTR_SCORE_COLS if c not in names]
+        missing_scores = [c for c in generic_scores if c not in names]
         missing_score_clauses = ",\n          ".join(
             f"CAST(NULL AS DOUBLE) AS {c}" for c in missing_scores
         )
@@ -863,7 +875,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
              else f'CAST(NULL AS VARCHAR) AS "{dst}"')
             for src, dst in zip(_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS)
         )
-        clauses = [score_clauses, missing_score_clauses,
+        clauses = [score_clauses, missing_score_clauses, sik_clause,
                    dir_clauses, path_clauses, fc_clauses, label_clauses]
         extra_select = ",\n          ".join(c for c in clauses if c)
 

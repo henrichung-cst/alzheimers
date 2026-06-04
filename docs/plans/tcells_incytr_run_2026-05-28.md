@@ -83,8 +83,22 @@ Wrap each run with a heartbeat that surfaces this progress without tailing:
 ## Out of scope
 
 - sce4 parity — does **not** apply to T-cell data (independent cohort, human DB, distinct vocabulary).
-- Kinase scoring — `USE_KLDATA=FALSE`; T-cell bulk is per project policy never deconvoluted, and kinase MEA on per-state pseudobulk would violate the bulk-only rule.
 - Donor1 ps channel for donor2 — donor2 has no IMAC; channels = `pr,py`.
+
+> **Update 2026-06-04 — SiK kinase scoring enabled (this was wrongly scoped out above).**
+> The original "out of scope" reasoning conflated SiK with kinase MEA. SiK is
+> **scRNA-only**: `SiK_score` = mean Exclusiveness Index (`Cal_EI`) of a path's
+> kinase nodes in the receiver cluster, computed from the Seurat expression
+> matrix + idents (both donors have these in `incytr_obj.rds`). It needs **no
+> bulk deconvolution and no kinase MEA**, so it never touched the bulk-only rule.
+> The only missing piece was a **human** kinase-substrate library (the Song
+> `kldata` is mouse-cased). `alz/integration/build_tcells_kldata.py` derives one
+> from donor1's `ps/py_bulk_linear.csv` via the species-agnostic PSPA ranking
+> (no homologene), written to `data/datasets/tcells/kinase/kldata_human.csv` and
+> symlinked into each donor's `INPUTS_DIR` as `kldata.csv`. The runner now sets
+> `USE_KLDATA="TRUE"`. donor2 reuses donor1's kldata (no IMAC motifs of its own)
+> but computes its EI on its own scRNA. Verified: PDS folds SiK exactly
+> (`multimodel_score ± 0.5·SiK`); viewer SiK column populated, 0 nulls.
 
 ## Files touched / created
 

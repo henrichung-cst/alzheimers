@@ -12,7 +12,8 @@
 #   CHANNELS             → "pr,py,ps" (donor1) or "pr,py" (donor2)
 #   PR_FILE/PY_FILE/PS_FILE → state-keyed deconvoluted CSVs
 #   PR_GENE_COL/PY_GENE_COL/PS_GENE_COL → "gene_symbol"
-#   USE_KLDATA=FALSE     → kinase scoring skipped (bulk-only per cohort design)
+#   USE_KLDATA=TRUE      → SiK kinase scoring on, human kldata.csv symlinked
+#                          per donor (→ data/datasets/tcells/kinase/kldata_human.csv)
 #
 # Modes:
 #   --smoke <donor>   one contrast at NBOOT=2 → scratch dir wide_smoke/
@@ -42,6 +43,7 @@ preflight() {
   local donor="$1"
   local indir="data/derived/tcells_incytr_inputs/$donor"
   local need=( "$DRIVER" "$indir/incytr_obj.rds" "$indir/allmarkers.csv"
+               "$indir/kldata.csv"
                "$indir/pr_deconvoluted.csv" "$indir/py_deconvoluted.csv" )
   if [[ "$donor" == "donor1" ]]; then need+=( "$indir/ps_deconvoluted.csv" ); fi
   for f in "${need[@]}"; do
@@ -74,7 +76,7 @@ run_one() {
   PR_GENE_COL="gene_symbol" \
   PY_GENE_COL="gene_symbol" \
   PS_GENE_COL="gene_symbol" \
-  USE_KLDATA="FALSE" \
+  USE_KLDATA="TRUE" \
   SPECIES="human" \
   NBOOT="$nboot" \
   NPAIR_WORKERS="${NPAIR_WORKERS:-1}" \

@@ -59,7 +59,8 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
 | `build_cluster_spine.py` | Run-once generator: builds the levy_t5 31-cluster spine CSV from the Levy lab cluster key + barcode-to-cluster table. Outputs to `data/incytr_frozen/v2_46clusters/spines/<name>/cluster_spine.csv`. |
 | `extract_cluster_assignments.R` | Run-once generator: emits `barcode_to_cluster.csv` and `cell_metadata.csv` from the legacy `incytr_obj.rds`. |
 | `build_seaad_bridge.py` | One-shot: hand-curated `cluster_to_seaad_supertype.csv` (levy_t5 cluster → SEA-AD supertype). Direct crosswalks only — no chained mappings through intermediate vocabularies. |
-| `build_yuyu_kldata.py` | Builds `kldata_pspy.csv`; symlinked into `data/derived/incytr_inputs/kldata.csv` for the R driver. |
+| `build_yuyu_kldata.py` | Builds the mouse `kldata_pspy.csv` (Song-derived, homologene-mapped); symlinked into `data/derived/incytr_inputs/kldata.csv` for the AD R driver. |
+| `build_tcells_kldata.py` | Builds the **human** `kldata_human.csv` for the T-cell cohort (reuses `rank_kinases`; substrate sites from donor1 `ps/py_bulk_linear.csv`; **no homologene** — symbols already human); symlinked into each `data/derived/tcells_incytr_inputs/<donor>/kldata.csv`. Enables SiK for t-cells. |
 
 ## Entry points
 
