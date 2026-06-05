@@ -236,11 +236,22 @@ def prepare_song_specificity(song_sp_df):
         return None
     song_sp = song_sp_df.copy()
     song_sp["_gene_upper"] = song_sp["gene_symbol"].str.upper()
+    # per-(gene,cluster) share + the per-gene tau / top-cluster summary (tau is
+    # the headline location-specificity metric; the share is the per-cluster cell)
+    cols = ["_gene_upper", "cell_type", "specificity_score"]
+    rename = {"specificity_score": "song_specificity"}
+    for src, dst in (("tau", "song_tau"),
+                     ("top_cluster", "song_top_cluster"),
+                     ("top_share", "song_top_share")):
+        if src in song_sp.columns:
+            cols.append(src)
+            rename[src] = dst
     song_spec_top = (song_sp.sort_values("specificity_score")
                             .drop_duplicates(["_gene_upper", "cell_type"], keep="last")
-                            [["_gene_upper", "cell_type", "specificity_score"]]
-                            .rename(columns={"specificity_score": "song_specificity"}))
-    print(f"  Song specificity: {len(song_spec_top)} (gene, cell_type) pairs loaded")
+                            [cols]
+                            .rename(columns=rename))
+    print(f"  Song specificity: {len(song_spec_top)} (gene, cell_type) pairs loaded "
+          f"(tau {'present' if 'song_tau' in song_spec_top.columns else 'ABSENT'})")
     return song_spec_top
 
 

@@ -1432,7 +1432,9 @@ function _khRenderAttribution(body, r) {
     donorSelector +
     `<table class="attr-verdict-table"><thead>${superHead}${head}</thead><tbody>${tbody}</tbody></table>`;
 
-  const sel = document.getElementById("kh-attr-donor-select");
+  // Scope to this panel's own body — the crosstable detail reuses this renderer,
+  // so a document-wide getElementById would grab the human tab's select instead.
+  const sel = body.querySelector("#kh-attr-donor-select");
   if (sel) sel.addEventListener("change", () => {
     _KHState.auditDonor = sel.value || null;
     _khRenderAttribution(body, r);
@@ -1610,28 +1612,5 @@ function wireKinaseHuman() {
     Store.dispatch({type:"SET_SELECTION", key:"kinaseHuman",
       value: Store.state.selection.kinaseHuman === khid ? null : khid});
   });
-  // Splitter.
-  const sp = document.getElementById("kh-splitter");
-  if (sp) {
-    const leftPanel = sp.previousElementSibling;
-    if (leftPanel) {
-      let sx = 0, sw = 0;
-      sp.addEventListener("mousedown", e => {
-        sx = e.clientX; sw = leftPanel.getBoundingClientRect().width;
-        document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none";
-        function mv(ev) {
-          const w = Math.min(1600, Math.max(420, sw + (ev.clientX - sx)));
-          leftPanel.style.width = w + "px";
-        }
-        function up() {
-          document.body.style.cursor = ""; document.body.style.userSelect = "";
-          document.removeEventListener("mousemove", mv);
-          document.removeEventListener("mouseup", up);
-        }
-        document.addEventListener("mousemove", mv);
-        document.addEventListener("mouseup", up);
-        e.preventDefault();
-      });
-    }
-  }
+  // Splitter wiring is centralized in 02_ui_chrome.js (_wireSplitter).
 }

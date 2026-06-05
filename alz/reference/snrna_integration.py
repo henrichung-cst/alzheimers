@@ -217,8 +217,10 @@ def step_specificity() -> None:
     """Compute within-cohort expression specificity per gene per cluster.
 
     Pools all animals (males + females) to maximize power for a static
-    property. Mirrors the WMB specificity formula:
-        specificity = mean_in_cluster / sum(means_across_all_clusters)
+    property. Emits two granularities:
+      - per-(gene, cluster) `share` = mean_in_cluster / Σ means  (WMB-style)
+      - per-gene `tau` (Yanai tissue-specificity index) + top_cluster/top_share
+        — the headline location-specificity metric, normalized for cluster count.
     Clusters are the spine subclasses (config.CLUSTER_SPINE — Levy-t5, 31).
     """
     print("=" * 72)
@@ -240,10 +242,34 @@ def step_specificity() -> None:
     # Mean expression per subclass (pool across all animals)
     mean_by_ct = pb.groupby("cell_type")[gene_cols].mean()  # (n_subclass, n_genes)
 
-    # Specificity: fraction of total expression in each subclass
+    # Per-(gene, cluster) share: fraction of total expression in each subclass
+    # (same family as WMB's specificity_score — a per-cluster cell value).
     total_expr = mean_by_ct.sum(axis=0)  # (n_genes,)
-    total_expr = total_expr.replace(0, np.nan)  # avoid division by zero
-    specificity = mean_by_ct.div(total_expr, axis=1)  # (n_subclass, n_genes)
+    total_expr_safe = total_expr.replace(0, np.nan)  # avoid division by zero
+    specificity = mean_by_ct.div(total_expr_safe, axis=1)  # (n_subclass, n_genes)
+
+    # Per-gene tau: Yanai tissue-specificity index over the cluster vector,
+    #   tau = Σ_i (1 − x_i / x_max) / (N − 1),  0 = uniform → 1 = one cluster.
+    # Unlike a peak/even-split ratio, tau is normalized for cluster count, so it
+    # does NOT inflate at 31 clusters (the trap that over-calls housekeeping
+    # kinases as "specific"). This is the headline location-specificity metric;
+    # the per-cluster `share` above is the readable companion.
+    m = mean_by_ct.clip(lower=0)
+    n_ct = m.shape[0]
+    xmax = m.max(axis=0)  # (n_genes,)
+    ratio = m.div(xmax.replace(0, np.nan), axis=1)
+    tau = (1.0 - ratio).sum(axis=0) / (n_ct - 1)
+    tau[xmax <= 0] = 0.0
+    per_gene = pd.DataFrame({
+        "gene_symbol": gene_cols,
+        "tau": tau.reindex(gene_cols).round(6).values,
+        "top_cluster": m.idxmax(axis=0).reindex(gene_cols).values,
+        "top_share": (xmax / total_expr_safe).fillna(0.0).reindex(gene_cols).round(6).values,
+        "n_expressing": (m > 0).sum(axis=0).reindex(gene_cols).astype(int).values,
+    })
+    print(f"  tau over {n_ct} spine clusters: "
+          f"{per_gene['tau'].min():.3f}..{per_gene['tau'].max():.3f} "
+          f"(median {per_gene['tau'].median():.3f})")
 
     # Reshape to long format matching WMB output schema (vectorized)
     spec_long = specificity.stack().reset_index()
@@ -251,6 +277,7 @@ def step_specificity() -> None:
     mean_long = mean_by_ct.stack().reset_index()
     mean_long.columns = ["cell_type", "gene_symbol", "mean_expression"]
     df = spec_long.merge(mean_long, on=["cell_type", "gene_symbol"])
+    df = df.merge(per_gene, on="gene_symbol", how="left")
     df = df[np.isfinite(df["specificity_score"]) & (df["mean_expression"] > 0)].copy()
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)

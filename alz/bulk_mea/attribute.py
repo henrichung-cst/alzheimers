@@ -212,6 +212,9 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
         unified = unified.merge(song_spec_top, on=["_gene_upper", "cell_type"], how="left")
     else:
         unified["song_specificity"] = np.nan
+    for _col in ("song_specificity", "song_tau", "song_top_share", "song_top_cluster"):
+        if _col not in unified.columns:
+            unified[_col] = np.nan
 
     if song_cd_top is not None:
         unified["_song_contrast"] = (unified["contrast"] if song_key_is_contrast

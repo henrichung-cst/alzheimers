@@ -32,9 +32,11 @@ function _confPass(rowConf, threshold) {
   return (_CONF_RANK[rowConf] || 0) >= (_CONF_RANK[threshold] || 0);
 }
 
-// WMB specificity tiers expressed as multiples of uniform (1/34 ≈ 0.0294 across
-// 34 WMB classes). 10× / 5× / 2× / 1× → 0.294 / 0.147 / 0.059 / 0.029.
-const _WMB_UNIFORM = 1 / 34;
+// WMB specificity tiers as multiples of the even-split baseline. WMB specificity
+// is a share normalized over the retained WMB classes the spine maps onto (~11),
+// so the honest uniform is 1/N_retained, read canonically from meta.wmb_uniform
+// (matches the crosstable; see docs/plans/specificity_validation_2026-06-05.md §6).
+const _WMB_UNIFORM = (typeof PAYLOAD !== "undefined" && PAYLOAD.meta && PAYLOAD.meta.wmb_uniform) || (1 / 11);
 const _WMB_TIER_VALUES = [10, 5, 2, 1];
 function _wmbTier(s) {
   if (s == null || !isFinite(s)) return 0;

@@ -1573,6 +1573,20 @@ def _norm_motif(s: str) -> str:
     return str(s or "").strip("_").upper()
 
 
+def _to_float32_estimable(s: pd.Series) -> np.ndarray:
+    """Cast to float32, mapping finite values outside float32 range to NaN.
+
+    Degenerate OLS fits (near-singular design) yield astronomically large
+    standard errors (|se| up to ~2e41). A blind float32 cast overflows these to
+    +/-inf (RuntimeWarning) and misrepresents an unidentifiable coefficient as a
+    finite-but-huge bound. NaN ("not estimable") is the honest representation and
+    silences the spurious warning. Values already within range cast unchanged.
+    """
+    a = s.to_numpy(dtype="float64", copy=True)
+    a[np.isfinite(a) & (np.abs(a) > np.finfo(np.float32).max)] = np.nan
+    return a.astype("float32")
+
+
 def _write_decomp_ols_slices(kid: dict, contrast_to_id: dict) -> dict:
     """Per-kinase shard of per-cell-type OLS at substrate sites.
 
@@ -1656,9 +1670,9 @@ def _write_decomp_ols_slices(kid: dict, contrast_to_id: dict) -> dict:
             ["contrast_id", "cell_type", "site_id", "gene_symbol",
              "motif", "lfc", "se", "pval", "track"]
         ].copy()
-        out["lfc"] = out["lfc"].astype("float32")
-        out["se"] = out["se"].astype("float32")
-        out["pval"] = out["pval"].astype("float32")
+        out["lfc"] = _to_float32_estimable(out["lfc"])
+        out["se"] = _to_float32_estimable(out["se"])
+        out["pval"] = _to_float32_estimable(out["pval"])
         path = os.path.join(EDGE_SLICES_DECOMP_OLS_DIR,
                             template.format(kinase_id=int(kid_int)))
         pq.write_table(pa.Table.from_pandas(out, preserve_index=False), path,
@@ -2944,10 +2958,16 @@ def build_payload(data: UnifiedData) -> dict:
     incytr_pathways_block = _write_incytr_pair_pathways()
     context_id = "song_ad"
 
+    # WMB specificity is a share normalized over the retained WMB classes the
+    # spine maps onto; the honest "even split" baseline for its cross-check tier
+    # is 1/N_retained, not 1/31 or 1/34. Emit it canonically so the viewer reads
+    # one value (see docs/plans/specificity_validation_2026-06-05.md §6, F1/F2/F6).
+    _n_wmb_classes = len(set(config.load_cluster_to_wmb_class_map().values())) or 1
     meta = {
         "schema_version": SCHEMA_VERSION,
         "viewer_payload_schema_version": 2,
         "generated_at": pd.Timestamp.utcnow().isoformat(),
+        "wmb_uniform": 1.0 / _n_wmb_classes,
         "cohort": "song_ad",
         "default_context": context_id,
         "contexts": [
@@ -3047,6 +3067,10 @@ def build_payload(data: UnifiedData) -> dict:
         ("song_lfc", float("nan")),
         ("song_pval", float("nan")),
         ("song_fdr", float("nan")),
+        ("song_specificity", float("nan")),
+        ("song_tau", float("nan")),
+        ("song_top_share", float("nan")),
+        ("song_top_cluster", ""),
         ("concordance_source", ""),
         ("NES", float("nan")),
         ("FDR", float("nan")),
@@ -3063,6 +3087,10 @@ def build_payload(data: UnifiedData) -> dict:
         "wmb_mean_log2_expression": ua["wmb_mean_log2_expression"].astype(float).round(3).tolist(),
         "wmb_fraction_cells_expressing": ua["wmb_fraction_cells_expressing"].astype(float).round(3).tolist(),
         "wmb_binary_expressed": [bool(v) for v in ua["wmb_binary_expressed"].fillna(False)],
+        "song_specificity": ua["song_specificity"].astype(float).round(4).tolist(),
+        "song_tau": ua["song_tau"].astype(float).round(4).tolist(),
+        "song_top_share": ua["song_top_share"].astype(float).round(4).tolist(),
+        "song_top_cluster": ua["song_top_cluster"].fillna("").astype(str).tolist(),
         "sea_ad_lfc": ua["sea_ad_lfc"].astype(float).round(4).tolist(),
         "song_lfc": ua["song_lfc"].astype(float).round(4).tolist(),
         "song_pval": ua["song_pval"].astype(float).round(4).tolist(),

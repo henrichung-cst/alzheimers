@@ -397,6 +397,33 @@ main#app-main { padding:14px; }
 .nes-profile-cell.kh-ctrl-group { background:#f7f7f7; border-color:#dcdcdc;
   border-left:2px solid #b0bec5; }
 .nes-profile-cell.kh-ctrl-group .npc { opacity:0.65; }
+/* Crosstable agreement view: glyph columns. Category filtering is a toolbar dropdown. */
+#kx-table .kx-mglyph, #kx-table .kx-hglyph { text-align:center; padding:2px 4px;
+  white-space:nowrap; }
+#kx-table th.kx-agree-col, #kx-table td.kx-agree-col { min-width:72px;
+  text-align:center; }
+#kx-table th.kx-spec, #kx-table td.kx-spec { text-align:center; }
+#kx-table th.kx-nes-num, #kx-table td.kx-nes-num { text-align:right;
+  font-variant-numeric:tabular-nums; white-space:nowrap; padding:2px 6px; }
+
+/* Crosstable cross-dataset detail panel. */
+#kx-detail .kx-detail-idle, #kx-detail .kx-detail-placeholder {
+  padding:16px; font-size:13px; text-align:center; }
+.kx-detail-header { padding:2px 2px 8px; border-bottom:1px solid var(--border);
+  margin-bottom:8px; }
+.kx-detail-title { font-size:15px; display:flex; gap:8px; align-items:center;
+  flex-wrap:wrap; }
+.kx-detail-verdict { font-size:12px; margin-top:4px; }
+.kx-detail-tabs { display:flex; gap:4px; margin-bottom:8px; }
+.kx-detail-tabs button { font-size:12px; padding:4px 10px; border:1px solid var(--border);
+  background:#f5f5f5; border-radius:4px 4px 0 0; cursor:pointer; }
+.kx-detail-tabs button.active { background:#fff; border-bottom-color:#fff;
+  font-weight:600; }
+.kx-detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.kx-detail-col { min-width:0; }
+.kx-detail-col-head { font-size:11px; font-weight:700; text-transform:uppercase;
+  letter-spacing:0.3px; color:#546e7a; margin-bottom:4px; }
+@media (max-width:1100px) { .kx-detail-grid { grid-template-columns:1fr; } }
 .nes-profile-cell.kh-ctrl-group .npc.sig { outline-color:#455a64; opacity:0.95; }
 .nes-profile-spacer { width:6px; height:14px; align-self:center;
   border-left:1px dashed #b0bec5; margin:0 1px; }

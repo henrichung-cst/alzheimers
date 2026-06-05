@@ -371,29 +371,59 @@
     </div>
   </div>
   <div id="tab-crosstable" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-crosstable" hidden>
-    <div class="card">
-      <div class="ke-toolbar ke-toolbar-multi" id="kx-toolbar">
-        <label class="ke-filter-label" title="Levy-T5 cluster used as the cell-type pivot. Drives the M-decomp NES, WMB/SEA-AD/HBCA specificity, and SEA-AD cell LFC columns.">Cluster
-          <select id="kx-cluster" aria-label="Levy-T5 cluster"></select>
-        </label>
-        <label class="ke-filter-label" title="Phospho-residue track.">Track
-          <select id="kx-track" aria-label="Residue track">
-            <option value="">Any</option>
-            <option value="ST">ST</option>
-            <option value="Y">Y</option>
-          </select>
-        </label>
-        <label class="ke-filter-label">
-          <input id="kx-search" aria-label="Search kinase or gene" placeholder="Search kinase or gene…" style="width:160px;"/>
-        </label>
-        <button id="kx-reset" class="ke-filter-reset" title="Reset cluster, search, sort, and column visibility">Reset</button>
-        <span class="muted" id="kx-count"></span>
+    <div class="explorer-layout kinase-audit-layout">
+      <div class="card">
+        <div class="ke-toolbar ke-toolbar-multi" id="kx-toolbar">
+          <label class="ke-filter-label" title="Cell-type pivot for the WMB cross-check and H-spec tiers. 'Any cell type' shows each kinase's peak across all clusters (hover a tier for the cluster); pick a cluster to pin them to it. The primary M-spec (Song τ) is per kinase and does not pivot, but a pinned cluster gets a ★ when it IS the kinase's top cell type.">Cluster
+            <select id="kx-cluster" aria-label="Levy-T5 cluster"></select>
+          </label>
+          <label class="ke-filter-label" title="Mouse Song location specificity (τ): how concentrated a kinase's expression is in one cell type across this study's own cells (0 = spread evenly, 1 = confined to one). Keeps a kinase whose τ reaches the band.">M-spec
+            <select id="kx-mspec" aria-label="Minimum mouse Song specificity (tau)">
+              <option value="0">Any</option>
+              <option value="0.6">Specific (τ≥0.60)</option>
+              <option value="0.85">Highly specific (τ≥0.85)</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Minimum human SEA-AD MTG specificity tier. Keeps a kinase if its SEA-AD specificity at the selected cluster — or its peak across clusters when 'Any cell type' — reaches the tier.">H-spec
+            <select id="kx-hspec" aria-label="Minimum human SEA-AD specificity tier">
+              <option value="0">Any</option>
+              <option value="1">≥1×</option>
+              <option value="2">≥2×</option>
+              <option value="5">≥5×</option>
+              <option value="10">≥10×</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Phospho-residue track.">Track
+            <select id="kx-track" aria-label="Residue track">
+              <option value="">Any</option>
+              <option value="ST">ST</option>
+              <option value="Y">Y</option>
+            </select>
+          </label>
+          <label class="ke-filter-label">
+            <input id="kx-search" aria-label="Search kinase or gene" placeholder="Search kinase or gene…" style="width:160px;"/>
+          </label>
+          <label class="ke-filter-label" title="Compute M med, H med, and the Agree category over ALL measured contrasts/donors, not just those significant at the header FDR. A dataset counts as present if it has any measurement; direction is the all-sample median.">
+            <input type="checkbox" id="kx-allsamples"/> All samples
+          </label>
+          <label class="ke-filter-label" title="Agreement category between mouse (Song) and human (Mukesh), computed live at the current FDR. 'Any' shows all categories.">Agreement
+            <select id="kx-agree" aria-label="Agreement category">
+              <option value="">Any</option>
+              <option value="concordant-up">Concordant — up</option>
+              <option value="concordant-down">Concordant — down</option>
+              <option value="discordant">Discordant</option>
+              <option value="mouse-only">Mouse-only</option>
+              <option value="human-only">Human-only</option>
+              <option value="neither">Neither</option>
+            </select>
+          </label>
+          <button id="kx-reset" class="ke-filter-reset" title="Reset cluster, track, search, agreement filter, sort, and selection">Reset</button>
+          <span class="muted" id="kx-count"></span>
+        </div>
+        <div id="kx-table-wrap"></div>
       </div>
-      <details style="margin:4px 0 8px;">
-        <summary style="cursor:pointer;font-size:12px;"><b>Columns</b> <span class="muted">(toggle which contrasts, donors, and specificity sources to show)</span></summary>
-        <div id="kx-cols-panel" style="border:1px solid #ddd;border-radius:4px;padding:6px 8px;margin-top:4px;background:#fafafa;"></div>
-      </details>
-      <div id="kx-table-wrap"></div>
+      <div class="ka-splitter" id="kx-splitter" title="Drag to resize"></div>
+      <section class="detail-card" id="kx-detail" aria-live="polite"></section>
     </div>
   </div>
   <div id="tab-methods" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-methods" hidden>

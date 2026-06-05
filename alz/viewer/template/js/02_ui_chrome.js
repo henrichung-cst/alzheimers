@@ -306,43 +306,48 @@ function wireDrawerResizer() {
     });
   }
 
-  // Kinase-tab splitter between ranked-kinase table and audit detail.
-  const kaSplitter = document.getElementById("ka-splitter");
-  if (kaSplitter) {
-    const leftPanel = kaSplitter.previousElementSibling;
-    if (leftPanel) {
-      try {
-        const savedW = localStorage.getItem("kinaseTab.leftWidth");
-        if (savedW) {
-          const w = parseInt(savedW, 10);
-          if (w >= 420 && w <= 1600) leftPanel.style.width = w + "px";
-        }
-      } catch (_) {}
-      let kStartX = 0, kStartW = 0;
-      kaSplitter.addEventListener("mousedown", e => {
-        kStartX = e.clientX;
-        kStartW = leftPanel.getBoundingClientRect().width;
-        kaSplitter.classList.add("dragging");
-        document.body.style.cursor = "col-resize";
-        document.body.style.userSelect = "none";
-        function onMove(ev) {
-          const newW = Math.min(1600, Math.max(420, kStartW + (ev.clientX - kStartX)));
-          leftPanel.style.width = newW + "px";
-        }
-        function onUp() {
-          kaSplitter.classList.remove("dragging");
-          document.body.style.cursor = "";
-          document.body.style.userSelect = "";
-          try { localStorage.setItem("kinaseTab.leftWidth", parseInt(leftPanel.style.width, 10)); } catch (_) {}
-          document.removeEventListener("mousemove", onMove);
-          document.removeEventListener("mouseup", onUp);
-        }
-        document.addEventListener("mousemove", onMove);
-        document.addEventListener("mouseup", onUp);
-        e.preventDefault();
-      });
-    }
+  // Master/detail splitters between the ranked table and the detail panel.
+  // One helper drives all three tabs (kinase, human, crosstable); each persists
+  // its left-panel width under its own localStorage key.
+  function _wireSplitter(splitterId, storageKey, minW, maxW) {
+    const sp = document.getElementById(splitterId);
+    if (!sp) return;
+    const leftPanel = sp.previousElementSibling;
+    if (!leftPanel) return;
+    minW = minW || 420; maxW = maxW || 1600;
+    try {
+      const savedW = localStorage.getItem(storageKey);
+      if (savedW) {
+        const w = parseInt(savedW, 10);
+        if (w >= minW && w <= maxW) leftPanel.style.width = w + "px";
+      }
+    } catch (_) {}
+    sp.addEventListener("mousedown", e => {
+      const startX = e.clientX;
+      const startW = leftPanel.getBoundingClientRect().width;
+      sp.classList.add("dragging");
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      function onMove(ev) {
+        const newW = Math.min(maxW, Math.max(minW, startW + (ev.clientX - startX)));
+        leftPanel.style.width = newW + "px";
+      }
+      function onUp() {
+        sp.classList.remove("dragging");
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        try { localStorage.setItem(storageKey, parseInt(leftPanel.style.width, 10)); } catch (_) {}
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      }
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+      e.preventDefault();
+    });
   }
+  _wireSplitter("ka-splitter", "kinaseTab.leftWidth");
+  _wireSplitter("kh-splitter", "humanTab.leftWidth");
+  _wireSplitter("kx-splitter", "crosstableTab.leftWidth");
 }
 
 // ---------------------------------------------------------------------------
