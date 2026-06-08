@@ -499,29 +499,6 @@ function _renderKinaseNesPlot(hostId, kinase_id) {
   }, {displaylogo:false, responsive:true});
 }
 
-function _renderKinaseCelltypeEvidence(hostId, kinase_id) {
-  const host = document.getElementById(hostId);
-  if (!host) return;
-  const EV = PAYLOAD.kinase_celltype_evidence || {kinase_id:[]};
-  const evIdx = _evidenceByKinase.get(kinase_id) || [];
-  const rows = evIdx.map(k => ({
-    cell_type: EV.cell_type[k],
-    wmb_fold: EV.wmb_fold[k],
-    sea_ad_lfc: EV.sea_ad_lfc[k],
-    song_lfc: EV.song_lfc[k],
-    wmb_tier: EV.wmb_tier[k],
-    evidence_basis: EV.evidence_basis ? EV.evidence_basis[k] : "",
-    concordance_direction: EV.concordance_direction ? EV.concordance_direction[k] : "",
-  }));
-  rows.sort((a, b) => {
-    const av = a.wmb_fold == null ? -Infinity : a.wmb_fold;
-    const bv = b.wmb_fold == null ? -Infinity : b.wmb_fold;
-    return bv - av;
-  });
-  _renderAuditTable(hostId, "celltype_evidence_table", rows,
-    ["cell_type","wmb_fold","sea_ad_lfc","song_lfc","wmb_tier","evidence_basis","concordance_direction"],
-    "celltype_evidence_table");
-}
 
 // ---- Attribution drawer helpers ----------------------------------------
 // The Attribution subtab uses three audit sources read directly so the
@@ -564,15 +541,41 @@ function _allenABALink(gene) {
   );
 }
 
+// Song location fold pills. song_specificity is a share summing to 1 over the 31
+// Levy-t5 clusters, so the even-split baseline is 1/31 ≈ 0.032 (meta.song_uniform).
+// Pills mirror the WMB tier vocabulary (≥10× / ≥5× / ≥2× / ≥1× uniform).
+const _MS_UNIFORM = (typeof PAYLOAD !== "undefined" && PAYLOAD && PAYLOAD.meta
+  && PAYLOAD.meta.song_uniform) || (1 / 31);
+const _MS_TIER_VALUES = [10, 5, 2, 1];
+function _msTier(s) {
+  if (s == null || !isFinite(s)) return 0;
+  for (const t of _MS_TIER_VALUES) {
+    if (s >= t * _MS_UNIFORM) return t;
+  }
+  return 0;
+}
+function _msTierBadge(t, share, topCluster, tau) {
+  // num() is locally scoped inside the render fns, so format inline here.
+  const where = topCluster ? "concentrates in " + topCluster : "";
+  const tauTxt = (tau != null && isFinite(tau)) ? " · τ " + Number(tau).toFixed(2) : "";
+  const shareTxt = (share != null && isFinite(share)) ? "share " + Number(share).toFixed(3) : "";
+  const tip = "Song location evidence ≥ " + t + "× even-split (1/31 ≈ 0.032)"
+    + (shareTxt ? " · " + shareTxt : "") + (where ? " · " + where : "") + tauTxt;
+  if (!t) return '<span class="muted" title="' + _escapeHtml("below 1× even-split"
+    + (shareTxt ? " · " + shareTxt : "") + (where ? " · " + where : "") + tauTxt) + '">—</span>';
+  const cls = t >= 10 ? "vhi" : (t >= 5 ? "hi" : (t >= 2 ? "mid" : "lo"));
+  return '<span class="badge ' + cls + '" title="' + _escapeHtml(tip) + '">≥' + t + '×</span>';
+}
+
 const ATTR_VERDICT_COLS = [
   {key:"cell_type",                    label:"Cell type",   type:"str", group:"id",
    title:""},
   {key:"cross_rank",                   label:"Conf",        type:"num", group:"attr",
    title:"Combined confidence tier. Starts from the attribution-only tier (high / moderate / low / none). Upgraded to 'very high' when the decomposition layer significantly agrees (Decomp FDR < 0.25 with sign matching bulk MEA). Sort uses cross_rank: tier first, decomposition step as tie-breaker."},
-  {key:"wmb_specificity",              label:"WMB enrich",  type:"num", group:"attr",
-   title:"WMB enrichment: share of total log2 expression across 34 WMB classes (uniform = 1/34 ≈ 0.029). Computed at WMB-class granularity, then attached to each Levy-T5 cluster via the levy_t5→WMB crosswalk — Levy-T5 clusters that map to the same WMB class share this value."},
+  {key:"song_specificity",             label:"Song",        type:"num", group:"attr",
+   title:"Song location evidence — this kinase's share of expression in this cell type across the levy_t5 pseudobulk, shown as fold over the even-split baseline (1/31 ≈ 0.032): ≥10× / ≥5× / ≥2× / ≥1×. Sort uses the underlying share."},
   {key:"wmb_tier",                     label:"WMB tier",    type:"num", group:"attr",
-   title:"WMB specificity as a multiple of uniform (1/34 ≈ 0.029): ≥10× / ≥5× / ≥2× / ≥1×. Empty = below 1× uniform. Inherited from the WMB class this Levy-T5 cluster maps to."},
+   title:"WMB cross-check tier as a multiple of uniform (1/9 ≈ 0.111): ≥10× / ≥5× / ≥2× / ≥1×. Empty = below 1× uniform. Inherited from the WMB class this Levy-T5 cluster maps to."},
   {key:"sea_ad_lfc",                   label:"SEA-AD LFC",  type:"num", group:"attr",
    title:"SEA-AD log2 fold change in human AD vs control, median across SEA-AD supertypes mapped to this subclass. Stratum (early / late / full CPS) is selected from the contrast pathway. Color: red = up in AD, blue = down."},
   {key:"song_lfc",                     label:"Song LFC",    type:"num", group:"attr",
@@ -721,7 +724,7 @@ function _renderAttributionVerdict(hostId, ctx) {
     return `<tr data-cell-type="${_escapeHtml(r.cell_type)}" class="attr-verdict-row${i === 0 ? ' attr-verdict-selected' : ''}">` +
       `<td class="attr-celltype"${_sbAttr}>${_escapeHtml(r.cell_type)}${_sbTip ? ' <span class="attr-subclass-marker" aria-hidden="true">ⓘ</span>' : ''} ${expBadge}</td>` +
       `<td><span class="${_attrConfidenceClass(r.combined_tier)}" title="${_escapeHtml('Attribution: ' + (r.combined_confidence || 'none') + (r.combined_tier === 'very_high' ? ' · upgraded to very_high by significant decomp agreement' : ''))}">${_escapeHtml((r.combined_tier || '').replace('_', ' '))}</span></td>` +
-      `<td class="attr-num">${num(r.wmb_specificity, 3)}</td>` +
+      `<td class="attr-num">${_msTierBadge(_msTier(Number(r.song_specificity)), r.song_specificity, r.song_top_cluster, r.song_tau)}</td>` +
       `<td class="attr-num">${_wmbTierBadge(_wmbTier(Number(r.wmb_specificity)))}</td>` +
       seaCell +
       songCell +
@@ -778,10 +781,10 @@ function _renderAttributionVerdict(hostId, ctx) {
       `<p><strong>Confidence tier</strong> grades <em>which sources agree</em>, not how strong any one signal is:</p>` +
       `<ul>` +
         `<li><strong><span class="attr-conf attr-conf-very-high">very high</span></strong> — a <em>high</em> attribution row that is also corroborated by the decomposition layer: Decomp FDR < 0.25 with the same sign as the bulk MEA NES. Both evidence streams reinforce one another.</li>` +
-        `<li><strong><span class="badge hi">high</span></strong> — all three of these hold: <em>(a)</em> within-cohort Song supports the direction, <em>(b)</em> the gene is clearly cell-type-specific in WMB (specificity ≥ 2× uniform on the 34-WMB-class reference scale, i.e. ≈ 0.059; inherited by the Levy-t5 cluster from its mapped WMB class), and <em>(c)</em> at least one reference shows real movement (|Song LFC| or |SEA-AD LFC| > 0.1).</li>` +
-        `<li><strong><span class="badge mid">moderate</span></strong> — meaningful evidence but missing one strict gate. Two ways to land here: Song-supported but WMB specificity falls below the high threshold, <em>or</em> only SEA-AD reached concordance (no Song). SEA-AD-only is <strong>always</strong> capped at moderate — we won't promote a cross-species call to high.</li>` +
-        `<li><strong><span class="badge lo">low</span></strong> — concordance is positive but the gene isn't expression-specific in WMB and no reference LFC clears the magnitude bar.</li>` +
-        `<li><strong>none</strong> — concordance ≤ 0 (signs disagree). Row is excluded from <code>unified_attribution.csv</code> entirely.</li>` +
+        `<li><strong><span class="badge hi">high</span></strong> — all three of these hold: <em>(a)</em> within-cohort Song supports the direction, <em>(b)</em> the gene is clearly cell-type-specific in the WMB cross-check (wmb_specificity ≥ 2× the even-split share across the 9 retained WMB classes, 2/9 ≈ 0.222; inherited by the Levy-t5 cluster from its mapped WMB class), and <em>(c)</em> at least one reference shows real movement (|Song LFC| or |SEA-AD LFC| > 0.1).</li>` +
+        `<li><strong><span class="badge mid">moderate</span></strong> — meaningful evidence but missing one strict gate. Two ways to land here: Song-supported but WMB specificity falls below the high threshold, <em>or</em> only SEA-AD reached direction support (no Song). SEA-AD-only is <strong>always</strong> capped at moderate — we won't promote a cross-species call to high.</li>` +
+        `<li><strong><span class="badge lo">low</span></strong> — direction support is positive but the gene isn't expression-specific in WMB and no reference LFC clears the magnitude bar.</li>` +
+        `<li><strong>none</strong> — direction support is absent or opposite. Row is excluded from <code>unified_attribution.csv</code> entirely.</li>` +
       `</ul>` +
       `</div></details>`;
   host.querySelectorAll("tr.attr-verdict-row").forEach(tr => tr.addEventListener("click", () => {
@@ -821,13 +824,13 @@ function _renderAttributionDrawer(hostId, ctx, cellType) {
     ` &middot; <span class="muted">${_escapeHtml(gene)} / ${_escapeHtml(ctx.contrast)}</span>` +
     ` &middot; ${_allenABALink(gene)}</div>` +
     `<div class="attr-drawer-grid">` +
-      `<section class="attr-section"><h5>WMB expression across 34 WMB classes <span class="muted">(wmb_kinase_expression.csv)</span></h5>` +
+      `<section class="attr-section"><h5>WMB expression across WMB reference classes <span class="muted">(wmb_kinase_expression.csv)</span></h5>` +
         `<p class="muted attr-caption">Seurat-style dot plot for ${_escapeHtml(gene)} in the Allen Whole Mouse Brain reference. Color = mean log2 expression, dot size = fraction of cells expressing. Target cell type is outlined.</p>` +
         `<div id="attr-wmb-dotplot"></div></section>` +
       `<section class="attr-section"><h5>SEA-AD supertype log2 fold change <span class="muted">(sea_ad_supertype_lfc.csv)</span></h5>` +
         `<p class="muted attr-caption">Per-supertype LFC for ${_escapeHtml(gene)} in human AD donors, grouped by subclass. Stratum (early / late / full CPS) follows the contrast pathway. Subclass median is used in the verdict table.</p>` +
         `<div id="attr-seaad-heatmap"></div></section>` +
-      `<section class="attr-section"><h5>Song within-cohort OLS <span class="muted">(song_concordance.csv)</span></h5>` +
+      `<section class="attr-section"><h5>Song within-cohort OLS <span class="muted">(Song LFC rows)</span></h5>` +
         `<p class="muted attr-caption">Factorial OLS coefficient on the per-animal pseudobulk for this cell type and pathway. Pathway is derived from the contrast prefix (App / Tau / ApTt).</p>` +
         `<div id="attr-song-table"></div></section>` +
     `</div>` +
@@ -1030,7 +1033,7 @@ function _renderSongOLSPanel(hostId, ctx, targetCellType) {
   const host = document.getElementById(hostId);
   if (!host) return;
   if (!SliceCache || typeof SliceCache.loadSongConcordance !== "function") {
-    host.innerHTML = `<div class="muted">Song concordance shards unavailable in this build.</div>`;
+    host.innerHTML = `<div class="muted">Song LFC shards unavailable in this build.</div>`;
     return;
   }
   const gene = ctx.gene || "";
@@ -1044,7 +1047,7 @@ function _renderSongOLSPanel(hostId, ctx, targetCellType) {
     const stillThis = document.getElementById(hostId);
     if (!stillThis || stillThis !== host) return;
     if (!Array.isArray(allRows) || allRows.length === 0) {
-      host.innerHTML = `<div class="muted">No Song concordance shard for ${_escapeHtml(gene)}.</div>`;
+      host.innerHTML = `<div class="muted">No Song LFC shard for ${_escapeHtml(gene)}.</div>`;
       return;
     }
     // Schema migrated from 3-pathway to 9-contrast. Fall back to legacy pathway
@@ -1054,7 +1057,7 @@ function _renderSongOLSPanel(hostId, ctx, targetCellType) {
     const keyCol = _useContrast ? "contrast" : "pathway";
     const rows = allRows.filter(r => r.cell_type === reqCell);
     if (rows.length === 0) {
-      host.innerHTML = `<div class="muted">No Song concordance rows for ${_escapeHtml(gene)} × ${_escapeHtml(reqCell)}.</div>`;
+      host.innerHTML = `<div class="muted">No Song LFC rows for ${_escapeHtml(gene)} × ${_escapeHtml(reqCell)}.</div>`;
       return;
     }
     const num = (v, d=3) => (v == null || !isFinite(Number(v))) ? "—" : Number(v).toFixed(d);
@@ -1090,7 +1093,7 @@ function _renderSongOLSPanel(hostId, ctx, targetCellType) {
         `</tr></thead><tbody>${tbody}</tbody>` +
       `</table>`;
   }).catch(err => {
-    console.error("song concordance shard fetch failed", err);
+    console.error("song LFC shard fetch failed", err);
     host.innerHTML = `<div class="muted">Failed to load Song shard: ${_escapeHtml(String(err && err.message || err))}</div>`;
   });
 }

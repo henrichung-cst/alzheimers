@@ -2,15 +2,17 @@
 // Kinase Crosstable — cross-dataset agreement view (master/detail).
 //
 // MASTER (left): a slim, agreement-grouped list of kinases — one row per kinase
-// with the mouse 3×3 NES glyph, the agreement badge, the human per-donor strip,
-// and mouse/human specificity tiers at the selected cluster. The per-sample NES
+// with the mouse 3×3 NES glyph, the direction badge, the human per-donor strip,
+// and mouse/human location tiers at the selected cluster. The per-sample NES
 // detail lives in the DETAIL panel, not as wide columns.
 //
 // DETAIL (right, #kx-detail): a cross-dataset comparison of the selected kinase,
 // two columns (Mouse · Song | Human · Mukesh) under a verdict header, with two
 // sub-tabs that REUSE the per-dataset Kinase-tab renderers verbatim:
 //   Activity      — _renderKinaseNesPlot (mouse) | _khRenderNESAcrossDonors (human)
-//   Specificity   — _renderKinaseCelltypeEvidence (mouse) | _khRenderAttribution (human)
+//                   plus Song/SEA-AD LFC direction support.
+//   Specificity   — _kxRenderSpecAligned: ONE cluster-aligned reference table,
+//                   Song (primary mouse) + WMB / SEA-AD / HBCA cross-check pills.
 //
 // Indexes are joined client-side from existing PAYLOAD keys (see _kxBuildIndexes).
 // The cross-dataset join key is the kinase abbreviation + residue (species-neutral;
@@ -32,18 +34,18 @@ let _KX_AD_DONORS = [];
 let _KX_CTRL_DONORS = [];
 let _KX_INITIALIZED = false;
 
-// Song location-specificity tau bands (the primary mouse signal): tau is the
-// Yanai tissue-specificity index over the 31 spine clusters, 0 = expressed
-// evenly → 1 = confined to one cell type. Unlike a peak/even-split ratio it is
-// normalized for cluster count, so housekeeping kinases read low at any
-// resolution. See docs/plans/specificity_validation_2026-06-05.md §6.
-const _KX_SONG_TAU_HIGH = 0.85;   // "highly specific to one cell type"
-const _KX_SONG_TAU_SPEC = 0.60;   // "specific"
+// Song location specificity (the favored mouse signal), shown as fold over the
+// even-split baseline (1/31 ≈ 0.032, meta.song_uniform) — the same vocabulary as
+// the WMB cross-check and the detail pane: ≥10× / ≥5× / ≥2× / ≥1×. The fold is
+// the kinase's peak cell-type share (song_top_share); τ — the Yanai concentration
+// index over the 31 spine clusters — rides in the tooltip. See
+// docs/plans/specificity_validation_2026-06-05.md §6.
+const _KX_SONG_UNIFORM = (PAYLOAD && PAYLOAD.meta && PAYLOAD.meta.song_uniform) || (1 / 31);
 
 // Uniform baseline for the WMB cross-check tier. WMB specificity is a share
-// normalized over the retained WMB classes the spine maps onto (~11), so the
+// normalized over the retained WMB classes that carry atlas cells (~9), so the
 // honest "even split" is 1/N_retained, emitted canonically as meta.wmb_uniform.
-let _KX_WMB_UNIFORM = (PAYLOAD && PAYLOAD.meta && PAYLOAD.meta.wmb_uniform) || (1 / 11);
+let _KX_WMB_UNIFORM = (PAYLOAD && PAYLOAD.meta && PAYLOAD.meta.wmb_uniform) || (1 / 9);
 
 function _kxState() {
   if (!Store.state.view.crosstable) {
@@ -53,8 +55,8 @@ function _kxState() {
       search: "",
       sortKey: "agree_score",
       sortDir: -1,
-      mSpecMin: 0,            // minimum mouse WMB specificity tier (0=any,1,2,5,10 × uniform)
-      hSpecMin: 0,            // minimum human SEA-AD specificity tier (0=any,1,2,5,10 ×)
+      mSpecMin: 0,            // minimum mouse Song location tier (0=any, 2/5/10 × even-split)
+      hSpecMin: 0,            // minimum human SEA-AD expr tier (0=any,1,2,5,10 ×)
       allSamples: false,      // median + agreement over ALL measured units, not just sig
       agreeCat: "",           // agreement category to show ("" = any), via the toolbar dropdown
       selectedKey: null,      // `name|residue` of the kinase shown in the detail panel
@@ -243,24 +245,30 @@ function _kxLog2TierBadge(score, atCluster) {
   if (!rank) return `<td class="muted" title="log2 ${score.toFixed(3)}${_escapeHtml(at)}">&lt;1×</td>`;
   return `<td style="text-align:center;padding:2px 4px;" title="log2 ${score.toFixed(3)}${_escapeHtml(at)}">${_khSpecTierBadge(rank)}</td>`;
 }
-// Primary mouse specificity: Song tau (per kinase). `pinned` is the active
-// cluster pivot (or "") — when a cluster is pinned we flag whether it IS the
-// kinase's top cell type, but the tier itself is the per-kinase tau (it does
-// not vary by cluster the way the WMB share does).
+// Primary mouse specificity: Song location specificity (per kinase), as fold over
+// even-split (1/31). The fold is the kinase's peak cell-type share; τ rides in the
+// tooltip. `pinned` is the active cluster pivot (or "") — when a cluster is pinned
+// we flag whether it IS the kinase's top cell type, but the tier is per-kinase (it
+// does not vary by cluster the way the WMB share does).
 function _kxSongTierBadge(song, pinned) {
-  if (!song || song.tau == null || !isFinite(song.tau)) return `<td class="muted">–</td>`;
-  const tau = song.tau;
+  if (!song || song.topShare == null || !isFinite(song.topShare)) return `<td class="muted">–</td>`;
+  const u = _KX_SONG_UNIFORM;
+  const share = song.topShare;
   const top = song.topCluster || "?";
-  const pct = song.topShare != null ? `${(song.topShare * 100).toFixed(0)}% in ${top}` : top;
+  const pct = `${(share * 100).toFixed(0)}% in ${top}`;
+  const tauTxt = (song.tau != null && isFinite(song.tau)) ? ` · τ ${song.tau.toFixed(2)}` : "";
   let cls, label;
-  if (tau >= _KX_SONG_TAU_HIGH)      { cls = "badge vhi"; label = "highly specific"; }
-  else if (tau >= _KX_SONG_TAU_SPEC) { cls = "badge hi";  label = "specific"; }
-  else { return `<td class="muted" title="τ ${tau.toFixed(2)} · ${_escapeHtml(pct)}">broad</td>`; }
+  if (share >= 10 * u) { cls = "badge vhi"; label = "≥10×"; }
+  else if (share >= 5 * u) { cls = "badge hi";  label = "≥5×"; }
+  else if (share >= 2 * u) { cls = "badge mid"; label = "≥2×"; }
+  else if (share >= u)     { cls = "badge lo";  label = "≥1×"; }
+  else { return `<td class="muted" title="below 1× even-split (share ${share.toFixed(3)} vs 1/31 ≈ ${u.toFixed(3)}) · ${_escapeHtml(pct)}${tauTxt}">&lt;1×</td>`; }
   let mark = "";
   if (pinned) mark = (pinned === top)
     ? ` <span title="this pinned cell type IS where it concentrates">★</span>`
     : ` <span class="muted" title="concentrates in ${_escapeHtml(top)}, not the pinned ${_escapeHtml(pinned)}">·</span>`;
-  return `<td style="text-align:center;padding:2px 4px;"><span class="${cls}" title="Song location τ ${tau.toFixed(2)} · ${_escapeHtml(pct)}">${label}</span>${mark}</td>`;
+  const tip = `Song location specificity ${(share / u).toFixed(1)}× even-split (share ${share.toFixed(3)} vs 1/31 ≈ ${u.toFixed(3)}) · ${pct}${tauTxt}`;
+  return `<td style="text-align:center;padding:2px 4px;"><span class="${cls}" title="${_escapeHtml(tip)}">${label}</span>${mark}</td>`;
 }
 function _kxWmbTierBadge(frac, atCluster) {
   if (frac == null || !isFinite(frac)) return `<td class="muted">–</td>`;
@@ -275,13 +283,117 @@ function _kxWmbTierBadge(frac, atCluster) {
   return `<td style="text-align:center;padding:2px 4px;"><span class="${cls}" title="WMB specificity ${frac.toFixed(4)} vs uniform ${u.toFixed(4)}${_escapeHtml(at)}">${label}</span></td>`;
 }
 
+// ---------- cell-type specificity corroboration (detail sub-tab) ----------
+
+// Fold-over-the-average-cell-type → tier. WMB carries a fold-over-uniform
+// directly; the human references (SEA-AD MTG, HBCA) carry a log2 ratio whose
+// fold is 2^score (cell-type mean / brain-wide mean). Song uses its share with
+// _msTier (fold over the 1/31 even-split). All four collapse to one vocabulary:
+// ≥10× / ≥5× / ≥2× / ≥1× more concentrated than the atlas's average cell type.
+function _kxFoldTier(fold) {
+  if (fold == null || !isFinite(fold)) return 0;
+  if (fold >= 10) return 10;
+  if (fold >= 5) return 5;
+  if (fold >= 2) return 2;
+  if (fold >= 1) return 1;
+  return 0;
+}
+// One pill renderer for every reference column so the design language is
+// identical across Song / WMB / SEA-AD / HBCA (badge vhi/hi/mid/lo; muted <1×).
+function _kxRefPill(tier, tip) {
+  if (!tier) return `<td class="muted" title="${_escapeHtml(tip)}">&lt;1×</td>`;
+  const cls = tier >= 10 ? "vhi" : tier >= 5 ? "hi" : tier >= 2 ? "mid" : "lo";
+  return `<td style="text-align:center;padding:2px 4px;"><span class="badge ${cls}" title="${_escapeHtml(tip)}">≥${tier}×</span></td>`;
+}
+
+// Cluster-aligned reference-corroboration table for one kinase: where does it
+// localize, and do the independent atlases agree with Song's call? Rows = the
+// union of Levy-T5 clusters ranked by any reference, columns = the four fold
+// pills (Song primary; WMB / SEA-AD / HBCA cross-checks). Song share + τ + WMB
+// fold per cluster come from kinase_celltype_evidence (by kid); SEA-AD + HBCA
+// scores from _KX_HUMAN_SPEC_BY_NAME (by name). Human-only kinases have no kid →
+// Song/WMB dashed, human pills populated.
+function _kxRenderSpecAligned(hostEl, row) {
+  if (typeof _ensureKinaseIndexes === "function") _ensureKinaseIndexes();
+  const EV = PAYLOAD.kinase_celltype_evidence || {cell_type: []};
+  const byCluster = new Map();
+  const at = (c) => { let o = byCluster.get(c); if (!o) { o = {cluster: c}; byCluster.set(c, o); } return o; };
+
+  const kid = row._humanOnly ? null : row.kid;
+  if (kid != null && typeof _evidenceByKinase !== "undefined" && _evidenceByKinase) {
+    for (const k of (_evidenceByKinase.get(kid) || [])) {
+      const c = EV.cell_type[k];
+      if (!c) continue;
+      const o = at(c);
+      const sShare = EV.song_specificity ? EV.song_specificity[k] : null;
+      o.song = (sShare != null && isFinite(sShare)) ? sShare : null;
+      o.songTau = EV.song_tau ? EV.song_tau[k] : null;
+      o.wmbFold = EV.wmb_fold ? EV.wmb_fold[k] : null;
+    }
+  }
+  const spec = _KX_HUMAN_SPEC_BY_NAME.get(row.name);
+  if (spec) {
+    for (const [c, e] of spec.seaad) { const o = at(c); o.seaad = e.score; o.seaadLfc = e.lfc; }
+    for (const [c, e] of spec.hbca) { const o = at(c); o.hbca = e.score; }
+  }
+
+  const rows = Array.from(byCluster.values());
+  if (!rows.length) {
+    hostEl.innerHTML = `<div class="kx-detail-placeholder muted">No cell-type specificity references for this kinase.</div>`;
+    return;
+  }
+  for (const o of rows) {
+    o._t = {
+      song: o.song != null ? _msTier(o.song) : 0,
+      wmb: _kxFoldTier(o.wmbFold),
+      seaad: o.seaad != null ? _kxFoldTier(Math.pow(2, o.seaad)) : 0,
+      hbca: o.hbca != null ? _kxFoldTier(Math.pow(2, o.hbca)) : 0,
+    };
+  }
+  // Rank by the strongest reference at the cluster (max tier), Song share as tie-break.
+  rows.sort((a, b) => {
+    const ma = Math.max(a._t.song, a._t.wmb, a._t.seaad, a._t.hbca);
+    const mb = Math.max(b._t.song, b._t.wmb, b._t.seaad, b._t.hbca);
+    return mb !== ma ? mb - ma : (b.song || 0) - (a.song || 0);
+  });
+
+  const u = _KX_SONG_UNIFORM;
+  const body = rows.map(o => {
+    const t = o._t;
+    const songTip = o.song != null
+      ? `Song ${(o.song / u).toFixed(1)}× even-split (share ${o.song.toFixed(3)} vs 1/31 ≈ ${u.toFixed(3)})${(o.songTau != null && isFinite(o.songTau)) ? ` · τ ${o.songTau.toFixed(2)}` : ""}`
+      : "Not measured in mouse (Song)";
+    const wmbTip = (o.wmbFold != null && isFinite(o.wmbFold)) ? `WMB ${o.wmbFold.toFixed(2)}× uniform` : "No WMB cross-check at this cluster";
+    const seaTip = o.seaad != null
+      ? `SEA-AD expr ${Math.pow(2, o.seaad).toFixed(1)}× brain mean (log2 ${o.seaad.toFixed(2)}). Location evidence only; SEA-AD LFC is shown in the NES tab.`
+      : "No SEA-AD cross-check at this cluster";
+    const hbcaTip = o.hbca != null ? `HBCA ${Math.pow(2, o.hbca).toFixed(1)}× brain mean (log2 ${o.hbca.toFixed(2)})` : "No HBCA cross-check at this cluster";
+    const songCell = kid == null ? `<td class="muted" title="Not measured in mouse (Song)">–</td>` : _kxRefPill(t.song, songTip);
+    const wmbCell = kid == null ? `<td class="muted" title="Not measured in mouse (WMB)">–</td>` : _kxRefPill(t.wmb, wmbTip);
+    return `<tr><td>${_escapeHtml(o.cluster)}</td>${songCell}${wmbCell}${_kxRefPill(t.seaad, seaTip)}${_kxRefPill(t.hbca, hbcaTip)}</tr>`;
+  }).join("");
+
+  const head = `<thead><tr>` +
+    `<th title="Levy-T5 cluster — the shared axis: WMB classes, SEA-AD supertypes, and HBCA superclusters are all rolled up to this nomenclature before ranking.">Cell type</th>` +
+    `<th title="Song location specificity — the primary mouse call. This kinase's share of expression in this cluster across the levy_t5 pseudobulk, as fold over the even-split baseline (1/31 ≈ 0.032). τ in tooltip.">Song</th>` +
+    `<th title="WMB (Allen Whole Mouse Brain) atlas cross-check — fold over the retained-class uniform (1/9 ≈ 0.111).">WMB</th>` +
+    `<th title="SEA-AD MTG human expression reference — 2^log2(cell-type mean / brain-wide mean). Location evidence only; SEA-AD LFC is shown in the NES tab.">SEA-AD expr</th>` +
+    `<th title="Allen HBCA human atlas cross-check — 2^log2(cell-type mean / brain-wide mean).">HBCA</th>` +
+    `</tr></thead>`;
+  hostEl.innerHTML =
+    `<p class="kx-spec-note muted">Cell-type localization of <b>${_escapeHtml(row.gene || row.name)}</b> across reference atlases, on the shared Levy-T5 axis. ` +
+    `<b>Song</b> is the primary mouse call; <b>WMB</b> (mouse), <b>SEA-AD expr</b> and <b>HBCA</b> (human) are independent cross-checks. ` +
+    `Pills are fold over each atlas's average cell type: ≥10× / ≥5× / ≥2× / ≥1×.</p>` +
+    `<div class="kx-spec-table-wrap"><table class="data-table kx-spec-table">${head}<tbody>${body}</tbody></table></div>`;
+}
+
 // ---------- cross-dataset agreement model ----------
 
-// Labels + badge styling for the agreement categories (toolbar dropdown + row badge).
+// Labels + badge styling for the mouse/human direction categories.
 const _KX_AGREE_META = {
-  "concordant-up":   {cls: "badge vhi", glyph: "↑ agree",   label: "Concordant — up",   tip: "Significant in BOTH datasets, both up in disease."},
-  "concordant-down": {cls: "badge hi",  glyph: "↓ agree",   label: "Concordant — down", tip: "Significant in BOTH datasets, both down in disease."},
-  "discordant":      {cls: "badge mix", glyph: "✕ discord", label: "Discordant",        tip: "Significant in both datasets but opposite direction."},
+  "concordant-up":   {cls: "badge vhi", glyph: "↑ same",     label: "Same direction — up",     tip: "Significant in BOTH datasets, both up in disease."},
+  "concordant-down": {cls: "badge hi",  glyph: "↓ same",     label: "Same direction — down",   tip: "Significant in BOTH datasets, both down in disease."},
+  "discordant":      {cls: "badge mix", glyph: "opposite",   label: "Opposite direction",      tip: "Significant in both datasets but opposite direction."},
   "mouse-only":      {cls: "badge mid", glyph: "M only",    label: "Mouse-only",        tip: "Significant in mouse (Song) only."},
   "human-only":      {cls: "badge imp", glyph: "H only",    label: "Human-only",        tip: "Significant in human (Mukesh) only."},
   "neither":         {cls: "badge lo",  glyph: "–",         label: "Neither",           tip: "Not significant in either dataset at this FDR."},
@@ -297,7 +409,7 @@ function _kxMedian(arr) {
 // Stamp _mouseSig / _humanSig / _agreeCategory / _agreeScore on each row, live
 // against the FDR gate. BOTH summary NES are the median over the dataset's units
 // (mouse contrasts / human AD donors) that are significant at the gate — the same
-// statistic on both sides, so the magnitudes and concordance signs are comparable
+// statistic on both sides, so the magnitudes and direction signs are comparable
 // (peak vs median would bias the mouse magnitude upward). Significance and sign
 // are both derived from the SAME live threshold.
 // allSamples = include EVERY measured unit in the median (and treat "measured"
@@ -342,7 +454,7 @@ function _kxComputeAgreement(rows, fdrGate, allSamples) {
 
 // Median-of-significant NES driving the Agree call. "–" when nothing is
 // significant on that side at the live gate (so the row's category is *-only or
-// neither, not concordant/discordant). Colored by sign, same red/blue as glyphs.
+// neither, not same/opposite direction). Colored by sign, same red/blue as glyphs.
 function _kxMedNesCell(val) {
   if (val == null || !isFinite(val)) return `<td class="muted kx-nes-num">–</td>`;
   const col = val >= 0 ? "#c53030" : "#2b6cb0";
@@ -407,6 +519,119 @@ function _kxHumanGlyphCell(r, fdrGate) {
   return `<td class="kx-hglyph"><div class="nes-profile-wrap">${adBlock}${ctrlBlock}</div></td>`;
 }
 
+// ---------- NES-tab LFC direction support ----------
+
+function _kxFinite(v) {
+  return v != null && isFinite(Number(v));
+}
+
+function _kxSigned(v, digits) {
+  if (!_kxFinite(v)) return "–";
+  const n = Number(v);
+  return `${n >= 0 ? "+" : ""}${n.toFixed(digits)}`;
+}
+
+function _kxDirectionSupport(nes, lfc) {
+  const n = _kxFinite(nes) ? Number(nes) : null;
+  const l = _kxFinite(lfc) ? Number(lfc) : null;
+  if (n == null || l == null || n === 0 || Math.abs(l) < 0.1) {
+    return {
+      cls: "badge lo",
+      label: "no clear change",
+      tip: "Needs a signed NES and |LFC| ≥ 0.1 to call direction support.",
+    };
+  }
+  const same = (n > 0) === (l > 0);
+  return same
+    ? {cls: "badge hi", label: "same direction", tip: "LFC sign matches the NES activity direction."}
+    : {cls: "badge mix", label: "opposite direction", tip: "LFC sign is opposite the NES activity direction."};
+}
+
+function _kxBestSongLfcEvidence(row, cluster, useTopCluster = true) {
+  if (row._humanOnly || row.kid == null) return null;
+  const AI = PAYLOAD.attribution_index || {};
+  if (!AI.kinase_id) return null;
+  const song = _KX_SONG_BY_KID.get(row.kid) || null;
+  const preferredCell = cluster || (useTopCluster && song && song.topCluster) || "";
+  const candidates = [];
+  for (let j = 0; j < AI.kinase_id.length; j++) {
+    if (AI.kinase_id[j] !== row.kid) continue;
+    const cell = AI.cell_type ? AI.cell_type[j] : "";
+    if (preferredCell && cell !== preferredCell) continue;
+    const lfc = AI.song_lfc ? AI.song_lfc[j] : null;
+    if (!_kxFinite(lfc)) continue;
+    const contrastId = AI.contrast_id ? AI.contrast_id[j] : null;
+    const contrast = CONTRASTS && contrastId != null ? CONTRASTS[contrastId] : "";
+    const nes = (AI.nes && _kxFinite(AI.nes[j])) ? AI.nes[j]
+      : (contrast && row._nes ? row._nes[contrast] : null);
+    candidates.push({
+      source: "Song LFC",
+      scope: `${cell || "cell type n/a"}${contrast ? ` · ${contrast}` : ""}`,
+      lfc: Number(lfc),
+      nes: _kxFinite(nes) ? Number(nes) : null,
+      fdr: AI.fdr ? AI.fdr[j] : null,
+      confidence: AI.combined_confidence ? AI.combined_confidence[j] : "",
+    });
+  }
+  if (!candidates.length && preferredCell) {
+    // If the top/pinned cell type has no LFC row, fall back to the strongest
+    // available Song LFC for the kinase so the NES tab still surfaces the evidence.
+    return _kxBestSongLfcEvidence(row, "", false);
+  }
+  candidates.sort((a, b) => Math.abs(b.lfc) - Math.abs(a.lfc));
+  return candidates[0] || null;
+}
+
+function _kxRenderDirectionSupport(hostEl, row) {
+  if (!hostEl) return;
+  const s = _kxState();
+  const rows = [];
+  const song = _kxBestSongLfcEvidence(row, s.cluster);
+  if (song) rows.push(song);
+  const human = row._human || null;
+  if (human && _kxFinite(human.sea_ad_lfc)) {
+    rows.push({
+      source: "SEA-AD LFC",
+      scope: `${human.sea_ad_n || "n/a"} human MTG supertypes`,
+      lfc: Number(human.sea_ad_lfc),
+      nes: row._hNes,
+      fdr: null,
+      confidence: "",
+    });
+  }
+
+  if (!rows.length) {
+    hostEl.innerHTML = `<div class="kx-direction-support muted">No Song LFC or SEA-AD LFC direction evidence for this kinase.</div>`;
+    return;
+  }
+  const body = rows.map(r => {
+    const support = _kxDirectionSupport(r.nes, r.lfc);
+    const fdrTxt = _kxFinite(r.fdr) ? Number(r.fdr).toFixed(3) : "–";
+    const tip = `${support.tip} NES ${_kxSigned(r.nes, 2)} · LFC ${_kxSigned(r.lfc, 3)}`;
+    return `<tr>` +
+      `<td>${_escapeHtml(r.source)}</td>` +
+      `<td class="muted">${_escapeHtml(r.scope)}</td>` +
+      `<td class="kx-nes-num">${_kxSigned(r.nes, 2)}</td>` +
+      `<td class="kx-nes-num">${_kxSigned(r.lfc, 3)}</td>` +
+      `<td class="kx-nes-num">${_escapeHtml(fdrTxt)}</td>` +
+      `<td><span class="${support.cls}" title="${_escapeHtml(tip)}">${_escapeHtml(support.label)}</span></td>` +
+      `</tr>`;
+  }).join("");
+  hostEl.innerHTML =
+    `<section class="kx-direction-support">` +
+    `<div class="kx-detail-col-head">Direction support</div>` +
+    `<p class="muted">LFC evidence is interpreted with NES activity, not as cell-type specificity.</p>` +
+    `<table class="data-table kx-direction-table"><thead><tr>` +
+    `<th title="LFC evidence source.">Source</th>` +
+    `<th title="Cell type / contrast or human summary scope used for this direction check.">Scope</th>` +
+    `<th title="NES activity direction used as the reference sign.">NES</th>` +
+    `<th title="Disease-vs-control transcript log2 fold change.">LFC</th>` +
+    `<th title="FDR for the matching Song attribution row, when available.">FDR</th>` +
+    `<th title="Whether the LFC sign supports the NES activity direction.">Support</th>` +
+    `</tr></thead><tbody>${body}</tbody></table>` +
+    `</section>`;
+}
+
 // ---------- slim master header + row builders ----------
 
 function _kxBuildHeader(s) {
@@ -422,20 +647,20 @@ function _kxBuildHeader(s) {
   cells.push(TH("family", "Family", "Kinase family. Click to sort."));
   cells.push(TH(null, "Mouse", "Mouse (Song) bulk MEA NES across 3 diseases × 3 timepoints (red=up, blue=down; outlined=FDR<header).", "kx-mglyph"));
   cells.push(TH(null, "Human", "Human (Mukesh) per-donor MEA NES: AD donors, then a muted CTRL reference group (red=up, blue=down; outlined=FDR<header).", "kx-hglyph"));
-  cells.push(TH("m_med", "M med", "Mouse median NES over the contrasts feeding the Agree call (FDR-significant, or all when 'All samples' is on). – = none. Sort by magnitude.", "kx-nes-num"));
-  cells.push(TH("h_med", "H med", "Human median NES over the AD donors feeding the Agree call (FDR-significant, or all when 'All samples' is on). – = none. Sort by magnitude.", "kx-nes-num"));
-  cells.push(TH("agree_score", "Agree", "Cross-dataset agreement from M med + H med: both significant at the header FDR AND same direction in disease. Grouped by category; click to sort within groups.", "kx-agree-col"));
+  cells.push(TH("m_med", "M med", "Mouse median NES over the contrasts feeding the direction call (FDR-significant, or all when 'All samples' is on). – = none. Sort by magnitude.", "kx-nes-num"));
+  cells.push(TH("h_med", "H med", "Human median NES over the AD donors feeding the direction call (FDR-significant, or all when 'All samples' is on). – = none. Sort by magnitude.", "kx-nes-num"));
+  cells.push(TH("agree_score", "Direction", "Mouse/human direction support from M med + H med: both significant at the header FDR AND same direction in disease. Grouped by category; click to sort within groups.", "kx-agree-col"));
   const specScope = s.cluster ? `at ${s.cluster}` : "— peak across all clusters (hover for the cluster)";
-  cells.push(TH("m_spec", "M-spec", `Mouse Song location specificity (τ, 0–1): ≥${_KX_SONG_TAU_HIGH} highly specific, ≥${_KX_SONG_TAU_SPEC} specific. One value per kinase; the cell type it concentrates in is in the tooltip. ★ = the pinned cluster IS that cell type.`, "kx-spec"));
-  cells.push(TH("wmb", "WMB", `WMB atlas cross-check: independent mouse-brain cell-type specificity tier ${specScope} (× uniform 1/${(1 / _KX_WMB_UNIFORM).toFixed(0)}). Confirms the Song call against an outside atlas.`, "kx-spec"));
-  cells.push(TH("h_spec", "H-spec", `Human SEA-AD MTG cell-type specificity tier ${specScope}.`, "kx-spec"));
+  cells.push(TH("m_spec", "Song", `Song location evidence, as fold over the even-split baseline (1/31 ≈ 0.032): ≥10× / ≥5× / ≥2× / ≥1×. The fold is the kinase's peak cell-type share; the concentration index τ and the cell type it concentrates in are in the tooltip. One value per kinase. ★ = the pinned cluster IS that cell type.`, "kx-spec"));
+  cells.push(TH("wmb", "WMB", `WMB atlas cross-check: independent mouse-brain location tier ${specScope} (× uniform 1/${(1 / _KX_WMB_UNIFORM).toFixed(0)}). Confirms the Song call against an outside atlas.`, "kx-spec"));
+  cells.push(TH("h_spec", "SEA-AD expr", `Human SEA-AD MTG expression location tier ${specScope}. This is expression enrichment, not SEA-AD LFC.`, "kx-spec"));
   return `<thead><tr>${cells.join("")}</tr></thead>`;
 }
 
 // Resolve a row's mouse (WMB) + human (SEA-AD) specificity for the active pivot:
 // "" = Any cell type → peak across clusters (with the argmax cluster for the
-// tooltip); a named cluster → the value at that cluster. Shared by the M-spec /
-// H-spec columns AND the M-spec / H-spec minimum-tier filters so they agree.
+// tooltip); a named cluster → the value at that cluster. Shared by the Song /
+// SEA-AD expr columns AND their minimum-tier filters so they agree.
 function _kxResolveSpec(r, cluster) {
   const song = _KX_SONG_BY_KID.get(r.kid) || null;  // per-kinase, pivot-independent
   if (cluster) {
@@ -479,7 +704,7 @@ const _KX_STRING_KEYS = new Set(["name", "gene", "residue", "family"]);
 function _kxSortRows(rows, s) {
   const cluster = s.cluster;
   if (s.sortKey === "agree_score") {
-    // Signed sort: concordant (high +) first, discordant (−) last.
+    // Signed sort: same-direction (high +) first, opposite-direction (negative) last.
     rows.sort((a, b) => s.sortDir * ((b._agreeScore || 0) - (a._agreeScore || 0)));
     return;
   }
@@ -491,9 +716,9 @@ function _kxSortRows(rows, s) {
   rows.sort((a, b) => {
     let av, bv;
     if (s.sortKey === "m_spec") {
-      // Song tau — per kinase, pivot-independent.
+      // Song peak cell-type share (the fold driver) — per kinase, pivot-independent.
       const sa = _KX_SONG_BY_KID.get(a.kid), sb = _KX_SONG_BY_KID.get(b.kid);
-      const ta = sa ? sa.tau : null, tb = sb ? sb.tau : null;
+      const ta = sa ? sa.topShare : null, tb = sb ? sb.topShare : null;
       const ax = (ta == null || !isFinite(ta)) ? -Infinity : ta;
       const bx = (tb == null || !isFinite(tb)) ? -Infinity : tb;
       return s.sortDir * (bx - ax);
@@ -545,8 +770,8 @@ function _kxFilteredRows(s) {
     }
     if (mMin > 0 || hMin > 0) {
       const sp = _kxResolveSpec(r, s.cluster);
-      // mMin is a Song tau threshold (0.60 / 0.85), per kinase.
-      if (mMin > 0 && (!sp.song || sp.song.tau == null || sp.song.tau < mMin)) return false;
+      // mMin is a fold-over-even-split threshold (2 / 5 / 10 ×), on the Song peak share.
+      if (mMin > 0 && (!sp.song || sp.song.topShare == null || sp.song.topShare < mMin * _KX_SONG_UNIFORM)) return false;
       if (hMin > 0 && (sp.seaad == null || sp.seaad < hLog2Min)) return false;
     }
     return true;
@@ -581,7 +806,7 @@ function _kxRenderTable() {
       else if (r._agreeCategory === "concordant-down") cd++;
       else if (r._agreeCategory === "discordant") dis++;
     }
-    countEl.textContent = `${n.toLocaleString()} kinase${n === 1 ? "" : "s"} · concordant ↑${cu} ↓${cd} · discordant ${dis} · cluster=${s.cluster || "any"} · ${s.allSamples ? "all samples" : `fdr<${fdrGate}`}`;
+    countEl.textContent = `${n.toLocaleString()} kinase${n === 1 ? "" : "s"} · same dir ↑${cu} ↓${cd} · opposite ${dis} · cluster=${s.cluster || "any"} · ${s.allSamples ? "all samples" : `fdr<${fdrGate}`}`;
   }
 
   wrap.querySelectorAll("th[data-sortkey]").forEach(th => {
@@ -680,24 +905,27 @@ function _kxRenderDetail() {
       <button data-kxd-tab="activity" class="${tab === "activity" ? "active" : ""}">NES Activity</button>
       <button data-kxd-tab="specificity" class="${tab === "specificity" ? "active" : ""}">Cell-type Specificity</button>
     </nav>
-    <div class="kx-detail-grid">
+    ${tab === "specificity"
+      ? `<div id="kx-detail-spec" class="kx-detail-spec"></div>`
+      : `<div id="kx-detail-direction"></div><div class="kx-detail-grid">
       <div class="kx-detail-col"><div class="kx-detail-col-head">Mouse · Song</div><div id="kx-detail-m"></div></div>
       <div class="kx-detail-col"><div class="kx-detail-col-head">Human · Mukesh</div><div id="kx-detail-h"></div></div>
-    </div>`;
+    </div>`}`;
 
   host.querySelectorAll("button[data-kxd-tab]").forEach(b => b.addEventListener("click", () => {
     s.detailTab = b.dataset.kxdTab;
     _kxRenderDetail();
   }));
 
-  const mEl = document.getElementById("kx-detail-m");
-  const hEl = document.getElementById("kx-detail-h");
   if (typeof _ensureKinaseIndexes === "function") _ensureKinaseIndexes();
-  const humanReady = (typeof _KH_HAS !== "undefined") && _KH_HAS && _KH;
-  const hrow = (humanReady && humanKid != null && typeof _khAllRows === "function")
-    ? _khAllRows().find(x => x.id === humanKid) : null;
 
   if (tab === "activity") {
+    _kxRenderDirectionSupport(document.getElementById("kx-detail-direction"), row);
+    const mEl = document.getElementById("kx-detail-m");
+    const hEl = document.getElementById("kx-detail-h");
+    const humanReady = (typeof _KH_HAS !== "undefined") && _KH_HAS && _KH;
+    const hrow = (humanReady && humanKid != null && typeof _khAllRows === "function")
+      ? _khAllRows().find(x => x.id === humanKid) : null;
     if (mouseKid != null && typeof _renderKinaseNesPlot === "function") _renderKinaseNesPlot("kx-detail-m", mouseKid);
     else mEl.innerHTML = _kxNotMeasured("mouse");
     if (hrow && typeof _khRenderNESAcrossDonors === "function") {
@@ -705,12 +933,10 @@ function _kxRenderDetail() {
       _khRenderNESAcrossDonors("kx-detail-h", hrow, _KHState.auditDonor);
     } else hEl.innerHTML = _kxNotMeasured("human");
   } else {
-    if (mouseKid != null && typeof _renderKinaseCelltypeEvidence === "function") _renderKinaseCelltypeEvidence("kx-detail-m", mouseKid);
-    else mEl.innerHTML = _kxNotMeasured("mouse");
-    if (hrow && (_KH.celltype_specificity) && typeof _khRenderAttribution === "function") {
-      _kxPrimeHumanDonor(hrow);
-      _khRenderAttribution(hEl, hrow);
-    } else hEl.innerHTML = hrow ? `<div class="kx-detail-placeholder muted">No human cell-type specificity reference loaded.</div>` : _kxNotMeasured("human");
+    // Cell-type Specificity: one cluster-aligned reference-corroboration table
+    // (Song primary + WMB / SEA-AD / HBCA cross-checks), not two verbatim tables.
+    const specEl = document.getElementById("kx-detail-spec");
+    if (specEl) _kxRenderSpecAligned(specEl, row);
   }
 }
 

@@ -46,15 +46,14 @@
               </select>
             </label>
           </span>
-          <span class="ke-filter-label" id="ke-ms-wmb-wrap">
-            <label class="ke-filter-label">WMB
-              <select id="ke-filter-wmb" aria-label="Minimum WMB specificity tier"
-                      title="Minimum WMB specificity tier (× uniform 1/34 ≈ 0.029). Kinase passes if any attribution row in scope has wmb_specificity ≥ threshold.">
+          <span class="ke-filter-label" id="ke-ms-song-wrap">
+            <label class="ke-filter-label">Song
+              <select id="ke-filter-song" aria-label="Minimum mouse Song location specificity (fold over even-split)"
+                      title="Minimum Song location evidence, as fold over the even-split baseline (1/31). Kinase passes if its peak cell-type share reaches the selected threshold.">
                 <option value="0">Any</option>
-                <option value="1">≥1× (0.029)</option>
-                <option value="2">≥2× (0.059)</option>
-                <option value="5">≥5× (0.147)</option>
-                <option value="10">≥10× (0.294)</option>
+                <option value="2">&geq;2&times;</option>
+                <option value="5">&geq;5&times;</option>
+                <option value="10">&geq;10&times;</option>
               </select>
             </label>
           </span>
@@ -88,7 +87,8 @@
               <th data-col="peak_NES" data-metric="peakNes" title="Peak |NES| — max absolute NES across the active disease/timepoint scope (or all 9 contrasts if no scope). Click to sort.">|NES|</th>
               <th data-col="n_sig" data-metric="nSig" title="n_sig — count of contrasts where FDR < threshold, within the active disease/timepoint scope (or out of 9 if no scope). Click to sort.">n_sig</th>
               <th data-col="n_attributed_celltypes" data-metric="nAttributed" title="Cell types attributed at high or moderate confidence in the active scope. Click to sort by count (matches the pill column).">Cell types</th>
-              <th data-col="wmb_max_tier" data-metric="wmbMaxTier" title="Maximum WMB specificity tier reached by any attribution row in scope (×uniform 1/34). 10× = ≥0.294, 5× = ≥0.147, 2× = ≥0.059, 1× = ≥0.029. Click to sort by max tier.">WMB</th>
+              <th data-col="song_spec" data-metric="songTau" title="Song location evidence, shown as fold over the even-split baseline (1/31 ≈ 0.032): ≥10× / ≥5× / ≥2× / ≥1×. The fold is the kinase's peak cell-type share; the concentration index τ and the cell type are in the tooltip. Click to sort.">Song</th>
+              <th data-col="wmb_max_tier" data-metric="wmbMaxTier" title="WMB cross-check — maximum WMB location tier reached by any attribution row in scope, as a multiple of the retained-class uniform (1/9 ≈ 0.111). Independent atlas check on the Song call. Click to sort by max tier.">WMB</th>
               <th data-col="conf" data-metric="highConfAttr" title="Highest confidence tier reached in the active scope (high &gt; moderate &gt; low &gt; none). Click to sort by max tier — kinases with at least one HIGH-confidence row come first, ties broken by table order.">Conf</th>
             </tr></thead>
             <tbody></tbody>
@@ -123,7 +123,7 @@
               <option value="">Any</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Minimum human attribution confidence tier. High = specificity plus SEA-AD LFC support; moderate = either specificity or SEA-AD LFC support.">Confidence
+          <label class="ke-filter-label" title="Minimum human attribution confidence tier. High = human location evidence plus SEA-AD LFC support; moderate = either location evidence or SEA-AD LFC support.">Confidence
             <select id="kh-filter-confidence" aria-label="Minimum human attribution confidence">
               <option value="">Any</option>
               <option value="high">high+</option>
@@ -131,7 +131,7 @@
               <option value="low">low+</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Minimum human reference specificity tier. Kinase passes if any attribution row reaches this tier.">Specificity
+          <label class="ke-filter-label" title="Minimum human reference location tier. Kinase passes if any attribution row reaches this tier.">Location
             <select id="kh-filter-specificity" aria-label="Minimum human specificity tier">
               <option value="0">Any</option>
               <option value="1">≥1×</option>
@@ -140,11 +140,11 @@
               <option value="4">≥10×</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Compare median NES (sig) sign to the kinase's SEA-AD AD-vs-control effect size (Nebula log2FC, median across all 139 MTG supertypes). Agree = same sign; Disagree = opposite sign; N/A = either side is unsigned or SEA-AD has no coverage.">SEA-AD
+          <label class="ke-filter-label" title="Compare median NES (sig) sign to the kinase's SEA-AD AD-vs-control effect size (Nebula log2FC, median across all 139 MTG supertypes). Same = same sign; Opposite = opposite sign; N/A = either side is unsigned or SEA-AD has no coverage.">SEA-AD
             <select id="kh-filter-seaad" aria-label="SEA-AD agreement">
               <option value="">Any</option>
-              <option value="agree">Agree</option>
-              <option value="disagree">Disagree</option>
+              <option value="agree">Same</option>
+              <option value="disagree">Opposite</option>
               <option value="na">N/A</option>
             </select>
           </label>
@@ -192,7 +192,7 @@
               <th data-col="n_donors_down" title="Donors significant with NES &lt; 0.">down</th>
               <th data-col="n_ctrl_sig" class="kh-ctrl-col" title="CTRL donors significant at the active FDR (LOO control deltas). Useful when investigating wash-out: if many controls are also significant in the same direction, the AD-vs-CTRL signal is not specific.">n_ctrl_sig</th>
               <th data-col="n_attributed_celltypes" class="kh-spec-col" title="Human reference cell types attributed at high or moderate confidence. Click to sort by count.">Cell types</th>
-              <th data-col="max_specificity_tier" class="kh-spec-col" title="Maximum human reference specificity tier reached by any attribution row: ≥10× / ≥5× / ≥2× / ≥1×. Click to sort by tier.">Specificity</th>
+              <th data-col="max_specificity_tier" class="kh-spec-col" title="Maximum human reference location tier reached by any attribution row: ≥10× / ≥5× / ≥2× / ≥1×. Click to sort by tier.">Location</th>
               <th data-col="conf" class="kh-spec-col" title="Highest human attribution confidence tier reached across SEA-AD MTG and cortex/hippocampus-scoped HBCA. Click to sort by confidence.">Conf</th>
             </tr></thead>
             <tbody></tbody>
@@ -235,7 +235,7 @@
             <li><b>Layer = bulk \\ decomp</b>: bulk passes AND no cell type in scope passes decomp at the gate (bulk-only signal).</li>
             <li><b>Sign = signed</b>: split bars (up at +y, down at −y). <b>up / down / either</b>: only one direction or unsigned total.</li>
           </ul>
-          <p style="margin-top:6px;">Cell-type scope is one of: <b>any (OR)</b> across the 24 decomp-present WMB classes, or a single class. The decomp pipeline does not cover the remaining 10 WMB classes (sampling gaps).</p>
+          <p style="margin-top:6px;">Cell-type scope is one of: <b>any (OR)</b> across the decomp-present Levy-t5 cell types, or a single cell type. The decomp pipeline does not cover every cluster in the 31-cell-type spine (sampling gaps).</p>
         </div>
       </details>
     </div>
@@ -374,17 +374,18 @@
     <div class="explorer-layout kinase-audit-layout">
       <div class="card">
         <div class="ke-toolbar ke-toolbar-multi" id="kx-toolbar">
-          <label class="ke-filter-label" title="Cell-type pivot for the WMB cross-check and H-spec tiers. 'Any cell type' shows each kinase's peak across all clusters (hover a tier for the cluster); pick a cluster to pin them to it. The primary M-spec (Song τ) is per kinase and does not pivot, but a pinned cluster gets a ★ when it IS the kinase's top cell type.">Cluster
+          <label class="ke-filter-label" title="Cell-type pivot for the WMB and SEA-AD expr tiers. 'Any cell type' shows each kinase's peak across all clusters (hover a tier for the cluster); pick a cluster to pin them to it. Song location evidence is per kinase and does not pivot, but a pinned cluster gets a ★ when it IS the kinase's top cell type.">Cluster
             <select id="kx-cluster" aria-label="Levy-T5 cluster"></select>
           </label>
-          <label class="ke-filter-label" title="Mouse Song location specificity (τ): how concentrated a kinase's expression is in one cell type across this study's own cells (0 = spread evenly, 1 = confined to one). Keeps a kinase whose τ reaches the band.">M-spec
-            <select id="kx-mspec" aria-label="Minimum mouse Song specificity (tau)">
+          <label class="ke-filter-label" title="Song location evidence, as fold over the even-split baseline (1/31 ≈ 0.032): how concentrated a kinase's expression is in one cell type across this study's own cells. Keeps a kinase whose peak cell-type share reaches the fold threshold.">Song
+            <select id="kx-mspec" aria-label="Minimum mouse Song specificity (fold over even-split)">
               <option value="0">Any</option>
-              <option value="0.6">Specific (τ≥0.60)</option>
-              <option value="0.85">Highly specific (τ≥0.85)</option>
+              <option value="2">&geq;2&times;</option>
+              <option value="5">&geq;5&times;</option>
+              <option value="10">&geq;10&times;</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Minimum human SEA-AD MTG specificity tier. Keeps a kinase if its SEA-AD specificity at the selected cluster — or its peak across clusters when 'Any cell type' — reaches the tier.">H-spec
+          <label class="ke-filter-label" title="Minimum human SEA-AD MTG expression location tier. Keeps a kinase if its SEA-AD expression enrichment at the selected cluster — or its peak across clusters when 'Any cell type' — reaches the tier. This is not SEA-AD LFC.">SEA-AD expr
             <select id="kx-hspec" aria-label="Minimum human SEA-AD specificity tier">
               <option value="0">Any</option>
               <option value="1">≥1×</option>
@@ -403,21 +404,21 @@
           <label class="ke-filter-label">
             <input id="kx-search" aria-label="Search kinase or gene" placeholder="Search kinase or gene…" style="width:160px;"/>
           </label>
-          <label class="ke-filter-label" title="Compute M med, H med, and the Agree category over ALL measured contrasts/donors, not just those significant at the header FDR. A dataset counts as present if it has any measurement; direction is the all-sample median.">
+          <label class="ke-filter-label" title="Compute M med, H med, and the direction category over ALL measured contrasts/donors, not just those significant at the header FDR. A dataset counts as present if it has any measurement; direction is the all-sample median.">
             <input type="checkbox" id="kx-allsamples"/> All samples
           </label>
-          <label class="ke-filter-label" title="Agreement category between mouse (Song) and human (Mukesh), computed live at the current FDR. 'Any' shows all categories.">Agreement
+          <label class="ke-filter-label" title="Mouse/human direction category, computed live at the current FDR. 'Any' shows all categories.">Direction
             <select id="kx-agree" aria-label="Agreement category">
               <option value="">Any</option>
-              <option value="concordant-up">Concordant — up</option>
-              <option value="concordant-down">Concordant — down</option>
-              <option value="discordant">Discordant</option>
+              <option value="concordant-up">Same direction — up</option>
+              <option value="concordant-down">Same direction — down</option>
+              <option value="discordant">Opposite direction</option>
               <option value="mouse-only">Mouse-only</option>
               <option value="human-only">Human-only</option>
               <option value="neither">Neither</option>
             </select>
           </label>
-          <button id="kx-reset" class="ke-filter-reset" title="Reset cluster, track, search, agreement filter, sort, and selection">Reset</button>
+          <button id="kx-reset" class="ke-filter-reset" title="Reset cluster, track, search, direction filter, sort, and selection">Reset</button>
           <span class="muted" id="kx-count"></span>
         </div>
         <div id="kx-table-wrap"></div>

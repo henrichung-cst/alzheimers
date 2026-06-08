@@ -1032,13 +1032,13 @@ const KH_ATTR_COLS = [
   {key:"cell_type",            label:"Cell type",   type:"str", group:"id",
    title:"Levy T5 cluster. SEA-AD supertypes and HBCA superclusters are rolled up to this shared nomenclature before ranking."},
   {key:"combined_tier",        label:"Conf",        type:"conf", group:"attr",
-   title:"Human mirror of the mouse confidence tier: high / moderate / low / none. High requires both specificity ≥ log2(2) and |SEA-AD LFC| ≥ 0.1."},
-  {key:"specificity",          label:"Specificity", type:"num", group:"attr",
-   title:"log2(cell-type mean / reference-wide mean). > 0 means enriched in this cell type."},
+   title:"Human mirror of the mouse confidence tier: high / moderate / low / none. High requires both human location evidence ≥ log2(2) and |SEA-AD LFC| ≥ 0.1."},
+  {key:"specificity",          label:"Location",    type:"num", group:"attr",
+   title:"Human expression location evidence: log2(cell-type mean / reference-wide mean). > 0 means enriched in this cell type."},
   {key:"specificity_tier_rank",label:"Tier",        type:"num", group:"attr",
-   title:"Specificity bucket by multiple of uniform: ≥10× / ≥5× / ≥2× / ≥1×."},
+   title:"Location bucket by multiple of uniform: ≥10× / ≥5× / ≥2× / ≥1×."},
   {key:"mean_log2_expression", label:"log2 expr",   type:"num", group:"attr",
-   title:"Mean log2 expression in this cell type. Low absolute expression can make specificity less interpretable."},
+   title:"Mean log2 expression in this cell type. Low absolute expression can make location enrichment less interpretable."},
   {key:"sea_ad_lfc",           label:"SEA-AD LFC",  type:"num", group:"attr",
    title:"SEA-AD AD-vs-control LFC for this kinase in this SEA-AD supertype. HBCA rows have no SEA-AD analog."},
   {key:"combined_score",       label:"Score",       type:"num", group:"attr",
@@ -1316,8 +1316,8 @@ function _khRenderAttribution(body, r) {
   const donorNES = pd ? pd.NES : null;
   const donorFDR = pd ? pd.FDR : null;
 
-  // Combined score (mirrors mouse): effective_concordance × (0.5 + specificity).
-  // Specificity is the strongest human-reference prior for the Levy T5 cell
+  // Combined score (mirrors mouse): direction support × (0.5 + location evidence).
+  // Location evidence is the strongest human-reference prior for the Levy T5 cell
   // type; SEA-AD LFC is folded in when available for the same cell-type row.
   const scoreOf = (row) => {
     const spec = row.specificity;
@@ -1380,7 +1380,7 @@ function _khRenderAttribution(body, r) {
   const tbody = rows.map((row, i) => {
     const tierChip =
       `<span class="${_attrConfidenceClass(row.combined_tier)}">${_escapeHtml(row.combined_tier.replace('_', ' '))}</span>`;
-    // Specificity tier: uses the same ≥10× / ≥5× / ≥2× / ≥1× of uniform logic
+    // Location tier: uses the same ≥10× / ≥5× / ≥2× / ≥1× of uniform logic
     // as the mouse WMB tier, applied to the human log2-ratio score directly.
     const specTier = row.specificity == null || !isFinite(row.specificity)
       ? "" : _wmbSpecToHumanTier(row.specificity);
@@ -1416,7 +1416,7 @@ function _khRenderAttribution(body, r) {
   const superHead =
     `<tr class="attr-verdict-supergroup">` +
       `<th class="attr-supergroup-spacer" colspan="1"></th>` +
-      `<th class="attr-supergroup-attr" colspan="6" title="Cell-type attribution evidence (human references — transcript-level specificity + SEA-AD AD effect).">Attribution</th>` +
+      `<th class="attr-supergroup-attr" colspan="6" title="Cell-type attribution evidence (human references — transcript-level location evidence + SEA-AD AD effect).">Attribution</th>` +
       `<th class="attr-supergroup-decomp" colspan="2" title="Per-donor kinase activity from the human MEA. Broadcast per kinase; changes with the donor selector.">Donor kinase activity</th>` +
     `</tr>`;
 
@@ -1424,7 +1424,7 @@ function _khRenderAttribution(body, r) {
     `<p class="kinase-stage-note">` +
     `Cell-type attribution of <strong>${_escapeHtml(r.gene_symbol || r.name)}</strong> ` +
     `across human reference atlases, consolidated to Levy T5 clusters before display. ` +
-    `Specificity is a transcript-level prior; ` +
+    `Location evidence is a transcript-level prior; ` +
     `SEA-AD LFC is the AD-vs-control effect rolled up to the same cluster; donor NES ` +
     `is the kinase's per-donor MEA activity broadcast to every row. ` +
     `HBCA rows lack SEA-AD LFC.` +
