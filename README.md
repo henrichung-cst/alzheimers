@@ -193,11 +193,36 @@ All of the above are bundled (resumable, with sentinels) in `alz/runners/main/ru
 
 ### Collaborator data ingest
 
-External study data is pulled on demand (no live FUSE mounts):
+External study data is pulled on demand (no live FUSE mounts). Every Drive
+source is declared in `conf/data_sources.yaml` and pulled by the shared
+[`rclone-ingest`](vendor/rclone-ingest) engine (vendored as a git submodule);
+the `pixi run ingest-*` tasks are thin wrappers over it.
 
 ```bash
-pixi run ingest-gdrive-shared       # → data/external/gdrive_shared/
-pixi run ingest-lucie-proteomics    # → data/external/lucie_proteomics/
+git submodule update --init           # first checkout only (provides vendor/rclone-ingest)
+pixi run rclone-ingest check          # preflight: rclone present + remotes configured
+pixi run ingest-gdrive-shared         # → data/external/gdrive_shared/
+pixi run ingest-lucie-proteomics      # → data/external/lucie_proteomics/
+pixi run ingest-5xfad-reports         # → data/raw/external/lucie_proteomics/reports/ (parsed PTM tables)
+pixi run ingest-5xfad-raw-sne         # + ~28 GB raw .sne for the 2 unparsed cells
+pixi run ingest-deconvolution-bulk    # → data/datasets/song/proteomics/source/ (filtered)
+pixi run ingest-tcells                # T-cell cohort proteomics
+pixi run ingest-tcells-scrna          # + ~10 GB scRNA .rds (group: scrna)
+pixi run ingest-sce4-canonical        # sce4 parity provenance (Top300 + limma)
+pixi run ingest-sce4-source           # full 7.5 GiB sce4 working dir
+```
+
+Add or edit sources in `conf/data_sources.yaml`; `pixi run rclone-ingest list`
+enumerates them. The engine is pull-only — auth lives in `rclone.conf`.
+
+To examine a folder before declaring it (read/range-only — no mount, no bulk
+download), use `ls` / `peek` / `fetch`:
+
+```bash
+pixi run rclone-ingest ls tcells donor1 -R --max-depth 2     # names, sizes, mimetypes (no transfer)
+pixi run rclone-ingest peek tcells donor1/proteomics/x.csv   # first 4 KB via a ranged GET
+pixi run rclone-ingest fetch tcells donor1/proteomics/x.csv --dest /tmp   # grab one file
+pixi run rclone-ingest ls --folder-id <ID> --remote gdrive_shared        # ad-hoc, undeclared folder
 ```
 
 ### Supplementary diagnostics

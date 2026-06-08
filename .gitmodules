@@ -1,0 +1,3 @@
+[submodule "vendor/rclone-ingest"]
+	path = vendor/rclone-ingest
+	url = /home/hchung/Projects/work/rclone-ingest

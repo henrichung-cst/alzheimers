@@ -1,6 +1,9 @@
 # Public repo policy: track code, docs, and repo policy.
 *
 !/.gitignore
+!/.gitmodules
+!/vendor/
+!/vendor/**
 !/alz/
 !/alz/**
 !README.md

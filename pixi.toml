@@ -7,11 +7,17 @@ version = "0.1.0"
 
 [tasks]
 ingest = "python alz/ingest/song.py --run"
-ingest-gdrive-shared = "rclone copy gdrive_shared: data/external/gdrive_shared/ --drive-root-folder-id 1syiic6d9DUJIc1sPL5wc8uL7Od3Dsq3Z --progress"
-ingest-lucie-proteomics = "rclone copy gdrive_shared: data/external/lucie_proteomics/ --drive-root-folder-id 1uWjRb_ZnrDp9HwgijE48zhb8gvJjOr2P --progress"
-ingest-deconvolution-bulk = "rclone copy gdrive_shared:yuyu01/documentation/incytr/deconvolution/ data/datasets/song/proteomics/source/ --drive-root-folder-id 1syiic6d9DUJIc1sPL5wc8uL7Od3Dsq3Z --max-depth 1 --include imac_median.csv --include py_median.csv --include pr_median.csv --include yuyu_samplekey.csv --progress"
-ingest-tcells = "bash alz/runners/supporting/ingest_tcells.sh"
-ingest-tcells-scrna = "bash alz/runners/supporting/ingest_tcells.sh --scrna"
+# Drive ingest is manifest-driven via the rclone-ingest engine (vendor/rclone-ingest
+# submodule); sources live in conf/data_sources.yaml. `rclone-ingest check` preflights.
+ingest-gdrive-shared = "rclone-ingest sync gdrive-shared"
+ingest-lucie-proteomics = "rclone-ingest sync lucie-proteomics"
+ingest-5xfad-reports = "rclone-ingest sync 5xfad-reports"
+ingest-5xfad-raw-sne = "rclone-ingest sync 5xfad-raw-sne"
+ingest-deconvolution-bulk = "rclone-ingest sync deconvolution-bulk"
+ingest-tcells = "rclone-ingest sync tcells"
+ingest-tcells-scrna = "rclone-ingest sync tcells --group scrna"
+ingest-sce4-canonical = "rclone-ingest sync sce4-canonical"
+ingest-sce4-source = "rclone-ingest sync sce4-source"
 tcells-reshape = "python alz/ingest/tcells.py --reshape"
 tcells-perdonor = "python alz/ingest/tcells_perdonor.py --donor both"
 tcells-projectils-map = "bash alz/runners/supporting/tcells_projectils_map.sh"
@@ -120,6 +126,9 @@ bioconductor-singlecellexperiment = "*"
 bioconductor-summarizedexperiment = "*"
 
 [pypi-dependencies]
+# Shared Drive-ingest engine (git submodule). Editable so the `rclone-ingest`
+# console script is on PATH; sources are declared in conf/data_sources.yaml.
+rclone-ingest = { path = "vendor/rclone-ingest", editable = true }
 kinase-library = "*"
 py-spy = ">=0.4.1, <0.5"
 abc-atlas-access = { git = "https://github.com/alleninstitute/abc_atlas_access.git" }

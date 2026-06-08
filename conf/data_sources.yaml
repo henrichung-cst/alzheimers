@@ -1,0 +1,99 @@
+# Google Drive ingest sources for the alzheimers project.
+# Engine: vendor/rclone-ingest (git submodule). Run via `rclone-ingest sync <name>`
+# or the `pixi run ingest-*` tasks. Pull-only; auth lives in rclone.conf.
+version: 1
+
+# Remote names must match `rclone listremotes`.
+remotes:
+  gdrive_shared: { description: "Shared collaborator drive (Song/yuyu, Lucie, T-cells)" }
+  gdrive:        { description: "Personal/project drive (sce4 provenance)" }
+
+defaults:
+  flags: ["--progress"]
+  retries: 3
+
+sources:
+  gdrive-shared:
+    remote: gdrive_shared
+    folder_id: 1syiic6d9DUJIc1sPL5wc8uL7Od3Dsq3Z
+    transfers:
+      - { src: "", dest: "data/external/gdrive_shared/" }
+
+  # Analysis-ready Lucie artifacts only. Excludes raw Spectronaut *.sne (~250 GB of
+  # base + _XIC search archives) — those are not pipeline inputs. Specific 5xFAD .sne
+  # are pulled deliberately by 5xfad-raw-sne below.
+  lucie-proteomics:
+    remote: gdrive_shared
+    folder_id: 1uWjRb_ZnrDp9HwgijE48zhb8gvJjOr2P
+    transfers:
+      - { src: "", dest: "data/external/lucie_proteomics/", flags: ["--exclude", "*.sne"] }
+
+  # Lucie 5xFAD Male, parsed analysis-ready report tables (gdrive, not gdrive_shared).
+  # 2 regions x 5 PTM modalities. Excludes the older *.csv duplicate reports (Hippo
+  # KGG/pY have a newer .tsv reprocess) and the 0-byte Hippo Total Proteome upload.
+  # Gaps filled from raw .sne by 5xfad-raw-sne below: Cortex/IMAC + Hippo/Total.
+  5xfad-reports:
+    remote: gdrive
+    folder_id: 1lCFVOvcCr09o7JOfEky77dWO5eZ0vPVO
+    transfers:
+      - src: ""
+        dest: "data/raw/external/lucie_proteomics/reports/"
+        flags: ["--exclude", "*.csv", "--exclude", "Total Proteome/**"]
+
+  # Raw Spectronaut .sne for the two cells with no parsed report (~28 GB, base only,
+  # NOT the much larger _XIC variants). Plus the 5xFAD search FASTA + the .sne parser
+  # so the missing Cortex/IMAC + Hippo/Total tables can be produced via alz/ingest/lucie.py.
+  5xfad-raw-sne:
+    remote: gdrive_shared
+    folder_id: 1uWjRb_ZnrDp9HwgijE48zhb8gvJjOr2P
+    transfers:
+      - { src: "5XFAD_cortex/20260526_090409_102325_LD_5xfad_IMAC_cortex.sne", dest: "data/raw/external/lucie_proteomics/5XFAD_cortex/" }
+      - { src: "5XFAD_hippocampus/20260429_143150_5xFAD_hippocampus_3-6-9-12mo_totalproteome.sne", dest: "data/raw/external/lucie_proteomics/5XFAD_hippocampus/" }
+      - { src: "ensembl_5XFAD_reviewed_con_myco.fasta", dest: "data/raw/external/lucie_proteomics/" }
+      - { src: "Tcell_parsed_tables/Ensembl_sne_parser.R", dest: "data/raw/external/lucie_proteomics/" }
+
+  deconvolution-bulk:
+    remote: gdrive_shared
+    folder_id: 1syiic6d9DUJIc1sPL5wc8uL7Od3Dsq3Z
+    transfers:
+      - src: "yuyu01/documentation/incytr/deconvolution/"
+        dest: "data/datasets/song/proteomics/source/"
+        max_depth: 1
+        include: [imac_median.csv, py_median.csv, pr_median.csv, yuyu_samplekey.csv]
+
+  # T-cell exhaustion cohort (2026-05-27 meeting notes).
+  # In scope: Total + pY ForPerseus (both donors), Donor1 IMAC (Donor2 has none).
+  # scrna group: ~10 GB .rds, on demand only (`--group scrna`).
+  # Out of scope: KGG/AcK/MME, Flow, NotParsed reports, collaborator Log2FC files.
+  tcells:
+    remote: gdrive_shared
+    folder_id: 1YE_h1jIyBajtm6ArxJqevJ0rt0xLKQgX
+    transfers:
+      - { src: "T Cell Exhaustion Donor 1/Proteomics Data/Total with Ensembl/10Feb2026_Donor1_TotalProteome_ForPerseus.txt", dest: "data/datasets/tcells/donor1/proteomics/" }
+      - { src: "T Cell Exhaustion Donor 1/Proteomics Data/pY with Ensembl/10Feb2026_Donor1_pY_ForPerseus.txt", dest: "data/datasets/tcells/donor1/proteomics/" }
+      - { src: "T Cell Exhaustion Donor 1/Proteomics Data/IMAC with Ensembl/18May2026_TCellDonor1_Normalized_IMACSiteReporttsv.tsv", dest: "data/datasets/tcells/donor1/proteomics/" }
+      - { src: "T Cell Exhaustion Donor 2/Proteomics Data/Total/10Feb2026_Donor2_TotalProteome_ForPerseus.txt", dest: "data/datasets/tcells/donor2/proteomics/" }
+      - { src: "T Cell Exhaustion Donor 2/Proteomics Data/pY/10Feb2026_Donor2_pY_ForPerseus.txt", dest: "data/datasets/tcells/donor2/proteomics/" }
+      - { group: scrna, src: "T Cell Exhaustion Donor 1/Single Cell Data/Tcells.singlet.rds", dest: "data/datasets/tcells/donor1/scrna/" }
+      - { group: scrna, src: "T Cell Exhaustion Donor 2/Single Cell Data/Tcells_d2.singlet (1).rds", dest: "data/datasets/tcells/donor2/scrna/" }
+
+  # sce4 parity provenance (personal remote). copyto = single-file rename.
+  sce4-canonical:
+    remote: gdrive
+    folder_id: 1yAAvtXNlrXDZhp7nwVFMG46HbQAaQfUQ
+    transfers:
+      - mode: copyto
+        src:  "Analysis_new cluster labels_cutoff_0.1/DEG_PRG_ma_2mo_ApTt_WTyp_10302025/sce4_DEG_PRG_Top300_table_10302025.csv"
+        dest: "data/incytr_frozen/outputs/Analysis_new cluster labels_cutoff_0.1/DEG_PRG_ma_2mo_ApTt_WTyp_10302025/sce4_DEG_PRG_Top300_table_10302025.csv"
+      - mode: copyto
+        src:  "deconvolution_with_new_clusters_20250721/limma_corrected_IMAC_yuyu.tsv"
+        dest: "data/incytr_frozen/v2_46clusters/provenance/limma_corrected_IMAC_yuyu.tsv"
+
+  # Full sce4 working directory (7.5 GiB). --ignore-existing makes re-runs resumable.
+  sce4-source:
+    remote: gdrive
+    folder_id: 1yAAvtXNlrXDZhp7nwVFMG46HbQAaQfUQ
+    transfers:
+      - src: ""
+        dest: "data/incytr_frozen/sce4_source/"
+        flags: ["--transfers=4", "--checkers=8", "--drive-acknowledge-abuse", "--ignore-existing"]
