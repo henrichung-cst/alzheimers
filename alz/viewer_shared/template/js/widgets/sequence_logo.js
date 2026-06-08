@@ -1,16 +1,11 @@
 // ---------------------------------------------------------------------------
-// SequenceLogo — consensus-motif renderer for kinase library PSSMs.
+// SequenceLogo — pLogo-style renderer for kinase library PSSMs.
 //
-// Single row of letters, one column per position, sized uniformly. At each
-// position we list the amino acids whose probability is at least RATIO_CUT×
-// the median probability across the 20 canonical residues at that position;
-// positions with no qualifying residue render as "x". Position 0 (the
-// phosphoacceptor) is rendered from `st_fav` for ST kinases (sized by
-// preference) and as fixed `y` for tyrosine.
-//
-// RATIO_CUT is a heuristic — 2.5× empirically separates clear preferences
-// (R/K at -3 for basophilic kinases, P at +1 for proline-directed kinases)
-// from background noise in the 23-row PSSM. Tunable via opts.ratioCut.
+// Each flanking column is normalized over the 20 canonical amino acids and
+// rendered as a sequence-logo stack. Total stack height is the column's
+// information content; individual letter heights are probability ×
+// information content. Position 0 is the phosphoacceptor: fixed Y for
+// tyrosine kinases, or S/T favorability for serine/threonine kinases.
 // ---------------------------------------------------------------------------
 
 const SequenceLogo = (() => {
@@ -24,50 +19,79 @@ const SequenceLogo = (() => {
     s: "#1f8a3a", t: "#1f8a3a", y: "#1f8a3a",
   };
 
-  const RATIO_CUT_DEFAULT = 1.75;  // "clear preference" threshold
-  const MAX_LETTERS_PER_POS = 2;   // never more than two letters per column
+  const CANONICAL_AA = new Set([
+    "A", "C", "D", "E", "F", "G", "H", "I", "K", "L",
+    "M", "N", "P", "Q", "R", "S", "T", "V", "W", "Y",
+  ]);
+  const MAX_BITS = Math.log2(20);
+  const MAX_VISIBLE_AA = 8;
+  const MIN_LETTER_PX = 3;
 
-  function _median(arr) {
-    const s = arr.slice().sort((a, b) => a - b);
-    const n = s.length;
-    if (!n) return 0;
-    return n % 2 ? s[(n - 1) >> 1] : 0.5 * (s[n / 2 - 1] + s[n / 2]);
+  function _log2(x) {
+    return Math.log(x) / Math.log(2);
   }
 
-  function _consensusForCol(matrix, aa, colIdx, ratioCut) {
-    const col = matrix.map(row => Number(row[colIdx]) || 0);
-    const canonical = [];
+  function _canonicalWeights(matrix, aa, colIdx) {
+    const weights = [];
     for (let i = 0; i < aa.length; i++) {
       const a = aa[i];
-      if (a.length === 1 && a >= "A" && a <= "Z") canonical.push(col[i]);
+      if (!CANONICAL_AA.has(a)) continue;
+      const v = Number(matrix[i] && matrix[i][colIdx]);
+      if (Number.isFinite(v) && v > 0) weights.push({aa: a, value: v});
     }
-    const med = _median(canonical);
-    if (!(med > 0)) return [];
-    const candidates = [];
-    for (let i = 0; i < aa.length; i++) {
-      const r = col[i] / med;
-      if (r >= ratioCut) candidates.push({aa: aa[i], ratio: r});
-    }
-    candidates.sort((a, b) => b.ratio - a.ratio);
-    return candidates.slice(0, MAX_LETTERS_PER_POS);
+    return weights;
   }
 
-  function _centerLetters(kinType, stFav) {
-    if (kinType === "tyrosine") return [{aa: "y"}];
+  function _stackForCol(matrix, aa, colIdx, pxPerBit) {
+    const weights = _canonicalWeights(matrix, aa, colIdx);
+    const total = weights.reduce((acc, w) => acc + w.value, 0);
+    if (!(total > 0)) return {entries: [], bits: 0};
+
+    let entropy = 0;
+    const probs = weights.map(w => {
+      const p = w.value / total;
+      entropy -= p > 0 ? p * _log2(p) : 0;
+      return {...w, p};
+    });
+    const bits = Math.max(0, MAX_BITS - entropy);
+    if (!(bits > 0)) return {entries: [], bits: 0};
+
+    const entries = probs
+      .map(w => ({aa: w.aa, p: w.p, bits: w.p * bits}))
+      .filter(w => w.bits * pxPerBit >= MIN_LETTER_PX)
+      .sort((a, b) => b.bits - a.bits)
+      .slice(0, MAX_VISIBLE_AA)
+      .sort((a, b) => a.bits - b.bits);
+    return {entries, bits};
+  }
+
+  function _centerStack(kinType, stFav) {
+    if (kinType === "tyrosine") return {entries: [{aa: "Y", bits: MAX_BITS}], bits: MAX_BITS};
     if (stFav) {
       const s = Number(stFav.S) || 0;
       const t = Number(stFav.T) || 0;
       if (s + t > 0) {
-        const out = [];
-        // include both if neither dominates; otherwise just the winner.
-        if (s >= 0.7 * t && t >= 0.7 * s) {
-          out.push({aa: "S"}); out.push({aa: "T"});
-        } else if (s > t) out.push({aa: "S"});
-        else out.push({aa: "T"});
-        return out;
+        const entries = [];
+        if (s > 0) entries.push({aa: "S", bits: MAX_BITS * s / (s + t)});
+        if (t > 0) entries.push({aa: "T", bits: MAX_BITS * t / (s + t)});
+        entries.sort((a, b) => a.bits - b.bits);
+        return {entries, bits: MAX_BITS};
       }
     }
-    return [{aa: "S/T"}];
+    return {
+      entries: [{aa: "S", bits: MAX_BITS / 2}, {aa: "T", bits: MAX_BITS / 2}],
+      bits: MAX_BITS,
+    };
+  }
+
+  function _svgText(entry, x, baselineY, heightPx, baseFontSize) {
+    const col = AA_COLOR[entry.aa] || "#222";
+    const scaleY = Math.max(0.01, heightPx / baseFontSize);
+    return `<text x="0" y="0" text-anchor="middle" `
+      + `font-family="ui-monospace, Menlo, Consolas, monospace" `
+      + `font-weight="700" font-size="${baseFontSize}" fill="${col}" `
+      + `transform="matrix(1 0 0 ${scaleY} ${x} ${baselineY})">`
+      + `${_escapeHtml(entry.aa)}</text>`;
   }
 
   function render(host, motif, opts) {
@@ -77,13 +101,13 @@ const SequenceLogo = (() => {
       return;
     }
     opts = opts || {};
-    const ratioCut = opts.ratioCut || RATIO_CUT_DEFAULT;
-    const colW   = opts.colWidth   || 32;
-    const rowH   = opts.rowHeight  || 28;   // single letter row
-    const stackGap = 2;                     // px between stacked letters
-    const padT   = 6;
-    const padB   = 18;                      // axis labels
-    const padL   = 8;
+    const colW   = opts.colWidth   || 31;
+    const pxPerBit = opts.pxPerBit || 20;
+    const stackH = MAX_BITS * pxPerBit;
+    const baseFontSize = opts.baseFontSize || 28;
+    const padT   = 8;
+    const padB   = 20;                      // axis labels
+    const padL   = 30;                      // bit axis
     const padR   = 8;
 
     // Compose column list with center (position 0).
@@ -101,50 +125,59 @@ const SequenceLogo = (() => {
     }
 
     const colData = cols.map(c => c.src === "matrix"
-      ? _consensusForCol(motif.matrix, motif.amino_acids, c.idx, ratioCut)
-      : _centerLetters(motif.kin_type, motif.st_fav));
+      ? _stackForCol(motif.matrix, motif.amino_acids, c.idx, pxPerBit)
+      : _centerStack(motif.kin_type, motif.st_fav));
 
-    // Cell height = MAX_LETTERS_PER_POS rows so columns align visually.
-    const cellH = rowH * MAX_LETTERS_PER_POS + stackGap * (MAX_LETTERS_PER_POS - 1);
     const width  = padL + padR + cols.length * colW;
-    const height = padT + padB + cellH;
+    const height = padT + padB + stackH;
+    const baseline = padT + stackH;
+
+    const axis = [0, 2, 4].map(t => {
+      const y = baseline - t * pxPerBit;
+      return `<line x1="${padL - 4}" y1="${y}" x2="${width - padR}" y2="${y}" `
+        + `stroke="${t === 0 ? "#90a4ae" : "#eceff1"}" stroke-width="1"/>`
+        + `<text x="${padL - 8}" y="${y + 3}" text-anchor="end" `
+        + `font-size="9" fill="#78909c" `
+        + `font-family="ui-monospace, Menlo, Consolas, monospace">${t}</text>`;
+    }).join("")
+      + `<text x="${padL - 22}" y="${padT + stackH / 2}" text-anchor="middle" `
+      + `font-size="9" fill="#78909c" `
+      + `font-family="ui-monospace, Menlo, Consolas, monospace" `
+      + `transform="rotate(-90 ${padL - 22} ${padT + stackH / 2})">bits</text>`;
 
     const colGroups = colData.map((entries, ci) => {
       const x = padL + ci * colW;
       const isCenter = cols[ci].pos === 0;
-      let html = "";
-      if (entries.length === 0) {
-        const y = padT + cellH / 2 + 7;
-        html += `<text x="${x + colW / 2}" y="${y}" text-anchor="middle" `
-              + `font-family="ui-monospace, Menlo, Consolas, monospace" `
-              + `font-size="20" fill="#bbb">x</text>`;
-      } else {
-        for (let i = 0; i < entries.length; i++) {
-          const e = entries[i];
-          const y = padT + (i + 1) * rowH + i * stackGap - 6;
-          const col = AA_COLOR[e.aa] || "#222";
-          html += `<text x="${x + colW / 2}" y="${y}" text-anchor="middle" `
-                + `font-family="ui-monospace, Menlo, Consolas, monospace" `
-                + `font-weight="700" font-size="22" fill="${col}">`
-                + `${_escapeHtml(e.aa)}</text>`;
-        }
+      let html = `<g><title>position ${_escapeHtml(String(cols[ci].pos))}: `
+        + `${entries.bits.toFixed(2)} bits</title>`;
+      if (isCenter) {
+        html += `<rect x="${x}" y="${padT}" width="${colW}" height="${stackH}" `
+          + `fill="#fff5f5" opacity="0.75"/>`;
+      }
+      let used = 0;
+      for (const e of entries.entries) {
+        const h = e.bits * pxPerBit;
+        const y = baseline - used;
+        html += _svgText(e, x + colW / 2, y, h, baseFontSize);
+        used += h;
       }
       const lbl = String(cols[ci].pos);
-      html += `<text x="${x + colW / 2}" y="${padT + cellH + 12}" `
+      html += `<text x="${x + colW / 2}" y="${baseline + 13}" `
             + `text-anchor="middle" font-size="11" fill="#555" `
             + `font-family="ui-monospace, Menlo, Consolas, monospace">${lbl}</text>`;
       if (isCenter) {
-        html += `<line x1="${x - 1}" y1="${padT}" x2="${x - 1}" y2="${padT + cellH}" `
+        html += `<line x1="${x - 1}" y1="${padT}" x2="${x - 1}" y2="${padT + stackH}" `
               + `stroke="#c43a3a" stroke-width="1"/>`
-              + `<line x1="${x + colW + 1}" y1="${padT}" x2="${x + colW + 1}" y2="${padT + cellH}" `
+              + `<line x1="${x + colW + 1}" y1="${padT}" x2="${x + colW + 1}" y2="${padT + stackH}" `
               + `stroke="#c43a3a" stroke-width="1"/>`;
       }
-      return html;
+      return html + `</g>`;
     }).join("");
 
     host.innerHTML = `<svg class="sequence-logo" width="${width}" height="${height}" `
                    + `viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">`
-                   + colGroups + `</svg>`;
+                   + `<rect width="${width}" height="${height}" fill="#fff"/>`
+                   + axis + colGroups + `</svg>`;
   }
 
   function buildBlock(name, motif, containerId) {
@@ -159,8 +192,7 @@ const SequenceLogo = (() => {
       + `<div id="${_escapeHtml(containerId)}" class="kinase-motif-logo"></div>`
       + `<p class="kinase-stage-note muted">Position-specific amino-acid preferences from the kinase library PSSM for ${nm}. `
       + `Center (0) is the phosphoacceptor — ${center}. `
-      + `Shown: residues with probability ≥ ${RATIO_CUT_DEFAULT}× the per-position median over the 20 canonical AAs `
-      + `(max ${MAX_LETTERS_PER_POS} per column; "x" = none qualify).</p></section>`;
+      + `Letter height is scaled by probability × information content; low-information positions appear small or empty.</p></section>`;
   }
 
   return {render, buildBlock};
