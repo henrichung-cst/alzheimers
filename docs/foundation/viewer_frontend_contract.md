@@ -66,6 +66,30 @@ are absent. Evidence-row rendering is shared and branches on cohort metadata for
 and trace row grouping. The remaining shared modules are byte-identical UI/state helpers used by both
 viewers.
 
+### Shared Kinase Motif Logo
+
+`js/widgets/sequence_logo.js` is a shared browser-side port of
+`kinase_library.Kinase.seq_logo()` for the kinase detail Measurement Trace panel. The approved
+viewer logo follows Kinase Library's default `logo_type="ratio_to_median"` behavior:
+
+```text
+height = log2(position_value / per-position median)
+```
+
+Letters above zero are residues favored over the position median; letters below zero are residues
+disfavored relative to that median. This is intentionally denser than an information-content logo
+because it preserves Kinase Library's visual interpretation of motif preferences. For example, AKT1
+shows a modest R preference at -5 and a strong R preference at -3, matching the Kinase Library
+motif view.
+
+The widget uses Kinase Library's amino-acid color map and phospho-priming display conventions:
+lowercase `t` is rendered as `pS/pT`, lowercase `y` as `pY`, and lowercase `s` is dropped, matching
+the package defaults. These flanking `pS/pT` and `pY` entries are phospho-priming preferences, not
+the central phosphoacceptor. Position 0 is drawn separately from the kinase phosphoacceptor
+preference: fixed `Y` for tyrosine kinases and S/T favorability for serine/threonine kinases. The
+center stack is scaled to the tallest positive flanking stack, matching Kinase Library's
+`make_seq_logo()` behavior.
+
 ### Song/AD Incytr Heatmap Saturation
 
 The Song/AD heatmap is intentionally not renormalized by default. A 2026-06-01 audit found that the

@@ -175,6 +175,32 @@ Older payloads emitted a flat fallback during migration:
 New JS should use `kinases.by_context[active_context]`. Current builders emit canonical
 `by_context` blocks; the adapter accepts older flat payloads only for backward compatibility.
 
+### Kinase Motifs
+
+`payload.kinase_motifs` is a global lookup keyed by Kinase Library kinase name. The shared
+Measurement Trace motif widget consumes this block in both the AD/Song and T-cell viewers. Each
+entry should provide the normalized Kinase Library matrix and phosphoacceptor metadata:
+
+```json
+{
+  "kinase_motifs": {
+    "AKT1": {
+      "kin_type": "ser_thr",
+      "positions": [-5, -4, -3, -2, -1, 1, 2, 3, 4],
+      "amino_acids": ["P", "G", "A", "C", "S", "T", "...", "s", "t", "y"],
+      "matrix": [[0.1, 0.2]],
+      "st_fav": {"S": 1.0, "T": 0.64}
+    }
+  }
+}
+```
+
+The frontend renders this block with Kinase Library's default sequence-logo interpretation:
+`log2(position_value / per-position median)`. Flanking lowercase `t` and `y` are displayed as
+`pS/pT` and `pY` phospho-priming preferences, while lowercase `s` is dropped to match
+`kinase_library.Kinase.seq_logo()` defaults. Position 0 is not stored in `positions`; it is inserted
+by the frontend from `kin_type` and `st_fav`.
+
 ### Cell Types
 
 Cell-type blocks may be global or context-aware:
