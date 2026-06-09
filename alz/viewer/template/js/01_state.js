@@ -14,11 +14,10 @@ let RECEIVERS = null;
 let DISEASE_COLORS = null;
 
 async function _loadPayload() {
-  // 1) Inline payload (default for self-contained HTML): read from the
-  //    <script type="application/json" id="payload-data"> tag the build emits.
-  // 2) If the inline payload is empty/null/missing, fall back to fetching
-  //    the .json.gz / .json sidecars (kept for hosting modes where the build
-  //    intentionally writes a small index.html + separate payload file).
+  // 1) Hosted/S3 default: payload-data is null, so fetch raw
+  //    unified_viewer.payload.json.gz and manually decompress it.
+  // 2) Inline archival mode: --inline-payload embeds JSON in payload-data.
+  // 3) Plain JSON remains a fallback for browsers without gzip stream support.
   let text = null;
   const inlineEl = document.getElementById("payload-data");
   if (inlineEl && inlineEl.textContent && inlineEl.textContent.trim() !== "null"

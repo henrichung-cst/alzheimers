@@ -32,6 +32,21 @@ function _confPass(rowConf, threshold) {
   return (_CONF_RANK[rowConf] || 0) >= (_CONF_RANK[threshold] || 0);
 }
 
+let _attributionRowsByKinase = null;
+function _ensureAttributionRowsByKinase() {
+  if (_attributionRowsByKinase) return _attributionRowsByKinase;
+  const m = new Map();
+  const AI = PAYLOAD.attribution_index || {};
+  const ids = AI.kinase_id || [];
+  for (let i = 0; i < ids.length; i++) {
+    const kid = Number(ids[i]);
+    if (!m.has(kid)) m.set(kid, []);
+    m.get(kid).push(i);
+  }
+  _attributionRowsByKinase = m;
+  return m;
+}
+
 // WMB location tiers as multiples of the even-split baseline. WMB specificity
 // is a share normalized over the retained WMB classes that carry atlas cells (~9),
 // so the honest uniform is 1/N_retained, read canonically from meta.wmb_uniform
@@ -120,12 +135,13 @@ function getScopedAttribution(kinaseId, filter) {
   // may be string ("" = any) or array ([] = any).
   const AI = PAYLOAD.attribution_index || {};
   if (!AI.kinase_id) return [];
+  const rowIdxs = _ensureAttributionRowsByKinase().get(Number(kinaseId)) || [];
+  if (rowIdxs.length === 0) return [];
   const scopedCtx = getScopedContrastIds(filter);
   const ctSet = _filterSet(filter.celltype);
   const confidence = filter.confidence || "";
   const out = [];
-  for (let j = 0; j < AI.kinase_id.length; j++) {
-    if (AI.kinase_id[j] !== kinaseId) continue;
+  for (const j of rowIdxs) {
     if (scopedCtx.size > 0 && !scopedCtx.has(AI.contrast_id[j])) continue;
     if (ctSet.size && !ctSet.has(AI.cell_type[j]))                continue;
     const _tier = AI.confidence_tier ? AI.confidence_tier[j] : "none";

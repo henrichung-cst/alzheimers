@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Unified viewer builder: single-file HTML deliverable for the kinase pipeline.
+"""Unified viewer builder for the kinase pipeline.
 
 Reads the unified attribution + recovery tables (mouse), the Levy-t5 decomposition
 shards (per-cluster MEA + per-animal site OLS), the pair-mode Incytr output
 (`outputs/reports/incytr_pair_mode/`), and the human per-donor MEA + SEA-AD
-agreement chain. Emits `outputs/reports/unified_viewer/index.html` with the
-columnar payload inlined as `<script type="application/json" id="payload-data">`
-plus per-entity shards under `edge_slices/{human_perdonor,decomp_ols,
-song_concordance,incytr_pathways}/` fetched on demand by the JS tabs.
+agreement chain. Emits `outputs/reports/unified_viewer/index.html` plus
+`unified_viewer.payload.json(.gz)` sidecars and per-entity shards under
+`edge_slices/{human_perdonor,decomp_ols,song_concordance,incytr_pathways}/`
+fetched on demand by the JS tabs.
 
 Usage:
     python alz/build_unified_viewer.py              # payload + html (default)
@@ -3034,12 +3034,6 @@ def build_payload(data: UnifiedData) -> dict:
         "omics_trace": ensure_omics_trace_sources(),
         "omics_trace_normalized": ensure_omics_trace_normalized_sources(),
     }
-    # Build-time round-trip assertion: recompute stored *_log2FC from substrate
-    # and verify agreement to <=1e-4. Catches routing bugs, substrate drift,
-    # sign flips, and aggregation mismatches. Skipped gracefully on first build
-    # (before edge_slices/incytr_pathways/ exists). See Item 3.5.
-    assert_pathway_fc_round_trips()
-
     kid = {k: i for i, k in enumerate(data.edge_metadata["kinases"])}
     ev = data.celltype_evidence[
         data.celltype_evidence["kinase"].isin(kid)
@@ -3284,26 +3278,32 @@ def _render_template() -> str:
 
 
 
-def write_html(payload: dict, json_str: str | None = None) -> dict:
+def write_html(
+    payload: dict | None = None,
+    json_str: str | None = None,
+    *,
+    inline_payload: bool = False,
+) -> dict:
     """Emit the unified viewer HTML at UNIFIED_VIEWER_DIR/index.html.
 
     Sibling dirs (edge_slices/, edge_summaries/) are written by
     build_edge_shards.py; this function only writes the HTML.
     """
     os.makedirs(UNIFIED_VIEWER_DIR, exist_ok=True)
-    if json_str is None:
+    if inline_payload and json_str is None:
+        if payload is None:
+            raise ValueError("payload or json_str is required for inline HTML")
         json_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    # PAYLOAD inlined inside <script type="application/json" id="payload-data">.
-    # Trade-off: index.html grows to ~85 MB (vs ~1 MB with async fetch), but
-    # the viewer is a single self-contained file with no second-fetch failure
-    # mode (S3 ACL / file:// / CORS / etc). JS still supports the async-fetch
-    # path as a fallback when the inline payload is empty/null.
+    payload_text = json_str if inline_payload else "null"
+    # Default hosted/S3 mode keeps index.html small and loads
+    # unified_viewer.payload.json.gz via client-side DecompressionStream.
+    # --inline-payload preserves the archival/offline single-file mode.
     html = _render_template()
     for sentinel, value in (
         ("__APP_COLOR__", config.DISEASE_COLORS["App"]),
         ("__TAU_COLOR__", config.DISEASE_COLORS["Tau"]),
         ("__APTT_COLOR__", config.DISEASE_COLORS["ApTt"]),
-        ("__PAYLOAD_SENTINEL__", json_str),
+        ("__PAYLOAD_SENTINEL__", payload_text),
     ):
         html = html.replace(sentinel, value)
     raw = html.encode("utf-8")
@@ -3543,6 +3543,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--payload", action="store_true", help="Write JSON payload")
     ap.add_argument("--html", action="store_true", help="Write unified_viewer.html (requires payload)")
     ap.add_argument("--validate", action="store_true", help="Write Phase 2 validation report")
+    ap.add_argument("--inline-payload", action="store_true",
+                    help="Embed the full JSON payload in index.html for a "
+                         "single-file archival/offline artifact. Default "
+                         "hosted mode writes a small HTML shell that fetches "
+                         "unified_viewer.payload.json.gz beside it.")
     ap.add_argument("--skip-roundtrip", action="store_true",
                     help="Skip the Item 3.5 build-time LFC round-trip assertion "
                          "(default mode, ~60s). Use only for fast iteration.")
@@ -3560,16 +3565,20 @@ def main(argv: list[str] | None = None) -> int:
         args.payload = True
         args.html = True
 
-    _assert_input_provenance(skip_verify=args.skip_verify)
-
-    data = load_all_data()
+    needs_data = args.summary or args.payload or args.validate
+    data = None
+    if needs_data:
+        _assert_input_provenance(skip_verify=args.skip_verify)
+        data = load_all_data()
 
     if args.summary:
+        assert data is not None
         print(json.dumps(data.summary(), indent=2))
 
     payload = None
     json_str = None
     if args.payload:
+        assert data is not None
         payload = build_payload(data)
         sizes = write_payload(payload)
         json_str = sizes.pop("json_str")
@@ -3577,7 +3586,7 @@ def main(argv: list[str] | None = None) -> int:
               f"gzip={sizes['gzip_bytes']/1e6:.2f} MB")
 
     if args.html:
-        if payload is None:
+        if args.inline_payload and payload is None:
             if not os.path.exists(PAYLOAD_JSON):
                 raise SystemExit(
                     f"payload missing at {PAYLOAD_JSON}; run --payload first"
@@ -3585,10 +3594,26 @@ def main(argv: list[str] | None = None) -> int:
             with open(PAYLOAD_JSON) as f:
                 json_str = f.read()
             payload = json.loads(json_str)
-        info = write_html(payload, json_str=json_str)
+        elif not args.inline_payload:
+            missing = [
+                path for path in (PAYLOAD_JSON_GZ, PAYLOAD_JSON)
+                if not os.path.exists(path)
+            ]
+            if missing:
+                raise SystemExit(
+                    "payload sidecar missing; run --payload first: "
+                    + ", ".join(missing)
+                )
+            json_str = None
+        info = write_html(
+            payload,
+            json_str=json_str,
+            inline_payload=args.inline_payload,
+        )
         print(f"  html {info['html_bytes']/1e6:.2f} MB -> {info['output']}")
 
     if args.validate:
+        assert data is not None
         validate(data)
 
     if args.payload and not args.skip_roundtrip:

@@ -64,6 +64,10 @@ Tradeoffs:
 
 Priority: high for S3-folder deployment.
 
+Status: implemented. `index.html` now emits `payload-data` as `null` by
+default and the existing loader fetches `unified_viewer.payload.json.gz`.
+Use `--inline-payload` when a single-file archival/offline artifact is needed.
+
 ### 2. Index attribution rows by kinase in JavaScript
 
 `getScopedAttribution()` currently scans every row in `PAYLOAD.attribution_index`
@@ -89,6 +93,10 @@ Tradeoffs:
 
 Priority: high.
 
+Status: implemented. The kinase viewer builds a one-time
+`kinase_id -> attribution row indices` map and `getScopedAttribution()` walks
+only the matching row slice.
+
 ### 3. Run pathway round-trip verification once per payload build
 
 The default payload path currently runs the pathway round-trip verifier inside
@@ -110,6 +118,9 @@ Tradeoffs:
 - None if one verifier pass remains.
 
 Priority: high for build time.
+
+Status: implemented. The verifier now runs from the CLI payload path only, so
+`--skip-roundtrip` and `--strict-roundtrip` control the single remaining pass.
 
 ### 4. Add source fingerprints for shard rebuild skipping
 
@@ -136,6 +147,9 @@ Tradeoffs:
 
 Priority: medium; implement only with strict invalidation.
 
+Status: deferred. This should be implemented as a separate rollback unit with
+manifest tests because stale shard reuse would be worse than slow rebuilds.
+
 ### 5. Move `gene_node_index` to a lazy sidecar
 
 `gene_node_index` is about 15.7 MB raw inside the main payload and is only needed
@@ -158,6 +172,10 @@ Tradeoffs:
 
 Priority: medium-high after sidecar payload default.
 
+Status: deferred. The sidecar payload default removes the largest S3 transfer
+problem first; lazy `gene_node_index` needs UI loading/error handling and should
+ship separately.
+
 ### 6. Debounce and cache audit-table filtering
 
 Audit tables filter and sort all loaded rows on each render. The search input
@@ -179,6 +197,9 @@ Tradeoffs:
 
 Priority: medium.
 
+Status: deferred. This is an interaction-only optimization and can be added
+independently from the hosted payload/build-time changes.
+
 ## Implemented During Audit
 
 `SliceCache` now coalesces concurrent fetch/decode requests for:
@@ -196,4 +217,3 @@ Tradeoffs:
 
 - Concurrent callers share the same success or failure for a request.
 - This is the expected behavior for identical shard requests.
-
