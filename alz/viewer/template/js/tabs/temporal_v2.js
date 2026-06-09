@@ -18,7 +18,7 @@ function _tv2EnsureAttrIndex() {
     const kid = AI.kinase_id[j];
     const cidx = AI.contrast_id[j];
     const cell = AI.cell_type[j];
-    const tier = _combinedTierFor(kid, cidx, cell, AI.combined_confidence[j]);
+    const tier = AI.confidence_tier ? AI.confidence_tier[j] : "none";
     const rank = _CONF_RANK[tier] || 0;
     const key = kid + "|" + cidx;
     let arr = m.get(key);
@@ -714,7 +714,7 @@ window.KinaseFilter = (function() {
     celltype: [],     // [] = any; otherwise array of subclass strings
     confidence: "",   // "" | "high" | "moderate" | "low" — ordinal threshold (≥)
     nSigMin: 0,       // minimum n_sig (count of significant contrasts in scope)
-    wmbMin: 0,        // 0 = any; 1/2/5/10 = minimum WMB specificity tier (× uniform)
+    songMin: 0,       // 0 = any; 2 / 5 / 10 = minimum Song location specificity (× even-split)
     pattern: "",      // TrendFilter value over disease-specific NES time courses.
     fdr: 0.25, sortCol: "nes_profile", sortAsc: false,
   };

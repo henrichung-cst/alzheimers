@@ -7,7 +7,7 @@ not WMB-34. Evidence sources merge via single-hop crosswalks:
     via `cluster_to_seaad_supertype.csv` (many-to-many; weighted mean LFC).
   - WMB expression specificity, joined cluster → parent WMB class via
     `cluster_to_wmb_class.csv` (1:1, lineage-level; clusters sharing a parent
-    inherit identical WMB scores).
+    inherit identical WMB specificity values).
   - Song within-cohort transcriptomic concordance + specificity, keyed
     directly on cluster_name (identity join).
 
@@ -40,73 +40,18 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from alz.shared import config
+from alz.bulk_mea.confidence import (
+    CONFIDENCE_RANK,
+    assign_confidence,
+    load_decomposition_crosscheck,
+    prepare_human_location_specificity,
+)
 from alz.cross_reference.evidence import (
     compute_sea_ad_concordance,
     prepare_song_concordance,
     prepare_song_specificity,
     prepare_wmb_specificity,
 )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _assign_confidence_and_basis_vectorized(unified):
-    """Vectorized confidence + evidence-basis assignment for the unified table.
-
-    Non-MEA-significant rows short-circuit to ('none', 'weak') in the same pass.
-    """
-    eligible = unified["mea_significant"].astype(bool) & (unified["effective_concordance"] > 0)
-    wmb = unified["wmb_specificity"]
-    sea_lfc = unified["sea_ad_lfc"].fillna(0.0)
-    song_lfc_col = (unified["song_lfc"].fillna(0.0)
-                    if "song_lfc" in unified.columns
-                    else pd.Series(0.0, index=unified.index))
-    song_contributed = unified["concordance_source"].isin(("song", "both"))
-
-    has_wmb = wmb >= config.SPECIFICITY_LOW
-    has_wmb_high = wmb >= config.SPECIFICITY_HIGH
-    has_sea_ad = sea_lfc.abs() > config.SEA_AD_LFC_MIN
-    has_song = song_lfc_col.abs() > config.SONG_LFC_MIN
-
-    # Confidence tiers, priority high → moderate → low (np.select picks first match)
-    high_mask = eligible & song_contributed & has_wmb_high & (has_song | has_sea_ad)
-    mod_song_mask = eligible & song_contributed & (has_wmb | has_sea_ad | has_song)
-    mod_sea_ad_mask = eligible & ~song_contributed & (has_wmb | has_sea_ad)
-    low_mask = eligible & ~song_contributed & ~(has_wmb | has_sea_ad)
-    conf = pd.Series(
-        np.select(
-            [high_mask, mod_song_mask, mod_sea_ad_mask, low_mask],
-            ["high", "moderate", "moderate", "low"],
-            default="none",
-        ),
-        index=unified.index,
-    )
-
-    basis = pd.Series(
-        np.select(
-            [
-                eligible & has_wmb & has_sea_ad & has_song,
-                eligible & has_wmb & has_song & ~has_sea_ad,
-                eligible & has_wmb & has_sea_ad & ~has_song,
-                eligible & has_wmb & ~has_sea_ad & ~has_song,
-                eligible & has_song & ~has_wmb & ~has_sea_ad,
-                eligible & has_sea_ad & ~has_wmb & ~has_song,
-            ],
-            [
-                "three_way",
-                "within_cohort",
-                "cross_species",
-                "mouse_expression_only",
-                "song_only",
-                "human_concordance_only",
-            ],
-            default="weak",
-        ),
-        index=unified.index,
-    )
-    return conf, basis
 
 
 def _combine_mea_tracks(mea_by_track):
@@ -150,8 +95,9 @@ def _map_kinases_to_genes(sig, k2g_df):
 
 
 def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
-                      song_cd_top, song_key_is_contrast):
-    """Cross-join sig × WMB classes, layer in evidence merges, score, and label.
+                      song_cd_top, song_key_is_contrast,
+                      human_location_top=None, decomp_top=None):
+    """Cross-join sig × WMB classes, layer in evidence merges, and label.
 
     Returns ``(unified_full, unified_attributed, summary_dict)``.
     `unified_full` keeps every row (including confidence='none'); `unified_attributed`
@@ -190,12 +136,13 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
         unified = unified.merge(
             sea_ad_df[sea_ad_cols], on=["kinase", "contrast", "cell_type"], how="left"
         )
+        unified = unified.rename(columns={"concordance_score": "_sea_ad_directional_lfc"})
     else:
         unified["sea_ad_lfc"] = np.nan
         unified["sea_ad_n_supertypes"] = np.nan
         unified["sea_ad_direction_agreement"] = np.nan
         unified["sea_ad_stratum"] = np.nan
-        unified["concordance_score"] = np.nan
+        unified["_sea_ad_directional_lfc"] = np.nan
 
     if wmb_top is not None:
         # Lineage-level WMB join: (_gene_upper, wmb_class) → specificity.
@@ -226,22 +173,42 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
     for _col in ("song_lfc", "song_pval", "song_fdr"):
         if _col not in unified.columns:
             unified[_col] = np.nan
-    unified["song_concordance_score"] = np.where(
+    unified["_song_directional_lfc"] = np.where(
         np.isfinite(unified["song_lfc"]),
         np.sign(unified["NES"]) * unified["song_lfc"],
         np.nan,
     )
 
+    if human_location_top is not None:
+        unified = unified.merge(
+            human_location_top,
+            on=["_gene_upper", "cell_type"],
+            how="left",
+        )
+    for _col in ("seaad_location_score", "hbca_location_score", "human_location_score"):
+        if _col not in unified.columns:
+            unified[_col] = np.nan
+
+    if decomp_top is not None:
+        unified = unified.merge(
+            decomp_top,
+            on=["kinase", "contrast", "cell_type"],
+            how="left",
+        )
+    for _col in ("decomp_nes", "decomp_fdr"):
+        if _col not in unified.columns:
+            unified[_col] = np.nan
+
     w_song = config.SONG_CONCORDANCE_WEIGHT
     w_sea_ad = config.SEA_AD_CONCORDANCE_WEIGHT
-    song_cs = unified["song_concordance_score"]
-    sea_ad_cs = unified["concordance_score"]
+    song_cs = unified["_song_directional_lfc"]
+    sea_ad_cs = unified["_sea_ad_directional_lfc"]
     has_song_v = np.isfinite(song_cs)
     has_sea_ad_v = np.isfinite(sea_ad_cs) & (sea_ad_cs != 0)
     has_both = has_song_v & has_sea_ad_v
     has_song_only = has_song_v & ~has_sea_ad_v
     has_sea_ad_only = ~has_song_v & has_sea_ad_v
-    unified["effective_concordance"] = np.select(
+    unified["_effective_concordance"] = np.select(
         [has_both, has_song_only, has_sea_ad_only],
         [(w_song * song_cs + w_sea_ad * sea_ad_cs) / (w_song + w_sea_ad),
          song_cs, sea_ad_cs],
@@ -253,12 +220,7 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
         default="none",
     )
 
-    unified["combined_score"] = (
-        unified["effective_concordance"]
-        * (config.COMBINED_SCORE_SPECIFICITY_BASE + unified["wmb_specificity"]))
-    conf, basis = _assign_confidence_and_basis_vectorized(unified)
-    unified["combined_confidence"] = conf
-    unified["evidence_basis"] = basis
+    unified = assign_confidence(unified)
 
     unified = unified.drop(columns=["_gene_upper"], errors="ignore")
 
@@ -269,8 +231,32 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
             f"{expected} (n_sig {len(sig)} × n_clusters "
             f"{len(config.CLUSTER_SPINE)}) — silent drop in merge")
 
-    attributed = unified[unified["combined_confidence"] != "none"].copy()
-    attributed = attributed.sort_values("combined_score", ascending=False)
+    attributed = unified[unified["confidence_tier"] != "none"].copy()
+    attributed["_confidence_rank"] = (
+        attributed["confidence_tier"].map(CONFIDENCE_RANK).fillna(0).astype(int)
+    )
+    attributed["_song_lfc_abs"] = attributed["song_lfc"].abs()
+    attributed["_sea_ad_lfc_abs"] = attributed["sea_ad_lfc"].abs()
+    attributed = attributed.sort_values(
+        [
+            "_confidence_rank",
+            "song_specificity",
+            "decomp_agrees_bulk",
+            "wmb_specificity",
+            "human_location_score",
+            "_song_lfc_abs",
+            "_sea_ad_lfc_abs",
+        ],
+        ascending=[False, False, False, False, False, False, False],
+    ).drop(columns=["_confidence_rank", "_song_lfc_abs", "_sea_ad_lfc_abs"])
+
+    internal_cols = [
+        "_effective_concordance",
+        "_song_directional_lfc",
+        "_sea_ad_directional_lfc",
+    ]
+    unified = unified.drop(columns=internal_cols, errors="ignore")
+    attributed = attributed.drop(columns=internal_cols, errors="ignore")
 
     if len(attributed) > 0:
         print(f"\n  Attribution summary:")
@@ -280,7 +266,7 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
               f"({n_unique_kinases} unique kinases)")
         print(f"\n  By confidence:")
         for conf, cnt in attributed[
-                "combined_confidence"].value_counts().items():
+                "confidence_tier"].value_counts().items():
             print(f"    {conf}: {cnt}")
         print(f"\n  By cell type (spine cluster):")
         for ct, cnt in attributed[
@@ -291,7 +277,7 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
         "n_mea_significant": int(len(sig)),
         "n_total_rows": int(len(unified)),
         "n_attributed": int(len(attributed)),
-        "by_confidence": (attributed["combined_confidence"].value_counts()
+        "by_confidence": (attributed["confidence_tier"].value_counts()
                           .to_dict() if len(attributed) > 0 else {}),
         "by_cell_type": (attributed["cell_type"].value_counts()
                          .to_dict() if len(attributed) > 0 else {}),
@@ -365,8 +351,16 @@ def main():
                   else None)
     song_cd_top, song_key_is_contrast = prepare_song_concordance(song_cd_df)
 
+    human_location_top = prepare_human_location_specificity()
+    decomp_top = load_decomposition_crosscheck()
+    if decomp_top is None:
+        print("  Decomposition cross-check: not available; no very_high promotion")
+    else:
+        print(f"  Decomposition cross-check: {len(decomp_top)} rows loaded")
+
     unified, attributed, summary = _assemble_unified(
-        sig, sea_ad_df, wmb_top, song_spec_top, song_cd_top, song_key_is_contrast)
+        sig, sea_ad_df, wmb_top, song_spec_top, song_cd_top, song_key_is_contrast,
+        human_location_top=human_location_top, decomp_top=decomp_top)
 
     # Save outputs
     attributed.to_csv(

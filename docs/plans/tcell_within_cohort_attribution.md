@@ -47,7 +47,7 @@ Outputs under `outputs/reports/kinase_attribution_tcells/donor1/`:
    - `tcell_specificity` (repeated across day rows), `tcell_tier` ∈ {0,1,2,5,10} (binned in Python via `1/N_states`)
    - `tcell_lfc`, `tcell_concordance = sign(NES) · tcell_lfc`
    - `tcell_consistency` = count of {d13,d17,d20} where `sign(NES)·tcell_lfc > 0` (per-`(kinase,state)`, repeated)
-   - `_full` keeps every row; `unified_attribution_tcells.csv` keeps **concordant** rows only (`tcell_concordance > 0`), mirroring the mouse `combined_confidence != "none"` drop.
+   - `_full` keeps every row; `unified_attribution_tcells.csv` keeps **concordant** rows only (`tcell_concordance > 0`), mirroring the mouse attributed-row drop.
    - Row-count guard: `len(_full) == n_kinases × n_states × n_contrast_days` (same assertion style as `attribute.py:262`).
    - Day-contrasts d15/d19 have no scRNA → **no attribution rows** (honest empty), only d13/d17/d20 attribute.
 
@@ -67,9 +67,9 @@ Outputs under `outputs/reports/kinase_attribution_tcells/donor1/`:
 - Filter gate: `tcellMin` compares `e.tcell_tier >= tcellMin` directly (simpler than the mouse `wmbMinScore` since tier is precomputed; copy the gate at :686).
 - Adapt `_renderCellTypesCell` (:558) to badge by `tcell_tier` (10→vhi, 5→hi, 2→mid) instead of the confidence string.
 
-**`alz/tcell_viewer/template/js/tabs/kinase_audit.js`** — replace `ATTR_VERDICT_COLS` (:567) with the T-cell set, drop the decomp super-group and `cross_rank`/SEA-AD/Song columns:
+**`alz/tcell_viewer/template/js/tabs/kinase_audit.js`** — replace `ATTR_VERDICT_COLS` (:567) with the T-cell set, drop the decomp super-group and legacy ranking/SEA-AD/Song columns:
 `[cell_type · tcell_tier (badge) · tcell_specificity · tcell_lfc · concordance vs bulk]`.
-- In `_renderAttributionVerdict` (:607): remove the decomp/`cross_rank` computation; sort by `tcell_tier` then `tcell_concordance` desc; keep the bulk-MEA anchor banner (it uses `NES`). Replace the explainer text with the within-cohort method (specificity tier + sign-vs-bulk + timecourse consistency; state the no-p-value rationale).
+- In `_renderAttributionVerdict` (:607): remove the decomp ranking computation; sort by `tcell_tier` then `tcell_concordance` desc; keep the bulk-MEA anchor banner (it uses `NES`). Replace the explainer text with the within-cohort method (specificity tier + sign-vs-bulk + timecourse consistency; state the no-p-value rationale).
 - Evidence drawer (`_renderAttributionDrawer` :815) currently renders WMB dot-plot / SEA-AD heatmap / Song OLS — none exist for T-cells. Replace with the **per-state transcript trace** (the day-vs-baseline expression curve, data already emitted by `_write_tcell_transcript_trace`), or omit the drawer. Do **not** render empty WMB/SEA-AD/Song panels.
 
 **`alz/tcell_viewer/template/body.html`** — re-add to the kinase table (:58-68) and toolbar (:26-55), mirroring the unified `body.html`:

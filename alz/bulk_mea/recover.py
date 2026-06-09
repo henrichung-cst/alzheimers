@@ -32,6 +32,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from alz.shared import config
+from alz.bulk_mea.confidence import CONFIDENCE_RANK
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -95,40 +96,58 @@ def _validate_gene_symbols(df, gene_map, table_name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Shared helper: Table 2 (WMB-gated static evidence)
+# Shared helper: Table 2 (Song-first static evidence)
 # ---------------------------------------------------------------------------
 
 def _build_celltype_evidence(uaf_full):
-    """Build Table 2: one row per (kinase, cell_type) above WMB expression gate.
+    """Build Table 2: one Song-first row per (kinase, cell_type).
 
-    wmb_specificity and sea_ad_lfc are static per pair (same across all
-    contrasts). Deduplicate by taking the row with the highest
-    combined_score (ties broken by wmb_specificity), so the surviving row
-    reflects the contrast where the joint attribution evidence is
-    strongest. Filter to pairs where wmb_specificity >= SPECIFICITY_LOW
-    (1 / N_CELL_TYPES; 1/31 ≈ 0.0323 under the Levy-t5 spine).
+    Deduplicate by taking the row with the highest canonical confidence tier,
+    then explicit Song/decomposition/localization evidence. Keep rows that are
+    attributed or have Song location specificity above the Levy-T5 uniform
+    baseline.
     """
-    if "combined_score" in uaf_full.columns:
-        idx = (uaf_full
-               .sort_values(["combined_score", "wmb_specificity"],
-                            ascending=[False, False])
-               .groupby(["kinase", "cell_type"], sort=False)
-               .head(1).index)
-    else:
-        idx = uaf_full.groupby(["kinase", "cell_type"])["wmb_specificity"].idxmax()
-    deduped = uaf_full.loc[idx].reset_index(drop=True)
+    spec_low = config.wmb_specificity_uniform()
+    spec_high = 2.0 * spec_low
+    song_uniform = 1.0 / config.N_CELL_TYPES
+
+    uaf_ranked = uaf_full.copy()
+    uaf_ranked["_confidence_rank"] = (
+        uaf_ranked["confidence_tier"].map(CONFIDENCE_RANK).fillna(0).astype(int)
+    )
+    uaf_ranked["_song_lfc_abs"] = uaf_ranked["song_lfc"].abs()
+    uaf_ranked["_sea_ad_lfc_abs"] = uaf_ranked["sea_ad_lfc"].abs()
+    idx = (uaf_ranked
+           .sort_values(
+               [
+                   "_confidence_rank",
+                   "song_specificity",
+                   "decomp_agrees_bulk",
+                   "wmb_specificity",
+                   "human_location_score",
+                   "_song_lfc_abs",
+                   "_sea_ad_lfc_abs",
+               ],
+               ascending=[False, False, False, False, False, False, False],
+           )
+           .groupby(["kinase", "cell_type"], sort=False)
+           .head(1).index)
+    deduped = uaf_ranked.loc[idx].drop(
+        columns=["_confidence_rank", "_song_lfc_abs", "_sea_ad_lfc_abs"],
+    ).reset_index(drop=True)
 
     filtered = deduped[
-        deduped["wmb_specificity"] >= config.SPECIFICITY_LOW
+        (deduped["confidence_tier"].astype(str) != "none")
+        | (deduped["song_specificity"].fillna(0) >= song_uniform)
     ].copy()
 
     filtered["wmb_fold_over_uniform"] = (
-        filtered["wmb_specificity"] / config.SPECIFICITY_LOW)
+        filtered["wmb_specificity"] / spec_low)
     filtered["concordance_direction"] = filtered["sea_ad_lfc"].apply(
         lambda x: "up" if x > config.SEA_AD_LFC_MIN
         else ("down" if x < -config.SEA_AD_LFC_MIN else "none"))
     filtered["wmb_tier"] = filtered["wmb_specificity"].apply(
-        lambda x: "high" if x >= config.SPECIFICITY_HIGH else "low")
+        lambda x: "high" if x >= spec_high else "low")
 
     # Song within-cohort concordance (carry forward from unified attribution)
     if "song_lfc" in filtered.columns:
@@ -142,15 +161,31 @@ def _build_celltype_evidence(uaf_full):
 
     cols = [
         "kinase", "gene_symbol", "cell_type",
+        "confidence_tier", "confidence_basis",
+        "song_direction_support", "song_location_tier",
+        "wmb_crosscheck_tier", "human_location_tier", "decomp_agrees_bulk",
         "wmb_specificity", "wmb_fold_over_uniform",
+        "song_specificity", "song_tau", "song_top_share", "song_top_cluster",
         "sea_ad_lfc", "sea_ad_n_supertypes",
-        "concordance_direction", "evidence_basis", "wmb_tier",
+        "seaad_location_score", "hbca_location_score", "human_location_score",
+        "concordance_direction", "wmb_tier",
         "song_lfc", "song_concordance_direction",
+        "decomp_nes", "decomp_fdr",
     ]
-    for extra in ("combined_score", "combined_confidence", "contrast"):
+    for extra in ("contrast",):
         if extra in filtered.columns and extra not in cols:
             cols.append(extra)
-    return filtered[cols]
+    cols = [c for c in cols if c in filtered.columns]
+    filtered["_confidence_rank"] = (
+        filtered["confidence_tier"].map(CONFIDENCE_RANK).fillna(0).astype(int)
+    )
+    filtered["_song_lfc_abs"] = filtered["song_lfc"].abs()
+    filtered["_sea_ad_lfc_abs"] = filtered["sea_ad_lfc"].abs()
+    sorted_filtered = filtered.sort_values(
+        ["kinase", "_confidence_rank", "song_specificity", "_song_lfc_abs", "_sea_ad_lfc_abs"],
+        ascending=[True, False, False, False, False],
+    )
+    return sorted_filtered[cols]
 
 
 # ---------------------------------------------------------------------------
@@ -261,10 +296,8 @@ def _build_kinase_activity_matrix(mea, gene_map):
 def _build_kinase_hypothesis_table(t1, t2):
     """Build Table 3: kinase-first synthesis joining activity profile + top cell types.
 
-    Cell types ranked by combined_score desc (effective concordance × WMB
-    multiplier — the same score the unified attribution uses for confidence
-    tiers). Ties broken by weighted concordance, then WMB enrichment. None-
-    confidence cells are dropped from the ranking when at least one
+    Cell types ranked by confidence tier, then weighted concordance and WMB
+    enrichment. None-confidence cells are dropped from the ranking when at least one
     high/moderate cell exists for that kinase, so the kinase-list "Top cell"
     reflects an actual attribution claim rather than a WMB plausibility floor.
     """
@@ -277,20 +310,19 @@ def _build_kinase_hypothesis_table(t1, t2):
     t2_work["_weighted_concordance"] = (
         (w_song * abs_song + w_sea_ad * abs_sea_ad) / (w_song + w_sea_ad))
 
-    if "combined_confidence" in t2_work.columns:
-        attributable = t2_work["combined_confidence"].isin(["high", "moderate"])
+    if "confidence_tier" in t2_work.columns:
+        attributable = t2_work["confidence_tier"].isin(["very_high", "high", "moderate"])
         kinases_with_attribution = set(
             t2_work.loc[attributable, "kinase"].unique())
         keep_mask = attributable | (~t2_work["kinase"].isin(kinases_with_attribution))
         t2_work = t2_work[keep_mask].copy()
 
-    if "combined_score" in t2_work.columns:
-        sort_keys = ["kinase", "combined_score",
-                     "_weighted_concordance", "wmb_fold_over_uniform"]
-        ascending = [True, False, False, False]
-    else:
-        sort_keys = ["kinase", "wmb_fold_over_uniform", "_weighted_concordance"]
-        ascending = [True, False, False]
+    t2_work["_confidence_rank"] = (
+        t2_work["confidence_tier"].map(CONFIDENCE_RANK).fillna(0).astype(int)
+    )
+    sort_keys = ["kinase", "_confidence_rank",
+                 "_weighted_concordance", "wmb_fold_over_uniform"]
+    ascending = [True, False, False, False]
     t2_sorted = t2_work.sort_values(sort_keys, ascending=ascending)
 
     n_cands = t2.groupby("kinase").size().rename("n_celltype_candidates")
@@ -305,7 +337,7 @@ def _build_kinase_hypothesis_table(t1, t2):
                 result[f"top_celltype_{rank}"] = top.loc[i, "cell_type"]
                 result[f"top_celltype_{rank}_wmb_fold"] = top.loc[i, "wmb_fold_over_uniform"]
                 result[f"top_celltype_{rank}_sea_ad_lfc"] = top.loc[i, "sea_ad_lfc"]
-                result[f"top_celltype_{rank}_evidence"] = top.loc[i, "evidence_basis"]
+                result[f"top_celltype_{rank}_evidence"] = top.loc[i, "confidence_basis"]
                 if has_song:
                     result[f"top_celltype_{rank}_song_lfc"] = top.loc[i, "song_lfc"]
             else:
@@ -321,15 +353,12 @@ def _build_kinase_hypothesis_table(t1, t2):
                .apply(_top3, include_groups=False)
                .reset_index())
 
-    # Single source of truth: the pill mirrors the per-row combined_confidence
-    # from unified_attribution_full (set by _assign_confidence_and_basis_vectorized
-    # in alz/bulk_mea/attribute.py). Pill = True iff at least one (kinase, cell_type)
-    # row reaches "high" — the same tier rendered in the Attribution verdict
-    # table. Tier-by-tier evidence is shown in the Attribution tab; the pill is
-    # only a binary "has at least one HIGH row" indicator.
-    if "combined_confidence" in t2.columns:
+    # Single source of truth: the pill mirrors the per-row confidence_tier from
+    # unified_attribution_full. Pill = True iff at least one (kinase, cell_type)
+    # row reaches high or very_high.
+    if "confidence_tier" in t2.columns:
         high_conf = (
-            t2[t2["combined_confidence"] == "high"]
+            t2[t2["confidence_tier"].isin(["very_high", "high"])]
             .groupby("kinase").size().gt(0).rename("has_high_conf_attribution")
         )
     else:

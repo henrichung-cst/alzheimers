@@ -80,6 +80,7 @@ Generated caches (`alz/__pycache__/`, etc.) are excluded from this index.
 ### Integration and provenance references
 
 - `docs/integrations/`
+- `conf/data_sources.yaml` — Drive ingest manifest (consumed by the `vendor/rclone-ingest` submodule engine)
 - `data/raw/external/gdrive_shared/` (on-demand via `pixi run ingest-gdrive-shared`)
 - `data/raw/external/lucie_proteomics/` (on-demand via `pixi run ingest-lucie-proteomics`)
 

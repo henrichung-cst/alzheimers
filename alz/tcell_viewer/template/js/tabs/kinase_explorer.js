@@ -50,42 +50,6 @@ function _tcellTierBadge(t) {
          '× uniform (' + (t * _tcellUniform()).toFixed(3) + ')">' + _tcellTierLabel(t) + '</span>';
 }
 
-// Decomp step ordinal vs bulk MEA direction:
-//   3 strong-agree (FDR<0.10), 2 sig-agree (FDR<0.25), 1 nominal,
-//   0 absent, -2 sig-disagree (FDR<0.25, sign opposes bulk).
-// bulkNes may be passed in pre-fetched; otherwise read from the active context.
-function _decompStep(decompNes, decompFdr, bulkNes) {
-  if (decompNes == null || !isFinite(decompNes) || decompNes === 0) return 0;
-  if (bulkNes == null || !isFinite(bulkNes) || bulkNes === 0) return 1;
-  const agree = (decompNes > 0) === (bulkNes > 0);
-  const sig = decompFdr != null && isFinite(decompFdr) && decompFdr < 0.25;
-  const strong = decompFdr != null && isFinite(decompFdr) && decompFdr < 0.10;
-  if (agree) return strong ? 3 : (sig ? 2 : 1);
-  return sig ? -2 : 1;
-}
-
-function _decompStepFor(kid, contrastId, cellType) {
-  if (!_decompByKey) return 0;
-  const d = _decompByKey.get(`${kid}|${contrastId}|${cellType}`);
-  if (!d) return 0;
-  const cName = CONTRASTS[contrastId];
-  const _K = ViewerPayload.kinases();
-  const bulkNes = (_K && cName && _K["NES_" + cName]) ? _K["NES_" + cName][kid] : null;
-  return _decompStep(d.nes, d.fdr, bulkNes);
-}
-
-// Apply the very_high upgrade rule: a "high" attribution row whose decomp
-// significantly agrees with the bulk direction is promoted.
-function _upgradeTier(attrConf, decompStep) {
-  if (attrConf === "high" && decompStep >= 2) return "very_high";
-  return attrConf || "none";
-}
-
-function _combinedTierFor(kid, contrastId, cellType, attrConf) {
-  if (attrConf !== "high") return attrConf || "none";
-  return _upgradeTier(attrConf, _decompStepFor(kid, contrastId, cellType));
-}
-
 function getScopedAttribution(kinaseId, filter) {
   // Returns filtered within-cohort attribution rows from
   // PAYLOAD.attribution_index for one kinase. The T-cell attribution carries

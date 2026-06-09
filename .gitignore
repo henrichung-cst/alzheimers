@@ -29,6 +29,7 @@ alz/integration/intermediates/
 /docs/archive/
 /docs/**/*.pdf
 /docs/**/*.html
+!/docs/probes/s3_gzip_probe/index.html
 # bench/ is bulk reference data on disk; track only the parity-audit log.
 !/bench/
 /bench/*

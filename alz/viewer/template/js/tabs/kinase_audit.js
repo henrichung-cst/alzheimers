@@ -570,8 +570,8 @@ function _msTierBadge(t, share, topCluster, tau) {
 const ATTR_VERDICT_COLS = [
   {key:"cell_type",                    label:"Cell type",   type:"str", group:"id",
    title:""},
-  {key:"cross_rank",                   label:"Conf",        type:"num", group:"attr",
-   title:"Combined confidence tier. Starts from the attribution-only tier (high / moderate / low / none). Upgraded to 'very high' when the decomposition layer significantly agrees (Decomp FDR < 0.25 with sign matching bulk MEA). Sort uses cross_rank: tier first, decomposition step as tie-breaker."},
+  {key:"confidence_tier",              label:"Conf",        type:"conf", group:"attr",
+   title:"Canonical confidence tier assigned in Python. Song is the primary high-confidence evidence; WMB, human specificity, and decomposition are cross-checks."},
   {key:"song_specificity",             label:"Song",        type:"num", group:"attr",
    title:"Song location evidence — this kinase's share of expression in this cell type across the levy_t5 pseudobulk, shown as fold over the even-split baseline (1/31 ≈ 0.032): ≥10× / ≥5× / ≥2× / ≥1×. Sort uses the underlying share."},
   {key:"wmb_tier",                     label:"WMB tier",    type:"num", group:"attr",
@@ -628,13 +628,13 @@ function _renderAttributionVerdict(hostId, ctx) {
     return;
   }
 
-  // Deduplicate by (contrast_id, cell_type), keeping best-score row.
+  // Deduplicate by (contrast_id, cell_type), keeping the best canonical row.
   const rowKey = r => `${r.contrast_id}|${r.cell_type}`;
   const deduped = new Map();
   for (const r of allRows) {
     const k = rowKey(r);
     const prev = deduped.get(k);
-    if (!prev || r.combined_score > prev.combined_score) deduped.set(k, r);
+    if (!prev || _cmpSongFirstAttribution(r, prev) < 0) deduped.set(k, r);
   }
   const rows = Array.from(deduped.values());
 
@@ -658,28 +658,30 @@ function _renderAttributionVerdict(hostId, ctx) {
       const sig = r.decomp_fdr != null && isFinite(r.decomp_fdr) && r.decomp_fdr < 0.25;
       r.bulk_match = agree ? (sig ? 2 : 1) : (sig ? -2 : -1);
     }
-    const decompStep = _decompStep(r.decomp_nes, r.decomp_fdr, _bulkNes);
-    r.decomp_step = decompStep;
-    r.combined_tier = _upgradeTier(r.combined_confidence, decompStep);
     r.wmb_tier = _wmbTier(Number(r.wmb_specificity));
-    // cross_rank: combine combined_tier (0..4) and decomp step (-2..3) so
-    // reinforcing rows sort first, conflicts demoted, single-layer in between.
-    r.cross_rank = (_CONF_RANK[r.combined_tier] || 0) * 6 + decompStep;
   }
 
-  const sortKey = host.dataset.sortKey || "cross_rank";
+  const sortKey = host.dataset.sortKey || "confidence_tier";
   const sortAsc = host.dataset.sortAsc === "1";
   const sortCol = ATTR_VERDICT_COLS.find(c => c.key === sortKey)
-    || ATTR_VERDICT_COLS.find(c => c.key === "cross_rank")
+    || ATTR_VERDICT_COLS.find(c => c.key === "confidence_tier")
     || ATTR_VERDICT_COLS[ATTR_VERDICT_COLS.length - 1];
   rows.sort((a, b) => _attrVerdictCmp(a, b, sortCol.key, sortCol.type, sortAsc));
+  if (sortCol.key === "confidence_tier") {
+    rows.sort((a, b) => {
+      const primary = _attrVerdictCmp(a, b, sortCol.key, sortCol.type, sortAsc);
+      if (primary !== 0) return primary;
+      return (_songSpecificityRank(b) - _songSpecificityRank(a)) ||
+             ((b.decomp_agrees_bulk ? 1 : 0) - (a.decomp_agrees_bulk ? 1 : 0));
+    });
+  }
   const showAllId = `${hostId}-show-all`;
   const showAll = !!(host.dataset.showAll === "1");
   const visibleRows = showAll
     ? rows
-    : rows.filter(r => r.combined_tier === "very_high"
-                    || r.combined_tier === "high"
-                    || r.combined_tier === "moderate");
+    : rows.filter(r => r.confidence_tier === "very_high"
+                    || r.confidence_tier === "high"
+                    || r.confidence_tier === "moderate");
   const hiddenCount = rows.length - visibleRows.length;
   const num = (v, d=3) => (v == null || !isFinite(v)) ? "" : Number(v).toFixed(d);
   const tbody = visibleRows.map((r, i) => {
@@ -723,7 +725,7 @@ function _renderAttributionVerdict(hostId, ctx) {
     const _sbAttr = _sbTip ? ` title="WMB subclass breakdown: ${_escapeHtml(_sbTip)}"` : "";
     return `<tr data-cell-type="${_escapeHtml(r.cell_type)}" class="attr-verdict-row${i === 0 ? ' attr-verdict-selected' : ''}">` +
       `<td class="attr-celltype"${_sbAttr}>${_escapeHtml(r.cell_type)}${_sbTip ? ' <span class="attr-subclass-marker" aria-hidden="true">ⓘ</span>' : ''} ${expBadge}</td>` +
-      `<td><span class="${_attrConfidenceClass(r.combined_tier)}" title="${_escapeHtml('Attribution: ' + (r.combined_confidence || 'none') + (r.combined_tier === 'very_high' ? ' · upgraded to very_high by significant decomp agreement' : ''))}">${_escapeHtml((r.combined_tier || '').replace('_', ' '))}</span></td>` +
+      `<td><span class="${_attrConfidenceClass(r.confidence_tier)}" title="${_escapeHtml((r.confidence_basis || 'none') + (r.decomp_agrees_bulk ? ' · decomp agrees with bulk' : ''))}">${_escapeHtml((r.confidence_tier || '').replace('_', ' '))}</span></td>` +
       `<td class="attr-num">${_msTierBadge(_msTier(Number(r.song_specificity)), r.song_specificity, r.song_top_cluster, r.song_tau)}</td>` +
       `<td class="attr-num">${_wmbTierBadge(_wmbTier(Number(r.wmb_specificity)))}</td>` +
       seaCell +
@@ -781,9 +783,9 @@ function _renderAttributionVerdict(hostId, ctx) {
       `<p><strong>Confidence tier</strong> grades <em>which sources agree</em>, not how strong any one signal is:</p>` +
       `<ul>` +
         `<li><strong><span class="attr-conf attr-conf-very-high">very high</span></strong> — a <em>high</em> attribution row that is also corroborated by the decomposition layer: Decomp FDR < 0.25 with the same sign as the bulk MEA NES. Both evidence streams reinforce one another.</li>` +
-        `<li><strong><span class="badge hi">high</span></strong> — all three of these hold: <em>(a)</em> within-cohort Song supports the direction, <em>(b)</em> the gene is clearly cell-type-specific in the WMB cross-check (wmb_specificity ≥ 2× the even-split share across the 9 retained WMB classes, 2/9 ≈ 0.222; inherited by the Levy-t5 cluster from its mapped WMB class), and <em>(c)</em> at least one reference shows real movement (|Song LFC| or |SEA-AD LFC| > 0.1).</li>` +
-        `<li><strong><span class="badge mid">moderate</span></strong> — meaningful evidence but missing one strict gate. Two ways to land here: Song-supported but WMB specificity falls below the high threshold, <em>or</em> only SEA-AD reached direction support (no Song). SEA-AD-only is <strong>always</strong> capped at moderate — we won't promote a cross-species call to high.</li>` +
-        `<li><strong><span class="badge lo">low</span></strong> — direction support is positive but the gene isn't expression-specific in WMB and no reference LFC clears the magnitude bar.</li>` +
+        `<li><strong><span class="badge hi">high</span></strong> — within-cohort Song supports the bulk direction (|Song LFC| > 0.1) and the same Song data localizes the kinase to this cell type (Song specificity ≥2× the 1/31 even-split share). WMB is shown as a cross-check, not required for high.</li>` +
+        `<li><strong><span class="badge mid">moderate</span></strong> — Song contributes but one strict Song gate is missing, or only SEA-AD/WMB support is available. SEA-AD-only is <strong>always</strong> capped at moderate because it lacks same-cohort Song support.</li>` +
+        `<li><strong><span class="badge lo">low</span></strong> — net direction support is positive but it lacks a strong Song location/direction pair and does not clear the moderate evidence bar.</li>` +
         `<li><strong>none</strong> — direction support is absent or opposite. Row is excluded from <code>unified_attribution.csv</code> entirely.</li>` +
       `</ul>` +
       `</div></details>`;
@@ -811,8 +813,8 @@ function _renderAttributionVerdict(hostId, ctx) {
       _renderAttributionVerdict(hostId, ctx);
     });
   }
-  // Open drawer on the top row by default
-  if (rows[0]) _renderAttributionDrawer("attr-drawer", ctx, rows[0].cell_type);
+  // Open drawer on the top visible row by default.
+  if (visibleRows[0]) _renderAttributionDrawer("attr-drawer", ctx, visibleRows[0].cell_type);
 }
 
 function _renderAttributionDrawer(hostId, ctx, cellType) {
@@ -1379,7 +1381,7 @@ async function renderActiveKinaseAuditTab(kinase_id) {
         `<div id="audit-attribution"></div></section>`;
       _renderAttributionVerdict("attr-verdict", ctx);
       _renderAuditTable("audit-attribution", "unified_attribution", ctx.attrRows,
-        ["kinase","gene_symbol","contrast","cell_type","combined_confidence","wmb_specificity","wmb_mean_log2_expression","wmb_fraction_cells_expressing","sea_ad_lfc","song_lfc","combined_score","evidence_basis"],
+        ["kinase","gene_symbol","contrast","cell_type","confidence_tier","confidence_basis","song_specificity","song_tau","song_top_cluster","song_direction_support","song_location_tier","wmb_crosscheck_tier","human_location_tier","decomp_agrees_bulk","wmb_specificity","wmb_mean_log2_expression","wmb_fraction_cells_expressing","sea_ad_lfc","song_lfc","seaad_location_score","hbca_location_score","human_location_score","decomp_nes","decomp_fdr"],
         "unified_attribution");
     }
   } catch (e) {

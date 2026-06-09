@@ -31,6 +31,7 @@ const SliceCache = (function(){
   }
   const MAX = 16;                          // LRU cap (per side)
   const bCache = new Map();                // bucket_id -> rows[]
+  const bInflight = new Map();             // bucket_id -> Promise<rows[]>
 
   function _lruTouch(cache, key, value){
     if (cache.has(key)) cache.delete(key);
@@ -67,11 +68,19 @@ const SliceCache = (function(){
     if (bCache.has(bkt)) {
       const v = bCache.get(bkt); _lruTouch(bCache, bkt, v); return v;
     }
+    if (bInflight.has(bkt)) return bInflight.get(bkt);
     const pad = String(bkt).padStart(3, "0");
     const url = `${ESR.backbone_url}${pad}.parquet`;
-    const rows = await _fetchParquet(url);
-    _lruTouch(bCache, bkt, rows);
-    return rows;
+    const p = _fetchParquet(url).then(rows => {
+      _lruTouch(bCache, bkt, rows);
+      bInflight.delete(bkt);
+      return rows;
+    }).catch(err => {
+      bInflight.delete(bkt);
+      throw err;
+    });
+    bInflight.set(bkt, p);
+    return p;
   }
 
   async function backboneEdges(backbone_id){
@@ -81,22 +90,33 @@ const SliceCache = (function(){
 
   // Decomp-OLS shards: per-kinase substrate-site OLS for every (contrast, cell_type).
   const dCache = new Map();              // kinase_id -> rows[]
+  const dInflight = new Map();           // kinase_id -> Promise<rows[]>
   async function loadDecompOls(kinase_id){
     _ensureInit();
-    if (!dPresent.has(Number(kinase_id))) return [];
-    if (dCache.has(kinase_id)) {
-      const v = dCache.get(kinase_id); _lruTouch(dCache, kinase_id, v); return v;
+    const kid = Number(kinase_id);
+    if (!dPresent.has(kid)) return [];
+    if (dCache.has(kid)) {
+      const v = dCache.get(kid); _lruTouch(dCache, kid, v); return v;
     }
+    if (dInflight.has(kid)) return dInflight.get(kid);
     if (!ESR.decomp_ols_url) return [];
-    const pad = String(kinase_id).padStart(3, "0");
+    const pad = String(kid).padStart(3, "0");
     const url = `${ESR.decomp_ols_url}${pad}.parquet`;
-    const rows = await _fetchParquet(url);
-    _lruTouch(dCache, kinase_id, rows);
-    return rows;
+    const p = _fetchParquet(url).then(rows => {
+      _lruTouch(dCache, kid, rows);
+      dInflight.delete(kid);
+      return rows;
+    }).catch(err => {
+      dInflight.delete(kid);
+      throw err;
+    });
+    dInflight.set(kid, p);
+    return p;
   }
 
   // Song concordance shards: one parquet per uppercased gene symbol.
   const sCache = new Map();              // GENE_UPPER -> rows[]
+  const sInflight = new Map();           // GENE_UPPER -> Promise<rows[]>
   async function loadSongConcordance(geneSymbol){
     _ensureInit();
     const g = String(geneSymbol || "").toUpperCase();
@@ -104,11 +124,19 @@ const SliceCache = (function(){
     if (sCache.has(g)) {
       const v = sCache.get(g); _lruTouch(sCache, g, v); return v;
     }
+    if (sInflight.has(g)) return sInflight.get(g);
     if (!ESR.song_concordance_url) return [];
     const url = `${ESR.song_concordance_url}${encodeURIComponent(g)}.parquet`;
-    const rows = await _fetchParquet(url);
-    _lruTouch(sCache, g, rows);
-    return rows;
+    const p = _fetchParquet(url).then(rows => {
+      _lruTouch(sCache, g, rows);
+      sInflight.delete(g);
+      return rows;
+    }).catch(err => {
+      sInflight.delete(g);
+      throw err;
+    });
+    sInflight.set(g, p);
+    return p;
   }
 
   // Incytr pathway shards: one parquet per (sender, receiver) pair under
@@ -117,6 +145,7 @@ const SliceCache = (function(){
   // "/" with "-" and " " with "_". Sender raw, receiver display name (the
   // payload-side senders/receivers arrays already carry canonical display).
   const iCache = new Map();              // "context||sender||receiver" -> rows[]
+  const iInflight = new Map();           // "context||sender||receiver" -> Promise<rows[]>
   async function loadIncytrShard(sender, receiver) {
     _ensureInit();
     const skey = sender + "||" + receiver;
@@ -133,12 +162,20 @@ const SliceCache = (function(){
     if (iCache.has(lkey)) {
       const v = iCache.get(lkey); _lruTouch(iCache, lkey, v); return v;
     }
+    if (iInflight.has(lkey)) return iInflight.get(lkey);
     const base = ESR.incytr_pathways_url || "edge_slices/incytr_pathways/";
     const fname = ViewerPayload.incytrShardFilename(sender, receiver, context);
     const url = `${base}${fname}`;
-    const rows = await _fetchParquet(url);
-    _lruTouch(iCache, lkey, rows);
-    return rows;
+    const p = _fetchParquet(url).then(rows => {
+      _lruTouch(iCache, lkey, rows);
+      iInflight.delete(lkey);
+      return rows;
+    }).catch(err => {
+      iInflight.delete(lkey);
+      throw err;
+    });
+    iInflight.set(lkey, p);
+    return p;
   }
 
   // Human per-donor substrate shards: one parquet per kinase id with

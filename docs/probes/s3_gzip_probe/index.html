@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>S3 gzip probe</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 24px;
+      line-height: 1.45;
+      color: #111827;
+      background: #f8fafc;
+    }
+    main {
+      max-width: 860px;
+      margin: 0 auto;
+      background: #fff;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      padding: 20px;
+    }
+    h1 {
+      font-size: 20px;
+      margin: 0 0 12px;
+    }
+    .status {
+      padding: 10px 12px;
+      border-radius: 4px;
+      margin: 12px 0;
+      border: 1px solid #d1d5db;
+      background: #f9fafb;
+    }
+    .pass {
+      border-color: #86efac;
+      background: #f0fdf4;
+      color: #14532d;
+    }
+    .warn {
+      border-color: #facc15;
+      background: #fefce8;
+      color: #713f12;
+    }
+    .fail {
+      border-color: #fca5a5;
+      background: #fef2f2;
+      color: #7f1d1d;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 13px;
+    }
+    th, td {
+      border-bottom: 1px solid #e5e7eb;
+      padding: 7px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      width: 250px;
+      color: #374151;
+      background: #f9fafb;
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    pre {
+      white-space: pre-wrap;
+      background: #0f172a;
+      color: #e5e7eb;
+      padding: 12px;
+      border-radius: 4px;
+      overflow: auto;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>S3 gzip content-encoding probe</h1>
+  <p>
+    This page fetches <code>probe.json.gz</code> from the same folder and checks
+    whether the browser receives raw gzip bytes or an auto-decompressed JSON
+    body.
+  </p>
+  <div id="verdict" class="status">Running...</div>
+  <table>
+    <tbody id="facts"></tbody>
+  </table>
+  <h2 style="font-size:16px;margin-top:18px;">Raw details</h2>
+  <pre id="details"></pre>
+</main>
+
+<script>
+"use strict";
+
+const EXPECTED = "hello from gzip fixture";
+
+function row(label, value) {
+  return `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`;
+}
+
+function escapeHtml(value) {
+  return String(value == null ? "" : value).replace(/[&<>"']/g, c => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[c]));
+}
+
+async function gunzipArrayBuffer(buf) {
+  if (typeof DecompressionStream !== "function") {
+    throw new Error("DecompressionStream is not available in this browser");
+  }
+  const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return await new Response(stream).text();
+}
+
+function parseJsonText(text) {
+  const obj = JSON.parse(text);
+  if (!obj || obj.expected !== EXPECTED) {
+    throw new Error("JSON parsed, but fixture content did not match expected value");
+  }
+  return obj;
+}
+
+async function run() {
+  const factsEl = document.getElementById("facts");
+  const verdictEl = document.getElementById("verdict");
+  const detailsEl = document.getElementById("details");
+  const url = `probe.json.gz?cachebust=${Date.now()}`;
+  const facts = [];
+  const details = {};
+
+  try {
+    const resp = await fetch(url, { cache: "no-store" });
+    details.status = `${resp.status} ${resp.statusText}`;
+    details.url = resp.url;
+    const contentEncoding = resp.headers.get("content-encoding") || "";
+    const contentType = resp.headers.get("content-type") || "";
+    const contentLength = resp.headers.get("content-length") || "";
+    const etag = resp.headers.get("etag") || "";
+    const buf = await resp.arrayBuffer();
+    const bytes = new Uint8Array(buf.slice(0, 4));
+    const firstBytes = Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join(" ");
+    const gzipMagic = bytes[0] === 0x1f && bytes[1] === 0x8b;
+    const textDecoder = new TextDecoder("utf-8");
+    const bodyPrefix = textDecoder.decode(buf.slice(0, 60));
+
+    details.headers = {
+      "content-encoding": contentEncoding,
+      "content-type": contentType,
+      "content-length": contentLength,
+      "etag": etag,
+    };
+    details.firstBytesHex = firstBytes;
+    details.bodyPrefix = bodyPrefix;
+    details.bodyBytesVisibleToJs = buf.byteLength;
+    details.decompressionStreamAvailable = typeof DecompressionStream === "function";
+
+    let autoDecoded = false;
+    let manualDecoded = false;
+    let autoError = "";
+    let manualError = "";
+
+    try {
+      const text = textDecoder.decode(buf);
+      parseJsonText(text);
+      autoDecoded = true;
+    } catch (err) {
+      autoError = err && err.message ? err.message : String(err);
+    }
+
+    try {
+      const text = await gunzipArrayBuffer(buf);
+      parseJsonText(text);
+      manualDecoded = true;
+    } catch (err) {
+      manualError = err && err.message ? err.message : String(err);
+    }
+
+    facts.push(["Fetch status", details.status]);
+    facts.push(["Content-Encoding header", contentEncoding || "(absent)"]);
+    facts.push(["Content-Type header", contentType || "(absent)"]);
+    facts.push(["Content-Length header", contentLength || "(absent)"]);
+    facts.push(["First bytes visible to JS", `${firstBytes}${gzipMagic ? " (gzip magic)" : ""}`]);
+    facts.push(["DecompressionStream", details.decompressionStreamAvailable ? "available" : "not available"]);
+    facts.push(["Auto-decompressed JSON visible to JS", autoDecoded ? "yes" : `no (${autoError})`]);
+    facts.push(["Manual client-side gunzip works", manualDecoded ? "yes" : `no (${manualError})`]);
+
+    let verdictClass = "warn";
+    let verdictText = "";
+    if (contentEncoding.toLowerCase().includes("gzip") && autoDecoded && !gzipMagic) {
+      verdictClass = "pass";
+      verdictText = "Content-Encoding gzip is active. Browser auto-decompressed the object; do not manually gunzip this response in viewer code.";
+    } else if (!contentEncoding && gzipMagic && manualDecoded) {
+      verdictClass = "pass";
+      verdictText = "Raw .gz sidecar mode works. This matches the current unified-viewer manual DecompressionStream loader.";
+    } else if (contentEncoding.toLowerCase().includes("gzip") && gzipMagic) {
+      verdictClass = "fail";
+      verdictText = "The response advertises gzip encoding but JS still sees gzip bytes. Check S3/CloudFront metadata or proxy behavior.";
+    } else if (manualDecoded) {
+      verdictClass = "warn";
+      verdictText = "Manual decompression works, but headers/body are unusual. Inspect details before changing viewer loading behavior.";
+    } else if (autoDecoded) {
+      verdictClass = "warn";
+      verdictText = "JSON is visible to JS, but Content-Encoding is absent. The object may have been uploaded already decompressed or renamed.";
+    } else {
+      verdictClass = "fail";
+      verdictText = "Neither browser auto-decompression nor manual DecompressionStream decoding produced the expected JSON.";
+    }
+
+    verdictEl.className = `status ${verdictClass}`;
+    verdictEl.textContent = verdictText;
+  } catch (err) {
+    facts.push(["Probe error", err && err.message ? err.message : String(err)]);
+    verdictEl.className = "status fail";
+    verdictEl.textContent = "Probe failed before it could inspect the gzip response.";
+    details.error = err && err.stack ? err.stack : String(err);
+  }
+
+  factsEl.innerHTML = facts.map(([k, v]) => row(k, v)).join("");
+  detailsEl.textContent = JSON.stringify(details, null, 2);
+}
+
+run();
+</script>
+</body>
+</html>
+

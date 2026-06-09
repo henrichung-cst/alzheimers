@@ -186,9 +186,8 @@ COLUMN_DEFINITIONS = {
     "residue_type": "Phosphorylated residue class included in the analysis track.",
     "track": "Analysis track label, usually ST for serine/threonine.",
     "cell_type": "Cell type assigned to a kinase attribution evidence row.",
-    "combined_score": "Combined cell-type attribution score across transcriptomic evidence sources.",
-    "combined_confidence": "Confidence tier assigned to the combined attribution row.",
-    "evidence_basis": "Evidence sources supporting the attribution row.",
+    "confidence_tier": "Canonical song-first confidence tier assigned in Python.",
+    "confidence_basis": "Short summary of the evidence route supporting the confidence tier.",
     "sample_column": "Normalized sample column name used in phospho and stoichiometry matrices.",
     "raw_phospho": "Raw phosphosite intensity from the phospho source workbook before IRS normalization.",
     "raw_protein": "Raw parent-protein intensity from the total proteome source workbook before IRS normalization.",
@@ -764,7 +763,7 @@ def load_all_data() -> UnifiedData:
         os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "unified_attribution.csv"),
         usecols=[
             "kinase", "gene_symbol", "contrast", "cell_type",
-            "NES", "FDR", "combined_score", "combined_confidence",
+            "NES", "FDR", "confidence_tier",
         ],
     )
     # Load full attribution table (all tiers incl. low/none) as the single
@@ -773,10 +772,18 @@ def load_all_data() -> UnifiedData:
                                  "unified_attribution_full.csv")
     _ua_full_cols = [
         "kinase", "contrast", "cell_type",
-        "combined_confidence", "combined_score",
+        "confidence_tier", "confidence_basis",
+        "song_direction_support", "song_location_tier",
+        "wmb_crosscheck_tier", "human_location_tier", "decomp_agrees_bulk",
         "wmb_specificity", "wmb_mean_log2_expression",
         "wmb_fraction_cells_expressing", "wmb_binary_expressed",
         "sea_ad_lfc", "song_lfc", "concordance_source",
+        "seaad_location_score", "hbca_location_score", "human_location_score",
+        "decomp_nes", "decomp_fdr",
+        # Song location specificity (favored mouse signal) + concordance stats —
+        # consumed by attribution_index and the kinase_celltype_evidence merge.
+        "song_specificity", "song_tau", "song_top_share", "song_top_cluster",
+        "song_pval", "song_fdr",
         "NES", "FDR",
     ]
     unified_attribution_full = pd.read_csv(
@@ -2959,15 +2966,18 @@ def build_payload(data: UnifiedData) -> dict:
     context_id = "song_ad"
 
     # WMB specificity is a share normalized over the retained WMB classes the
-    # spine maps onto; the honest "even split" baseline for its cross-check tier
-    # is 1/N_retained, not 1/31 or 1/34. Emit it canonically so the viewer reads
-    # one value (see docs/plans/specificity_validation_2026-06-05.md §6, F1/F2/F6).
-    _n_wmb_classes = len(set(config.load_cluster_to_wmb_class_map().values())) or 1
+    # spine maps onto and that actually carry atlas cells (N≈9); the honest "even
+    # split" baseline for its cross-check tier is 1/N, not 1/31 or 1/11. Read the
+    # SAME ruler the recover.py gate uses so display and pipeline never diverge
+    # (see docs/plans/specificity_validation_2026-06-05.md §6, F1/F2/F6).
     meta = {
         "schema_version": SCHEMA_VERSION,
         "viewer_payload_schema_version": 2,
         "generated_at": pd.Timestamp.utcnow().isoformat(),
-        "wmb_uniform": 1.0 / _n_wmb_classes,
+        "wmb_uniform": config.wmb_specificity_uniform(),
+        # song_specificity is a share summing to 1 over the 31 Levy-t5 clusters,
+        # so its even-split baseline is 1/N_CELL_TYPES (the M-spec fold pills).
+        "song_uniform": 1.0 / config.N_CELL_TYPES,
         "cohort": "song_ad",
         "default_context": context_id,
         "contexts": [
@@ -3035,35 +3045,78 @@ def build_payload(data: UnifiedData) -> dict:
         data.celltype_evidence["kinase"].isin(kid)
     ].copy()
     ev["kinase_id"] = ev["kinase"].map(kid).astype("uint16")
+    for _col, _default in [
+        ("song_specificity", float("nan")),
+        ("song_tau", float("nan")),
+        ("song_top_cluster", ""),
+        ("confidence_tier", "none"),
+        ("confidence_basis", ""),
+        ("song_direction_support", False),
+        ("song_location_tier", "none"),
+        ("wmb_crosscheck_tier", "none"),
+        ("human_location_tier", "none"),
+        ("decomp_agrees_bulk", False),
+        ("seaad_location_score", float("nan")),
+        ("hbca_location_score", float("nan")),
+        ("human_location_score", float("nan")),
+        ("decomp_nes", float("nan")),
+        ("decomp_fdr", float("nan")),
+    ]:
+        if _col not in ev.columns:
+            ev[_col] = _default
     kinase_celltype_evidence = {
         "kinase_id":  ev["kinase_id"].tolist(),
         "cell_type":  ev["cell_type"].tolist(),
+        "confidence_tier": ev["confidence_tier"].astype(str).tolist(),
+        "confidence_basis": ev["confidence_basis"].fillna("").astype(str).tolist(),
+        "song_direction_support": [bool(v) for v in ev["song_direction_support"].fillna(False)],
+        "song_location_tier": ev["song_location_tier"].fillna("none").astype(str).tolist(),
+        "wmb_crosscheck_tier": ev["wmb_crosscheck_tier"].fillna("none").astype(str).tolist(),
+        "human_location_tier": ev["human_location_tier"].fillna("none").astype(str).tolist(),
+        "decomp_agrees_bulk": [bool(v) for v in ev["decomp_agrees_bulk"].fillna(False)],
+        "song_specificity": ev["song_specificity"].astype(float).round(3).tolist(),
+        "song_tau":   ev["song_tau"].astype(float).round(3).tolist(),
+        "song_top_cluster": ev["song_top_cluster"].fillna("").astype(str).tolist(),
         "wmb_fold":   ev["wmb_fold_over_uniform"].astype(float).round(3).tolist(),
         "sea_ad_lfc": ev["sea_ad_lfc"].astype(float).round(3).tolist(),
         "song_lfc":   ev["song_lfc"].astype(float).round(3).tolist(),
+        "seaad_location_score": ev["seaad_location_score"].astype(float).round(3).tolist(),
+        "hbca_location_score": ev["hbca_location_score"].astype(float).round(3).tolist(),
+        "human_location_score": ev["human_location_score"].astype(float).round(3).tolist(),
+        "decomp_nes": ev["decomp_nes"].astype(float).round(3).tolist(),
+        "decomp_fdr": ev["decomp_fdr"].astype(float).round(3).tolist(),
         "wmb_tier":   ev["wmb_tier"].astype(str).tolist(),
-        "evidence_basis": ev["evidence_basis"].fillna("").astype(str).tolist(),
         "concordance_direction": ev["concordance_direction"].fillna("").astype(str).tolist(),
     }
 
     # Attribution index — single source of truth, built from unified_attribution_full.csv.
-    # Contains ALL confidence tiers (high/moderate/low/none) so JS can derive
-    # pills, cell-type counts, and verdict rows from one consistent source.
-    # Extra columns (wmb_specificity, sea_ad_lfc, song_lfc, concordance_source)
-    # are denormalized here so the verdict table no longer needs a separate CSV fetch.
+    # Contains ALL confidence tiers so JS can render pills, cell-type counts,
+    # and verdict rows from one Python-assigned source of truth.
     contrast_to_id = {c: i for i, c in enumerate(contrasts)}
     # Use full table if available, fall back to high+moderate subset.
     ua_src = data.unified_attribution_full if len(data.unified_attribution_full) > 0 \
         else data.unified_attribution
     ua = ua_src[ua_src["kinase"].isin(kid)
                 & ua_src["contrast"].isin(contrast_to_id)].copy()
-    # Ensure expected columns exist (fall-back for legacy unified_attribution.csv).
+    # Ensure expected columns exist if building from the attributed subset.
     for _col, _default in [
+        ("confidence_tier", "none"),
+        ("confidence_basis", ""),
+        ("song_direction_support", False),
+        ("song_location_tier", "none"),
+        ("wmb_crosscheck_tier", "none"),
+        ("human_location_tier", "none"),
+        ("decomp_agrees_bulk", False),
         ("wmb_specificity", float("nan")),
         ("wmb_mean_log2_expression", float("nan")),
         ("wmb_fraction_cells_expressing", float("nan")),
         ("wmb_binary_expressed", False),
         ("sea_ad_lfc", float("nan")),
+        ("seaad_location_score", float("nan")),
+        ("hbca_location_score", float("nan")),
+        ("human_location_score", float("nan")),
+        ("decomp_nes", float("nan")),
+        ("decomp_fdr", float("nan")),
         ("song_lfc", float("nan")),
         ("song_pval", float("nan")),
         ("song_fdr", float("nan")),
@@ -3081,8 +3134,13 @@ def build_payload(data: UnifiedData) -> dict:
         "kinase_id":   ua["kinase"].map(kid).astype("uint16").tolist(),
         "contrast_id": ua["contrast"].map(contrast_to_id).astype("uint8").tolist(),
         "cell_type":   ua["cell_type"].astype(str).tolist(),
-        "combined_confidence": ua["combined_confidence"].astype(str).tolist(),
-        "combined_score": ua["combined_score"].astype(float).round(3).tolist(),
+        "confidence_tier": ua["confidence_tier"].astype(str).tolist(),
+        "confidence_basis": ua["confidence_basis"].fillna("").astype(str).tolist(),
+        "song_direction_support": [bool(v) for v in ua["song_direction_support"].fillna(False)],
+        "song_location_tier": ua["song_location_tier"].fillna("none").astype(str).tolist(),
+        "wmb_crosscheck_tier": ua["wmb_crosscheck_tier"].fillna("none").astype(str).tolist(),
+        "human_location_tier": ua["human_location_tier"].fillna("none").astype(str).tolist(),
+        "decomp_agrees_bulk": [bool(v) for v in ua["decomp_agrees_bulk"].fillna(False)],
         "wmb_specificity": ua["wmb_specificity"].astype(float).round(4).tolist(),
         "wmb_mean_log2_expression": ua["wmb_mean_log2_expression"].astype(float).round(3).tolist(),
         "wmb_fraction_cells_expressing": ua["wmb_fraction_cells_expressing"].astype(float).round(3).tolist(),
@@ -3092,6 +3150,11 @@ def build_payload(data: UnifiedData) -> dict:
         "song_top_share": ua["song_top_share"].astype(float).round(4).tolist(),
         "song_top_cluster": ua["song_top_cluster"].fillna("").astype(str).tolist(),
         "sea_ad_lfc": ua["sea_ad_lfc"].astype(float).round(4).tolist(),
+        "seaad_location_score": ua["seaad_location_score"].astype(float).round(4).tolist(),
+        "hbca_location_score": ua["hbca_location_score"].astype(float).round(4).tolist(),
+        "human_location_score": ua["human_location_score"].astype(float).round(4).tolist(),
+        "decomp_nes": ua["decomp_nes"].astype(float).round(4).tolist(),
+        "decomp_fdr": ua["decomp_fdr"].astype(float).round(4).tolist(),
         "song_lfc": ua["song_lfc"].astype(float).round(4).tolist(),
         "song_pval": ua["song_pval"].astype(float).round(4).tolist(),
         "song_fdr": ua["song_fdr"].astype(float).round(4).tolist(),
@@ -3100,7 +3163,7 @@ def build_payload(data: UnifiedData) -> dict:
         "fdr": ua["FDR"].astype(float).round(4).tolist(),
     }
     print(f"  attribution_index: {len(ua):,} rows "
-          f"({ua['combined_confidence'].value_counts().to_dict()})",
+          f"({ua['confidence_tier'].value_counts().to_dict()})",
           flush=True)
 
     decomp = data.decomposition

@@ -65,12 +65,12 @@ All MEA-significant kinases are evaluated against three evidence sources at the 
 
 3. **SEA-AD cross-species concordance** (human AD MTG, 139 supertypes): supertypes aggregated to WMB class via `seaad_subclass_to_wmb_class.csv`. Present for ~9 of 34 classes (cortical neurons + glia + vascular + immune); `n/a` for non-MTG classes (hippocampal pyramidals, subcortical, brainstem, cerebellar).
 
-Combined confidence (thresholds expressed as multiples of uniform = 1/34):
-- **High**: Within-cohort Song supports the direction + WMB specificity ≥ 2× uniform + at least one |LFC| > 0.1
-- **Moderate**: Either Song or SEA-AD provides directional evidence with WMB plausibility
+Combined confidence (thresholds expressed as multiples of the relevant uniform baseline):
+- **High**: Within-cohort Song supports the direction (|Song LFC| > 0.1) + Song cell-type specificity ≥ 2× uniform
+- **Moderate**: Song contributes but one strict Song gate is missing, or SEA-AD/WMB provides support without Song
 - **Low**: Weak evidence from all sources
 
-SEA-AD `n/a` (out-of-MTG classes) does not preclude high confidence — Song + WMB alone suffice when Song concordance is significant.
+SEA-AD `n/a` (out-of-MTG classes) does not preclude high confidence — same-cohort Song direction plus Song location is the high-confidence route. WMB remains an independent mouse-atlas cross-check.
 
 ### 5. Mechanism annotation (supplementary)
 

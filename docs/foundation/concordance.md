@@ -31,10 +31,10 @@ Weights are configurable:
 
 ## Computing concordance
 
-### Step 1: Raw concordance scores
+### Step 1: Direction checks
 
 For each (kinase, cell type, contrast) triple, a directional concordance
-score is computed from each available source:
+check is computed from each available source:
 
 ```
 sea_ad_cs = sign(NES) × sea_ad_lfc
@@ -48,9 +48,10 @@ song_cs   = sign(NES) × song_lfc
 - `song_lfc`: log2 fold change of the kinase gene in the paired mouse
   snRNA-seq for this cell type
 
-A **positive** concordance score means the kinase activity direction (up or
+A **positive** value means the kinase activity direction (up or
 down) matches the gene expression direction in that cell type — the cell type
-is a plausible source. A **negative** score means they disagree.
+is a plausible source. A **negative** value means they disagree. These values
+are internal gate inputs, not exported evidence scores.
 
 ### Step 2: Pathway matching
 
@@ -75,10 +76,9 @@ Mapping: `config.SEA_AD_PATHWAY_MAP` (for SEA-AD) and
 `contrast.split("_")[0]` (for Song, which maps to factorial OLS pathways
 directly).
 
-### Step 3: Weighted effective concordance
+### Step 3: Internal direction gate
 
-The two raw scores are combined into a single effective concordance value
-using the configured weights:
+The two direction checks are combined internally using the configured weights:
 
 ```
 If both available:
@@ -97,42 +97,41 @@ If neither:
 The `concordance_source` is recorded as `"both"`, `"song"`, `"sea_ad"`, or
 `"none"`.
 
-**Gate:** If `effective_concordance ≤ 0`, the attribution is rejected. The
+**Gate:** If the internal weighted direction check is `≤ 0`, the attribution is rejected. The
 kinase activity direction contradicts the expression evidence for this cell
 type.
 
-### Step 4: Combined score (for ranking)
+### Step 4: Canonical confidence tier
 
-```
-combined_score = effective_concordance × (0.5 + wmb_specificity)
-```
-
-WMB specificity amplifies concordance — a kinase that is both concordant and
-cell-type-specific ranks highest. The 0.5 offset prevents zero-specificity
-cell types from being completely suppressed.
+The final exported confidence value is the categorical `confidence_tier`. For
+display ordering, code sorts by that tier and then by explicit evidence columns:
+Song location specificity, decomposition agreement, WMB/human location support,
+and raw Song/SEA-AD LFC magnitudes. WMB no longer gates the evidence table or
+drives a synthetic score.
 
 ## Confidence tiers
 
-After effective concordance passes the positivity gate, confidence is
+After the internal direction gate passes, confidence is
 assigned based on the strength and source of evidence:
 
 ### High confidence
 - Song contributed to concordance (`source` is `"song"` or `"both"`)
-- WMB specificity ≥ 2× uniform (SPECIFICITY_HIGH)
-- LFC evidence from Song or SEA-AD exceeds minimum threshold
+- Song LFC exceeds the minimum threshold
+- Song cell-type specificity ≥ 2× uniform over the Levy-T5 spine
 
 ### Moderate confidence
-- Song contributed but WMB specificity is lower, OR
+- Song contributed but one strict Song gate is missing, OR
 - SEA-AD-only concordance (capped at moderate regardless of WMB tier)
 
 ### Low confidence
 - Weak evidence from all sources
 
 ### None (rejected)
-- `effective_concordance ≤ 0` (direction mismatch)
+- internal weighted direction check `≤ 0` (direction mismatch)
 
-**Key constraint:** SEA-AD-only concordance can never reach "high" confidence.
-Only Song-supported concordance (same-species, same-cohort) qualifies.
+**Key constraint:** SEA-AD-only and WMB-only evidence can never reach "high"
+confidence. Only Song-supported concordance with Song cell-type localization
+(same-species, same-cohort) qualifies.
 
 ## Evidence basis labels
 
@@ -141,16 +140,17 @@ describing which sources contributed:
 
 | Label | WMB | SEA-AD | Song | Interpretation |
 |-------|-----|--------|------|----------------|
-| `three_way` | ✓ | ✓ | ✓ | Strongest: expression-specific, concordant in both human and mouse transcriptomics |
-| `within_cohort` | ✓ | — | ✓ | Strong: same-cohort mouse evidence + expression specificity |
+| `three_way` | ✓ | ✓ | ✓ | Strongest: Song-localized, WMB cross-checked, concordant in both human and mouse transcriptomics |
+| `within_cohort` | optional | — | ✓ | Strong: same-cohort mouse evidence + Song cell-type specificity |
 | `cross_species` | ✓ | ✓ | — | Moderate: human concordance + expression specificity, no paired mouse data |
 | `mouse_expression_only` | ✓ | — | — | Weak: expressed in cell type but no concordance evidence |
-| `song_only` | — | ✓ | — | Song concordance without WMB expression specificity |
+| `song_only` | — | — | ✓ | Song concordance without WMB expression specificity |
 | `human_concordance_only` | — | ✓ | — | SEA-AD concordance without WMB expression specificity |
 | `weak` | — | — | — | Below all thresholds |
 
 Thresholds:
-- WMB: `wmb_specificity ≥ SPECIFICITY_LOW` (1/24 ≈ 0.042, i.e., above uniform)
+- Song location: `song_specificity ≥ 1/N_CELL_TYPES` (above uniform), high at `2/N_CELL_TYPES`
+- WMB: `wmb_specificity ≥ wmb_specificity_uniform()` (above retained-class uniform; cross-check)
 - SEA-AD: `|sea_ad_lfc| > SEA_AD_LFC_MIN` (default 0.1)
 - Song: `|song_lfc| > SONG_LFC_MIN` (default 0.1)
 
@@ -158,9 +158,9 @@ Thresholds:
 
 ### Unified attribution table (`unified_attribution.csv`)
 
-Contains per-row effective concordance, concordance source, combined score,
-confidence tier, and evidence basis for every (kinase, cell type, contrast)
-triple. This is the full granular output.
+Contains the categorical confidence tier, confidence basis, concordance source,
+and raw evidence columns for every (kinase, cell type, contrast) triple. It
+does not export a synthetic score or the internal direction-gate value.
 
 ### Hypothesis tables (`attribution_recovery.py`)
 
@@ -168,11 +168,7 @@ triple. This is the full granular output.
 evidence. WMB fold, SEA-AD LFC, Song LFC, evidence basis, WMB tier.
 
 **Table 3 (kinase_hypothesis_table.csv):** Top 3 cell types per kinase,
-ranked by WMB fold then weighted concordance magnitude:
-
-```
-weighted_concordance = (3 × |song_lfc| + 1 × |sea_ad_lfc|) / 4
-```
+ranked by confidence tier and explicit evidence columns.
 
 `has_high_conf_attribution` is `True` if any cell type has WMB tier "high"
 AND concordance evidence from either source (`|song_lfc| > 0.1` OR
@@ -180,9 +176,8 @@ AND concordance evidence from either source (`|song_lfc| > 0.1` OR
 
 ### Interactive viewer (`build_unified_viewer.py`)
 
-The composite score builder exposes Song and SEA-AD as independent
-dimensions with configurable weights. Default "balanced" preset:
-Song concordance = 30, SEA-AD concordance = 10 (3:1 ratio).
+The viewer renders the categorical confidence tier and raw support columns.
+It does not expose a concordance score or an attribution evidence score.
 
 ## Gene mapping chain
 
@@ -231,9 +226,9 @@ silently dropped.
 
 | Component | File | Function/Lines |
 |-----------|------|----------------|
-| Raw concordance scores | `alz/kinase_attribute.py` | `_compute_effective_concordance()` |
-| Confidence + evidence basis | `alz/kinase_attribute.py` | `_assign_confidence_and_basis_vectorized()` |
-| Vectorized weighted blend | `alz/kinase_attribute.py` | `step_attribute()` |
+| Internal direction gate | `alz/bulk_mea/attribute.py` | `_assemble_unified()` |
+| Confidence + evidence basis | `alz/bulk_mea/confidence.py` | `assign_confidence()` |
+| Direction-source weighting | `alz/bulk_mea/attribute.py` | `_assemble_unified()` |
 | SEA-AD pathway matching | `alz/kinase_attribute.py` | `step_attribute()` |
 | Pipeline orchestration | `alz/pipelines/attribute/{nodes,pipeline}.py` | Kedro nodes wrap pure helpers |
 | CLI shim | `alz/kinase_attribute.py` | `main()` (delegates to `KedroSession`) |
@@ -241,5 +236,5 @@ silently dropped.
 | Song Allen-Cell-Type → WMB class mapping | `alz/config.py` | `SONG_TO_WMB_CLASS_MAP` |
 | Top cell-type ranking | `alz/attribution_recovery.py` | `_build_kinase_hypothesis_table()` |
 | High-confidence flag | `alz/attribution_recovery.py` | `_build_kinase_hypothesis_table()` |
-| Viewer score presets | `alz/build_unified_viewer.py` | `SCORE_PRESETS` (Kinase Explorer side panel) |
+| Viewer payload assembly | `alz/build_unified_viewer.py` | attribution payload block |
 | Weight configuration | `alz/config.py` | `SONG_CONCORDANCE_WEIGHT`, `SEA_AD_CONCORDANCE_WEIGHT` |

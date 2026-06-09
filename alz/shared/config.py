@@ -202,9 +202,35 @@ SEA_AD_PATHWAY_MAP = {
     "ApTt": "full",    # combined pathology → full CPS range
 }
 N_CELL_TYPES = len(CLUSTER_SPINE)        # 31 — Levy levy_t5 spine
-SPECIFICITY_HIGH = 2.0 / N_CELL_TYPES    # ≥2× uniform across 31 clusters
-SPECIFICITY_LOW = 1.0 / N_CELL_TYPES     # ≥1× uniform across 31 clusters
-COMBINED_SCORE_SPECIFICITY_BASE = 0.5    # baseline weight on concordance even at zero specificity
+# WMB specificity even-split baseline — see wmb_specificity_uniform(). The share
+# is normalized over the retained WMB classes the spine maps onto (N≈9), so the
+# honest "above even-split" threshold is 1/N, NOT 1/N_CELL_TYPES. One ruler for
+# the recover.py gate, attribute.py confidence flags, and the viewer WMB tier.
+
+def wmb_specificity_uniform():
+    """Even-split baseline (1/N) for ``wmb_specificity``.
+
+    The WMB specificity share (``wmb_expression.py``) is normalized per gene over
+    the retained WMB classes that actually carry atlas cells — empirically **9**,
+    not the 11 declared by the crosswalk: two retained classes ('07 CTX-MGE GABA',
+    '13 CNU-HYa Glut') have no cells in the whole-brain scope, so they never enter
+    any gene's denominator and every gene's share sums to 1 over 9. The honest
+    "above even-split" threshold is therefore ``1/N`` with N = present retained
+    classes — NOT ``1/N_CELL_TYPES`` (the 31-cluster count, which made the share
+    read ~3x more enriched than it is). Derived from the expression artifact so
+    the gate, the confidence flags, and the viewer tier all use one ruler; falls
+    back to the crosswalk's distinct-class count before the artifact is built.
+    """
+    retained = set(load_cluster_to_wmb_class_map().values())
+    try:
+        import pandas as pd
+        present = set(
+            pd.read_csv(WMB_EXPRESSION_FILE, usecols=["cell_type"])["cell_type"]
+        ) & retained
+        n = len(present) or len(retained)
+    except (FileNotFoundError, OSError, ValueError, KeyError):
+        n = len(retained)
+    return 1.0 / n
 
 CLASS_TO_TISSUE_CATEGORY = {
     "01 IT-ET Glut": "Excitatory neurons",

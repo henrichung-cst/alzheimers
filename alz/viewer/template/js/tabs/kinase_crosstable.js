@@ -350,11 +350,20 @@ function _kxRenderSpecAligned(hostEl, row) {
       hbca: o.hbca != null ? _kxFoldTier(Math.pow(2, o.hbca)) : 0,
     };
   }
-  // Rank by the strongest reference at the cluster (max tier), Song share as tie-break.
+  // Rank by Song first when the kinase has Song data; the other references are
+  // cross-checks. Human-only kinases have no Song side, so they fall back to the
+  // strongest available human/cross-reference tier.
   rows.sort((a, b) => {
-    const ma = Math.max(a._t.song, a._t.wmb, a._t.seaad, a._t.hbca);
-    const mb = Math.max(b._t.song, b._t.wmb, b._t.seaad, b._t.hbca);
-    return mb !== ma ? mb - ma : (b.song || 0) - (a.song || 0);
+    const hasSongA = a.song != null && isFinite(a.song);
+    const hasSongB = b.song != null && isFinite(b.song);
+    if (hasSongA !== hasSongB) return hasSongB - hasSongA;
+    if (hasSongA && hasSongB) {
+      if (a._t.song !== b._t.song) return b._t.song - a._t.song;
+      if ((a.song || 0) !== (b.song || 0)) return (b.song || 0) - (a.song || 0);
+    }
+    const ma = Math.max(a._t.wmb, a._t.seaad, a._t.hbca);
+    const mb = Math.max(b._t.wmb, b._t.seaad, b._t.hbca);
+    return mb !== ma ? mb - ma : (a.cluster || "").localeCompare(b.cluster || "");
   });
 
   const u = _KX_SONG_UNIFORM;
@@ -570,7 +579,7 @@ function _kxBestSongLfcEvidence(row, cluster, useTopCluster = true) {
       lfc: Number(lfc),
       nes: _kxFinite(nes) ? Number(nes) : null,
       fdr: AI.fdr ? AI.fdr[j] : null,
-      confidence: AI.combined_confidence ? AI.combined_confidence[j] : "",
+      confidence: AI.confidence_tier ? AI.confidence_tier[j] : "",
     });
   }
   if (!candidates.length && preferredCell) {

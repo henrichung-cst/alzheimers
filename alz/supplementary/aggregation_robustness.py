@@ -28,9 +28,10 @@ def _assign_confidence(concordance_score, wmb_specificity, sea_ad_lfc):
     """Parameterized confidence assignment (duplicated from kinase_attribution)."""
     if concordance_score <= 0:
         return "none"
-    if wmb_specificity >= config.SPECIFICITY_HIGH and abs(sea_ad_lfc) > config.SEA_AD_LFC_MIN:
+    _wmb_uniform = config.wmb_specificity_uniform()
+    if wmb_specificity >= 2.0 * _wmb_uniform and abs(sea_ad_lfc) > config.SEA_AD_LFC_MIN:
         return "high"
-    if wmb_specificity >= config.SPECIFICITY_LOW or abs(sea_ad_lfc) > config.SEA_AD_LFC_MIN:
+    if wmb_specificity >= _wmb_uniform or abs(sea_ad_lfc) > config.SEA_AD_LFC_MIN:
         return "moderate"
     return "low"
 

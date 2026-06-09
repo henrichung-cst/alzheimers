@@ -515,7 +515,7 @@ function _renderKinaseCelltypeEvidence(hostId, kinase_id) {
     sea_ad_lfc: EV.sea_ad_lfc[k],
     song_lfc: EV.song_lfc[k],
     wmb_tier: EV.wmb_tier[k],
-    evidence_basis: EV.evidence_basis ? EV.evidence_basis[k] : "",
+    confidence_basis: EV.confidence_basis ? EV.confidence_basis[k] : "",
     concordance_direction: EV.concordance_direction ? EV.concordance_direction[k] : "",
   }));
   rows.sort((a, b) => {
@@ -524,7 +524,7 @@ function _renderKinaseCelltypeEvidence(hostId, kinase_id) {
     return bv - av;
   });
   _renderAuditTable(hostId, "celltype_evidence_table", rows,
-    ["cell_type","wmb_fold","sea_ad_lfc","song_lfc","wmb_tier","evidence_basis","concordance_direction"],
+    ["cell_type","wmb_fold","sea_ad_lfc","song_lfc","wmb_tier","confidence_basis","concordance_direction"],
     "celltype_evidence_table");
 }
 

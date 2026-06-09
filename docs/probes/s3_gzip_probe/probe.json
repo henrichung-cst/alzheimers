@@ -1,0 +1,6 @@
+{
+  "probe": "s3-gzip-content-encoding",
+  "expected": "hello from gzip fixture",
+  "version": 1
+}
+

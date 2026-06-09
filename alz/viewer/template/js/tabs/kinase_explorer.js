@@ -66,6 +66,30 @@ function _keSongBadge(song) {
   return _msTierBadge(_msTier(song.topShare), song.topShare, song.topCluster, song.tau);
 }
 
+function _rowSongLocationRank(r) {
+  const share = r && r.song ? Number(r.song.topShare) : null;
+  if (share == null || !isFinite(share)) return -1;
+  return share;
+}
+
+function _songSpecificityRank(e) {
+  const share = e ? Number(e.song_specificity) : null;
+  if (share == null || !isFinite(share)) return -1;
+  return share;
+}
+
+function _cmpCanonicalAttribution(a, b) {
+  const ta = _CONF_RANK[a && a.confidence_tier] || 0;
+  const tb = _CONF_RANK[b && b.confidence_tier] || 0;
+  if (ta !== tb) return tb - ta;
+  const sa = _songSpecificityRank(a);
+  const sb = _songSpecificityRank(b);
+  if (sa !== sb) return sb - sa;
+  const da = a && a.decomp_agrees_bulk ? 1 : 0;
+  const db = b && b.decomp_agrees_bulk ? 1 : 0;
+  return db - da;
+}
+
 // Decomp step ordinal vs bulk MEA direction:
 //   3 strong-agree (FDR<0.10), 2 sig-agree (FDR<0.25), 1 nominal,
 //   0 absent, -2 sig-disagree (FDR<0.25, sign opposes bulk).
@@ -90,18 +114,6 @@ function _decompStepFor(kid, contrastId, cellType) {
   return _decompStep(d.nes, d.fdr, bulkNes);
 }
 
-// Apply the very_high upgrade rule: a "high" attribution row whose decomp
-// significantly agrees with the bulk direction is promoted.
-function _upgradeTier(attrConf, decompStep) {
-  if (attrConf === "high" && decompStep >= 2) return "very_high";
-  return attrConf || "none";
-}
-
-function _combinedTierFor(kid, contrastId, cellType, attrConf) {
-  if (attrConf !== "high") return attrConf || "none";
-  return _upgradeTier(attrConf, _decompStepFor(kid, contrastId, cellType));
-}
-
 function getScopedAttribution(kinaseId, filter) {
   // Returns filtered rows from PAYLOAD.attribution_index for one kinase.
   // filter: { disease, timepoint, celltype, confidence } where dimension values
@@ -116,16 +128,18 @@ function getScopedAttribution(kinaseId, filter) {
     if (AI.kinase_id[j] !== kinaseId) continue;
     if (scopedCtx.size > 0 && !scopedCtx.has(AI.contrast_id[j])) continue;
     if (ctSet.size && !ctSet.has(AI.cell_type[j]))                continue;
-    const _attrConf = AI.combined_confidence[j];
-    const _tier = _combinedTierFor(kinaseId, AI.contrast_id[j], AI.cell_type[j], _attrConf);
-    // Confidence threshold tests the upgraded tier so "very_high" filters work.
+    const _tier = AI.confidence_tier ? AI.confidence_tier[j] : "none";
     if (!_confPass(_tier, confidence))                            continue;
     out.push({
       contrast_id:               AI.contrast_id[j],
       cell_type:                 AI.cell_type[j],
-      combined_confidence:       _attrConf,
-      combined_tier:             _tier,
-      combined_score:            AI.combined_score[j],
+      confidence_tier:           _tier,
+      confidence_basis:          AI.confidence_basis ? AI.confidence_basis[j] : "",
+      song_direction_support:    AI.song_direction_support ? AI.song_direction_support[j] : false,
+      song_location_tier:        AI.song_location_tier ? AI.song_location_tier[j] : "none",
+      wmb_crosscheck_tier:       AI.wmb_crosscheck_tier ? AI.wmb_crosscheck_tier[j] : "none",
+      human_location_tier:       AI.human_location_tier ? AI.human_location_tier[j] : "none",
+      decomp_agrees_bulk:        AI.decomp_agrees_bulk ? AI.decomp_agrees_bulk[j] : false,
       wmb_specificity:           AI.wmb_specificity            ? AI.wmb_specificity[j]            : null,
       song_specificity:          AI.song_specificity           ? AI.song_specificity[j]           : null,
       song_tau:                  AI.song_tau                   ? AI.song_tau[j]                   : null,
@@ -134,6 +148,11 @@ function getScopedAttribution(kinaseId, filter) {
       wmb_fraction_cells_expressing: AI.wmb_fraction_cells_expressing ? AI.wmb_fraction_cells_expressing[j] : null,
       wmb_binary_expressed:      AI.wmb_binary_expressed       ? AI.wmb_binary_expressed[j]       : false,
       sea_ad_lfc:                AI.sea_ad_lfc                 ? AI.sea_ad_lfc[j]                 : null,
+      seaad_location_score:      AI.seaad_location_score       ? AI.seaad_location_score[j]       : null,
+      hbca_location_score:       AI.hbca_location_score        ? AI.hbca_location_score[j]        : null,
+      human_location_score:      AI.human_location_score       ? AI.human_location_score[j]       : null,
+      decomp_nes_python:         AI.decomp_nes                 ? AI.decomp_nes[j]                 : null,
+      decomp_fdr_python:         AI.decomp_fdr                 ? AI.decomp_fdr[j]                 : null,
       song_lfc:                  AI.song_lfc                   ? AI.song_lfc[j]                   : null,
       song_pval:                 AI.song_pval                  ? AI.song_pval[j]                  : null,
       song_fdr:                  AI.song_fdr                   ? AI.song_fdr[j]                   : null,
@@ -446,41 +465,48 @@ function _makeKeCompare(scopedCtxIds) {
     }
     else if (col === "n_attributed_celltypes") {
       // Match what the Cell types pill column displays: dedup by cell_type
-      // keeping best tier, then count rows at moderate-or-better.
+      // keeping best tier, then count rows at moderate-or-better. Song location
+      // breaks count ties so the own-cohort cell-specific signal is favored.
       const _bestTierByCT = (kid) => {
         const m = new Map();
         for (const e of getScopedAttribution(kid, kf)) {
-          const r = _CONF_RANK[e.combined_tier] || 0;
+          const r = _CONF_RANK[e.confidence_tier] || 0;
           if (r > (m.get(e.cell_type) || 0)) m.set(e.cell_type, r);
         }
         let n = 0;
         for (const r of m.values()) if (r >= 2) n++;
         return n;
       };
-      va = _bestTierByCT(a.id);
-      vb = _bestTierByCT(b.id);
+      const ca = _bestTierByCT(a.id);
+      const cb = _bestTierByCT(b.id);
+      if (ca !== cb) return asc ? (ca - cb) : (cb - ca);
+      va = _rowSongLocationRank(a);
+      vb = _rowSongLocationRank(b);
     }
     else if (col === "conf") {
-      // Sort by max tier reached in scope: very_high(4) > high(3) > moderate(2) > low(1) > none(0).
+      // Sort by max tier reached in scope, with Song location as the tie-breaker.
       const _maxTier = (kid) => {
         let m = 0;
         for (const e of getScopedAttribution(kid, kf)) {
-          const r = _CONF_RANK[e.combined_tier] || 0;
+          const r = _CONF_RANK[e.confidence_tier] || 0;
           if (r > m) m = r;
         }
         return m;
       };
-      va = _maxTier(a.id);
-      vb = _maxTier(b.id);
+      const ca = _maxTier(a.id);
+      const cb = _maxTier(b.id);
+      if (ca !== cb) return asc ? (ca - cb) : (cb - ca);
+      va = _rowSongLocationRank(a);
+      vb = _rowSongLocationRank(b);
     }
     else if (col === "n_sig") {
       va = _kineSigCountScoped(a, fdr, scopedCtxIds);
       vb = _kineSigCountScoped(b, fdr, scopedCtxIds);
     }
     else if (col === "song_spec") {
-      // Rank by the displayed fold driver (peak cell-type share), not τ.
-      va = (a.song && isFinite(a.song.topShare)) ? a.song.topShare : -1;
-      vb = (b.song && isFinite(b.song.topShare)) ? b.song.topShare : -1;
+      // Rank by the displayed Song tier, then the fold driver (peak share), not τ.
+      va = _rowSongLocationRank(a);
+      vb = _rowSongLocationRank(b);
     }
     else if (col === "wmb_max_tier") {
       va = _kineMaxWmbTierScoped(a.id, kf);
@@ -599,27 +625,27 @@ function _renderAgreementProfile(r) {
 
 function _renderCellTypesCell(r, filter) {
   // Reflect rows in the active filter scope; if filter is empty, scope = all 9 contrasts.
-  const rows = getScopedAttribution(r.id, filter || {});
+  const rows = getScopedAttribution(r.id, filter || {}).filter(e =>
+    e.confidence_tier === "very_high" || e.confidence_tier === "high" || e.confidence_tier === "moderate");
   const byCell = new Map();
   for (const e of rows) {
     const prev = byCell.get(e.cell_type);
-    if (!prev || e.combined_score > prev.combined_score) byCell.set(e.cell_type, e);
+    if (!prev || _cmpCanonicalAttribution(e, prev) < 0) byCell.set(e.cell_type, e);
   }
-  const displayRows = Array.from(byCell.values()).filter(e =>
-    e.combined_tier === "very_high" || e.combined_tier === "high" || e.combined_tier === "moderate");
-  // Sort: tier first (very_high → high → moderate), then score desc within tier.
-  displayRows.sort((a, b) => {
-    const dt = (_CONF_RANK[b.combined_tier] || 0) - (_CONF_RANK[a.combined_tier] || 0);
-    if (dt !== 0) return dt;
-    return b.combined_score - a.combined_score;
-  });
+  const displayRows = Array.from(byCell.values());
+  displayRows.sort(_cmpCanonicalAttribution);
   const n = displayRows.length;
   if (n === 0) return `<span class="muted">—</span>`;
   const top = displayRows.slice(0, 3);
-  const tip = displayRows.map(e => `${e.cell_type} (${(e.combined_tier || '').replace('_', ' ')}, ${e.combined_score.toFixed(2)})`).join("\n");
+  const tip = displayRows.map(e => {
+    const song = (e.song_specificity != null && isFinite(e.song_specificity))
+      ? `Song ${(Number(e.song_specificity) / _MS_UNIFORM).toFixed(1)}×`
+      : "Song n/a";
+    return `${e.cell_type} (${song}, ${(e.confidence_tier || '').replace('_', ' ')})`;
+  }).join("\n");
   const topNames = top.map(e => {
-    const cls = e.combined_tier === "very_high" ? "vhi"
-              : e.combined_tier === "high"      ? "hi"
+    const cls = e.confidence_tier === "very_high" ? "vhi"
+              : e.confidence_tier === "high"      ? "hi"
               : "mid";
     return `<span class="badge ${cls}">${_escapeHtml(e.cell_type)}</span>`;
   }).join(" ");
@@ -778,7 +804,7 @@ function renderKinaseExplorer() {
     const scopedRows = getScopedAttribution(r.id, colFilter);
     const ctxByTier = {very_high: new Set(), high: new Set(), moderate: new Set()};
     for (const e of scopedRows) {
-      if (ctxByTier[e.combined_tier]) ctxByTier[e.combined_tier].add(e.contrast_id);
+      if (ctxByTier[e.confidence_tier]) ctxByTier[e.confidence_tier].add(e.contrast_id);
     }
     const tierSpec = [
       {tier:"very_high", cls:"vhi", label:"VERY HIGH", suffix:" (attribution + decomp agreement)"},

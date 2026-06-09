@@ -120,8 +120,9 @@ carry no Day-2 FC column, confirming the "(later) − (Day 2)" contrast.
 - **Landing layout:** `data/datasets/tcells/{donor1,donor2}/{proteomics,scrna}/`,
   original vendor filenames preserved.
 - **Tasks wired:** `pixi run ingest-tcells` (proteomics) and
-  `pixi run ingest-tcells-scrna` (+10 GB scRNA) →
-  `alz/runners/supporting/ingest_tcells.sh`.
+  `pixi run ingest-tcells-scrna` (+10 GB scRNA) → `tcells` source in
+  `conf/data_sources.yaml` (rclone-ingest engine; superseded the standalone
+  `ingest_tcells.sh` on 2026-06-08).
 
 Hard rules from the notes:
 
@@ -136,8 +137,8 @@ Hard rules from the notes:
 
 ### Proposed actions
 
-- ☑ **D1. Ingest task.** `ingest-tcells` (+ `ingest-tcells-scrna`) wired to
-  `alz/runners/supporting/ingest_tcells.sh` → `data/datasets/tcells/`. Proteomics
+- ☑ **D1. Ingest task.** `ingest-tcells` (+ `ingest-tcells-scrna`) → `tcells`
+  source in `conf/data_sources.yaml` → `data/datasets/tcells/`. Proteomics
   ForPerseus files landed; IMAC + scRNA pulling.
 - ☑ **D2. Reshape module** `alz/ingest/tcells.py` (`pixi run tcells-reshape`).
   ForPerseus is already site-collapsed (gene/residue/location/flanking pre-parsed)

@@ -80,12 +80,12 @@ function wireKinaseTable() {
     });
   }
 
-  // WMB specificity tier minimum (single, ordinal threshold).
-  const wmbSel = document.getElementById("ke-filter-wmb");
-  if (wmbSel) {
-    wmbSel.value = String(KinaseFilter.get("wmbMin") || 0);
-    wmbSel.addEventListener("change", () => {
-      KinaseFilter.set({wmbMin: parseInt(wmbSel.value, 10) || 0});
+  // Song location specificity floor (fold over even-split: 0 / 2 / 5 / 10 ×).
+  const songSel = document.getElementById("ke-filter-song");
+  if (songSel) {
+    songSel.value = String(KinaseFilter.get("songMin") || 0);
+    songSel.addEventListener("change", () => {
+      KinaseFilter.set({songMin: parseFloat(songSel.value) || 0});
       renderKinaseExplorer();
     });
   }
@@ -133,8 +133,8 @@ function _syncKinaseFilterUI() {
   }
   const confSel = document.getElementById("ke-filter-confidence");
   if (confSel) confSel.value = KinaseFilter.get("confidence") || "";
-  const wmbSel = document.getElementById("ke-filter-wmb");
-  if (wmbSel) wmbSel.value = String(KinaseFilter.get("wmbMin") || 0);
+  const songSel = document.getElementById("ke-filter-song");
+  if (songSel) songSel.value = String(KinaseFilter.get("songMin") || 0);
   const nsigInp = document.getElementById("ke-filter-nsig-min");
   if (nsigInp) nsigInp.value = String(KinaseFilter.get("nSigMin") || 0);
   const patSel = document.getElementById("ke-filter-pattern");

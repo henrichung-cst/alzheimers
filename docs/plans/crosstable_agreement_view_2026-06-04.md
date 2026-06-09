@@ -176,3 +176,45 @@ the crosstable changes only the crosstable panel (the L1435 scoping fix).
 2. `git status` — iteration 1 may be committed by then; if dirty, the 3 files above are it.
 3. Rebuild + eyeball: `pixi run viewer`, open `outputs/reports/unified_viewer/index.html`,
    hard-refresh, Crosstable tab (visible in both Mouse and Human modes).
+
+## Iteration 3 — Cell-type Specificity sub-tab: reference-corroboration redesign (2026-06-05)
+
+**Problem.** The detail panel's "Cell-type Specificity" sub-tab lifted two per-dataset
+renderers verbatim, side by side: `_renderKinaseCelltypeEvidence` (mouse, generic paged
+AuditTable — raw floats, search/pager/export/clean-headers chrome) and
+`_khRenderAttribution` (human SEA-AD+HBCA — raw scores, donor selector, methods prose).
+They share no cluster axis, mix raw floats vs pills, duplicate SEA-AD on both sides, and
+compute no corroboration — defeating the panel's purpose.
+
+**Corrected intent (after reference audit).** This is NOT mouse-dataset-vs-human-dataset
+agreement. Every specificity reference rolls up to the SAME Levy-T5 cluster axis and
+expresses the SAME quantity ("× more concentrated than the average cell type"), which is why
+they already share the ≥1×/≥2×/≥5×/≥10× pill vocabulary:
+
+| Reference | Species | Role | Native value | Fold |
+|---|---|---|---|---|
+| Song location specificity | mouse | **primary** | levy_t5 pseudobulk share | share ÷ (1/31) |
+| WMB (Allen Whole Mouse Brain) | mouse | cross-check | share over ~9 retained classes | ÷ (1/9) |
+| SEA-AD MTG | human | cross-check | log2(ct_mean / brain_mean) | 2^score |
+| Allen HBCA | human | cross-check | log2(ct_mean / brain_mean) | 2^score |
+
+So the question is: *where does this kinase localize, and do the independent atlases
+corroborate Song's call?* SEA-AD is a cross-check pill exactly like WMB.
+
+**Design (user-confirmed).** Replace the two verbatim tables with ONE cluster-aligned table:
+- Rows = Levy-T5 clusters, **union across all four references, ranked by max tier**.
+- Columns = four fold pills, primary first: **Song** (τ + share in tooltip) · **WMB** ·
+  **SEA-AD MTG** (AD LFC in tooltip) · **HBCA** — all `badge vhi/hi/mid/lo`, muted `<1×`.
+- **No corroboration mark** — four aligned pills; reader eyeballs corroboration.
+- Human-only kinases: same layout, Song/WMB dashed, SEA-AD/HBCA populated.
+- Drop pager/export/search/donor-selector/prose chrome.
+- Single full-width container for this sub-tab; the "NES Activity" sub-tab keeps its
+  mouse|human two-column grid.
+
+**Data sources (all client-side, already indexed).** Song share + τ + WMB fold per cluster
+from `PAYLOAD.kinase_celltype_evidence` via `_evidenceByKinase` (kid → indices); SEA-AD +
+HBCA score per cluster from `_KX_HUMAN_SPEC_BY_NAME` (name → {seaad,hbca} maps).
+
+**Changes.** `kinase_crosstable.js`: new `_kxFoldTier`, `_kxRefPill`, `_kxRenderSpecAligned`;
+`_kxRenderDetail` specificity branch renders the single table instead of the 2-col grid.
+`styles.css`: `.kx-detail-spec` / `.kx-spec-note` / `.kx-spec-table`. No Python/payload change.

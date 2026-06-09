@@ -266,3 +266,106 @@ Song distribution after compute, not guessed.
   ×uniform); M-spec filter = τ bands (0.60/0.85). Explorer tab: WMB baseline fixed to
   `meta.wmb_uniform` (F2); Song-primary upgrade of the explorer's mouse Kinase tab is the
   remaining follow-on (its WMB tier column + filter at kinase_explorer.js:782/653/289).
+
+### 6.6 Plan — make Song τ primary everywhere, WMB an adjacent cross-check (2026-06-05)
+
+**Goal.** Song τ is the *more precise* mouse location signal (resolves below WMB class — e.g.
+Ntrk1/Cholinergic τ=0.99 where WMB reads 0.27). Make it the **favored** mouse specificity on
+every viewer surface, with WMB kept **visible as an adjacent column** (genuine-difference
+exemption — WMB is the independent atlas cross-check, not a removed legacy path). Scope confirmed
+with user: **display surfaces only.** The confidence-tier gate in `recover.py` (high/mod/low,
+currently WMB ≥2× uniform) is **explicitly out of scope** — left WMB-gated, revisited separately.
+Pure view-layer + one payload-plumbing add; no pipeline rerun beyond `pixi run viewer`.
+
+**Current state (audit 2026-06-05).** Song τ is primary in **one** place: the crosstable main
+table. Everywhere else is still WMB-only/WMB-primary:
+- Explorer (mouse Kinase tab): WMB column `kinase_explorer.js:784` (`_kineMaxWmbTierScoped`),
+  WMB filter `:692` + `body.html:49-52`, header `body.html:91`. No Song τ surfaced at all.
+- Shared "Cell-type Specificity" detail (`_renderKinaseCelltypeEvidence`, `kinase_audit.js:502`)
+  — WMB-based, and it renders **inside the crosstable detail too**, so the crosstable detail
+  contradicts its own headline table.
+- Attribution audit table: "WMB enrich"/"WMB tier" columns `kinase_audit.js:572-575,724-725`.
+- Stale **"1/34"** / **"34 WMB classes"** text now contradicts the 1/11 computation:
+  `body.html:52,91`; `kinase_audit.js:573,575,824`.
+
+**Changes by file.**
+
+1. **`alz/build_unified_viewer.py`** — plumb per-cell-type Song into the detail.
+   `kinase_celltype_evidence` (consumed by `_renderKinaseCelltypeEvidence`) currently carries
+   `wmb_fold`/`wmb_tier`/`sea_ad_lfc`/`song_lfc` (song_lfc = AD-vs-WT *activity*, not location).
+   Add **`song_specificity`** (per-(kinase,cell_type) share from `song_expression_specificity.csv`)
+   and the per-kinase **`song_tau`**/`song_top_cluster` to this evidence block, joined on the same
+   key the WMB columns use. (attribution_index already carries all four song fields; reuse that
+   join rather than re-reading the CSV.)
+
+2. **`alz/viewer/template/js/tabs/kinase_explorer.js`** — Song τ primary, WMB adjacent.
+   - Build a per-kinase `_KE_SONG_BY_KID` (τ/topCluster/topShare), mirroring the crosstable's
+     `_KX_SONG_BY_KID` (stamp once from `AI.song_tau`/`song_top_cluster`/`song_top_share`).
+   - New `_kineSongTier(kid)` + reuse a τ-band badge (≥0.85 highly specific / ≥0.60 specific /
+     else broad; ★ when a scoped/pinned cluster == topCluster) — lift the crosstable's
+     `_kxSongTierBadge` logic; do not re-implement the bands.
+   - Replace the **M-spec column** at `:784` so it renders Song τ first, then keep the existing
+     `_wmbTierBadge(_kineMaxWmbTierScoped(...))` as a **second, adjacent "WMB" cell** (cross-check).
+     Two cells, Song then WMB — same pattern as the crosstable.
+   - Sort: route the primary specificity sort key to Song τ; add a separate `wmb` sort key that
+     keeps the existing `_kineMaxWmbTierScoped` ordering (mirror crosstable `_kxSortRows`).
+   - Filter: the existing WMB-tier filter (`:692`, `wmbMin`) becomes a **Song τ band** filter
+     (pass if `songTau ≥ τMin`); keep WMB filter only if trivially cheap — otherwise drop the WMB
+     *filter* (WMB stays a visible column, just not a filter, matching the crosstable).
+
+3. **`alz/viewer/template/js/tabs/kinase_audit.js`** — Song in the shared detail + audit table.
+   - `_renderKinaseCelltypeEvidence` (`:502`): add a **Song** column (per-cell-type
+     `song_specificity`, with the per-kinase τ shown in the section header) as the **first** mouse
+     location column, WMB fold/tier kept **adjacent** to its right. Sort default → Song.
+   - Attribution table (`:572-575,724-725`): keep the WMB columns; add an adjacent Song τ column
+     so the table matches. (Lower priority — confirm it's worth the width.)
+
+4. **Stale-text cleanup (correctness, not cosmetic).** Replace every hardcoded "1/34" /
+   "34 WMB classes" with the live `meta.wmb_uniform` (= 1/11) and "retained WMB classes" wording:
+   `body.html:52,91`; `kinase_audit.js:573,575,824`. The WMB *computation* already uses 1/11; only
+   the display strings lag, so they currently misstate the baseline.
+
+**Out of scope (recorded, not done).** `recover.py` celltype-evidence confidence gate
+(`SPECIFICITY_LOW/HIGH` on WMB) — the high/mod/low tiers and which cell types count as "supported"
+stay WMB-driven. Revisit as a separate decision (would change the attribution pipeline + force a
+full attribute→mechanism→recover rerun).
+
+**Reused, not rebuilt.** Crosstable's `_kxSongTierBadge`/τ-band logic and `_KX_SONG_BY_KID` shape;
+`_wmbTierBadge`/`_kineMaxWmbTierScoped` (WMB cells stay verbatim); `meta.wmb_uniform`.
+
+### 6.7 WMB even-split baseline unified to 1/N (resolves F1/F2 + the pipeline half) — 2026-06-05
+
+The viewer's WMB tier used `meta.wmb_uniform = 1/11` while the pipeline gate
+(`config.SPECIFICITY_LOW/HIGH`) used `1/31` / `2/31` — the **same `wmb_specificity`
+number measured against two rulers**, so a kinase could read "≥1× / not specific"
+in the WMB column while its WMB-gated confidence tier had been decided as if it
+were specific. Both numbers were also wrong: `wmb_expression.py` normalizes each
+gene's share over `RETAINED_WMB_CLASSES`, and the share **provably sums to 1 over
+9** classes (verified: all 547 genes, 9 retained rows each, share-sum = 1.0000).
+Two declared retained classes — `07 CTX-MGE GABA`, `13 CNU-HYa Glut` — carry no
+atlas cells in the whole-brain scope, so they never enter any denominator. **True
+N = 9**, not 11 and not 31.
+
+Fix (one ruler, derived from the artifact): `config.wmb_specificity_uniform()`
+returns `1/N` with N = retained WMB classes present in `wmb_kinase_expression.csv`
+(fallback = crosswalk distinct-class count before the artifact exists). The old
+`SPECIFICITY_LOW`/`SPECIFICITY_HIGH` constants are **deleted**; `attribute.py`
+(confidence flags), `recover.py` (evidence filter + `wmb_fold_over_uniform` +
+`wmb_tier`), the two `supplementary/` scripts, and `build_unified_viewer`'s
+`meta.wmb_uniform` all read this function. Effect: the "above even-split" gate
+goes from `≥0.032` (1/31) to `≥0.111` (1/9) — ~3× stricter, the intended
+correction — so the WMB-gated `high`/`moderate` confidence tiers and the
+cell-type evidence rows tighten. Song τ is unaffected (it's the favored signal;
+WMB is the cross-check). Requires re-running `attribute → mechanism → recover →
+viewer`. Static tooltips updated from `1/11`/`2/31` to `1/9`/`2/9`.
+
+**Verification.**
+1. `pixi run viewer`; hard-refresh; confirm `PAYLOAD.meta.generated_at` fresh and
+   `PAYLOAD.kinase_celltype_evidence` carries `song_specificity`/`song_tau`.
+2. Explorer mouse tab: Song τ column + WMB column both present, Song first; τ-band filter shifts
+   rows; sort by each independently works.
+3. Click a kinase → "Cell-type Specificity" detail leads with Song, WMB adjacent — and reads the
+   same whether opened from explorer or crosstable.
+4. Spot-check Ntrk1: Song τ≈0.99 (Cholinergic, highly specific) **next to** WMB 0.27 — the
+   precision gap is visible, not hidden.
+5. grep the built `index.html` for "1/34" / "34 WMB" → zero hits.

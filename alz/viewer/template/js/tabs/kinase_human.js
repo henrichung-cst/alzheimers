@@ -1031,7 +1031,7 @@ function _khTopCelltypeName(kinaseName, reference) {
 const KH_ATTR_COLS = [
   {key:"cell_type",            label:"Cell type",   type:"str", group:"id",
    title:"Levy T5 cluster. SEA-AD supertypes and HBCA superclusters are rolled up to this shared nomenclature before ranking."},
-  {key:"combined_tier",        label:"Conf",        type:"conf", group:"attr",
+  {key:"confidence_tier",      label:"Conf",        type:"conf", group:"attr",
    title:"Human mirror of the mouse confidence tier: high / moderate / low / none. High requires both human location evidence ≥ log2(2) and |SEA-AD LFC| ≥ 0.1."},
   {key:"specificity",          label:"Location",    type:"num", group:"attr",
    title:"Human expression location evidence: log2(cell-type mean / reference-wide mean). > 0 means enriched in this cell type."},
@@ -1041,8 +1041,6 @@ const KH_ATTR_COLS = [
    title:"Mean log2 expression in this cell type. Low absolute expression can make location enrichment less interpretable."},
   {key:"sea_ad_lfc",           label:"SEA-AD LFC",  type:"num", group:"attr",
    title:"SEA-AD AD-vs-control LFC for this kinase in this SEA-AD supertype. HBCA rows have no SEA-AD analog."},
-  {key:"combined_score",       label:"Score",       type:"num", group:"attr",
-   title:"Combined attribution score. With donor NES and SEA-AD LFC: sign(NES) × LFC × (0.5 + specificity); otherwise specificity."},
   {key:"donor_nes",            label:"Donor NES",   type:"num", group:"activity",
    title:"Per-donor kinase MEA NES for the selected donor. Same value is broadcast to each row for this kinase."},
   {key:"donor_fdr",            label:"Donor FDR",   type:"num", group:"activity",
@@ -1136,7 +1134,7 @@ function _khMergeAttributionRows(rawRows) {
   for (const row of rows) {
     row.references.sort((a, b) => String(a).localeCompare(String(b)));
     row.conf = _khAttrConf(row.specificity, row.sea_ad_lfc);
-    row.combined_tier = row.conf;
+    row.confidence_tier = row.conf;
     row.conf_rank = _khAttrConfRank(row.conf);
     row.tier_rank = _khSpecTierRank(row.specificity);
     row.specificity_tier_rank = row.tier_rank;
@@ -1316,38 +1314,25 @@ function _khRenderAttribution(body, r) {
   const donorNES = pd ? pd.NES : null;
   const donorFDR = pd ? pd.FDR : null;
 
-  // Combined score (mirrors mouse): direction support × (0.5 + location evidence).
-  // Location evidence is the strongest human-reference prior for the Levy T5 cell
-  // type; SEA-AD LFC is folded in when available for the same cell-type row.
-  const scoreOf = (row) => {
-    const spec = row.specificity;
-    const lfc = row.sea_ad_lfc;
-    if (donorNES != null && isFinite(donorNES) && lfc != null && isFinite(lfc)) {
-      const ec = Math.sign(donorNES) * lfc;
-      return ec * (0.5 + Math.max(0, spec || 0));
-    }
-    return spec;
-  };
   for (const row of rows) {
-    row.combined_score = scoreOf(row);
-    row.combined_tier  = _khAttrConf(row.specificity, row.sea_ad_lfc);
+    row.confidence_tier  = _khAttrConf(row.specificity, row.sea_ad_lfc);
     row.specificity_tier_rank = _khSpecTierRank(row.specificity);
     row.donor_nes = donorNES;
     row.donor_fdr = donorFDR;
   }
 
-  const sortKey = body.dataset.khAttrSortKey || "combined_tier";
+  const sortKey = body.dataset.khAttrSortKey || "confidence_tier";
   const sortAsc = body.dataset.khAttrSortAsc === "1";
   const sortCol = KH_ATTR_COLS.find(c => c.key === sortKey)
-    || KH_ATTR_COLS.find(c => c.key === "combined_tier")
+    || KH_ATTR_COLS.find(c => c.key === "confidence_tier")
     || KH_ATTR_COLS[KH_ATTR_COLS.length - 1];
   rows.sort((a, b) => _khAttrCmp(a, b, sortCol.key, sortCol.type, sortAsc));
-  if (sortCol.key === "combined_tier") {
+  if (sortCol.key === "confidence_tier") {
     rows.sort((a, b) => {
       const primary = _khAttrCmp(a, b, sortCol.key, sortCol.type, sortAsc);
       if (primary !== 0) return primary;
       return ((b.specificity_tier_rank || 0) - (a.specificity_tier_rank || 0)) ||
-             ((b.combined_score || -Infinity) - (a.combined_score || -Infinity));
+             ((b.specificity || -Infinity) - (a.specificity || -Infinity));
     });
   }
 
@@ -1379,7 +1364,7 @@ function _khRenderAttribution(body, r) {
   const num = (v, d=3) => (v == null || !isFinite(v)) ? "" : Number(v).toFixed(d);
   const tbody = rows.map((row, i) => {
     const tierChip =
-      `<span class="${_attrConfidenceClass(row.combined_tier)}">${_escapeHtml(row.combined_tier.replace('_', ' '))}</span>`;
+      `<span class="${_attrConfidenceClass(row.confidence_tier)}">${_escapeHtml(row.confidence_tier.replace('_', ' '))}</span>`;
     // Location tier: uses the same ≥10× / ≥5× / ≥2× / ≥1× of uniform logic
     // as the mouse WMB tier, applied to the human log2-ratio score directly.
     const specTier = row.specificity == null || !isFinite(row.specificity)
@@ -1401,7 +1386,6 @@ function _khRenderAttribution(body, r) {
       `<td class="attr-num">${specTier}</td>` +
       `<td class="attr-num">${num(row.mean_log2_expression, 2)}</td>` +
       seaCell +
-      `<td class="attr-num">${num(row.combined_score, 3)}</td>` +
       nesCell +
       fdrCell +
       `</tr>`;

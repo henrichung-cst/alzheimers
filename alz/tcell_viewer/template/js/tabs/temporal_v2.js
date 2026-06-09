@@ -18,12 +18,10 @@ function _tv2EnsureAttrIndex() {
     const kid = AI.kinase_id[j];
     const cidx = AI.contrast_id[j];
     const cell = AI.cell_type[j];
-    // T-cell attribution is binned specificity (no confidence string); rank by
-    // the precomputed tcell_tier. Fall back to the mouse confidence path when a
-    // payload still ships combined_confidence.
+    // T-cell attribution is binned specificity; rank by the precomputed
+    // tcell_tier. Canonical mouse payloads expose confidence_tier.
     const rank = AI.tcell_tier ? (AI.tcell_tier[j] || 0)
-      : (_CONF_RANK[_combinedTierFor(kid, cidx, cell,
-          AI.combined_confidence ? AI.combined_confidence[j] : undefined)] || 0);
+      : (_CONF_RANK[AI.confidence_tier ? AI.confidence_tier[j] : "none"] || 0);
     const key = kid + "|" + cidx;
     let arr = m.get(key);
     if (!arr) { arr = []; m.set(key, arr); }

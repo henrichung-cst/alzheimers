@@ -59,8 +59,8 @@ Microglial and astrocytic transcriptomic responses to amyloid pathology are
 among the most conserved features between human AD and 5xFAD mice. For other
 cell types and pathways, cross-species conservation is an open question.
 
-To make this transparent, the final attribution table includes an
-`evidence_basis` column that classifies each attribution as:
+To make this transparent, the final attribution table includes a
+`confidence_basis` column that classifies each attribution as:
 
 - `cross_species` — supported by both human SEA-AD concordance and mouse WMB
   expression specificity

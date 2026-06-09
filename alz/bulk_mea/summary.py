@@ -82,8 +82,8 @@ def print_summary():
     elif os.path.exists(attr_path):
         attr = pd.read_csv(attr_path)
         print(f"  Attributed rows: {len(attr)}")
-        if "combined_confidence" in attr.columns:
-            for conf, cnt in attr["combined_confidence"].value_counts().items():
+        if "confidence_tier" in attr.columns:
+            for conf, cnt in attr["confidence_tier"].value_counts().items():
                 print(f"    {conf}: {cnt}")
     else:
         print("  Not yet run")

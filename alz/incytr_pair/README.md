@@ -109,7 +109,6 @@ and `filter_significant_paths.py`; the cohorts differ only in their input builde
 | `run_pair_mode_tcells.sh` | Per-contrast loop driver (T-cell cohort); reuses the same `incytr_commandline.R`. pixi task `tcells-incytr`. |
 | `incytr_commandline.R` | R driver: calls `Incytr::Cal_pairwise_grid`; writes one wide parquet per contrast. Node labels (DEG/prG) and per-node FC are written inline. Env-parameterized for mouse vs human (`SPECIES`, `CHANNELS`, file/gene-col vars). |
 | `filter_significant_paths.py` | Row-subset significance filter applied after each contrast: `(SigProb_<disease> > 0.1 OR SigProb_<WTyp> > 0.1) AND abs(PDS) >= 0.2`, uncapped by default. Optional `--top300` applies the sce4 per-pair top-300 up/down cap for compatibility diagnostics only. Optional `--exclude-transgenes` removes `App`/`Psen1`/`Mapt` paths for AD sensitivity analyses only. |
-| `audit_transgene_excluded_reproduction.R` | Sce4 forensic audit that removes `App`/`Psen1`/`Mapt` paths from both rerun and frozen sce4 references before gated-set and Top300 comparison. |
 | `emit_expr_bygroup.R` | Transcript-substrate emitter: per-(cluster, Group) trimean of `originalexp@data` via `Incytr:::grouped_weighted_quartile`; writes `outputs/reports/decomposition/levy_t5/transcript_per_cluster.parquet`. Run once per spine build, not per contrast. |
 | `build_pair_inputs.sh` | Input-prep orchestrator (mouse): calls `build_pair_seurat.R`, `export_decomposition_for_pair.py`, `build_input_gene_list.R`; writes `data/derived/incytr_inputs/`. |
 | `build_pair_seurat.R` | Builds `incytr_obj.rds` from the snRNA-seq data. |
@@ -120,10 +119,16 @@ and `filter_significant_paths.py`; the cohorts differ only in their input builde
 | `pair_to_receiver_cache.py` | Reshapes the 9 wide driver outputs into the long-form `receiver_cache/` layout the unified viewer consumes. Also exports `_sanitize_celltype`, imported by 4 `alz/integration/` modules. |
 | `verify_sce4_parity.py` | Regression gate (`pixi run verify-incytr-sce4`): regenerates the two benchmark pairs unfiltered (nboot=0) and confirms the sce4-parity overrides still reproduce 599/600 + max \|Δ sclog2FC\|=0 on R/EM/T (App-transgene residual exempt). |
 | `verify_sce4_full.R` | Full sce4 reproduction gate (`pixi run verify-incytr-sce4-full`): compares every gated path tuple in the 9 unfiltered wide parquets against sce4's pre-cap pairwise RDS files. Fails loudly until all 9 RDS files are present. |
-| `audit_pds_score_influence.R` | Sce4 forensic audit that decomposes shared-row `delta_PDS` into weighted `TPDS`, `PPDS`, `PhPDS_ps`, `PhPDS_py`, signed SiK, and residual multimodel contributors. |
-| `audit_phospho_engine_trace.R` | Sce4 forensic audit that recomputes package-default phospho scores from the current input bundle and checks whether they reproduce our output versus sce4 frozen scores. |
 | `audit_incytr_input_provenance.py` | Lightweight scanner that reports canonical, diagnostic, and suspicious Incytr input-root references in scripts/docs/configs. Use before treating a run as production. |
 | `__init__.py` | Package marker (enables `from incytr_pair.* import` in `alz/integration/`). |
+
+The sce4-reproduction forensic probes (`audit_*`, `forensic_sce4_afc.R`,
+`run_sce4_full_unfiltered.sh`) and the redundant `launch_pair_mode.sh` launcher
+were archived to `archive/sce4_reproduction_2026-06-08/` on 2026-06-08 — the
+reproduction is solved and they are referenced only by the investigation log
+`docs/plans/sce4_reproduction.md`. The active regression gates
+(`verify_incytr_sce4.sh`, `verify_sce4_parity.py`, `verify_sce4_full.R`) and the
+production gene.use source (`extract_sce4_geneuse.R`) stay here.
 
 ## Data layout
 

@@ -195,7 +195,7 @@ Canonical outputs:
 - `outputs/reports/kinase_attribution/attribution_summary.json`
 
 Implementation: `alz/pipelines/attribute/{nodes,pipeline}.py` over pure
-helpers in `alz/kinase_attribute.py`. Concordance scoring documented in
+helpers in `alz/kinase_attribute.py`. Concordance model documented in
 [`concordance.md`](concordance.md).
 
 Failure modes:

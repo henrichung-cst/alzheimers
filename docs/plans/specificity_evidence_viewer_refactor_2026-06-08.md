@@ -201,9 +201,10 @@ Verification:
 
 ## Open implementation notes
 
-- Current backend attribution confidence still uses WMB specificity as the
-  specificity multiplier in `combined_score`. This plan does not change the
-  scoring model by itself; it clarifies how evidence is labeled and displayed.
+- At the time this note was written, backend attribution confidence still used
+  WMB specificity as the specificity multiplier in its legacy score. This plan
+  did not change the scoring model by itself; it clarified how evidence was
+  labeled and displayed.
 - Current viewer Song badges use top-share fold over `1/31` with tau in the
   tooltip. Moving to tau-driven `1x` / `2x` / `5x` / `10x` labels remains a
   separate design decision because the agreed tau bands do not yet define all

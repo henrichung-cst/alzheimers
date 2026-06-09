@@ -61,11 +61,14 @@ def step_run():
     df = pd.read_csv(full_path)
     print(f"  Loaded {len(df)} rows from unified_attribution_full.csv")
 
-    n = config.N_CELL_TYPES  # 34 under WMB-class spine
+    # Sweep multipliers of the WMB even-split baseline (1/N, N = retained WMB
+    # classes the share is normalized over ≈9), so the grid shares the gate's ruler.
+    _wmb_uniform = config.wmb_specificity_uniform()
+    n = 1.0 / _wmb_uniform
 
     # Current defaults
-    default_spec_high = config.SPECIFICITY_HIGH  # 2.0 / N_CELL_TYPES
-    default_spec_low = config.SPECIFICITY_LOW    # 1.0 / N_CELL_TYPES
+    default_spec_high = 2.0 * _wmb_uniform   # 2× even-split (the "high" gate)
+    default_spec_low = _wmb_uniform          # 1× even-split (the "moderate" gate)
     default_lfc = config.SEA_AD_LFC_MIN          # 0.1
 
     # Pre-extract arrays once for vectorized sweep.

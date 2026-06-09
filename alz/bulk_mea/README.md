@@ -101,11 +101,13 @@ single-hop crosswalks:
 - **Song** within-cohort snRNA concordance + specificity, keyed directly on
   `cluster_name`.
 
-These combine into `effective_concordance × (base + wmb_specificity)` =
-`combined_score`, from which it assigns a **confidence tier**
-(high/moderate/low/none) and an `evidence_basis` label (three_way /
-within_cohort / cross_species / …). A hard row-count assertion guards against
-silent drops in the merge chain.
+These feed the canonical **confidence tier**. Song within-cohort direction plus
+Song location specificity is the route to `high`; decomposition agreement
+promotes `high` rows to `very_high`. WMB, SEA-AD, HBCA, and decomposition are
+retained as explicit cross-check columns, with `confidence_basis` summarizing
+the route. Sorting uses the explicit tier and evidence columns directly, not a
+synthetic numeric score. A hard row-count assertion guards against silent drops
+in the merge chain.
 
 ### Stage 4 — `mechanism.py`
 
