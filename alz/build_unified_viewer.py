@@ -23,6 +23,7 @@ import argparse
 import filecmp
 import glob
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -309,6 +310,103 @@ def _copy_if_different(src: str, dest: str) -> bool:
             return False
     shutil.copy2(src, dest)
     return True
+
+
+_BUILD_CACHE_SCHEMA_VERSION = 1
+_VIEWER_BUILD_CACHE_DIR = os.path.join(UNIFIED_VIEWER_DIR, ".build_cache")
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _file_fingerprint(path: str) -> dict:
+    if not os.path.exists(path):
+        return {
+            "path": os.path.relpath(path, config.REPO_ROOT),
+            "missing": True,
+        }
+    st = os.stat(path)
+    return {
+        "path": os.path.relpath(path, config.REPO_ROOT),
+        "size": int(st.st_size),
+        "mtime_ns": int(st.st_mtime_ns),
+        "sha256": _sha256_file(path),
+    }
+
+
+def _input_signature(family: str, paths: list[str], params: dict) -> dict:
+    signature = {
+        "cache_schema_version": _BUILD_CACHE_SCHEMA_VERSION,
+        "family": family,
+        "params": params,
+        "files": [_file_fingerprint(p) for p in sorted(set(paths))],
+    }
+    return json.loads(json.dumps(signature, sort_keys=True, separators=(",", ":")))
+
+
+def _build_cache_path(family: str) -> str:
+    return os.path.join(_VIEWER_BUILD_CACHE_DIR, f"{family}.json.gz")
+
+
+def _load_build_cache(
+    family: str,
+    signature: dict,
+    output_dir: str,
+) -> dict | None:
+    path = _build_cache_path(family)
+    if not os.path.exists(path):
+        return None
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            cached = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"  {family}: ignoring unreadable build cache ({e})", flush=True)
+        return None
+    if cached.get("input_signature") != signature:
+        return None
+    missing = [
+        rel for rel in cached.get("output_files", [])
+        if not os.path.exists(os.path.join(output_dir, rel))
+    ]
+    if missing:
+        print(
+            f"  {family}: build cache stale; {len(missing)} output file(s) missing",
+            flush=True,
+        )
+        return None
+    payload = cached.get("payload")
+    if payload is None:
+        return None
+    print(f"  {family}: cache hit; reusing existing shards", flush=True)
+    return payload
+
+
+def _write_build_cache(
+    family: str,
+    signature: dict,
+    output_dir: str,
+    output_files: list[str],
+    payload: dict,
+) -> None:
+    os.makedirs(_VIEWER_BUILD_CACHE_DIR, exist_ok=True)
+    existing = [
+        rel for rel in output_files
+        if os.path.exists(os.path.join(output_dir, rel))
+    ]
+    cache = {
+        "cache_schema_version": _BUILD_CACHE_SCHEMA_VERSION,
+        "family": family,
+        "input_signature": signature,
+        "output_files": sorted(existing),
+        "payload": payload,
+    }
+    with gzip.open(_build_cache_path(family), "wt", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, separators=(",", ":"))
 
 
 def _count_csv_rows(path: str) -> int:
@@ -1642,23 +1740,44 @@ def _write_decomp_ols_slices(kid: dict, contrast_to_id: dict) -> dict:
         return {"slice_count": 0, "present_kinase_ids": [], "filename_template":
                 "{kinase_id:03d}.parquet"}
 
+    # Substrate sets — st + py tracks. Both files share schema.
+    ss_paths = [
+        os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "mea_substrate_sets.csv"),
+        os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "mea_substrate_sets_pY.csv"),
+    ]
+    cols = ["site_id", "gene_symbol", "motif", "cell_type",
+            "contrast", "lfc", "se", "pval", "track"]
+    signature = _input_signature(
+        "decomp_ols",
+        [__file__, DECOMP_OLS_PARQUET, *ss_paths],
+        {
+            "builder_version": 1,
+            "schema_version": SCHEMA_VERSION,
+            "spine": config.CLUSTER_SPINE_NAME,
+            "kinases": sorted((str(k), int(v)) for k, v in kid.items()),
+            "contrast_to_id": sorted((str(k), int(v)) for k, v in contrast_to_id.items()),
+            "source_columns": cols,
+        },
+    )
+    cached = _load_build_cache(
+        "decomp_ols", signature, EDGE_SLICES_DECOMP_OLS_DIR,
+    )
+    if cached is not None:
+        return cached
+
     # Wipe-and-recreate so an aborted previous run can't leave partial
     # shards alongside the new ones (mismatched slice_count vs.
     # present_kinase_ids in index.json).
     shutil.rmtree(EDGE_SLICES_DECOMP_OLS_DIR, ignore_errors=True)
     os.makedirs(EDGE_SLICES_DECOMP_OLS_DIR, exist_ok=True)
 
-    # Substrate sets — st + py tracks. Both files share schema.
-    ss_paths = [
-        os.path.join(AUDIT_SOURCES_DIR, "mea_substrate_sets.csv"),
-        os.path.join(AUDIT_SOURCES_DIR, "mea_substrate_sets_pY.csv"),
-    ]
     ss_frames = []
     for p in ss_paths:
         if os.path.exists(p):
             ss_frames.append(pd.read_csv(p, usecols=["kinase", "motif", "track"]))
     if not ss_frames:
-        print(f"  (warn) substrate-set tables not found under {AUDIT_SOURCES_DIR}; "
+        print(f"  (warn) substrate-set tables not found under "
+              f"{config.KINASE_ATTRIBUTION_OUTPUT_DIR}; "
               f"skipping decomp_ols slice generation", flush=True)
         return {"slice_count": 0, "present_kinase_ids": [], "filename_template":
                 "{kinase_id:03d}.parquet"}
@@ -1673,8 +1792,6 @@ def _write_decomp_ols_slices(kid: dict, contrast_to_id: dict) -> dict:
 
     print(f"  decomp_ols: loading {DECOMP_OLS_PARQUET} "
           f"({os.path.getsize(DECOMP_OLS_PARQUET) / 1e6:.1f} MB)", flush=True)
-    cols = ["site_id", "gene_symbol", "motif", "cell_type",
-            "contrast", "lfc", "se", "pval", "track"]
     pcdf = pq.read_table(DECOMP_OLS_PARQUET, columns=cols).to_pandas()
     pcdf = pcdf[pcdf["contrast"].isin(contrast_to_id)].copy()
     pcdf["motif_norm"] = pcdf["motif"].astype(str).map(_norm_motif)
@@ -1726,6 +1843,20 @@ def _write_decomp_ols_slices(kid: dict, contrast_to_id: dict) -> dict:
     }
     with open(os.path.join(EDGE_SLICES_DECOMP_OLS_DIR, "index.json"), "w") as f:
         json.dump(index, f)
+    output_files = [
+        "index.json",
+        *[
+            template.format(kinase_id=int(kid_int))
+            for kid_int in present
+        ],
+    ]
+    _write_build_cache(
+        "decomp_ols",
+        signature,
+        EDGE_SLICES_DECOMP_OLS_DIR,
+        output_files,
+        index,
+    )
     print(f"  decomp_ols: wrote {len(present)} shards "
           f"({total_rows:,} total rows)", flush=True)
     return index
@@ -1744,16 +1875,32 @@ def _write_song_concordance_slices(genes_of_interest: set[str]) -> dict:
         return {"slice_count": 0, "present_genes": [],
                 "filename_template": "{gene}.parquet"}
 
+    cols = ["gene_symbol", "cell_type", "contrast",
+            "song_lfc", "song_se", "song_pval", "song_fdr", "n_animals"]
+    gset = {str(g).upper() for g in genes_of_interest if g}
+    signature = _input_signature(
+        "song_concordance",
+        [__file__, src],
+        {
+            "builder_version": 1,
+            "schema_version": SCHEMA_VERSION,
+            "genes_of_interest": sorted(gset),
+            "source_columns": cols,
+        },
+    )
+    cached = _load_build_cache(
+        "song_concordance", signature, EDGE_SLICES_SONG_CONCORDANCE_DIR,
+    )
+    if cached is not None:
+        return cached
+
     shutil.rmtree(EDGE_SLICES_SONG_CONCORDANCE_DIR, ignore_errors=True)
     os.makedirs(EDGE_SLICES_SONG_CONCORDANCE_DIR, exist_ok=True)
 
     print(f"  song_concordance: loading {src} "
           f"({os.path.getsize(src) / 1e6:.1f} MB)", flush=True)
-    cols = ["gene_symbol", "cell_type", "contrast",
-            "song_lfc", "song_se", "song_pval", "song_fdr", "n_animals"]
     df = pd.read_csv(src, usecols=lambda c: c in cols)
     df["gene_upper"] = df["gene_symbol"].astype(str).str.upper()
-    gset = {str(g).upper() for g in genes_of_interest if g}
     if gset:
         df = df[df["gene_upper"].isin(gset)]
     print(f"  song_concordance: {len(df):,} rows after gene filter "
@@ -1794,6 +1941,17 @@ def _write_song_concordance_slices(genes_of_interest: set[str]) -> dict:
     }
     with open(os.path.join(EDGE_SLICES_SONG_CONCORDANCE_DIR, "index.json"), "w") as f:
         json.dump(index, f)
+    output_files = [
+        "index.json",
+        *[template.format(gene=g) for g in present],
+    ]
+    _write_build_cache(
+        "song_concordance",
+        signature,
+        EDGE_SLICES_SONG_CONCORDANCE_DIR,
+        output_files,
+        index,
+    )
     print(f"  song_concordance: wrote {len(present)} shards "
           f"({total_rows:,} total rows)", flush=True)
     return index
@@ -1991,6 +2149,16 @@ _INCYTR_SCORE_COLS = ("TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "SiK_score")
 _INCYTR_LOW_SIGNAL_MEDIAN_N_THRESHOLD = 3
 
 
+def _incytr_celltype_qc_counts_path() -> str:
+    return os.path.join(
+        config.REPO_ROOT,
+        "outputs",
+        "reports",
+        "snrna_integration",
+        "pseudobulk_cell_counts.csv",
+    )
+
+
 def _read_incytr_celltype_qc(celltypes: list[str]) -> dict:
     """Cell-count QC metadata for Song/AD Incytr interpretation.
 
@@ -1998,13 +2166,7 @@ def _read_incytr_celltype_qc(celltypes: list[str]) -> dict:
     viewer-side sensitivity filter that removes cell-cell interactions where
     either endpoint has median male pseudobulk n_cells <= 3.
     """
-    counts_path = os.path.join(
-        config.REPO_ROOT,
-        "outputs",
-        "reports",
-        "snrna_integration",
-        "pseudobulk_cell_counts.csv",
-    )
+    counts_path = _incytr_celltype_qc_counts_path()
     threshold = _INCYTR_LOW_SIGNAL_MEDIAN_N_THRESHOLD
     out = {
         "source": os.path.relpath(counts_path, config.REPO_ROOT),
@@ -2225,8 +2387,6 @@ def _write_incytr_pair_pathways() -> dict | None:
     `incytr_pathways` payload block. No build-time significance gate; the
     UI thresholds live.
     """
-    import duckdb
-
     input_dir = os.environ.get(
         "INCYTR_PAIR_MODE_INPUT_DIR",
         os.path.join(config.REPO_ROOT, "outputs", "reports", "incytr_pair_mode", "wide"),
@@ -2257,8 +2417,40 @@ def _write_incytr_pair_pathways() -> dict | None:
     present_contrasts = [c for c in _INCYTR_CONTRASTS
                          if c in {c2 for _, c2 in file_to_contrast}]
     contrast_to_idx = {c: i for i, c in enumerate(present_contrasts)}
+    signature = _input_signature(
+        "incytr_pathways",
+        [__file__, *[f for f, _ in file_to_contrast], _incytr_celltype_qc_counts_path()],
+        {
+            "builder_version": 1,
+            "schema_version": SCHEMA_VERSION,
+            "input_dir": os.path.relpath(input_dir, config.REPO_ROOT),
+            "file_to_contrast": [
+                (os.path.relpath(f, config.REPO_ROOT), c)
+                for f, c in file_to_contrast
+            ],
+            "present_contrasts": list(present_contrasts),
+            "pvalue_thresholds": list(_INCYTR_PATHWAY_PVALUES),
+            "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
+            "top_instance_limit": _INCYTR_TOP_INSTANCE_LIMIT,
+            "score_columns": list(_INCYTR_SCORE_COLS),
+            "fc_columns": list(_INCYTR_FC_COLS),
+            "label_columns": list(_INCYTR_LABEL_COLS),
+            "label_vocab": list(_INCYTR_LABEL_VOCAB),
+            "low_signal_median_n_threshold": _INCYTR_LOW_SIGNAL_MEDIAN_N_THRESHOLD,
+            "trajectory_timepoints": list(_TRAJ_TIMEPOINTS),
+            "trajectory_labels": list(_SIGN_VEC_LABELS),
+        },
+    )
+    cached = _load_build_cache(
+        "incytr_pathways", signature, EDGE_SLICES_INCYTR_PATHWAYS_DIR,
+    )
+    if cached is not None:
+        return cached
+
     print(f"  incytr_pair_pathways: {len(file_to_contrast)} parquet(s); "
           f"contrasts = {present_contrasts}", flush=True)
+
+    import duckdb
 
     con = duckdb.connect()
     con.execute("PRAGMA threads=8; PRAGMA memory_limit='12GB';")
@@ -2854,7 +3046,7 @@ def _write_incytr_pair_pathways() -> dict | None:
           f"({total_rows:,} rows; {total_bytes/1e6:.1f} MB total; "
           f"max {max_shard_bytes/1e6:.2f} MB → {max_shard_name})", flush=True)
 
-    return {
+    payload_block = {
         "schema_version": SCHEMA_VERSION,
         "version": 3,           # CR-04: v3 = multi-label traj_labels (semicolon-joined)
         "source": f"pair_mode ({os.path.relpath(input_dir, config.REPO_ROOT)})",
@@ -2881,6 +3073,14 @@ def _write_incytr_pair_pathways() -> dict | None:
         # CR-04: traj_labels/sign_vec live in shard rows; summary inline.
         "trajectory_summary": traj_summary,
     }
+    _write_build_cache(
+        "incytr_pathways",
+        signature,
+        EDGE_SLICES_INCYTR_PATHWAYS_DIR,
+        ["index.json", *sorted(pair_row_counts)],
+        payload_block,
+    )
+    return payload_block
 
 
 def _read_empty_deg_celltypes() -> list[str]:
