@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import filecmp
 import glob
 import gzip
 import json
@@ -32,6 +33,11 @@ import time
 import warnings
 from dataclasses import dataclass, field
 from typing import Any
+
+# Some dependency paths import Matplotlib for motif/logo helpers. In managed
+# environments HOME may not be writable, which makes every build pay a temp
+# cache setup penalty and emit a warning.
+os.environ.setdefault("MPLCONFIGDIR", os.path.join("/tmp", "alz-matplotlib"))
 
 import numpy as np
 import pandas as pd
@@ -278,8 +284,31 @@ def _copy_audit_source(src: str, key: str) -> str | None:
     ext = os.path.splitext(src)[1]
     dest_name = f"{key}{ext}"
     dest = os.path.join(AUDIT_SOURCES_DIR, dest_name)
-    shutil.copyfile(src, dest)
+    _copy_if_different(src, dest)
     return os.path.relpath(dest, UNIFIED_VIEWER_DIR)
+
+
+def _copy_if_different(src: str, dest: str) -> bool:
+    """Copy src to dest only when dest is missing or content differs.
+
+    Returns True when file bytes were copied. Identical files still get source
+    metadata via copystat so future checks can use the cheap shallow path.
+    """
+    if os.path.exists(dest):
+        src_stat = os.stat(src)
+        dest_stat = os.stat(dest)
+        if (
+            src_stat.st_size == dest_stat.st_size
+            and src_stat.st_mtime_ns == dest_stat.st_mtime_ns
+        ):
+            return False
+        if src_stat.st_size == dest_stat.st_size and filecmp.cmp(
+            src, dest, shallow=False,
+        ):
+            shutil.copystat(src, dest)
+            return False
+    shutil.copy2(src, dest)
+    return True
 
 
 def _count_csv_rows(path: str) -> int:
@@ -3311,7 +3340,7 @@ def write_html(
         f.write(raw)
     methods_bytes = 0
     if os.path.exists(PIPELINE_OVERVIEW_SRC):
-        shutil.copyfile(PIPELINE_OVERVIEW_SRC, PIPELINE_OVERVIEW_DEST)
+        _copy_if_different(PIPELINE_OVERVIEW_SRC, PIPELINE_OVERVIEW_DEST)
         methods_bytes = os.path.getsize(PIPELINE_OVERVIEW_DEST)
     else:
         print(f"WARNING: {PIPELINE_OVERVIEW_SRC} not found; "
