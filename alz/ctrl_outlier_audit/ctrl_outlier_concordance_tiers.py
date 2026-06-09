@@ -20,6 +20,7 @@ AD/suspect group direction. For clean controls, the expected direction is opposi
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import math
 from dataclasses import dataclass
@@ -39,6 +40,13 @@ FDR_THRESH = 0.25
 AD = ["AD-01", "AD-02", "AD-03", "AD-04", "AD-06", "AD-07", "AD-08", "AD-09", "AD-13", "AD-15"]
 SUSPECT = ["CTRL-07", "CTRL-08", "CTRL-10"]
 CLEAN = ["CTRL-01", "CTRL-02", "CTRL-03", "CTRL-04"]
+
+
+def _normalize_ad_sample(sample: str) -> str:
+    sample = sample.strip()
+    if sample.isdigit():
+        return f"AD-{int(sample):02d}"
+    return sample
 
 
 @dataclass(frozen=True)
@@ -423,7 +431,43 @@ def _write_kinases(rows: list[dict[str, str | float | int | bool]]) -> None:
             writer.writerow(out)
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build AD/suspect/clean concordance tier tables."
+    )
+    parser.add_argument(
+        "--out-dir",
+        default=str(OUT),
+        help="Directory for concordance_tier_summary.csv and concordance_tier_kinases.csv.",
+    )
+    parser.add_argument(
+        "--wide-path",
+        default=str(WIDE_PATH),
+        help="Path to suspect_vs_AD_kinase_wide.csv.",
+    )
+    parser.add_argument(
+        "--exclude-ad-samples",
+        nargs="*",
+        default=[],
+        help="AD samples to remove from per-donor AD concordance checks.",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = _parse_args()
+    global AD, OUT, WIDE_PATH, SUMMARY_PATH, KINASES_PATH
+    exclude_ad_samples = {_normalize_ad_sample(s) for s in args.exclude_ad_samples}
+    unknown = sorted(exclude_ad_samples - set(AD))
+    if unknown:
+        raise ValueError(f"Excluded AD samples not in concordance AD list: {unknown}")
+    AD = [sample for sample in AD if sample not in exclude_ad_samples]
+    OUT = Path(args.out_dir)
+    WIDE_PATH = Path(args.wide_path)
+    SUMMARY_PATH = OUT / "concordance_tier_summary.csv"
+    KINASES_PATH = OUT / "concordance_tier_kinases.csv"
+    OUT.mkdir(parents=True, exist_ok=True)
+
     rows = _annotate_rows()
     _write_summary(rows)
     _write_kinases(rows)

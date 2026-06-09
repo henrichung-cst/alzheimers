@@ -28,6 +28,7 @@ human group MEA; the other three contrasts are labeled sensitivity references ar
 """
 from __future__ import annotations
 
+import argparse
 import datetime as _dt
 from pathlib import Path
 
@@ -55,11 +56,22 @@ CONTRASTS = [
 ]
 
 
-def _sample_sets(matrix_cols) -> dict[str, list[str]]:
+def _normalize_ad_sample(sample: str) -> str:
+    sample = sample.strip()
+    if sample.isdigit():
+        return f"AD-{int(sample):02d}"
+    return sample
+
+
+def _sample_sets(matrix_cols, exclude_ad_samples: set[str] | None = None) -> dict[str, list[str]]:
     """Build the four group sets from the sample mapping, filtered to present columns."""
+    exclude_ad_samples = exclude_ad_samples or set()
     m = pd.read_csv(SAMPLE_MAPPING_CSV)
     cols = set(matrix_cols)
-    ad = sorted(s for s in m.loc[m.group == "AD", "sample_id"] if s in cols)
+    ad = sorted(
+        s for s in m.loc[m.group == "AD", "sample_id"]
+        if s in cols and s not in exclude_ad_samples
+    )
     allctrl = sorted(s for s in m.loc[m.group == "CTRL", "sample_id"] if s in cols)
     clean = [s for s in allctrl if s not in AD_LIKE_CTRL]
     suspect = [s for s in allctrl if s in AD_LIKE_CTRL]
@@ -171,9 +183,15 @@ def write_wide(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return wide
 
 
-def write_manifest(sets: dict[str, list[str]], summaries: dict[str, dict]):
+def write_manifest(
+    sets: dict[str, list[str]],
+    summaries: dict[str, dict],
+    exclude_ad_samples: set[str] | None = None,
+):
     sig = config.MEA_FDR_THRESH
     today = _dt.date.today().isoformat()
+    unique_samples = sorted(set().union(*sets.values()))
+    exclude_ad_samples = exclude_ad_samples or set()
     lines = [
         "# Suspect-control kinase MEA reanalysis — MANIFEST",
         "",
@@ -189,7 +207,16 @@ def write_manifest(sets: dict[str, list[str]], summaries: dict[str, dict]):
         "**Sign convention:** pipeline-wide `+ = up in disease/suspect direction`; "
         "`+NES` = higher kinase activity in group A than group B. Identical across all four.",
         "",
-        "These are **four views of the same 17 NBB human brains** — not independent cohorts.",
+        f"These are **four views of the same {len(unique_samples)} NBB human brains** — "
+        "not independent cohorts.",
+    ]
+    if exclude_ad_samples:
+        lines += [
+            "",
+            "**Sensitivity exclusion:** AD pool excludes "
+            f"{', '.join(sorted(exclude_ad_samples))}.",
+        ]
+    lines += [
         "",
         "## Group sets",
         "",
@@ -226,14 +253,25 @@ def write_manifest(sets: dict[str, list[str]], summaries: dict[str, dict]):
         for track in TRACKS:
             c = summaries[label]["counts"].get(track, (0, 0))
             lines.append(f"| `{label}` | {track} | {c[0]} | {c[1]} |")
+    if exclude_ad_samples:
+        ad_clean_note = (
+            "- **`AD_vs_cleanCTRL`** is a sensitivity rerun of the audit-adjusted "
+            f"production contrast after excluding {', '.join(sorted(exclude_ad_samples))} "
+            "from the AD pool. Do not treat this file as the canonical clean-baseline "
+            "production output."
+        )
+    else:
+        ad_clean_note = (
+            "- **`AD_vs_cleanCTRL`** is the audit-adjusted production contrast. Its "
+            "canonical copy lives at `../human_group_mea_clean_ctrl.csv`; "
+            "`mea_AD_vs_cleanCTRL.csv` here is the investigation-scoped twin produced by "
+            "the same code path (NES values are regression-checked to match)."
+        )
     lines += [
         "",
         "## Provenance & status notes",
         "",
-        "- **`AD_vs_cleanCTRL`** is the audit-adjusted production contrast. Its canonical "
-        "copy lives at `../human_group_mea_clean_ctrl.csv`; `mea_AD_vs_cleanCTRL.csv` here "
-        "is the investigation-scoped twin produced by the same code path (NES values are "
-        "regression-checked to match).",
+        ad_clean_note,
         "- **`AD_vs_allCTRL`** resurrects the **pre-audit** all-7-control baseline as a "
         "labeled hard-line reference only. It is contaminated by CTRL-07/08/10 by design — "
         "it is *not* a live fallback and must not be used as the production AD-vs-control "
@@ -281,12 +319,39 @@ def write_manifest(sets: dict[str, list[str]], summaries: dict[str, dict]):
     (OUT_DIR / "MANIFEST.md").write_text("\n".join(lines) + "\n")
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run suspect-control human kinase MEA reanalysis."
+    )
+    parser.add_argument(
+        "--out-dir",
+        default=str(OUT_DIR),
+        help="Output directory for the reanalysis CSVs and manifest.",
+    )
+    parser.add_argument(
+        "--exclude-ad-samples",
+        nargs="*",
+        default=[],
+        help="AD samples to remove from the AD pool, e.g. AD-01 AD-03 or 1 3.",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = _parse_args()
+    global OUT_DIR
+    OUT_DIR = Path(args.out_dir)
+    exclude_ad_samples = {_normalize_ad_sample(s) for s in args.exclude_ad_samples}
+
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     matrix = _load_track_matrix("st", "stoich")
     if matrix is None:
         raise RuntimeError("st stoichiometry matrix unavailable")
-    sets = _sample_sets(matrix.columns)
+    mapping_samples = set(pd.read_csv(SAMPLE_MAPPING_CSV)["sample_id"])
+    missing = sorted(exclude_ad_samples - mapping_samples)
+    if missing:
+        raise ValueError(f"Excluded AD samples not found in sample mapping: {missing}")
+    sets = _sample_sets(matrix.columns, exclude_ad_samples=exclude_ad_samples)
     sig = config.MEA_FDR_THRESH
 
     summaries: dict[str, dict] = {}
@@ -306,7 +371,7 @@ def main():
               f"rows={len(out)}  FDR<{sig}: {cstr}")
 
     wide = write_wide(frames)
-    write_manifest(sets, summaries)
+    write_manifest(sets, summaries, exclude_ad_samples=exclude_ad_samples)
     print(f"\nwrote {len(CONTRASTS)} contrasts + suspect_vs_AD_kinase_wide.csv "
           f"({len(wide)} rows) + MANIFEST.md -> {OUT_DIR}")
 
