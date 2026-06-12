@@ -127,6 +127,8 @@ const _ipRuntime = {
   geneIndexBlock: null,
   geneIndexMap:   null,         // upper-case gene symbol -> [gene ids]
   page:           0,            // 0-indexed current page (post-filter, post-sort)
+  indexLoading:   false,        // top-mode global filter-index fetch in flight
+  indexError:     null,         // top-mode global filter-index load error
 };
 
 // ---------------------------------------------------------------------------
@@ -524,88 +526,50 @@ function _ipRenderGeneIndexSearch(block, pairs) {
   return true;
 }
 
-function _ipTopRowsFiltered(opts) {
-  const block = _ipBlock();
-  const top = block && block.top_instances;
-  const rowsAll = top && Array.isArray(top.rows) ? top.rows : [];
-  const f = IncytrFilter.get();
-  const diseaseSet = new Set(f.disease || []);
-  const timeSet = new Set(f.timepoint || []);
-  const sP = f.sliderP, sPds = f.sliderPds;
-  const searchTokens = (f.searchText || "").toLowerCase().split(/\s+/).filter(Boolean);
-  const trend = (_ipHasTraj() && (!opts || opts.applyTrajectory !== false))
-    ? TrendFilter.normalize(f.trend || "") : "";
-  const trendLabel = trend ? TrendFilter.payloadLabel(trend) : "";
-  const out = [];
-  for (const r of rowsAll) {
-    _ipNormalizeTopRow(r);
-    if (IncytrCelltypeQc.enabled(block) && r.low_signal_endpoint) continue;
-    const c = r.contrast || "";
-    const ui = c.indexOf("_");
-    const dis = ui < 0 ? c : c.substring(0, ui);
-    const tp = ui < 0 ? "" : c.substring(ui + 1);
-    if (diseaseSet.size && !diseaseSet.has(dis)) continue;
-    if (timeSet.size && !timeSet.has(tp)) continue;
-    if (sP != null && !(r.pvalue != null && r.pvalue < sP)) continue;
-    if (sPds != null && !(Math.abs(Number(r.PDS) || 0) >= sPds)) continue;
-    if (searchTokens.length) {
-      const hay = [
-        r.sender, r.receiver, r.Path, r.Ligand, r.Receptor, r.EM, r.Target, r.contrast,
-      ].join("\n").toLowerCase();
-      let ok = true;
-      for (const t of searchTokens) { if (hay.indexOf(t) < 0) { ok = false; break; } }
-      if (!ok) continue;
-    }
-    if (trendLabel) {
-      const labels = new Set(_ipDecodeLabels(r.traj_labels || ""));
-      if (!labels.has(trendLabel)) continue;
-    }
-    out.push(r);
-  }
-  const key = f.sortKey || "rank";
-  const dir = f.sortDir || 1;
-  const numericKeys = new Set(["rank", "pvalue", "PDS", ..._ipScoreCols()]);
-  out.sort((a, b) => {
-    if (key === "rank") return dir * ((Number(a.rank) || 0) - (Number(b.rank) || 0));
-    const av = a[key], bv = b[key];
-    if (numericKeys.has(key)) {
-      const ax = (av == null || !isFinite(Number(av))) ? null : Number(av);
-      const bx = (bv == null || !isFinite(Number(bv))) ? null : Number(bv);
-      if (ax == null && bx == null) return 0;
-      if (ax == null) return 1;
-      if (bx == null) return -1;
-      return dir * (ax - bx);
-    }
-    const ax = av == null ? "" : String(av);
-    const bx = bv == null ? "" : String(bv);
-    return dir * ax.localeCompare(bx);
-  });
-  const topLimit = [500, 1000, 5000].includes(Number(f.topLimit))
-    ? Number(f.topLimit) : 500;
-  if (opts && opts.applyLimit === false) return out;
-  return out.slice(0, topLimit);
-}
 
 function _ipRenderTopTable() {
   const countEl = document.getElementById("ip-count");
   const wrap = document.getElementById("ip-table-wrap");
   const block = _ipBlock();
-  const top = block && block.top_instances;
-  const rowsAll = top && Array.isArray(top.rows) ? top.rows : [];
   if (!wrap || !countEl || !block) return;
-  if (!rowsAll.length) {
-    countEl.textContent = "No top Incytr pathway instances are packaged in this payload.";
+  if (!IncytrGlobalIndex.available()) {
+    countEl.textContent = "No global Incytr pathway index is packaged in this payload.";
     wrap.innerHTML = '<div class="muted" style="padding:16px;">Switch to Cell Type mode to inspect one sender/receiver pair.</div>';
     return;
   }
+  if (_ipRuntime.indexError) {
+    countEl.textContent = "Global pathway index load failed.";
+    wrap.innerHTML = `<div class="muted" style="padding:16px;">${_escapeHtml(_ipRuntime.indexError)}</div>`;
+    return;
+  }
+  // The complete-universe index is fetched once on first entry to Top mode.
+  // filterRank/materialize require it mapped; show a loading state until then.
+  if (!IncytrGlobalIndex.loaded()) {
+    countEl.textContent = "Loading the full pathway index…";
+    wrap.innerHTML = '<div class="muted" style="padding:16px;">'
+      + 'Fetching the complete pathway universe (one-time download)…</div>';
+    if (!_ipRuntime.indexLoading) {
+      _ipRuntime.indexLoading = true;
+      IncytrGlobalIndex.ensureLoaded()
+        .then(() => { _ipRuntime.indexLoading = false; _ipRenderTopTable(); })
+        .catch(e => {
+          _ipRuntime.indexLoading = false;
+          _ipRuntime.indexError = String(e && e.message ? e.message : e);
+          _ipRenderTopTable();
+        });
+    }
+    return;
+  }
+  const gi = IncytrGlobalIndex.manifest();
   const f = IncytrFilter.get();
   const topLimit = [500, 1000, 5000].includes(Number(f.topLimit))
     ? Number(f.topLimit) : 500;
-  const matching = _ipTopRowsFiltered({ applyLimit: false });
-  const filtered = matching.slice(0, topLimit);
-  if (!filtered.length) {
+  // filter -> rank -> cap over the WHOLE universe. `total` is the true count of
+  // matching pathways; `indices` is the capped, sorted row-id list (<= cap).
+  const { indices, total } = IncytrGlobalIndex.filterRank(f);
+  if (!total) {
     countEl.textContent =
-      `Top overall: 0 of ${rowsAll.length.toLocaleString()} packaged rows match the active filters.`;
+      `Top overall: 0 of ${gi.nrows.toLocaleString()} pathways match the active filters.`;
     const summary = _ipActiveFilterSummary(f);
     wrap.innerHTML = '<div class="muted" style="padding:16px;">'
       + (summary
@@ -614,13 +578,14 @@ function _ipRenderTopTable() {
       + '</div>';
     return;
   }
-  const nPages = Math.max(1, Math.ceil(filtered.length / _IP_PAGE_SIZE));
+  const nPages = Math.max(1, Math.ceil(indices.length / _IP_PAGE_SIZE));
   if (_ipRuntime.page >= nPages) _ipRuntime.page = nPages - 1;
   if (_ipRuntime.page < 0) _ipRuntime.page = 0;
   const page = _ipRuntime.page;
   const startIdx = page * _IP_PAGE_SIZE;
-  const endIdx = Math.min(filtered.length, startIdx + _IP_PAGE_SIZE);
-  const visible = filtered.slice(startIdx, endIdx);
+  const endIdx = Math.min(indices.length, startIdx + _IP_PAGE_SIZE);
+  // Hydrate only the visible page from the columns.
+  const visible = indices.slice(startIdx, endIdx).map(i => IncytrGlobalIndex.materialize(i));
   const fmt = (v, d) => (v == null || !isFinite(Number(v))) ? "—" : Number(v).toFixed(d);
   const trajBadges = (r) => {
     const labels = _ipDecodeLabels(r.traj_labels || "");
@@ -632,13 +597,17 @@ function _ipRenderTopTable() {
         + `${_escapeHtml(label)}</span>`;
     }).join("");
   };
+  // Cap-vs-universe is explicit: a collapse reads as "only N exist", never as a
+  // silent truncation. The cap is now a render budget, not a data gate.
+  const capped = total > indices.length;
   countEl.textContent =
-    `Top overall: showing ${filtered.length.toLocaleString()} of ${matching.length.toLocaleString()} matching rows `
-    + `(top ${topLimit.toLocaleString()} cap; ${rowsAll.length.toLocaleString()} packaged, ranked by ${top.rank_by || "abs(PDS)"}). `
-    + (filtered.length
-        ? `Page ${page + 1} / ${nPages.toLocaleString()} `
-          + `(rows ${(startIdx + 1).toLocaleString()}–${endIdx.toLocaleString()}).`
-        : "")
+    (capped
+      ? `Top overall: top ${indices.length.toLocaleString()} of ${total.toLocaleString()} matching pathways `
+        + `(raise the cap or narrow filters to see more)`
+      : `Top overall: all ${total.toLocaleString()} matching pathways shown`)
+    + `, ranked by ${gi.rank_by || "abs(PDS)"}. `
+    + `Page ${page + 1} / ${nPages.toLocaleString()} `
+    + `(rows ${(startIdx + 1).toLocaleString()}–${endIdx.toLocaleString()}).`
     + (IncytrCelltypeQc.enabled(block) ? ` ${IncytrCelltypeQc.controlText(block)}.` : "");
 
   const scoreCols = _ipScoreCols().map(k => ({ key: k, label: k, numeric: true, digits: 3 }));

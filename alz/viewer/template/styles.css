@@ -359,7 +359,7 @@ main#app-main { padding:14px; }
   font-size:11px; color:#37474f; cursor:pointer; user-select:none;
   white-space:nowrap; }
 .ms-opt:hover { background:#f0f4f7; }
-.ms-opt input { margin:0; }
+.ms-opt input { margin:0; flex:none; width:auto; }
 .ms-divider { border-top:1px solid #eceff1; margin:3px 0; }
 .ms-action { padding:3px 10px; font-size:10px; color:#1976d2; cursor:pointer;
   user-select:none; }

@@ -2139,7 +2139,16 @@ _INCYTR_PATHWAY_PVALUES = (0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
 # Replaced the legacy sigprob_max filter (outlier-driven mean ratio) on
 # 2026-05-12.
 _INCYTR_PATHWAY_ABS_PDS = (0.0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
-_INCYTR_TOP_INSTANCE_LIMIT = 5000
+
+# Global filter-index: one packed binary covering EVERY pathway (replaces the
+# former top-5000 `top_instances` pre-cap, which acted as a data-availability
+# gate — any filter whose survivors were under-represented in the |PDS|-top-5000
+# collapsed). Columns are concatenated little-endian, each of length N (= total
+# shard rows), rows pre-sorted by ABS(PDS) DESC so global rank = row position.
+# The viewer maps it into TypedArrays and runs filter → rank → slice(N) over the
+# complete universe, making the per-page cap a true render budget. Format +
+# rationale: docs/plans/incytr_global_filter_index_2026-06-10.md.
+_INCYTR_INDEX_FILENAME = "incytr_index.bin.gz"
 
 # Pathway scoring stack — surfaced as table columns in the pathway tab.
 # PDS is already in the shard; these are net-new. log2FC and sigprob_max
@@ -2421,7 +2430,7 @@ def _write_incytr_pair_pathways() -> dict | None:
         "incytr_pathways",
         [__file__, *[f for f, _ in file_to_contrast], _incytr_celltype_qc_counts_path()],
         {
-            "builder_version": 1,
+            "builder_version": 2,  # 2: global filter-index replaces top_instances
             "schema_version": SCHEMA_VERSION,
             "input_dir": os.path.relpath(input_dir, config.REPO_ROOT),
             "file_to_contrast": [
@@ -2431,7 +2440,7 @@ def _write_incytr_pair_pathways() -> dict | None:
             "present_contrasts": list(present_contrasts),
             "pvalue_thresholds": list(_INCYTR_PATHWAY_PVALUES),
             "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
-            "top_instance_limit": _INCYTR_TOP_INSTANCE_LIMIT,
+            "global_index_file": _INCYTR_INDEX_FILENAME,
             "score_columns": list(_INCYTR_SCORE_COLS),
             "fc_columns": list(_INCYTR_FC_COLS),
             "label_columns": list(_INCYTR_LABEL_COLS),
@@ -2742,109 +2751,81 @@ def _write_incytr_pair_pathways() -> dict | None:
         _build_pathway_counts(low_signal_where) if low_signal_where else None
     )
 
-    def _build_top_instances() -> dict:
-        """Compact cross-pair ranking for the Incytr Pathways overview.
-
-        The detailed table remains shard-backed; this index is only a small
-        rank-and-drilldown surface for the strongest pathway instances across
-        all sender/receiver pairs.
-        """
-        score_cols = [c for c in _INCYTR_SCORE_COLS if c in src_cols_pair]
-        score_select = ", ".join(score_cols)
-        label_cols = [c for c in _INCYTR_LABEL_COLS if c in src_cols_pair]
-        label_select = ", ".join(f'"{c}"' for c in label_cols)
-        opt_cols = ", ".join(c for c in (score_select, label_select) if c)
-        if opt_cols:
-            opt_cols = ", " + opt_cols
-        top = con.execute(f"""
-            SELECT
-              sender, receiver, Path, Ligand, Receptor, EM, Target,
-              contrast, pvalue, PDS, ABS(PDS) AS abs_pds,
-              sender || '||' || receiver || '||' || Path AS path_str
-              {opt_cols}
-            FROM src
-            WHERE PDS IS NOT NULL
-            ORDER BY ABS(PDS) DESC NULLS LAST
-            LIMIT {_INCYTR_TOP_INSTANCE_LIMIT}
-        """).fetchdf()
-        if top.empty:
-            return {
-                "rank_by": "abs(PDS)",
-                "limit": _INCYTR_TOP_INSTANCE_LIMIT,
-                "rows": [],
-            }
-
-        # Trajectory labels require the full time series for each top path, so
-        # pull only those path keys and reuse the shard annotator.
-        keys = top[["path_str"]].drop_duplicates()
-        con.register("top_path_keys", keys)
-        traj_src = con.execute("""
-            SELECT sender, receiver, Path, contrast, PDS
-            FROM src
-            WHERE sender || '||' || receiver || '||' || Path
-                  IN (SELECT path_str FROM top_path_keys)
-        """).fetchdf()
-        traj_map = pd.DataFrame()
-        if not traj_src.empty:
-            traj_annot, _, _ = _annotate_trajectory_columns(
-                traj_src, source_label="top_instances",
-            )
-            split = traj_annot["contrast"].astype(str).str.split("_", n=1, expand=True)
-            traj_annot["_disease"] = split[0].fillna("")
-            traj_annot["_path_str"] = (
-                traj_annot["sender"].astype(str) + "||"
-                + traj_annot["receiver"].astype(str) + "||"
-                + traj_annot["Path"].astype(str)
-            )
-            traj_map = traj_annot[
-                ["_path_str", "_disease", "traj_labels", "sign_vec"]
-            ].drop_duplicates()
-        if len(traj_map):
-            split_top = top["contrast"].astype(str).str.split("_", n=1, expand=True)
-            top["_disease"] = split_top[0].fillna("")
-            top = top.merge(
-                traj_map,
-                left_on=["path_str", "_disease"],
-                right_on=["_path_str", "_disease"],
-                how="left",
-            )
-        else:
-            top["traj_labels"] = ""
-            top["sign_vec"] = ""
-        top["rank"] = np.arange(1, len(top) + 1, dtype=int)
-        top["low_signal_endpoint"] = top.apply(
-            lambda r: bool(
-                r["sender"] in low_signal_celltypes
-                or r["receiver"] in low_signal_celltypes
-            ),
-            axis=1,
-        )
-
-        row_cols = [
-            "rank", "sender", "receiver", "Path", "Ligand", "Receptor",
-            "EM", "Target", "contrast", "pvalue", "PDS", "abs_pds",
-            "traj_labels", "sign_vec", "low_signal_endpoint",
-            *score_cols, *label_cols,
-        ]
-        rows: list[dict] = []
-        for rec in top[row_cols].to_dict("records"):
-            out = {}
-            for k, v in rec.items():
-                digits = 4 if k in {"PDS", "abs_pds", *score_cols} else None
-                if k == "pvalue":
-                    digits = 6
-                out[k] = _json_clean_value(v, digits)
-            rows.append(out)
-        return {
-            "rank_by": "abs(PDS)",
-            "limit": _INCYTR_TOP_INSTANCE_LIMIT,
-            "rows": rows,
-        }
-
     src_cols_pair = set(
         con.execute("DESCRIBE SELECT * FROM src LIMIT 0").fetchdf()["column_name"]
     )
-    top_instances = _build_top_instances()
+
+    # --- global filter-index encoders --------------------------------------
+    # Encoded per-pair inside _flush (full precision, before the float16
+    # downcast), accumulated, then concatenated + globally |PDS|-sorted after
+    # the streaming pass into one packed binary. Replaces the former top-5000
+    # `top_instances` pre-cap. Column layout (little-endian, length N): columns
+    # are ordered wide→narrow (f4, then u2, then u1) so each column's byte
+    # offset is a multiple of its element size — the viewer maps each as a
+    # zero-copy TypedArray view, which REQUIRES aligned offsets.
+    INCYTR_INDEX_COLUMNS = (
+        [("PDS", "f4"), ("pvalue", "f4")]
+        + [(sc, "u2") for sc in _INCYTR_SCORE_COLS]   # float16 bit-patterns
+        + [("ligandId", "u2"), ("receptorId", "u2"),
+           ("emId", "u2"), ("targetId", "u2")]
+        + [("senderId", "u1"), ("receiverId", "u1"), ("contrastId", "u1"),
+           ("labelBits", "u1"), ("trajBits", "u1")]
+    )
+    idx_gene_to_id: dict[str, int] = {}
+    idx_gene_vocab: list[str] = []
+    idx_chunks: list[dict] = []
+
+    def _idx_gene_ids(series) -> np.ndarray:
+        cat = series.astype(str)
+        for g in cat.unique():
+            if g not in idx_gene_to_id:
+                idx_gene_to_id[g] = len(idx_gene_vocab)
+                idx_gene_vocab.append(g)
+        return cat.map(idx_gene_to_id).to_numpy(dtype="<u2")
+
+    def _idx_label_bits(frame) -> np.ndarray:
+        # 2 bits per node (Ligand/Receptor/EM/Target): 0=none, 1=DEG, 2=prG.
+        bits = np.zeros(len(frame), dtype="<u1")
+        for shift, col in zip((0, 2, 4, 6), _INCYTR_LABEL_COLS):
+            if col not in frame.columns:
+                continue
+            c = frame[col]
+            codes = (c.cat.codes.to_numpy()
+                     if isinstance(c.dtype, pd.CategoricalDtype)
+                     else pd.Categorical(c, categories=_INCYTR_LABEL_VOCAB).codes)
+            # cat.codes: -1 NaN, 0 DEG, 1 prG → +1 → 0/1/2
+            bits |= ((codes + 1).astype("<u1") << shift).astype("<u1")
+        return bits
+
+    def _idx_traj_bits(series) -> np.ndarray:
+        s = series.fillna("").astype(str)
+        bits = np.zeros(len(s), dtype="<u1")
+        for i, label in enumerate(_SIGN_VEC_LABELS):  # exact tokens, no collisions
+            bits |= (s.str.contains(label, regex=False).to_numpy().astype("<u1") << i)
+        return bits
+
+    def _accumulate_index(s_name: str, r_name: str, frame) -> None:
+        n = len(frame)
+        if n == 0:
+            return
+        chunk = {
+            "senderId": np.full(n, sender_to_idx[s_name], dtype="<u1"),
+            "receiverId": np.full(n, receiver_to_idx[r_name], dtype="<u1"),
+            "contrastId": frame["contrast"].map(contrast_to_idx).to_numpy(dtype="<u1"),
+            "ligandId": _idx_gene_ids(frame["Ligand"]),
+            "receptorId": _idx_gene_ids(frame["Receptor"]),
+            "emId": _idx_gene_ids(frame["EM"]),
+            "targetId": _idx_gene_ids(frame["Target"]),
+            "labelBits": _idx_label_bits(frame),
+            "trajBits": _idx_traj_bits(frame["traj_labels"]),
+            "PDS": frame["PDS"].to_numpy(dtype="<f4"),
+            "pvalue": frame["pvalue"].to_numpy(dtype="<f4"),
+        }
+        for sc in _INCYTR_SCORE_COLS:
+            chunk[sc] = (frame[sc].to_numpy(dtype="float16").view("<u2")
+                         if sc in frame.columns else np.zeros(n, dtype="<u2"))
+        idx_chunks.append(chunk)
+
     gene_node_index = _build_incytr_gene_node_index(con)
     print(
         f"    gene_node_index: {len(gene_node_index['gene_id']):,} "
@@ -2935,6 +2916,11 @@ def _write_incytr_pair_pathways() -> dict | None:
         recur_index.update(pair_recur)
         for label, count in pair_traj.items():
             traj_summary[label] = traj_summary.get(label, 0) + int(count)
+        # Encode this pair into the global filter-index BEFORE the float16
+        # downcast (PDS/pvalue captured at full precision; ranking is locked by
+        # the build-time argsort below, so the stored f16 scores are display-
+        # only and cannot reorder ranks).
+        _accumulate_index(s_key, r_key, sub)
         sub = sub.drop(columns=["sender", "receiver", "Path"])
         # Float dtype compression runs after annotation so traj_labels
         # (string) and sign_vec (str) are unaffected.
@@ -3046,6 +3032,51 @@ def _write_incytr_pair_pathways() -> dict | None:
           f"({total_rows:,} rows; {total_bytes/1e6:.1f} MB total; "
           f"max {max_shard_bytes/1e6:.2f} MB → {max_shard_name})", flush=True)
 
+    # --- global filter-index: concat → |PDS|-sort → packed binary ----------
+    # Rows are reordered by ABS(PDS) DESC so the row position IS the global
+    # rank; the viewer streams the columns into TypedArrays and runs
+    # filter → rank → slice(N) over the complete universe (no pre-cap).
+    assert sys.byteorder == "little", "global index assumes little-endian"
+    global_index = None
+    if idx_chunks:
+        cols = {name: np.concatenate([c[name] for c in idx_chunks])
+                for name, _dt in INCYTR_INDEX_COLUMNS}
+        idx_chunks.clear()
+        n_idx = int(len(cols["PDS"]))
+        perm = np.argsort(-np.abs(cols["PDS"]), kind="stable")
+        buf = bytearray()
+        columns_manifest = []
+        for name, dt in INCYTR_INDEX_COLUMNS:
+            arr = np.ascontiguousarray(cols[name][perm], dtype=np.dtype("<" + dt[0] + dt[1]))
+            columns_manifest.append({"name": name, "type": dt, "bytes": int(arr.nbytes)})
+            buf += arr.tobytes()
+        del cols
+        raw_bin = bytes(buf)
+        gz_bin = gzip.compress(raw_bin, compresslevel=6)
+        with open(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR,
+                               _INCYTR_INDEX_FILENAME), "wb") as f:
+            f.write(gz_bin)
+        global_index = {
+            "url": f"edge_slices/incytr_pathways/{_INCYTR_INDEX_FILENAME}",
+            "nrows": n_idx,
+            "rank_by": "abs(PDS)",
+            "byteorder": "little",
+            "sender_vocab": senders_canonical,
+            "receiver_vocab": receivers_canonical,
+            "contrast_vocab": list(present_contrasts),
+            "gene_vocab": idx_gene_vocab,
+            "traj_label_vocab": list(_SIGN_VEC_LABELS),
+            "label_states": ["", *_INCYTR_LABEL_VOCAB],   # code 0/1/2 → ""/DEG/prG
+            "label_nodes": list(_INCYTR_LABEL_NODES),
+            "score_columns": list(_INCYTR_SCORE_COLS),
+            "columns": columns_manifest,
+            "raw_bytes": len(raw_bin),
+            "gzip_bytes": len(gz_bin),
+        }
+        print(f"  incytr global_index: {n_idx:,} rows × {len(columns_manifest)} cols, "
+              f"{len(idx_gene_vocab):,} genes; {len(raw_bin)/1e6:.1f} MB raw → "
+              f"{len(gz_bin)/1e6:.1f} MB gz", flush=True)
+
     payload_block = {
         "schema_version": SCHEMA_VERSION,
         "version": 3,           # CR-04: v3 = multi-label traj_labels (semicolon-joined)
@@ -3068,7 +3099,7 @@ def _write_incytr_pair_pathways() -> dict | None:
         "label_vocab": list(_INCYTR_LABEL_VOCAB),
         "direction_flag_columns": list(dir_flag_cols),
         "path_metric_columns": list(extra_path_cols),
-        "top_instances": top_instances,
+        "global_index": global_index,
         "gene_node_index": gene_node_index,
         # CR-04: traj_labels/sign_vec live in shard rows; summary inline.
         "trajectory_summary": traj_summary,
@@ -3077,7 +3108,7 @@ def _write_incytr_pair_pathways() -> dict | None:
         "incytr_pathways",
         signature,
         EDGE_SLICES_INCYTR_PATHWAYS_DIR,
-        ["index.json", *sorted(pair_row_counts)],
+        ["index.json", _INCYTR_INDEX_FILENAME, *sorted(pair_row_counts)],
         payload_block,
     )
     return payload_block
