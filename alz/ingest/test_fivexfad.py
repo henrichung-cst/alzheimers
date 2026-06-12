@@ -141,19 +141,31 @@ class FiveXFADTests(unittest.TestCase):
     def test_fivexfad_viewer_matches_single_kinase_tab_pattern(self) -> None:
         root = Path(__file__).resolve().parents[2]
         body = (root / "alz/viewer/template/body.html").read_text()
+        state = (root / "alz/viewer/template/js/01_state.js").read_text()
         manifest = (root / "alz/viewer/template/js/02_ui_chrome.js").read_text()
+        boot = (root / "alz/viewer_shared/template/js/boot.js").read_text()
+        header = (root / "alz/viewer_shared/template/js/05_header.js").read_text()
         tab_js = (root / "alz/viewer/template/js/tabs/kinase_fivexfad.js").read_text()
 
         self.assertIn('data-mode="fivexfad"', body)
         self.assertIn('id="tab-fivexfadkinase"', body)
         self.assertNotIn("tab-fivexfadqc", body)
         self.assertNotIn("tab-fivexfadmethods", body)
+        self.assertIn("kinaseFiveXFAD:null", state)
         self.assertIn('fivexfadkinase: {\n    group: "drilldown", label: "Kinase"', manifest)
+        self.assertIn('selection: ["kinaseFiveXFAD"]', manifest)
+        self.assertIn("updateFiveXFADKinaseSelection", manifest)
+        self.assertIn("kinaseFiveXFADSelChanged", boot)
+        self.assertIn('key:"kinaseFiveXFAD"', header)
         self.assertNotIn("5xFAD QC", manifest)
         self.assertNotIn("5xFAD Methods", manifest)
         self.assertIn("nes-profile-cell", tab_js)
         self.assertIn("kinase-audit-tabs", tab_js)
+        self.assertIn('label: "Attribution"', tab_js)
+        self.assertIn("No attribution rows are packaged", tab_js)
         self.assertNotIn("f5-age-cell", tab_js)
+        self.assertNotIn("QC status", tab_js)
+        self.assertNotIn("<th>QC</th>", tab_js)
 
 
 if __name__ == "__main__":

@@ -419,7 +419,13 @@ const TAB_MANIFEST = {
       cta:"Use another tab"}],
     wire: () => { if (typeof wireFiveXFADKinase === "function") wireFiveXFADKinase(); },
     render: () => { if (typeof renderFiveXFADKinase === "function") renderFiveXFADKinase(); },
-    rerenderOn: { filters: true, selection: [] },
+    rerenderOn: { filters: true, selection: ["kinaseFiveXFAD"] },
+    onChange: ({ tabChanged, kinaseFiveXFADSelChanged, f5key }) => {
+      if (!kinaseFiveXFADSelChanged || tabChanged) return false;
+      if (typeof updateFiveXFADKinaseSelection === "function")
+        updateFiveXFADKinaseSelection(f5key);
+      return true;
+    },
   },
   incytrheatmap: {
     group: "landscape", label: "Incytr Heatmap",

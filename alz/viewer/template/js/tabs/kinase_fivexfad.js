@@ -9,6 +9,7 @@ const _F5_AUDIT_TABS = [
   {id: "ols-details", label: "OLS Details"},
   {id: "mea-input", label: "MEA Preparation"},
   {id: "mea-score", label: "MEA Score"},
+  {id: "attribution", label: "Attribution"},
 ];
 
 let _F5Groups = null;
@@ -24,7 +25,6 @@ const _F5State = {
   nsigMin: 0,
   sortCol: "peakAbsNes",
   sortAsc: false,
-  selectedKey: null,
   auditTab: "mea-score",
   auditAge: null,
 };
@@ -68,6 +68,14 @@ function _f5RowKey(row) {
 
 function _f5QcKey(tissue, track, age) {
   return [tissue || "", track || "", String(age || "")].join("|");
+}
+
+function _f5SelectedKey() {
+  return Store.state.selection.kinaseFiveXFAD || null;
+}
+
+function _f5SetSelectedKey(key) {
+  Store.dispatch({type: "SET_SELECTION", key: "kinaseFiveXFAD", value: key || null});
 }
 
 function _f5Family(name) {
@@ -213,14 +221,16 @@ function _f5ProfileCell(group, age, maxAbs) {
     const rgb = nes >= 0 ? [197, 48, 48] : [43, 108, 176];
     bg = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${(0.15 + 0.85 * a).toFixed(3)})`;
   }
-  const qc = status ? `, status ${status}` : "";
-  const title = `${age}mo: NES ${_f5Fmt(nes, 2)}, FDR ${q == null ? "—" : q.toExponential(1)}${sig ? " (sig)" : ""}${qc}`;
+  const contrastStatus = status ? `, contrast status ${status}` : "";
+  const title = `${age}mo: NES ${_f5Fmt(nes, 2)}, FDR ${q == null ? "—" : q.toExponential(1)}${sig ? " (sig)" : ""}${contrastStatus}`;
   return `<div class="npc${sig ? " sig" : ""}" style="background:${bg};" title="${_f5Esc(title)}"></div>`;
 }
 
 function _f5Profile(group, maxAbs) {
   const cells = _F5_AGES.map(age => _f5ProfileCell(group, age, maxAbs)).join("");
-  return `<div class="nes-profile-wrap"><div class="nes-profile-cell" style="grid-template-columns:repeat(${_F5_AGES.length},1fr);">${cells}</div></div>`;
+  return `<div class="nes-profile-wrap" title="Age cells: 3, 6, 9, 12 months">` +
+    `<div class="nes-profile-cell" style="grid-template-columns:repeat(${_F5_AGES.length},1fr);">${cells}</div>` +
+    `</div>`;
 }
 
 function _f5SetOptions(id, values, labels) {
@@ -290,8 +300,9 @@ function wireFiveXFADKinase() {
     Object.assign(_F5State, {
       search: "", tissue: "", assay: "", analysis: "", age: "",
       nsigMin: 0, sortCol: "peakAbsNes", sortAsc: false,
-      selectedKey: null, auditTab: "mea-score", auditAge: null,
+      auditTab: "mea-score", auditAge: null,
     });
+    _f5SetSelectedKey(null);
     renderFiveXFADKinase();
   });
   const table = document.getElementById("f5-table");
@@ -308,18 +319,16 @@ function wireFiveXFADKinase() {
     tbody.addEventListener("click", ev => {
       const tr = ev.target.closest("tr[data-f5-key]");
       if (!tr) return;
-      _F5State.selectedKey = tr.dataset.f5Key;
       _F5State.auditAge = null;
-      renderFiveXFADKinase();
+      _f5SetSelectedKey(_f5SelectedKey() === tr.dataset.f5Key ? null : tr.dataset.f5Key);
     });
     tbody.addEventListener("keydown", ev => {
       if (ev.key !== "Enter" && ev.key !== " ") return;
       const tr = ev.target.closest("tr[data-f5-key]");
       if (!tr) return;
       ev.preventDefault();
-      _F5State.selectedKey = tr.dataset.f5Key;
       _F5State.auditAge = null;
-      renderFiveXFADKinase();
+      _f5SetSelectedKey(_f5SelectedKey() === tr.dataset.f5Key ? null : tr.dataset.f5Key);
     });
   }
 }
@@ -339,9 +348,11 @@ function renderFiveXFADKinase() {
   _f5PopulateControls();
   _f5SyncControls();
   const rows = _f5FilteredRows();
-  if (_F5State.selectedKey && !rows.some(r => r.key === _F5State.selectedKey)) {
-    _F5State.selectedKey = null;
+  const selectedKey = _f5SelectedKey();
+  if (selectedKey && !rows.some(r => r.key === selectedKey)) {
     _F5State.auditAge = null;
+    _f5SetSelectedKey(null);
+    return;
   }
   const count = document.getElementById("f5-count");
   if (count) count.textContent = `${rows.length.toLocaleString()} / ${_F5Groups.length.toLocaleString()} kinase slices`;
@@ -352,7 +363,7 @@ function renderFiveXFADKinase() {
   const denom = ages.length;
   const html = rows.map(r => {
     const subs = r.substrateHits == null ? "—" : `${r.substrateHits}/${r.substrateUniverse == null ? "?" : r.substrateUniverse}`;
-    const sel = r.key === _F5State.selectedKey ? " selected" : "";
+    const sel = r.key === selectedKey ? " selected" : "";
     const sub = r.sigCount === 0 ? " sub-thresh" : "";
     const residueBadge = r.residue_type === "Y"
       ? ' <span class="track-badge track-y" title="Tyrosine kinase (pY track)">pY</span>'
@@ -384,7 +395,31 @@ function _f5SyncSortIndicators() {
 
 function _f5SelectedGroup() {
   _f5EnsureIndexes();
-  return _F5Groups.find(g => g.key === _F5State.selectedKey) || null;
+  const key = _f5SelectedKey();
+  return _F5Groups.find(g => g.key === key) || null;
+}
+
+function _f5SelectionLabel(key) {
+  _f5EnsureIndexes();
+  const group = _F5Groups.find(g => g.key === key);
+  return group ? `${group.kinase} · ${_f5SliceLabel(group)}` : String(key || "");
+}
+
+function updateFiveXFADKinaseSelection(key) {
+  _f5UpdateRowSelection(key);
+  if (key == null) _F5State.auditAge = null;
+  renderFiveXFADKinaseDetail();
+}
+
+function _f5UpdateRowSelection(key) {
+  const tbody = document.querySelector("#f5-table tbody");
+  if (!tbody) return;
+  const prev = tbody.querySelector("tr.ke-row.selected");
+  if (prev) prev.classList.remove("selected");
+  if (key == null) return;
+  const safeKey = String(key).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const row = tbody.querySelector(`tr.ke-row[data-f5-key="${safeKey}"]`);
+  if (row) row.classList.add("selected");
 }
 
 function _f5GroupsForKinase(name) {
@@ -447,9 +482,8 @@ function renderFiveXFADKinaseDetail() {
 
   const sliceSel = document.getElementById("f5-audit-slice");
   if (sliceSel) sliceSel.addEventListener("change", ev => {
-    _F5State.selectedKey = ev.target.value;
     _F5State.auditAge = null;
-    renderFiveXFADKinase();
+    _f5SetSelectedKey(ev.target.value);
   });
   const ageSel = document.getElementById("f5-audit-age");
   if (ageSel) ageSel.addEventListener("change", ev => {
@@ -471,6 +505,7 @@ function _f5RenderAuditBody(group) {
   if (_F5State.auditTab === "measurement-trace") return _f5RenderTrace(body, group);
   if (_F5State.auditTab === "ols-details") return _f5RenderOls(body, group);
   if (_F5State.auditTab === "mea-input") return _f5RenderPrep(body, group);
+  if (_F5State.auditTab === "attribution") return _f5RenderAttribution(body, group);
   return _f5RenderScore(body, group);
 }
 
@@ -523,7 +558,7 @@ function _f5RenderScore(body, group) {
           <dt>p-value</dt><dd>${_f5Fmt(row && row.p_value, 4)}</dd>
           <dt>Substrates tested</dt><dd>${row && row.substrate_hits != null ? `${row.substrate_hits}/${row.substrate_universe}` : "—"}</dd>
           <dt>Samples</dt><dd>WT ${row && row.n_wt != null ? row.n_wt : "—"} · TG ${row && row.n_tg != null ? row.n_tg : "—"}</dd>
-          <dt>QC status</dt><dd>${_f5Esc(_f5StatusFor(group, age) || "—")}</dd>
+          <dt>Contrast status</dt><dd>${_f5Esc(_f5StatusFor(group, age) || "—")}</dd>
         </dl>
       </div>
     </section>
@@ -531,7 +566,7 @@ function _f5RenderScore(body, group) {
       <h4>Age profile</h4>
       <div class="kh-audit-tablewrap">
         <table class="data-table">
-          <thead><tr><th>Age</th><th>NES</th><th>FDR</th><th>ES</th><th>p-value</th><th>Subs</th><th>WT</th><th>TG</th><th>QC</th></tr></thead>
+          <thead><tr><th>Age</th><th>NES</th><th>FDR</th><th>ES</th><th>p-value</th><th>Subs</th><th>WT</th><th>TG</th><th>Status</th></tr></thead>
           <tbody>${allRows}</tbody>
         </table>
       </div>
@@ -562,8 +597,8 @@ function _f5RenderPrep(body, group) {
   );
   body.innerHTML = `
     <section class="audit-panel">
-      <h4>Contrast QC <span class="muted">(${_f5Esc(_f5SliceLabel(group))}, ${age}mo)</span></h4>
-      <p class="kinase-stage-note">Categorical contrast status and biological sample counts are shown as QC context only; they are not converted into viewer-facing analysis scores.</p>
+      <h4>Contrast evidence <span class="muted">(${_f5Esc(_f5SliceLabel(group))}, ${age}mo)</span></h4>
+      <p class="kinase-stage-note">Categorical contrast status and biological sample counts are shown as provenance context only; they are not converted into viewer-facing analysis scores.</p>
       ${_f5SmallTable(qcRows, [
         {key: "contrast", label: "Contrast"},
         {key: "residue_type", label: "Res"},
@@ -594,7 +629,7 @@ function _f5RenderOls(body, group) {
   body.innerHTML = `
     <section class="audit-panel">
       <h4>OLS Details <span class="muted">(${age}mo TG vs WT)</span></h4>
-      <p class="kinase-stage-note">The current 5xFAD viewer payload packages summary MEA rows and contrast QC for this cohort. Full site-level OLS rows are generated by the 5xFAD analysis workflow but are not embedded in this viewer payload.</p>
+      <p class="kinase-stage-note">The current 5xFAD viewer payload packages summary MEA rows and contrast evidence for this cohort. Full site-level OLS rows are generated by the 5xFAD analysis workflow but are not embedded in this viewer payload.</p>
       ${_f5SmallTable(row ? [row] : [], [
         {key: "contrast", label: "Contrast"},
         {key: "NES", label: "NES"},
@@ -614,5 +649,14 @@ function _f5RenderTrace(body, group) {
       <h4>Measurement Trace <span class="muted">(${age}mo TG vs WT)</span></h4>
       <p class="kinase-stage-note">Normalized phosphosite, matched protein, and stoichiometry matrices are retained as 5xFAD analysis artifacts, but the unified viewer payload does not currently embed per-site measurement matrices for this cohort. The table remains in the standard audit workbench position so the absence is explicit rather than hidden.</p>
       <div class="muted">No per-site measurement trace is packaged for ${_f5Esc(group.kinase)} in ${_f5Esc(_f5SliceLabel(group))}.</div>
+    </section>`;
+}
+
+function _f5RenderAttribution(body, group) {
+  body.innerHTML = `
+    <section class="audit-panel">
+      <h4>Attribution</h4>
+      <p class="kinase-stage-note">The Song and Mukesh kinase viewers reserve this tab for cell-type or reference-cohort attribution evidence. The current 5xFAD payload packages cohort-level kinase MEA rows, sample evidence, and contrast preparation artifacts, but it does not include a 5xFAD cell-type attribution layer.</p>
+      <div class="muted">No attribution rows are packaged for ${_f5Esc(group.kinase)} in ${_f5Esc(_f5SliceLabel(group))}.</div>
     </section>`;
 }

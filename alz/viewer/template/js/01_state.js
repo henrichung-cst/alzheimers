@@ -68,6 +68,7 @@ let HAS_HUMAN = false;
 let HAS_FIVEXFAD = false;
 const INITIAL_STATE = {
   selection: { kinase:null, backbone:null, celltype:null, kinaseHuman:null,
+               kinaseFiveXFAD:null,
                context:"song_ad" },
   filters:   { contrast:"ALL", fdr:0.25 },
   view:      { mode:"mouse", activeTab:"kinase", glossaryOpen:false,

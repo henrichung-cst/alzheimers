@@ -90,19 +90,22 @@ function boot() {
     const celltypeSelChanged = next.selection.celltype  !== prev.selection.celltype;
     const backboneSelChanged = next.selection.backbone  !== prev.selection.backbone;
     const kinaseHumanSelChanged = next.selection.kinaseHuman !== prev.selection.kinaseHuman;
+    const kinaseFiveXFADSelChanged = next.selection.kinaseFiveXFAD !== prev.selection.kinaseFiveXFAD;
     const contextChanged     = next.selection.context   !== prev.selection.context;
     const modeChanged        = next.view.mode           !== prev.view.mode;
     const tabChanged         = next.view.activeTab      !== prev.view.activeTab;
     const viewChanged        = next.view                !== prev.view;
 
     if (!filtersChanged && !kinaseSelChanged && !celltypeSelChanged
-        && !backboneSelChanged && !kinaseHumanSelChanged && !contextChanged
-        && !modeChanged && !tabChanged && !viewChanged) return;
+        && !backboneSelChanged && !kinaseHumanSelChanged
+        && !kinaseFiveXFADSelChanged && !contextChanged && !modeChanged
+        && !tabChanged && !viewChanged) return;
 
     if (modeChanged) {
       // Clear cross-mode selections so a mouse kinase doesn't haunt the human panel.
       Store.dispatch({type:"SET_SELECTION", key:"kinase", value:null});
       Store.dispatch({type:"SET_SELECTION", key:"kinaseHuman", value:null});
+      Store.dispatch({type:"SET_SELECTION", key:"kinaseFiveXFAD", value:null});
       syncTabsFromStore();
       return;
     }
@@ -125,7 +128,7 @@ function boot() {
       return;
     }
 
-    if (filtersChanged || kinaseSelChanged || celltypeSelChanged) syncHeaderFromStore();
+    if (filtersChanged || kinaseSelChanged || kinaseFiveXFADSelChanged || celltypeSelChanged) syncHeaderFromStore();
 
     if (backboneSelChanged) _refreshHighlightForBackbone(next.selection.backbone);
 
@@ -142,6 +145,7 @@ function boot() {
       const handled = m.onChange && m.onChange({
         tabChanged, kinaseSelChanged, kid: next.selection.kinase,
         kinaseHumanSelChanged, khid: next.selection.kinaseHuman,
+        kinaseFiveXFADSelChanged, f5key: next.selection.kinaseFiveXFAD,
       });
       if (!handled) {
         const re = m.rerenderOn || {};
@@ -151,6 +155,7 @@ function boot() {
           if (re.selection.includes("kinase")   && kinaseSelChanged)   need = true;
           if (re.selection.includes("celltype") && celltypeSelChanged) need = true;
           if (re.selection.includes("backbone") && backboneSelChanged) need = true;
+          if (re.selection.includes("kinaseFiveXFAD") && kinaseFiveXFADSelChanged) need = true;
         }
         if (need) _activeTabRender();
       }

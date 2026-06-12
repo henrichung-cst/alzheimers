@@ -8,8 +8,13 @@ function populateHeader() {
     Store.dispatch({type:"SET_VIEW", key:"glossaryOpen",
       value:!Store.state.view.glossaryOpen}));
   const skClear = document.getElementById("f-selection-kinase-clear");
-  if (skClear) skClear.addEventListener("click", () =>
-    Store.dispatch({type:"SET_SELECTION", key:"kinase", value:null}));
+  if (skClear) skClear.addEventListener("click", () => {
+    const mode = Store.state.view.mode || "mouse";
+    if (mode === "fivexfad")
+      Store.dispatch({type:"SET_SELECTION", key:"kinaseFiveXFAD", value:null});
+    else
+      Store.dispatch({type:"SET_SELECTION", key:"kinase", value:null});
+  });
   const scClear = document.getElementById("f-selection-celltype-clear");
   if (scClear) scClear.addEventListener("click", () =>
     Store.dispatch({type:"SET_SELECTION", key:"celltype", value:null}));
@@ -29,9 +34,16 @@ function syncHeaderFromStore() {
   const sel = Store.state.selection;
   const skClear = document.getElementById("f-selection-kinase-clear");
   if (skClear) {
-    const on = sel.kinase != null;
+    const mode = Store.state.view.mode || "mouse";
+    const f5On = mode === "fivexfad" && sel.kinaseFiveXFAD != null;
+    const on = f5On || sel.kinase != null;
     skClear.hidden = !on;
-    if (on) {
+    if (f5On) {
+      const name = (typeof _f5SelectionLabel === "function")
+        ? _f5SelectionLabel(sel.kinaseFiveXFAD)
+        : String(sel.kinaseFiveXFAD);
+      skClear.textContent = "Clear kinase selection (" + name + ")";
+    } else if (on) {
       _ensureKinaseIdx();
       const K = ViewerPayload.kinases();
       const ki = _kinaseIdxById.get(sel.kinase);
