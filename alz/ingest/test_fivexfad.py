@@ -85,6 +85,10 @@ class FiveXFADTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "kinase_attribution_5xfad"
             out.mkdir()
+            detail_dir = Path(tmp) / "viewer" / "fivexfad_detail"
+            detail_dir.mkdir(parents=True)
+            sentinel = detail_dir / "sentinel.json"
+            sentinel.write_text("{}")
             pd.DataFrame(
                 {
                     "tissue": ["cortex"],
@@ -123,11 +127,15 @@ class FiveXFADTests(unittest.TestCase):
             ).to_csv(out / "sample_manifest.csv", index=False)
 
             old_dir = viewer.FIVEXFAD_KINASE_DIR
+            old_detail_dir = viewer.FIVEXFAD_DETAIL_DIR
             viewer.FIVEXFAD_KINASE_DIR = str(out)
+            viewer.FIVEXFAD_DETAIL_DIR = str(detail_dir)
             try:
                 payload = viewer.build_supporting_5xfad_slice()
+                sentinel_preserved = sentinel.exists()
             finally:
                 viewer.FIVEXFAD_KINASE_DIR = old_dir
+                viewer.FIVEXFAD_DETAIL_DIR = old_detail_dir
 
         self.assertIsNotNone(payload)
         assert payload is not None
@@ -138,6 +146,7 @@ class FiveXFADTests(unittest.TestCase):
         self.assertEqual(payload["rows"][0]["substrate_universe"], 100)
         self.assertEqual(payload["rows"][0]["n_wt"], 3)
         self.assertIn("detail_shards", payload)
+        self.assertTrue(sentinel_preserved)
 
     def test_fivexfad_viewer_matches_single_kinase_tab_pattern(self) -> None:
         root = Path(__file__).resolve().parents[2]

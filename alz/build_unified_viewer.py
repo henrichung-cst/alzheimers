@@ -1736,8 +1736,9 @@ def _write_fivexfad_detail_shards(
     """Write per-kinase 5xFAD audit sidecars for the detail workbench."""
     if not rows:
         return {}
-    shutil.rmtree(FIVEXFAD_DETAIL_DIR, ignore_errors=True)
-    os.makedirs(FIVEXFAD_DETAIL_DIR, exist_ok=True)
+    tmp_dir = FIVEXFAD_DETAIL_DIR + ".tmp"
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    os.makedirs(tmp_dir, exist_ok=True)
 
     manifest = pd.read_csv(manifest_path) if os.path.exists(manifest_path) else pd.DataFrame()
     manifest_by_assay: dict[tuple[str, str], pd.DataFrame] = {}
@@ -1928,13 +1929,17 @@ def _write_fivexfad_detail_shards(
                     "substrate_summary": _f5_records(substrate_summary),
                     "source_files": [os.path.basename(paths[k]) for k in paths if os.path.exists(paths[k])],
                 }
-                with open(os.path.join(FIVEXFAD_DETAIL_DIR, fname), "w") as f:
+                with open(os.path.join(tmp_dir, fname), "w") as f:
                     json.dump(payload, f, allow_nan=False, separators=(",", ":"))
                 detail_index[key] = os.path.relpath(os.path.join(FIVEXFAD_DETAIL_DIR, fname), UNIFIED_VIEWER_DIR)
 
     if detail_index:
-        with open(os.path.join(FIVEXFAD_DETAIL_DIR, "index.json"), "w") as f:
+        with open(os.path.join(tmp_dir, "index.json"), "w") as f:
             json.dump({"schema_version": 1, "shards": detail_index}, f, separators=(",", ":"))
+        shutil.rmtree(FIVEXFAD_DETAIL_DIR, ignore_errors=True)
+        shutil.move(tmp_dir, FIVEXFAD_DETAIL_DIR)
+    else:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     print(f"  supporting_5xfad_detail: {len(detail_index):,} shards", flush=True)
     return detail_index
 
