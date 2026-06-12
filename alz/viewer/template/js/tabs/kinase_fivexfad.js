@@ -15,12 +15,13 @@ const _F5_AUDIT_TABS = [
 let _F5Groups = null;
 let _F5QcByKey = null;
 let _F5Wired = false;
+const _F5DetailCache = new Map();
 
 const _F5State = {
   search: "",
-  tissue: "",
-  assay: "",
-  analysis: "",
+  tissue: "cortex",
+  assay: "IMAC",
+  analysis: "stoichiometry",
   age: "",
   nsigMin: 0,
   sortCol: "peakAbsNes",
@@ -76,6 +77,11 @@ function _f5SelectedKey() {
 
 function _f5SetSelectedKey(key) {
   Store.dispatch({type: "SET_SELECTION", key: "kinaseFiveXFAD", value: key || null});
+}
+
+function _f5DetailShard(group) {
+  const shards = (_f5Block() && _f5Block().detail_shards) || {};
+  return shards[group.key] || "";
 }
 
 function _f5Family(name) {
@@ -233,29 +239,29 @@ function _f5Profile(group, maxAbs) {
     `</div>`;
 }
 
-function _f5SetOptions(id, values, labels) {
+function _f5SetOptions(id, values, labels, allowAny) {
   const el = document.getElementById(id);
   if (!el) return;
   const cur = el.value || "";
-  const opts = ['<option value="">Any</option>'];
+  const opts = allowAny === false ? [] : ['<option value="">Any</option>'];
   values.forEach(v => {
     const lab = labels && labels[v] ? labels[v] : v;
     opts.push(`<option value="${_f5Esc(v)}">${_f5Esc(lab)}</option>`);
   });
   el.innerHTML = opts.join("");
-  el.value = values.includes(cur) ? cur : "";
+  el.value = values.includes(cur) ? cur : (allowAny === false ? (values[0] || "") : "");
 }
 
 function _f5PopulateControls() {
   const block = _f5Block();
   if (!block) return;
   const filters = block.filters || {};
-  _f5SetOptions("f5-filter-tissue", filters.tissue || []);
-  _f5SetOptions("f5-filter-assay", filters.assay || []);
+  _f5SetOptions("f5-filter-tissue", filters.tissue || [], null, false);
+  _f5SetOptions("f5-filter-assay", filters.assay || [], null, false);
   _f5SetOptions("f5-filter-analysis", filters.analysis_track || [], {
     stoichiometry: "stoichiometry",
     raw_phospho: "raw phospho",
-  });
+  }, false);
   const ageVals = (filters.age_months || _F5_AGES).map(v => String(v));
   _f5SetOptions("f5-filter-age", ageVals, {3: "3mo", 6: "6mo", 9: "9mo", 12: "12mo"});
 }
@@ -298,7 +304,7 @@ function wireFiveXFADKinase() {
   const reset = document.getElementById("f5-filter-reset");
   if (reset) reset.addEventListener("click", () => {
     Object.assign(_F5State, {
-      search: "", tissue: "", assay: "", analysis: "", age: "",
+      search: "", tissue: "cortex", assay: "IMAC", analysis: "stoichiometry", age: "",
       nsigMin: 0, sortCol: "peakAbsNes", sortAsc: false,
       auditTab: "mea-score", auditAge: null,
     });
@@ -355,7 +361,7 @@ function renderFiveXFADKinase() {
     return;
   }
   const count = document.getElementById("f5-count");
-  if (count) count.textContent = `${rows.length.toLocaleString()} / ${_F5Groups.length.toLocaleString()} kinase slices`;
+  if (count) count.textContent = `${rows.length.toLocaleString()} kinases in selected surface`;
   const tbody = document.querySelector("#f5-table tbody");
   if (!tbody) return;
   const maxAbs = _f5MaxAbsVisible(rows);
@@ -373,14 +379,13 @@ function renderFiveXFADKinase() {
       <td>${_f5Esc(r.gene_symbol || "")}</td>
       <td>${_f5Esc(r.family || "")}</td>
       <td>${_f5Esc(r.residue_type || "")}</td>
-      <td>${_f5Esc(r.slice)}</td>
       <td>${_f5Profile(r, maxAbs)}</td>
       <td class="attr-num">${r.peakAbsNes == null ? '<span class="muted">—</span>' : r.peakAbsNes.toFixed(2)}</td>
       <td class="attr-num">${r.sigCount}<span class="muted" style="font-size:10px;"> / ${denom}</span></td>
       <td>${subs}</td>
     </tr>`;
   }).join("");
-  tbody.innerHTML = html || '<tr><td colspan="9" class="muted">No 5xFAD rows match the active filters.</td></tr>';
+  tbody.innerHTML = html || '<tr><td colspan="8" class="muted">No 5xFAD rows match the active filters.</td></tr>';
   _f5SyncSortIndicators();
   renderFiveXFADKinaseDetail();
 }
@@ -576,8 +581,63 @@ function _f5RenderScore(body, group) {
 function _f5SmallTable(rows, cols) {
   if (!rows || !rows.length) return '<div class="muted">No rows available.</div>';
   const head = cols.map(c => `<th>${_f5Esc(c.label)}</th>`).join("");
-  const body = rows.map(r => `<tr>${cols.map(c => `<td>${_f5Esc(r[c.key] == null ? "" : r[c.key])}</td>`).join("")}</tr>`).join("");
+  const body = rows.map(r => `<tr>${cols.map(c => {
+    const v = r[c.key];
+    const txt = c.fmt ? c.fmt(v, r) : (v == null ? "" : v);
+    return `<td>${_f5Esc(txt)}</td>`;
+  }).join("")}</tr>`).join("");
   return `<div class="kh-audit-tablewrap"><table class="data-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function _f5FmtShort(v) {
+  const n = _f5Num(v);
+  if (n == null) return "—";
+  if (Math.abs(n) > 0 && Math.abs(n) < 0.001) return n.toExponential(2);
+  return n.toFixed(3);
+}
+
+function _f5LoadDetail(group) {
+  const path = _f5DetailShard(group);
+  if (!path) return Promise.resolve(null);
+  if (_F5DetailCache.has(path)) return _F5DetailCache.get(path);
+  const p = fetch(path).then(resp => {
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+  }).catch(err => {
+    console.warn("5xFAD detail shard fetch failed", path, err);
+    return null;
+  });
+  _F5DetailCache.set(path, p);
+  return p;
+}
+
+function _f5StillSelected(group) {
+  return group && group.key === _f5SelectedKey();
+}
+
+function _f5ContrastForAge(age) {
+  return `TG_vs_WT_${age}mo`;
+}
+
+function _f5DetailMissing(group) {
+  const shard = _f5DetailShard(group);
+  if (!shard) return '<div class="muted">No 5xFAD detail shard is listed for this kinase surface.</div>';
+  if (window.location && window.location.protocol === "file:") {
+    return '<div class="muted">Detail sidecars are blocked under file://. Serve the unified viewer directory over HTTP to inspect this tab.</div>';
+  }
+  return '<div class="muted">5xFAD detail sidecar could not be loaded.</div>';
+}
+
+function _f5RenderAsyncPanel(body, group, renderer) {
+  body.innerHTML = '<div class="muted" style="padding:1em">Loading 5xFAD detail shard…</div>';
+  _f5LoadDetail(group).then(detail => {
+    if (!_f5StillSelected(group)) return;
+    if (!detail) {
+      body.innerHTML = _f5DetailMissing(group);
+      return;
+    }
+    renderer(detail);
+  });
 }
 
 function _f5SourceList() {
@@ -595,61 +655,117 @@ function _f5RenderPrep(body, group) {
   const sampleRows = (block.sample_counts || []).filter(r =>
     r.tissue === group.tissue && r.assay === group.assay && Number(r.age) === age
   );
-  body.innerHTML = `
-    <section class="audit-panel">
-      <h4>Contrast evidence <span class="muted">(${_f5Esc(_f5SliceLabel(group))}, ${age}mo)</span></h4>
-      <p class="kinase-stage-note">Categorical contrast status and biological sample counts are shown as provenance context only; they are not converted into viewer-facing analysis scores.</p>
-      ${_f5SmallTable(qcRows, [
-        {key: "contrast", label: "Contrast"},
-        {key: "residue_type", label: "Res"},
-        {key: "n_wt", label: "WT"},
-        {key: "n_tg", label: "TG"},
-        {key: "contrast_status", label: "Status"},
-      ])}
-    </section>
-    <section class="audit-panel" style="margin-top:10px;">
-      <h4>Sample counts</h4>
-      ${_f5SmallTable(sampleRows, [
-        {key: "tissue", label: "Tissue"},
-        {key: "assay", label: "Assay"},
-        {key: "age", label: "Age"},
-        {key: "genotype", label: "Genotype"},
-        {key: "n_biological_samples", label: "n"},
-      ])}
-    </section>
-    <section class="audit-panel" style="margin-top:10px;">
-      <h4>Packaged source files</h4>
-      ${_f5SourceList()}
-    </section>`;
+  _f5RenderAsyncPanel(body, group, detail => {
+    const contrast = _f5ContrastForAge(age);
+    const shiftRows = (detail.global_shift || []).filter(r => r.contrast === contrast);
+    const subRows = (detail.substrate_summary || []).filter(r => r.contrast === contrast);
+    const winRows = (detail.winsorized_sites || []).filter(r => r.contrast === contrast).slice(0, 25);
+    body.innerHTML = `
+      <section class="audit-panel">
+        <h4>Contrast evidence <span class="muted">(${_f5Esc(_f5SliceLabel(group))}, ${age}mo)</span></h4>
+        <p class="kinase-stage-note">Categorical contrast status and biological sample counts are shown as provenance context only; they are not converted into viewer-facing analysis scores.</p>
+        ${_f5SmallTable(qcRows, [
+          {key: "contrast", label: "Contrast"},
+          {key: "residue_type", label: "Res"},
+          {key: "n_wt", label: "WT"},
+          {key: "n_tg", label: "TG"},
+          {key: "contrast_status", label: "Status"},
+        ])}
+      </section>
+      <section class="audit-panel" style="margin-top:10px;">
+        <h4>Global shift</h4>
+        ${_f5SmallTable(shiftRows, [
+          {key: "contrast", label: "Contrast"},
+          {key: "median_shift", label: "Median shift", fmt: _f5FmtShort},
+          {key: "mean_before", label: "Mean before", fmt: _f5FmtShort},
+          {key: "pct_pos_before", label: "% positive before", fmt: _f5FmtShort},
+          {key: "pct_pos_after", label: "% positive after", fmt: _f5FmtShort},
+        ])}
+      </section>
+      <section class="audit-panel" style="margin-top:10px;">
+        <h4>Prepared substrate set</h4>
+        ${_f5SmallTable(subRows, [
+          {key: "contrast", label: "Contrast"},
+          {key: "substrate_motifs", label: "Substrate motifs"},
+        ])}
+      </section>
+      <section class="audit-panel" style="margin-top:10px;">
+        <h4>Winsorized substrate-site rows</h4>
+        ${_f5SmallTable(winRows, [
+          {key: "site_id", label: "Site"},
+          {key: "gene_symbol", label: "Gene"},
+          {key: "original_lfc", label: "Original LFC", fmt: _f5FmtShort},
+          {key: "clipped_lfc", label: "Clipped LFC", fmt: _f5FmtShort},
+          {key: "lower_bound", label: "Lower", fmt: _f5FmtShort},
+          {key: "upper_bound", label: "Upper", fmt: _f5FmtShort},
+        ])}
+      </section>
+      <section class="audit-panel" style="margin-top:10px;">
+        <h4>Sample counts</h4>
+        ${_f5SmallTable(sampleRows, [
+          {key: "tissue", label: "Tissue"},
+          {key: "assay", label: "Assay"},
+          {key: "age", label: "Age"},
+          {key: "genotype", label: "Genotype"},
+          {key: "n_biological_samples", label: "n"},
+        ])}
+      </section>
+      <section class="audit-panel" style="margin-top:10px;">
+        <h4>Packaged source files</h4>
+        ${_f5SourceList()}
+      </section>`;
+  });
 }
 
 function _f5RenderOls(body, group) {
   const age = _f5SelectedAge(group);
-  const row = _f5SelectedRow(group);
-  body.innerHTML = `
-    <section class="audit-panel">
-      <h4>OLS Details <span class="muted">(${age}mo TG vs WT)</span></h4>
-      <p class="kinase-stage-note">The current 5xFAD viewer payload packages summary MEA rows and contrast evidence for this cohort. Full site-level OLS rows are generated by the 5xFAD analysis workflow but are not embedded in this viewer payload.</p>
-      ${_f5SmallTable(row ? [row] : [], [
-        {key: "contrast", label: "Contrast"},
-        {key: "NES", label: "NES"},
-        {key: "FDR", label: "FDR"},
-        {key: "ES", label: "ES"},
-        {key: "p_value", label: "p-value"},
-        {key: "substrate_hits", label: "Substrate hits"},
-        {key: "substrate_universe", label: "Substrate universe"},
-      ])}
-    </section>`;
+  _f5RenderAsyncPanel(body, group, detail => {
+    const contrast = _f5ContrastForAge(age);
+    const rows = (detail.site_stats || []).filter(r => r.contrast === contrast);
+    body.innerHTML = `
+      <section class="audit-panel">
+        <h4>OLS Details <span class="muted">(${age}mo TG vs WT)</span></h4>
+        <p class="kinase-stage-note">Substrate-site rows for this kinase and contrast. LFC, p-value, FDR, and group counts come from the 5xFAD site-level OLS output used upstream of MEA.</p>
+        ${_f5SmallTable(rows, [
+          {key: "rank_in_contrast", label: "Rank"},
+          {key: "site_id", label: "Site"},
+          {key: "gene_symbol", label: "Gene"},
+          {key: "motif", label: "Motif"},
+          {key: "lfc", label: "LFC", fmt: _f5FmtShort},
+          {key: "p_value", label: "p-value", fmt: _f5FmtShort},
+          {key: "fdr", label: "FDR", fmt: _f5FmtShort},
+          {key: "n_wt", label: "WT"},
+          {key: "n_tg", label: "TG"},
+          {key: "clipped_lfc", label: "Clipped LFC", fmt: _f5FmtShort},
+        ])}
+      </section>`;
+  });
 }
 
 function _f5RenderTrace(body, group) {
   const age = _f5SelectedAge(group);
-  body.innerHTML = `
-    <section class="audit-panel">
-      <h4>Measurement Trace <span class="muted">(${age}mo TG vs WT)</span></h4>
-      <p class="kinase-stage-note">Normalized phosphosite, matched protein, and stoichiometry matrices are retained as 5xFAD analysis artifacts, but the unified viewer payload does not currently embed per-site measurement matrices for this cohort. The table remains in the standard audit workbench position so the absence is explicit rather than hidden.</p>
-      <div class="muted">No per-site measurement trace is packaged for ${_f5Esc(group.kinase)} in ${_f5Esc(_f5SliceLabel(group))}.</div>
-    </section>`;
+  _f5RenderAsyncPanel(body, group, detail => {
+    const siteRows = (detail.site_stats || []).filter(r => r.contrast === _f5ContrastForAge(age));
+    const siteSet = new Set(siteRows.slice(0, 8).map(r => r.site_id));
+    const rows = (detail.measurement_trace || [])
+      .filter(r => Number(r.age_months) === age && (!siteSet.size || siteSet.has(r.site_id)))
+      .slice(0, 160);
+    body.innerHTML = `
+      <section class="audit-panel">
+        <h4>Measurement Trace <span class="muted">(${age}mo TG vs WT)</span></h4>
+        <p class="kinase-stage-note">Sample-level receipt for substrate sites in the selected contrast. Columns show normalized phosphosite signal, matched total-protein signal, and the stoichiometry value used for the primary MEA track.</p>
+        ${_f5SmallTable(rows, [
+          {key: "site_id", label: "Site"},
+          {key: "gene_symbol", label: "Gene"},
+          {key: "motif", label: "Motif"},
+          {key: "sample", label: "Sample"},
+          {key: "genotype", label: "Genotype"},
+          {key: "raw_phospho", label: "Raw phospho", fmt: _f5FmtShort},
+          {key: "matched_total_protein", label: "Protein", fmt: _f5FmtShort},
+          {key: "stoichiometry", label: "Stoichiometry", fmt: _f5FmtShort},
+        ])}
+      </section>`;
+  });
 }
 
 function _f5RenderAttribution(body, group) {

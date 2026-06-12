@@ -137,6 +137,7 @@ class FiveXFADTests(unittest.TestCase):
         self.assertEqual(payload["rows"][0]["substrate_hits"], 3)
         self.assertEqual(payload["rows"][0]["substrate_universe"], 100)
         self.assertEqual(payload["rows"][0]["n_wt"], 3)
+        self.assertIn("detail_shards", payload)
 
     def test_fivexfad_viewer_matches_single_kinase_tab_pattern(self) -> None:
         root = Path(__file__).resolve().parents[2]
@@ -163,7 +164,13 @@ class FiveXFADTests(unittest.TestCase):
         self.assertIn("kinase-audit-tabs", tab_js)
         self.assertIn('label: "Attribution"', tab_js)
         self.assertIn("No attribution rows are packaged", tab_js)
+        self.assertIn("measurement_trace", tab_js)
+        self.assertIn("matched_total_protein", tab_js)
+        self.assertIn("detail_shards", tab_js)
         self.assertNotIn("f5-age-cell", tab_js)
+        self.assertNotIn('data-col="slice"', body)
+        self.assertNotIn("<td>${_f5Esc(r.slice)}</td>", tab_js)
+        self.assertNotIn("does not currently embed per-site measurement matrices", tab_js)
         self.assertNotIn("QC status", tab_js)
         self.assertNotIn("<th>QC</th>", tab_js)
 

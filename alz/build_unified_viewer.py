@@ -137,6 +137,11 @@ _AUDIT_TRACKS = [("", "ST"), ("_pY", "Y")]
 FIVEXFAD_KINASE_DIR = os.path.join(
     config.REPO_ROOT, "outputs", "reports", "kinase_attribution_5xfad"
 )
+FIVEXFAD_DETAIL_DIR = os.path.join(
+    UNIFIED_VIEWER_DIR, "edge_slices", "fivexfad_detail"
+)
+FIVEXFAD_DETAIL_SITES_PER_CONTRAST = 12
+FIVEXFAD_DETAIL_MAX_SITES = 40
 
 
 def _audit_specs() -> list[tuple[str, str, str]]:
@@ -1543,6 +1548,243 @@ def _subs_fraction_counts(value: Any) -> tuple[int | None, int | None]:
     return int(m.group(1)), int(m.group(2))
 
 
+def _f5_json_value(v):
+    if v is None:
+        return None
+    try:
+        if pd.isna(v):
+            return None
+    except Exception:
+        pass
+    if isinstance(v, np.integer):
+        return int(v)
+    if isinstance(v, np.floating):
+        return float(v)
+    if isinstance(v, np.bool_):
+        return bool(v)
+    return v
+
+
+def _f5_records(df: pd.DataFrame, cols: list[str] | None = None) -> list[dict]:
+    if df is None or df.empty:
+        return []
+    if cols is not None:
+        cols = [c for c in cols if c in df.columns]
+        df = df[cols]
+    return [
+        {str(k): _f5_json_value(v) for k, v in row.items()}
+        for row in df.to_dict(orient="records")
+    ]
+
+
+def _f5_shard_name(key: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", key).strip("_") + ".json"
+
+
+def _f5_group_key(kinase: str, tissue: str, assay: str, analysis_track: str) -> str:
+    return "|".join([kinase or "", tissue or "", assay or "", analysis_track or ""])
+
+
+def _write_fivexfad_detail_shards(
+    track_specs: list[tuple[str, str, str, str]],
+    rows: list[dict],
+    manifest_path: str,
+) -> dict[str, str]:
+    """Write per-kinase 5xFAD audit sidecars for the detail workbench."""
+    if not rows:
+        return {}
+    shutil.rmtree(FIVEXFAD_DETAIL_DIR, ignore_errors=True)
+    os.makedirs(FIVEXFAD_DETAIL_DIR, exist_ok=True)
+
+    manifest = pd.read_csv(manifest_path) if os.path.exists(manifest_path) else pd.DataFrame()
+    manifest_by_assay: dict[tuple[str, str], pd.DataFrame] = {}
+    if not manifest.empty:
+        primary = manifest[manifest["analysis_action"] == "primary"].copy()
+        for (tissue, assay), g in primary.groupby(["tissue", "assay"], sort=False):
+            manifest_by_assay[(str(tissue), str(assay))] = g.drop_duplicates("biological_sample_id")
+
+    rows_by_group: dict[tuple[str, str, str, str, str], list[dict]] = {}
+    for row in rows:
+        key = (
+            str(row.get("tissue", "")),
+            str(row.get("track", "")),
+            str(row.get("assay", "")),
+            str(row.get("analysis_track", "")),
+            str(row.get("kinase", "")),
+        )
+        rows_by_group.setdefault(key, []).append(row)
+
+    detail_index: dict[str, str] = {}
+    for tissue, track, assay, residue in track_specs:
+        prefix = f"{tissue}_{track}"
+        paths = {
+            "raw": os.path.join(FIVEXFAD_KINASE_DIR, f"{prefix}_raw_phospho_normalized.csv"),
+            "protein": os.path.join(FIVEXFAD_KINASE_DIR, f"{prefix}_matched_total_protein.csv"),
+            "stoich": os.path.join(FIVEXFAD_KINASE_DIR, f"{prefix}_stoichiometry_matrix.csv"),
+            "ols": os.path.join(FIVEXFAD_KINASE_DIR, f"{prefix}_site_level_ols.csv"),
+            "subs": os.path.join(FIVEXFAD_KINASE_DIR, f"{prefix}_mea_substrate_sets.csv"),
+            "winsor": os.path.join(FIVEXFAD_KINASE_DIR, f"{prefix}_winsorized_sites.csv"),
+            "shift": os.path.join(FIVEXFAD_KINASE_DIR, f"{prefix}_mea_global_shift.csv"),
+        }
+        if not all(os.path.exists(paths[k]) for k in ["raw", "protein", "stoich", "ols", "subs"]):
+            continue
+
+        raw = pd.read_csv(paths["raw"])
+        protein = pd.read_csv(paths["protein"])
+        stoich = pd.read_csv(paths["stoich"])
+        ols = pd.read_csv(paths["ols"])
+        subs = pd.read_csv(paths["subs"])
+        winsor = pd.read_csv(paths["winsor"]) if os.path.exists(paths["winsor"]) else pd.DataFrame()
+        shift = pd.read_csv(paths["shift"]) if os.path.exists(paths["shift"]) else pd.DataFrame()
+
+        meta_cols = ["site_id", "gene_symbol", "motif", "site_position", "residue_type", "matched_protein"]
+        stoich_meta = stoich[[c for c in meta_cols if c in stoich.columns]].copy()
+        ols = ols.merge(
+            stoich_meta[[c for c in ["site_id", "motif", "site_position", "residue_type"] if c in stoich_meta.columns]],
+            on="site_id",
+            how="left",
+        )
+        sample_cols = [
+            c for c in stoich.columns
+            if c not in {"site_id", "gene_symbol", "motif", "site_position", "residue_type", "matched_protein"}
+        ]
+        sample_meta = {}
+        sm = manifest_by_assay.get((tissue, assay), pd.DataFrame())
+        if not sm.empty:
+            for _, srow in sm.iterrows():
+                sid = str(srow.get("biological_sample_id", ""))
+                sample_meta[sid] = {
+                    "sample": sid,
+                    "age_months": int(srow.get("age_months", 0) or 0),
+                    "age": str(srow.get("age", "")),
+                    "genotype": str(srow.get("genotype", "")),
+                }
+
+        raw_by_site = raw.set_index("site_id", drop=False)
+        protein_by_site = protein.set_index("site_id", drop=False)
+        stoich_by_site = stoich.set_index("site_id", drop=False)
+
+        for analysis_track in ["stoichiometry", "raw_phospho"]:
+            effect_prefix = "stoich" if analysis_track == "stoichiometry" else "raw"
+            track_subs = subs[subs["analysis_track"] == analysis_track] if "analysis_track" in subs.columns else subs.iloc[0:0]
+            track_winsor = winsor[winsor["analysis_track"] == analysis_track] if "analysis_track" in winsor.columns else pd.DataFrame()
+            track_shift = shift[shift["analysis_track"] == analysis_track] if "analysis_track" in shift.columns else pd.DataFrame()
+            kinases = sorted({
+                key[4] for key in rows_by_group
+                if key[0] == tissue and key[1] == track and key[3] == analysis_track
+            })
+
+            for kinase in kinases:
+                group_rows = rows_by_group.get((tissue, track, assay, analysis_track, kinase), [])
+                site_frames = []
+                for grow in group_rows:
+                    contrast = str(grow.get("contrast", ""))
+                    motif_set = set(
+                        track_subs[
+                            (track_subs["kinase"] == kinase)
+                            & (track_subs["contrast"] == contrast)
+                        ]["motif"].dropna().astype(str)
+                    )
+                    if not motif_set:
+                        continue
+                    cols = [
+                        "site_id", "gene_symbol", "motif", "site_position",
+                        "residue_type", "matched_protein", "n_obs_stoich", "n_obs_raw",
+                        f"{effect_prefix}_lfc_{contrast}",
+                        f"{effect_prefix}_pval_{contrast}",
+                        f"{effect_prefix}_fdr_{contrast}",
+                        f"{effect_prefix}_n_wt_{contrast}",
+                        f"{effect_prefix}_n_tg_{contrast}",
+                    ]
+                    sub = ols[ols["motif"].isin(motif_set)][[c for c in cols if c in ols.columns]].copy()
+                    if sub.empty:
+                        continue
+                    sub["contrast"] = contrast
+                    sub = sub.rename(columns={
+                        f"{effect_prefix}_lfc_{contrast}": "lfc",
+                        f"{effect_prefix}_pval_{contrast}": "p_value",
+                        f"{effect_prefix}_fdr_{contrast}": "fdr",
+                        f"{effect_prefix}_n_wt_{contrast}": "n_wt",
+                        f"{effect_prefix}_n_tg_{contrast}": "n_tg",
+                    })
+                    if not track_winsor.empty:
+                        w = track_winsor[track_winsor["contrast"] == contrast][
+                            [c for c in ["site_id", "original_lfc", "clipped_lfc", "lower_bound", "upper_bound"] if c in track_winsor.columns]
+                        ]
+                        sub = sub.merge(w, on="site_id", how="left")
+                    rank_source = sub["clipped_lfc"] if "clipped_lfc" in sub.columns else sub["lfc"]
+                    sub["abs_rank_value"] = pd.to_numeric(rank_source, errors="coerce").abs()
+                    sub = sub.sort_values("abs_rank_value", ascending=False).head(FIVEXFAD_DETAIL_SITES_PER_CONTRAST)
+                    sub["rank_in_contrast"] = range(1, len(sub) + 1)
+                    site_frames.append(sub)
+
+                site_stats = pd.concat(site_frames, ignore_index=True) if site_frames else pd.DataFrame()
+                if site_stats.empty:
+                    site_ids = []
+                else:
+                    site_stats = site_stats.sort_values(["contrast", "rank_in_contrast"])
+                    site_ids = list(dict.fromkeys(site_stats["site_id"].astype(str).tolist()))[:FIVEXFAD_DETAIL_MAX_SITES]
+                    site_stats = site_stats[site_stats["site_id"].astype(str).isin(site_ids)]
+
+                measurement_rows = []
+                for site_id in site_ids:
+                    if site_id not in stoich_by_site.index:
+                        continue
+                    srow = stoich_by_site.loc[site_id]
+                    rrow = raw_by_site.loc[site_id] if site_id in raw_by_site.index else {}
+                    prow = protein_by_site.loc[site_id] if site_id in protein_by_site.index else {}
+                    for sample in sample_cols:
+                        smeta = sample_meta.get(sample, {"sample": sample, "age_months": None, "age": "", "genotype": ""})
+                        measurement_rows.append({
+                            "site_id": site_id,
+                            "gene_symbol": _f5_json_value(srow.get("gene_symbol")),
+                            "motif": _f5_json_value(srow.get("motif")),
+                            "sample": sample,
+                            "age_months": smeta.get("age_months"),
+                            "age": smeta.get("age"),
+                            "genotype": smeta.get("genotype"),
+                            "raw_phospho": _f5_json_value(rrow.get(sample) if hasattr(rrow, "get") else None),
+                            "matched_total_protein": _f5_json_value(prow.get(sample) if hasattr(prow, "get") else None),
+                            "stoichiometry": _f5_json_value(srow.get(sample)),
+                        })
+
+                substrate_summary = (
+                    track_subs[track_subs["kinase"] == kinase]
+                    .groupby("contrast")["motif"]
+                    .nunique()
+                    .rename("substrate_motifs")
+                    .reset_index()
+                ) if not track_subs.empty else pd.DataFrame()
+                key = _f5_group_key(kinase, tissue, assay, analysis_track)
+                fname = _f5_shard_name(key)
+                payload = {
+                    "schema_version": 1,
+                    "key": key,
+                    "kinase": kinase,
+                    "tissue": tissue,
+                    "track": track,
+                    "assay": assay,
+                    "residue_type": residue,
+                    "analysis_track": analysis_track,
+                    "sample_columns": [sample_meta.get(s, {"sample": s}) for s in sample_cols],
+                    "measurement_trace": measurement_rows,
+                    "site_stats": _f5_records(site_stats.drop(columns=["abs_rank_value"], errors="ignore")),
+                    "global_shift": _f5_records(track_shift),
+                    "winsorized_sites": _f5_records(track_winsor[track_winsor["site_id"].astype(str).isin(site_ids)] if not track_winsor.empty and site_ids else pd.DataFrame()),
+                    "substrate_summary": _f5_records(substrate_summary),
+                    "source_files": [os.path.basename(paths[k]) for k in paths if os.path.exists(paths[k])],
+                }
+                with open(os.path.join(FIVEXFAD_DETAIL_DIR, fname), "w") as f:
+                    json.dump(payload, f, allow_nan=False, separators=(",", ":"))
+                detail_index[key] = os.path.relpath(os.path.join(FIVEXFAD_DETAIL_DIR, fname), UNIFIED_VIEWER_DIR)
+
+    if detail_index:
+        with open(os.path.join(FIVEXFAD_DETAIL_DIR, "index.json"), "w") as f:
+            json.dump({"schema_version": 1, "shards": detail_index}, f, separators=(",", ":"))
+    print(f"  supporting_5xfad_detail: {len(detail_index):,} shards", flush=True)
+    return detail_index
+
+
 def build_supporting_5xfad_slice() -> dict | None:
     """Supporting 5xFAD kinase-enrichment slice.
 
@@ -1643,6 +1885,8 @@ def build_supporting_5xfad_slice() -> dict | None:
             sample_counts = grouped.to_dict(orient="records")
         source_files.append(os.path.relpath(manifest_path, UNIFIED_VIEWER_DIR))
 
+    detail_shards = _write_fivexfad_detail_shards(track_specs, rows, manifest_path)
+
     print(f"  supporting_5xfad: {len(rows):,} MEA rows", flush=True)
     return {
         "schema_version": 1,
@@ -1657,6 +1901,7 @@ def build_supporting_5xfad_slice() -> dict | None:
         "rows": rows,
         "contrast_qc": qc_rows,
         "sample_counts": sample_counts,
+        "detail_shards": detail_shards,
         "source_files": sorted(set(source_files)),
     }
 
