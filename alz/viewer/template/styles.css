@@ -391,6 +391,9 @@ main#app-main { padding:14px; }
   color:#78909c; line-height:13px; }
 .nes-profile-col-labels { display:flex; gap:1px; padding:0 1px; font-size:9px;
   color:#78909c; line-height:1; margin-bottom:1px; justify-content:space-around; }
+.nes-profile-age-stack { display:inline-flex; flex-direction:column; gap:1px; }
+.nes-profile-age-labels { display:grid; grid-template-columns:repeat(4,12px); gap:1px;
+  padding:0 1px; font-size:8px; line-height:9px; color:#78909c; text-align:center; }
 .nes-profile-wrap { display:inline-flex; align-items:center; gap:2px; }
 /* CTRL column group on the human kinase tab: muted background + thin
    left rule so it reads as a separate block from the AD donors. */

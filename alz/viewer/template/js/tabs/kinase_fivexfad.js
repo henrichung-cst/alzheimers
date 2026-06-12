@@ -9,7 +9,6 @@ const _F5_AUDIT_TABS = [
   {id: "ols-details", label: "OLS Details"},
   {id: "mea-input", label: "MEA Preparation"},
   {id: "mea-score", label: "MEA Score"},
-  {id: "attribution", label: "Attribution"},
 ];
 
 let _F5Groups = null;
@@ -54,8 +53,16 @@ function _f5TrackLabel(v) {
   return String(v || "");
 }
 
-function _f5SliceLabel(group) {
+function _f5SurfaceLabel(group) {
   return `${group.tissue} · ${group.assay} · ${_f5TrackLabel(group.analysis_track)}`;
+}
+
+function _f5AuditTabs() {
+  const block = _f5Block() || {};
+  const hasAttribution = Array.isArray(block.attribution_rows) && block.attribution_rows.length > 0;
+  return hasAttribution
+    ? _F5_AUDIT_TABS.concat([{id: "attribution", label: "Attribution"}])
+    : _F5_AUDIT_TABS.slice();
 }
 
 function _f5RowKey(row) {
@@ -138,8 +145,6 @@ function _f5StatusFor(group, age) {
 function _f5Metric(group, ages) {
   let peakAbsNes = null;
   let sigCount = 0;
-  let substrateHits = null;
-  let substrateUniverse = null;
   const fdr = Store.state.filters.fdr;
   for (const age of ages) {
     const row = group.rows.get(Number(age));
@@ -151,13 +156,8 @@ function _f5Metric(group, ages) {
     }
     const q = _f5Num(row.FDR);
     if (q != null && q < fdr) sigCount += 1;
-    const hits = _f5Num(row.substrate_hits);
-    if (hits != null && (substrateHits == null || hits > substrateHits)) {
-      substrateHits = hits;
-      substrateUniverse = _f5Num(row.substrate_universe);
-    }
   }
-  return {peakAbsNes, sigCount, substrateHits, substrateUniverse};
+  return {peakAbsNes, sigCount};
 }
 
 function _f5GroupPasses(group, ages, metric) {
@@ -182,7 +182,7 @@ function _f5FilteredRows() {
   for (const group of _F5Groups) {
     const metric = _f5Metric(group, ages);
     if (_f5GroupPasses(group, ages, metric)) {
-      out.push({...group, ...metric, slice: _f5SliceLabel(group)});
+      out.push({...group, ...metric});
     }
   }
   const col = _F5State.sortCol;
@@ -234,8 +234,12 @@ function _f5ProfileCell(group, age, maxAbs) {
 
 function _f5Profile(group, maxAbs) {
   const cells = _F5_AGES.map(age => _f5ProfileCell(group, age, maxAbs)).join("");
+  const labels = _F5_AGES.map(age => `<span>${age}</span>`).join("");
   return `<div class="nes-profile-wrap" title="Age cells: 3, 6, 9, 12 months">` +
+    `<div class="nes-profile-age-stack">` +
+    `<div class="nes-profile-age-labels">${labels}</div>` +
     `<div class="nes-profile-cell" style="grid-template-columns:repeat(${_F5_AGES.length},1fr);">${cells}</div>` +
+    `</div>` +
     `</div>`;
 }
 
@@ -368,7 +372,6 @@ function renderFiveXFADKinase() {
   const ages = _f5AgeScope();
   const denom = ages.length;
   const html = rows.map(r => {
-    const subs = r.substrateHits == null ? "—" : `${r.substrateHits}/${r.substrateUniverse == null ? "?" : r.substrateUniverse}`;
     const sel = r.key === selectedKey ? " selected" : "";
     const sub = r.sigCount === 0 ? " sub-thresh" : "";
     const residueBadge = r.residue_type === "Y"
@@ -382,10 +385,9 @@ function renderFiveXFADKinase() {
       <td>${_f5Profile(r, maxAbs)}</td>
       <td class="attr-num">${r.peakAbsNes == null ? '<span class="muted">—</span>' : r.peakAbsNes.toFixed(2)}</td>
       <td class="attr-num">${r.sigCount}<span class="muted" style="font-size:10px;"> / ${denom}</span></td>
-      <td>${subs}</td>
     </tr>`;
   }).join("");
-  tbody.innerHTML = html || '<tr><td colspan="8" class="muted">No 5xFAD rows match the active filters.</td></tr>';
+  tbody.innerHTML = html || '<tr><td colspan="7" class="muted">No 5xFAD rows match the active filters.</td></tr>';
   _f5SyncSortIndicators();
   renderFiveXFADKinaseDetail();
 }
@@ -407,7 +409,7 @@ function _f5SelectedGroup() {
 function _f5SelectionLabel(key) {
   _f5EnsureIndexes();
   const group = _F5Groups.find(g => g.key === key);
-  return group ? `${group.kinase} · ${_f5SliceLabel(group)}` : String(key || "");
+  return group ? `${group.kinase} · ${_f5SurfaceLabel(group)}` : String(key || "");
 }
 
 function updateFiveXFADKinaseSelection(key) {
@@ -430,6 +432,23 @@ function _f5UpdateRowSelection(key) {
 function _f5GroupsForKinase(name) {
   _f5EnsureIndexes();
   return _F5Groups.filter(g => g.kinase === name);
+}
+
+function _f5SurfaceValues(group, field) {
+  return Array.from(new Set(_f5GroupsForKinase(group.kinase).map(g => g[field]).filter(Boolean))).sort();
+}
+
+function _f5SurfaceOptions(group, field, labels) {
+  return _f5SurfaceValues(group, field).map(v => {
+    const lab = labels && labels[v] ? labels[v] : v;
+    return `<option value="${_f5Esc(v)}"${v === group[field] ? " selected" : ""}>${_f5Esc(lab)}</option>`;
+  }).join("");
+}
+
+function _f5GroupForSurface(kinase, tissue, assay, analysis) {
+  return _f5GroupsForKinase(kinase).find(g =>
+    g.tissue === tissue && g.assay === assay && g.analysis_track === analysis
+  ) || null;
 }
 
 function _f5SelectedAge(group) {
@@ -459,14 +478,19 @@ function renderFiveXFADKinaseDetail() {
     return;
   }
   const age = _f5SelectedAge(group);
-  const sliceOptions = _f5GroupsForKinase(group.kinase).map(g =>
-    `<option value="${_f5Esc(g.key)}"${g.key === group.key ? " selected" : ""}>${_f5Esc(_f5SliceLabel(g))}</option>`
-  ).join("");
+  const tissueOptions = _f5SurfaceOptions(group, "tissue");
+  const assayOptions = _f5SurfaceOptions(group, "assay");
+  const trackOptions = _f5SurfaceOptions(group, "analysis_track", {
+    stoichiometry: "stoichiometry",
+    raw_phospho: "raw phospho",
+  });
   const ageOptions = _F5_AGES.map(a => {
     const disabled = group.rows.has(a) ? "" : " disabled";
     return `<option value="${a}"${a === age ? " selected" : ""}${disabled}>${a}mo</option>`;
   }).join("");
-  const tabButtons = _F5_AUDIT_TABS.map(t =>
+  const tabs = _f5AuditTabs();
+  if (!tabs.some(t => t.id === _F5State.auditTab)) _F5State.auditTab = "mea-score";
+  const tabButtons = tabs.map(t =>
     `<button type="button" data-f5-audit-tab="${t.id}" class="${t.id === _F5State.auditTab ? "active" : ""}">${_f5Esc(t.label)}</button>`
   ).join("");
 
@@ -477,7 +501,9 @@ function renderFiveXFADKinaseDetail() {
         <div class="muted">${_f5Esc(group.gene_symbol || "")}${group.residue_type ? " · " + _f5Esc(group.residue_type) : ""}</div>
       </div>
       <div class="kinase-workbench-controls">
-        <label>Slice <select id="f5-audit-slice">${sliceOptions}</select></label>
+        <label>Tissue <select id="f5-audit-tissue">${tissueOptions}</select></label>
+        <label>Assay <select id="f5-audit-assay">${assayOptions}</select></label>
+        <label>Track <select id="f5-audit-track">${trackOptions}</select></label>
         <label>Age <select id="f5-audit-age">${ageOptions}</select></label>
       </div>
     </div>
@@ -485,10 +511,19 @@ function renderFiveXFADKinaseDetail() {
     <div class="kinase-audit-tab-body" id="f5-audit-body"></div>
   `;
 
-  const sliceSel = document.getElementById("f5-audit-slice");
-  if (sliceSel) sliceSel.addEventListener("change", ev => {
-    _F5State.auditAge = null;
-    _f5SetSelectedKey(ev.target.value);
+  const updateSurface = () => {
+    const tissue = document.getElementById("f5-audit-tissue")?.value || group.tissue;
+    const assay = document.getElementById("f5-audit-assay")?.value || group.assay;
+    const analysis = document.getElementById("f5-audit-track")?.value || group.analysis_track;
+    const next = _f5GroupForSurface(group.kinase, tissue, assay, analysis);
+    if (next) {
+      _F5State.auditAge = null;
+      _f5SetSelectedKey(next.key);
+    }
+  };
+  ["f5-audit-tissue", "f5-audit-assay", "f5-audit-track"].forEach(id => {
+    const sel = document.getElementById(id);
+    if (sel) sel.addEventListener("change", updateSurface);
   });
   const ageSel = document.getElementById("f5-audit-age");
   if (ageSel) ageSel.addEventListener("change", ev => {
@@ -528,30 +563,190 @@ function _f5ScoreTier(row) {
   return {label: `FDR ${f.toFixed(3)} · fails ${gate}`, cls: "chip-fail"};
 }
 
+function _f5RowForTrack(group, age, analysisTrack) {
+  const g = _f5GroupForSurface(group.kinase, group.tissue, group.assay, analysisTrack);
+  return g ? (g.rows.get(Number(age)) || null) : null;
+}
+
+function _f5FmtSigned(v, digits) {
+  const n = _f5Num(v);
+  if (n == null) return "—";
+  return `${n > 0 ? "+" : ""}${n.toFixed(digits == null ? 3 : digits)}`;
+}
+
+function _f5SubstrateText(row) {
+  return row && row.substrate_hits != null ? `${row.substrate_hits}/${row.substrate_universe}` : "—";
+}
+
+function _f5ComparisonHtml(group, age) {
+  const stoich = _f5RowForTrack(group, age, "stoichiometry");
+  const raw = _f5RowForTrack(group, age, "raw_phospho");
+  const rows = [
+    {metric: "NES", stoich: stoich && stoich.NES, raw: raw && raw.NES, digits: 2},
+    {metric: "ES", stoich: stoich && stoich.ES, raw: raw && raw.ES, digits: 3},
+    {metric: "p-value", stoich: stoich && stoich.p_value, raw: raw && raw.p_value, digits: 4},
+    {metric: "FDR", stoich: stoich && stoich.FDR, raw: raw && raw.FDR, digits: 3},
+  ].map(r => {
+    const s = _f5Num(r.stoich);
+    const rw = _f5Num(r.raw);
+    const delta = (s == null || rw == null) ? null : s - rw;
+    return `<tr><td>${_f5Esc(r.metric)}</td><td>${_f5Fmt(s, r.digits)}</td><td>${_f5Fmt(rw, r.digits)}</td><td>${_f5FmtSigned(delta, r.digits)}</td></tr>`;
+  }).join("");
+  const subs = `<tr><td>Substrates tested</td><td>${_f5Esc(_f5SubstrateText(stoich))}</td><td>${_f5Esc(_f5SubstrateText(raw))}</td><td>—</td></tr>`;
+  return `<div class="kh-audit-tablewrap"><table class="data-table">`
+    + `<thead><tr><th>metric</th><th>stoichiometry</th><th>raw phospho</th><th>Δ (stoich − raw)</th></tr></thead>`
+    + `<tbody>${rows}${subs}</tbody></table></div>`;
+}
+
+function _f5NesColor(nes, fdr) {
+  const n = _f5Num(nes);
+  if (n == null) return "#eceff1";
+  const base = n >= 0 ? [197, 48, 48] : [43, 108, 176];
+  const sig = _f5Num(fdr) != null && _f5Num(fdr) < Store.state.filters.fdr;
+  const alpha = sig ? 0.9 : 0.32;
+  return `rgba(${base[0]},${base[1]},${base[2]},${alpha})`;
+}
+
+function _f5RenderTrajectory(hostId, group, age) {
+  const host = document.getElementById(hostId);
+  if (!host || typeof Plotly === "undefined") return;
+  const stoichGroup = _f5GroupForSurface(group.kinase, group.tissue, group.assay, "stoichiometry");
+  const rawGroup = _f5GroupForSurface(group.kinase, group.tissue, group.assay, "raw_phospho");
+  const labels = _F5_AGES.map(a => `${a}mo`);
+  const stoichRows = _F5_AGES.map(a => stoichGroup ? stoichGroup.rows.get(a) : null);
+  const rawRows = _F5_AGES.map(a => rawGroup ? rawGroup.rows.get(a) : null);
+  const colors = stoichRows.map(r => _f5NesColor(r && r.NES, r && r.FDR));
+  const outlines = _F5_AGES.map(a => Number(a) === Number(age) ? "#000" : "rgba(0,0,0,0)");
+  const lineWidths = _F5_AGES.map(a => Number(a) === Number(age) ? 2.5 : 0);
+  Plotly.react(hostId, [
+    {
+      type: "bar",
+      x: labels,
+      y: stoichRows.map(r => r ? _f5Num(r.NES) : null),
+      marker: {color: colors, line: {color: outlines, width: lineWidths}},
+      name: "stoichiometry NES",
+      hovertemplate: "%{x}<br>stoich NES %{y:.2f}<extra></extra>",
+    },
+    {
+      type: "scatter",
+      mode: "markers",
+      x: labels,
+      y: rawRows.map(r => r ? _f5Num(r.NES) : null),
+      marker: {color: "#000", size: 9, symbol: "diamond-open", line: {width: 1.5, color: "#000"}},
+      name: "raw phospho NES",
+      hovertemplate: "%{x}<br>raw NES %{y:.2f}<extra></extra>",
+    },
+  ], {
+    margin: {l: 40, r: 10, t: 10, b: 45},
+    height: 220,
+    yaxis: {zeroline: true, zerolinecolor: "#bbb", title: "NES"},
+    showlegend: false,
+  }, {displaylogo: false, responsive: true}).then(() => {
+    if (host.removeAllListeners) host.removeAllListeners("plotly_click");
+    if (host.on) {
+      host.on("plotly_click", ev => {
+        const pts = ev && ev.points ? ev.points : null;
+        if (!pts || !pts[0]) return;
+        const next = parseInt(String(pts[0].x).replace("mo", ""), 10);
+        if (_F5_AGES.includes(next) && group.rows.has(next)) {
+          _F5State.auditAge = next;
+          renderFiveXFADKinaseDetail();
+        }
+      });
+    }
+  });
+}
+
+function _f5RenderRunningEnrichment(hostId, group, age) {
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  _f5LoadDetail(group).then(detail => {
+    if (!_f5StillSelected(group)) return;
+    if (!detail) {
+      host.innerHTML = _f5DetailMissing(group);
+      return;
+    }
+    const contrast = _f5ContrastForAge(age);
+    const rec = (detail.running_enrichment || []).find(r => r.contrast === contrast);
+    if (!rec || !rec.line || !rec.line.length || typeof Plotly === "undefined") {
+      host.innerHTML = `<div class="muted" style="padding:1em">Running enrichment requires the full prerank list and substrate-set motifs for this kinase surface.</div>`;
+      return;
+    }
+    const line = rec.line || [];
+    const hits = rec.hits || [];
+    const peakRank = rec.peak_rank;
+    const peakEs = _f5Num(rec.peak_es);
+    Plotly.react(hostId, [
+      {
+        type: "scatter",
+        mode: "lines",
+        x: line.map(r => r.rank),
+        y: line.map(r => r.running_es),
+        line: {color: "#1f77b4", width: 1.5},
+        name: "running ES",
+        hoverinfo: "skip",
+      },
+      {
+        type: "scatter",
+        mode: "markers",
+        x: hits.map(r => r.rank),
+        y: hits.map(r => r.running_es),
+        marker: {color: "#1f77b4", size: 5, opacity: 0.9},
+        name: "substrate hit",
+        text: hits.map(r => `rank ${r.rank}<br>${_f5Esc(r.gene_symbol || "")} · ${_f5Esc(r.motif || "")}<br>clipped LFC ${_f5Fmt(r.clipped_lfc, 3)}<br>running ES ${_f5Fmt(r.running_es, 3)}`),
+        hovertemplate: "%{text}<extra></extra>",
+      },
+      {
+        type: "scatter",
+        mode: "markers",
+        x: [peakRank],
+        y: [peakEs],
+        marker: {color: "#000", size: 9, symbol: "diamond"},
+        name: "peak ES",
+        hovertemplate: `peak ES ${_f5Fmt(peakEs, 3)} at rank ${peakRank}<extra></extra>`,
+      },
+    ], {
+      margin: {l: 50, r: 10, t: 30, b: 40},
+      height: 300,
+      showlegend: false,
+      annotations: [{
+        x: peakRank,
+        y: peakEs,
+        xref: "x",
+        yref: "y",
+        text: `peak ES ${_f5Fmt(peakEs, 3)} at rank ${peakRank}<br>leading edge: ${rec.leading_edge_count || 0} of ${rec.n_hits || 0} hits`,
+        showarrow: true,
+        arrowhead: 2,
+        ax: 30,
+        ay: peakEs >= 0 ? -40 : 40,
+        font: {size: 11},
+      }],
+      shapes: [{
+        type: "line",
+        xref: "x",
+        yref: "y",
+        x0: 1,
+        x1: rec.n_ranked || peakRank,
+        y0: 0,
+        y1: 0,
+        line: {color: "#999", width: 1, dash: "dot"},
+      }],
+      xaxis: {title: "prerank rank (1 = most up-shifted)", range: [1, rec.n_ranked || peakRank]},
+      yaxis: {title: "running ES", zeroline: false},
+    }, {displaylogo: false, responsive: true});
+  });
+}
+
 function _f5RenderScore(body, group) {
   const row = _f5SelectedRow(group);
   const age = _f5SelectedAge(group);
   const tier = _f5ScoreTier(row);
   const nes = _f5Num(row && row.NES);
   const nesColor = nes == null ? "#666" : (nes > 0 ? "#c53030" : "#2b6cb0");
-  const allRows = _F5_AGES.map(a => {
-    const r = group.rows.get(a);
-    const status = _f5StatusFor(group, a);
-    return `<tr>
-      <td>${a}mo</td>
-      <td>${_f5Fmt(r && r.NES, 2)}</td>
-      <td>${_f5Fmt(r && r.FDR, 3)}</td>
-      <td>${_f5Fmt(r && r.ES, 3)}</td>
-      <td>${_f5Fmt(r && r.p_value, 4)}</td>
-      <td>${r && r.substrate_hits != null ? `${r.substrate_hits}/${r.substrate_universe}` : "—"}</td>
-      <td>${r && r.n_wt != null ? r.n_wt : "—"}</td>
-      <td>${r && r.n_tg != null ? r.n_tg : "—"}</td>
-      <td>${_f5Esc(status || "—")}</td>
-    </tr>`;
-  }).join("");
   body.innerHTML = `
+    <p class="kinase-stage-note">The score for ${_f5Esc(group.kinase)} on ${age}mo TG vs WT: how the kinase's substrate set concentrates in the contrast prerank. Stoichiometry is primary; raw phospho is shown alongside for cross-track sanity.</p>
     <section class="audit-panel">
-      <h4>MEA Score <span class="muted">(${age}mo TG vs WT)</span></h4>
+      <h4>Score for ${age}mo TG vs WT</h4>
       <div class="mea-scorecard">
         <div class="mea-score-nes" style="color:${nesColor}">
           <div class="mea-score-label">NES</div>
@@ -561,21 +756,29 @@ function _f5RenderScore(body, group) {
         <dl class="mea-score-stats">
           <dt>ES</dt><dd>${_f5Fmt(row && row.ES, 3)}</dd>
           <dt>p-value</dt><dd>${_f5Fmt(row && row.p_value, 4)}</dd>
-          <dt>Substrates tested</dt><dd>${row && row.substrate_hits != null ? `${row.substrate_hits}/${row.substrate_universe}` : "—"}</dd>
+          <dt>Substrates tested</dt><dd>${_f5Esc(_f5SubstrateText(row))}</dd>
           <dt>Samples</dt><dd>WT ${row && row.n_wt != null ? row.n_wt : "—"} · TG ${row && row.n_tg != null ? row.n_tg : "—"}</dd>
           <dt>Contrast status</dt><dd>${_f5Esc(_f5StatusFor(group, age) || "—")}</dd>
         </dl>
       </div>
     </section>
     <section class="audit-panel" style="margin-top:10px;">
-      <h4>Age profile</h4>
-      <div class="kh-audit-tablewrap">
-        <table class="data-table">
-          <thead><tr><th>Age</th><th>NES</th><th>FDR</th><th>ES</th><th>p-value</th><th>Subs</th><th>WT</th><th>TG</th><th>Status</th></tr></thead>
-          <tbody>${allRows}</tbody>
-        </table>
-      </div>
+      <h4>Running enrichment for ${age}mo TG vs WT</h4>
+      <p class="kinase-stage-note">GSEA walk recomputed from the packaged prerank receipt. The curve steps up at substrate hits and down at misses. Peak ES and the leading-edge count are marked.</p>
+      <div id="f5-mea-running" style="height:300px"></div>
+    </section>
+    <section class="audit-panel" style="margin-top:10px;">
+      <h4>NES across ages</h4>
+      <p class="kinase-stage-note">Stoichiometry NES bars: full saturation when FDR is below the header threshold, faded otherwise. Raw phospho NES is shown as paired open diamonds. Click a bar to switch age.</p>
+      <div id="f5-mea-trajectory" style="height:220px"></div>
+    </section>
+    <section class="audit-panel" style="margin-top:10px;">
+      <h4>Stoichiometry vs raw phospho for ${age}mo TG vs WT</h4>
+      <p class="kinase-stage-note">Per-metric comparison of the same kinase, tissue, assay, and age scored against the two preprocessing tracks. Δ = stoichiometry − raw phospho.</p>
+      ${_f5ComparisonHtml(group, age)}
     </section>`;
+  _f5RenderRunningEnrichment("f5-mea-running", group, age);
+  _f5RenderTrajectory("f5-mea-trajectory", group, age);
 }
 
 function _f5SmallTable(rows, cols) {
@@ -640,40 +843,17 @@ function _f5RenderAsyncPanel(body, group, renderer) {
   });
 }
 
-function _f5SourceList() {
-  const files = (_f5Block() && _f5Block().source_files) || [];
-  if (!files.length) return '<div class="muted">No source files listed in the payload.</div>';
-  return `<ul style="margin:4px 0 0 18px;padding:0;">${files.map(f => `<li><code>${_f5Esc(f)}</code></li>`).join("")}</ul>`;
-}
-
 function _f5RenderPrep(body, group) {
   const age = _f5SelectedAge(group);
-  const block = _f5Block() || {};
-  const qcRows = (block.contrast_qc || []).filter(r =>
-    r.tissue === group.tissue && r.assay === group.assay && r.age_months === age
-  );
-  const sampleRows = (block.sample_counts || []).filter(r =>
-    r.tissue === group.tissue && r.assay === group.assay && Number(r.age) === age
-  );
   _f5RenderAsyncPanel(body, group, detail => {
     const contrast = _f5ContrastForAge(age);
     const shiftRows = (detail.global_shift || []).filter(r => r.contrast === contrast);
-    const subRows = (detail.substrate_summary || []).filter(r => r.contrast === contrast);
     const winRows = (detail.winsorized_sites || []).filter(r => r.contrast === contrast).slice(0, 25);
+    const prepRows = (detail.prepared_mea_input || []).filter(r => r.contrast === contrast);
     body.innerHTML = `
       <section class="audit-panel">
-        <h4>Contrast evidence <span class="muted">(${_f5Esc(_f5SliceLabel(group))}, ${age}mo)</span></h4>
-        <p class="kinase-stage-note">Categorical contrast status and biological sample counts are shown as provenance context only; they are not converted into viewer-facing analysis scores.</p>
-        ${_f5SmallTable(qcRows, [
-          {key: "contrast", label: "Contrast"},
-          {key: "residue_type", label: "Res"},
-          {key: "n_wt", label: "WT"},
-          {key: "n_tg", label: "TG"},
-          {key: "contrast_status", label: "Status"},
-        ])}
-      </section>
-      <section class="audit-panel" style="margin-top:10px;">
-        <h4>Global shift</h4>
+        <h4>Step 1 · Global shift</h4>
+        <p class="kinase-stage-note">Median LFC across the contrast's ranked sites, subtracted before GSEA so the prerank is centered at zero. Contrast-level, not kinase-specific.</p>
         ${_f5SmallTable(shiftRows, [
           {key: "contrast", label: "Contrast"},
           {key: "median_shift", label: "Median shift", fmt: _f5FmtShort},
@@ -683,14 +863,8 @@ function _f5RenderPrep(body, group) {
         ])}
       </section>
       <section class="audit-panel" style="margin-top:10px;">
-        <h4>Prepared substrate set</h4>
-        ${_f5SmallTable(subRows, [
-          {key: "contrast", label: "Contrast"},
-          {key: "substrate_motifs", label: "Substrate motifs"},
-        ])}
-      </section>
-      <section class="audit-panel" style="margin-top:10px;">
-        <h4>Winsorized substrate-site rows</h4>
+        <h4>Step 2 · Winsorization</h4>
+        <p class="kinase-stage-note">Centered LFCs clipped at the contrast bounds so individual sites cannot dominate the prerank.</p>
         ${_f5SmallTable(winRows, [
           {key: "site_id", label: "Site"},
           {key: "gene_symbol", label: "Gene"},
@@ -700,19 +874,20 @@ function _f5RenderPrep(body, group) {
           {key: "upper_bound", label: "Upper", fmt: _f5FmtShort},
         ])}
       </section>
-      <section class="audit-panel" style="margin-top:10px;">
-        <h4>Sample counts</h4>
-        ${_f5SmallTable(sampleRows, [
-          {key: "tissue", label: "Tissue"},
-          {key: "assay", label: "Assay"},
-          {key: "age", label: "Age"},
-          {key: "genotype", label: "Genotype"},
-          {key: "n_biological_samples", label: "n"},
+      <section class="audit-panel audit-wide" style="margin-top:10px;">
+        <h4>Step 3 · Prepared MEA input for this kinase</h4>
+        <p class="kinase-stage-note">One row per site whose motif is in this kinase's substrate set and present in the contrast prerank. Rank, centered LFC, clipped LFC, and leading-edge status mirror the inputs used to score the kinase.</p>
+        ${_f5SmallTable(prepRows, [
+          {key: "rank_in_contrast", label: "Rank"},
+          {key: "site_id", label: "Site"},
+          {key: "gene_symbol", label: "Gene"},
+          {key: "motif", label: "Motif"},
+          {key: "lfc", label: "LFC", fmt: _f5FmtShort},
+          {key: "centered_lfc", label: "Centered LFC", fmt: _f5FmtShort},
+          {key: "clipped_lfc", label: "Clipped LFC", fmt: _f5FmtShort},
+          {key: "was_winsorized", label: "Winsorized"},
+          {key: "in_leading_edge", label: "Leading edge"},
         ])}
-      </section>
-      <section class="audit-panel" style="margin-top:10px;">
-        <h4>Packaged source files</h4>
-        ${_f5SourceList()}
       </section>`;
   });
 }
@@ -769,10 +944,15 @@ function _f5RenderTrace(body, group) {
 }
 
 function _f5RenderAttribution(body, group) {
+  const rows = ((_f5Block() || {}).attribution_rows || []).filter(r => r.kinase === group.kinase);
   body.innerHTML = `
-    <section class="audit-panel">
+    <section class="audit-panel audit-wide">
       <h4>Attribution</h4>
-      <p class="kinase-stage-note">The Song and Mukesh kinase viewers reserve this tab for cell-type or reference-cohort attribution evidence. The current 5xFAD payload packages cohort-level kinase MEA rows, sample evidence, and contrast preparation artifacts, but it does not include a 5xFAD cell-type attribution layer.</p>
-      <div class="muted">No attribution rows are packaged for ${_f5Esc(group.kinase)} in ${_f5Esc(_f5SliceLabel(group))}.</div>
+      ${_f5SmallTable(rows, [
+        {key: "kinase", label: "Kinase"},
+        {key: "cell_type", label: "Cell type"},
+        {key: "location", label: "Location"},
+        {key: "confidence_tier", label: "Conf"},
+      ])}
     </section>`;
 }

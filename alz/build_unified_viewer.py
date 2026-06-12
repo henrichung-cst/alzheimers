@@ -142,6 +142,7 @@ FIVEXFAD_DETAIL_DIR = os.path.join(
 )
 FIVEXFAD_DETAIL_SITES_PER_CONTRAST = 12
 FIVEXFAD_DETAIL_MAX_SITES = 40
+FIVEXFAD_RUNNING_DISPLAY_POINTS = 450
 
 
 def _audit_specs() -> list[tuple[str, str, str]]:
@@ -1585,6 +1586,148 @@ def _f5_group_key(kinase: str, tissue: str, assay: str, analysis_track: str) -> 
     return "|".join([kinase or "", tissue or "", assay or "", analysis_track or ""])
 
 
+def _f5_norm_motif(v: Any) -> str:
+    return str(v or "").strip().upper()
+
+
+def _f5_prerank_for_contrast(
+    ols: pd.DataFrame,
+    track_shift: pd.DataFrame,
+    track_winsor: pd.DataFrame,
+    effect_prefix: str,
+    contrast: str,
+) -> pd.DataFrame:
+    lfc_col = f"{effect_prefix}_lfc_{contrast}"
+    if lfc_col not in ols.columns:
+        return pd.DataFrame()
+    p_col = f"{effect_prefix}_pval_{contrast}"
+    fdr_col = f"{effect_prefix}_fdr_{contrast}"
+    wt_col = f"{effect_prefix}_n_wt_{contrast}"
+    tg_col = f"{effect_prefix}_n_tg_{contrast}"
+    cols = [
+        "site_id", "gene_symbol", "motif", "site_position", "residue_type",
+        "matched_protein", "n_obs_stoich", "n_obs_raw", lfc_col, p_col,
+        fdr_col, wt_col, tg_col,
+    ]
+    out = ols[[c for c in cols if c in ols.columns]].copy()
+    out = out.rename(columns={
+        lfc_col: "lfc",
+        p_col: "p_value",
+        fdr_col: "fdr",
+        wt_col: "n_wt",
+        tg_col: "n_tg",
+    })
+    out["lfc"] = pd.to_numeric(out["lfc"], errors="coerce")
+    out = out[np.isfinite(out["lfc"])].copy()
+    if out.empty:
+        return out
+
+    shift_val = 0.0
+    if not track_shift.empty and "contrast" in track_shift.columns:
+        shift_rows = track_shift[track_shift["contrast"] == contrast]
+        if not shift_rows.empty and "median_shift" in shift_rows.columns:
+            val = pd.to_numeric(shift_rows["median_shift"].iloc[0], errors="coerce")
+            if pd.notna(val):
+                shift_val = float(val)
+    out["centered_lfc"] = out["lfc"] - shift_val
+
+    lower = upper = None
+    clipped_site_ids: set[str] = set()
+    if not track_winsor.empty and "contrast" in track_winsor.columns:
+        w = track_winsor[track_winsor["contrast"] == contrast]
+        if not w.empty:
+            if "site_id" in w.columns:
+                clipped_site_ids = set(w["site_id"].dropna().astype(str))
+            if "lower_bound" in w.columns and "upper_bound" in w.columns:
+                lo = pd.to_numeric(w["lower_bound"].dropna(), errors="coerce").dropna()
+                hi = pd.to_numeric(w["upper_bound"].dropna(), errors="coerce").dropna()
+                if not lo.empty and not hi.empty:
+                    lower = float(lo.iloc[0])
+                    upper = float(hi.iloc[0])
+    if lower is not None and upper is not None:
+        out["clipped_lfc"] = out["centered_lfc"].clip(lower, upper)
+    else:
+        out["clipped_lfc"] = out["centered_lfc"]
+    out["was_winsorized"] = np.where(
+        out["site_id"].astype(str).isin(clipped_site_ids)
+        | ~np.isclose(out["clipped_lfc"], out["centered_lfc"], equal_nan=True),
+        "yes",
+        "no",
+    )
+    out = out.sort_values("clipped_lfc", ascending=False, kind="mergesort").reset_index(drop=True)
+    out["rank_in_contrast"] = np.arange(1, len(out) + 1)
+    out["contrast"] = contrast
+    return out
+
+
+def _f5_running_enrichment(prerank: pd.DataFrame, motif_set: set[str]) -> dict[str, Any] | None:
+    if prerank.empty or not motif_set:
+        return None
+    motifs = {_f5_norm_motif(m) for m in motif_set if _f5_norm_motif(m)}
+    if not motifs:
+        return None
+    ranked = prerank[["rank_in_contrast", "site_id", "gene_symbol", "motif", "clipped_lfc"]].copy()
+    ranked["motif_norm"] = ranked["motif"].map(_f5_norm_motif)
+    is_hit = ranked["motif_norm"].isin(motifs).to_numpy()
+    n = len(ranked)
+    nh = int(is_hit.sum())
+    if n == 0 or nh == 0:
+        return None
+    weights = pd.to_numeric(ranked["clipped_lfc"], errors="coerce").abs().fillna(0.0).to_numpy()
+    hit_sum = float(weights[is_hit].sum())
+    if hit_sum <= 0:
+        return None
+    miss_rate = 1.0 / max(n - nh, 1)
+    running: list[float] = []
+    hit_indices: list[int] = []
+    cur = 0.0
+    peak = 0.0
+    peak_idx = 0
+    for i in range(n):
+        if is_hit[i]:
+            cur += float(weights[i]) / hit_sum
+            hit_indices.append(i)
+        else:
+            cur -= miss_rate
+        running.append(cur)
+        if abs(cur) > abs(peak):
+            peak = cur
+            peak_idx = i
+
+    if n <= FIVEXFAD_RUNNING_DISPLAY_POINTS:
+        line_idx = list(range(n))
+    else:
+        line_idx = sorted(set(np.linspace(0, n - 1, FIVEXFAD_RUNNING_DISPLAY_POINTS, dtype=int).tolist() + [peak_idx]))
+    line = [
+        {"rank": int(ranked["rank_in_contrast"].iloc[i]), "running_es": _f5_json_value(running[i])}
+        for i in line_idx
+    ]
+    hits = []
+    for i in hit_indices:
+        r = ranked.iloc[i]
+        hits.append({
+            "rank": int(r["rank_in_contrast"]),
+            "running_es": _f5_json_value(running[i]),
+            "site_id": _f5_json_value(r.get("site_id")),
+            "gene_symbol": _f5_json_value(r.get("gene_symbol")),
+            "motif": _f5_json_value(r.get("motif")),
+            "clipped_lfc": _f5_json_value(r.get("clipped_lfc")),
+        })
+    leading_edge_count = (
+        sum(1 for i in hit_indices if i <= peak_idx)
+        if peak >= 0 else sum(1 for i in hit_indices if i >= peak_idx)
+    )
+    return {
+        "n_ranked": n,
+        "n_hits": nh,
+        "peak_rank": int(ranked["rank_in_contrast"].iloc[peak_idx]),
+        "peak_es": _f5_json_value(peak),
+        "leading_edge_count": int(leading_edge_count),
+        "line": line,
+        "hits": hits,
+    }
+
+
 def _write_fivexfad_detail_shards(
     track_specs: list[tuple[str, str, str, str]],
     rows: list[dict],
@@ -1673,10 +1816,24 @@ def _write_fivexfad_detail_shards(
                 key[4] for key in rows_by_group
                 if key[0] == tissue and key[1] == track and key[3] == analysis_track
             })
+            contrasts = sorted({
+                str(r.get("contrast", ""))
+                for key, group_rows in rows_by_group.items()
+                if key[0] == tissue and key[1] == track and key[3] == analysis_track
+                for r in group_rows
+            })
+            prerank_by_contrast = {
+                contrast: _f5_prerank_for_contrast(
+                    ols, track_shift, track_winsor, effect_prefix, contrast
+                )
+                for contrast in contrasts
+            }
 
             for kinase in kinases:
                 group_rows = rows_by_group.get((tissue, track, assay, analysis_track, kinase), [])
                 site_frames = []
+                prepared_frames = []
+                running_rows = []
                 for grow in group_rows:
                     contrast = str(grow.get("contrast", ""))
                     motif_set = set(
@@ -1687,44 +1844,39 @@ def _write_fivexfad_detail_shards(
                     )
                     if not motif_set:
                         continue
-                    cols = [
-                        "site_id", "gene_symbol", "motif", "site_position",
-                        "residue_type", "matched_protein", "n_obs_stoich", "n_obs_raw",
-                        f"{effect_prefix}_lfc_{contrast}",
-                        f"{effect_prefix}_pval_{contrast}",
-                        f"{effect_prefix}_fdr_{contrast}",
-                        f"{effect_prefix}_n_wt_{contrast}",
-                        f"{effect_prefix}_n_tg_{contrast}",
-                    ]
-                    sub = ols[ols["motif"].isin(motif_set)][[c for c in cols if c in ols.columns]].copy()
+                    prerank = prerank_by_contrast.get(contrast, pd.DataFrame())
+                    if prerank.empty:
+                        continue
+                    motif_norm = {_f5_norm_motif(m) for m in motif_set}
+                    sub = prerank[prerank["motif"].map(_f5_norm_motif).isin(motif_norm)].copy()
                     if sub.empty:
                         continue
-                    sub["contrast"] = contrast
-                    sub = sub.rename(columns={
-                        f"{effect_prefix}_lfc_{contrast}": "lfc",
-                        f"{effect_prefix}_pval_{contrast}": "p_value",
-                        f"{effect_prefix}_fdr_{contrast}": "fdr",
-                        f"{effect_prefix}_n_wt_{contrast}": "n_wt",
-                        f"{effect_prefix}_n_tg_{contrast}": "n_tg",
-                    })
-                    if not track_winsor.empty:
-                        w = track_winsor[track_winsor["contrast"] == contrast][
-                            [c for c in ["site_id", "original_lfc", "clipped_lfc", "lower_bound", "upper_bound"] if c in track_winsor.columns]
-                        ]
-                        sub = sub.merge(w, on="site_id", how="left")
-                    rank_source = sub["clipped_lfc"] if "clipped_lfc" in sub.columns else sub["lfc"]
-                    sub["abs_rank_value"] = pd.to_numeric(rank_source, errors="coerce").abs()
-                    sub = sub.sort_values("abs_rank_value", ascending=False).head(FIVEXFAD_DETAIL_SITES_PER_CONTRAST)
-                    sub["rank_in_contrast"] = range(1, len(sub) + 1)
+                    leading_motifs = {
+                        _f5_norm_motif(x) for x in str(grow.get("leading_substrates", "")).split(";")
+                        if _f5_norm_motif(x)
+                    }
+                    sub["in_leading_edge"] = np.where(
+                        sub["motif"].map(_f5_norm_motif).isin(leading_motifs),
+                        "yes",
+                        "no",
+                    )
+                    sub = sub.sort_values("rank_in_contrast").head(FIVEXFAD_DETAIL_SITES_PER_CONTRAST)
                     site_frames.append(sub)
+                    prepared_frames.append(sub)
+                    running = _f5_running_enrichment(prerank, motif_set)
+                    if running is not None:
+                        running_rows.append({"contrast": contrast, **running})
 
                 site_stats = pd.concat(site_frames, ignore_index=True) if site_frames else pd.DataFrame()
+                prepared_input = pd.concat(prepared_frames, ignore_index=True) if prepared_frames else pd.DataFrame()
                 if site_stats.empty:
                     site_ids = []
                 else:
                     site_stats = site_stats.sort_values(["contrast", "rank_in_contrast"])
                     site_ids = list(dict.fromkeys(site_stats["site_id"].astype(str).tolist()))[:FIVEXFAD_DETAIL_MAX_SITES]
                     site_stats = site_stats[site_stats["site_id"].astype(str).isin(site_ids)]
+                    if not prepared_input.empty:
+                        prepared_input = prepared_input[prepared_input["site_id"].astype(str).isin(site_ids)]
 
                 measurement_rows = []
                 for site_id in site_ids:
@@ -1768,7 +1920,9 @@ def _write_fivexfad_detail_shards(
                     "analysis_track": analysis_track,
                     "sample_columns": [sample_meta.get(s, {"sample": s}) for s in sample_cols],
                     "measurement_trace": measurement_rows,
-                    "site_stats": _f5_records(site_stats.drop(columns=["abs_rank_value"], errors="ignore")),
+                    "site_stats": _f5_records(site_stats),
+                    "prepared_mea_input": _f5_records(prepared_input),
+                    "running_enrichment": running_rows,
                     "global_shift": _f5_records(track_shift),
                     "winsorized_sites": _f5_records(track_winsor[track_winsor["site_id"].astype(str).isin(site_ids)] if not track_winsor.empty and site_ids else pd.DataFrame()),
                     "substrate_summary": _f5_records(substrate_summary),
@@ -1859,6 +2013,7 @@ def build_supporting_5xfad_slice() -> dict | None:
                     "substrate_hits": hits,
                     "substrate_universe": universe,
                     "leading_substrate_count": leading_count,
+                    "leading_substrates": leading,
                     "n_wt": qc.get("n_wt"),
                     "n_tg": qc.get("n_tg"),
                     "contrast_status": qc.get("contrast_status", ""),
