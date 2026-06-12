@@ -10,7 +10,9 @@ function _checkRequirement(req) {
     if (req.equal !== undefined) return sel[req.key] === req.equal;
     return sel[req.key] != null;
   }
-  if (req.type === "payload") return !!(window.PAYLOAD && PAYLOAD[req.key]);
+  if (req.type === "payload") {
+    return !!(typeof PAYLOAD !== "undefined" && PAYLOAD && PAYLOAD[req.key]);
+  }
   return true;
 }
 
@@ -29,6 +31,7 @@ function renderUnmetPrerequisite(panelEl, tab) {
   card.querySelector(".prereq-msg").textContent = unmet.message;
   const btn = card.querySelector(".prereq-action");
   btn.textContent = unmet.cta;
+  if (!unmet.goTo && !unmet.setSelection && !unmet.focus) btn.hidden = true;
   btn.addEventListener("click", () => {
     if (unmet.goTo) {
       Store.dispatch({type:"SET_VIEW", key:"activeTab", value:unmet.goTo});
@@ -106,7 +109,12 @@ function applyHash() {
     if (map.b != null) Store.dispatch({type:"SET_SELECTION", key:"backbone", value:parseInt(map.b,10)});
     if (map.ct != null) Store.dispatch({type:"SET_SELECTION", key:"celltype", value:parseInt(map.ct,10)});
     if (map.kh != null) Store.dispatch({type:"SET_SELECTION", key:"kinaseHuman", value:parseInt(map.kh,10)});
-    if (map.m != null && HAS_HUMAN) Store.dispatch({type:"SET_VIEW", key:"mode", value:map.m});
+    if (map.m != null) {
+      const modeOk = (typeof _modeAvailable === "function")
+        ? _modeAvailable(map.m)
+        : (map.m === "mouse" || (map.m === "human" && HAS_HUMAN));
+      if (modeOk) Store.dispatch({type:"SET_VIEW", key:"mode", value:map.m});
+    }
     const ctx = map.ctx || map.d;
     if (ctx != null) {
       Store.dispatch({type:"SET_SELECTION", key:"context", value:ctx});

@@ -134,6 +134,9 @@ _PER_TRACK_AUDIT = [
 # (key, label, suffix) — tracks defined in config.PHOSPHO_TRACKS.
 # ST = "" suffix, pY = "_pY".
 _AUDIT_TRACKS = [("", "ST"), ("_pY", "Y")]
+FIVEXFAD_KINASE_DIR = os.path.join(
+    config.REPO_ROOT, "outputs", "reports", "kinase_attribution_5xfad"
+)
 
 
 def _audit_specs() -> list[tuple[str, str, str]]:
@@ -152,6 +155,10 @@ def _audit_specs() -> list[tuple[str, str, str]]:
                 os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, f"{base}{suffix}.csv"),
             ))
     specs.extend([
+        ("5xfad_sample_manifest", "5xFAD sample manifest",
+         os.path.join(FIVEXFAD_KINASE_DIR, "sample_manifest.csv")),
+        ("5xfad_dataset_index", "5xFAD dataset index",
+         os.path.join(FIVEXFAD_KINASE_DIR, "dataset_index.csv")),
         ("unified_attribution", "Unified attribution",
          os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "unified_attribution.csv")),
         ("unified_attribution_full", "Unified attribution (31 Levy-t5 clusters)",
@@ -1526,6 +1533,137 @@ def build_human_slice() -> tuple[dict, dict] | tuple[None, None]:
     if celltype_specificity is not None:
         human_slice["celltype_specificity"] = celltype_specificity
     return human_slice, human_perdonor_substrate_slice_index
+
+
+def _subs_fraction_counts(value: Any) -> tuple[int | None, int | None]:
+    text = str(value or "")
+    m = re.match(r"^\s*(\d+)\s*/\s*(\d+)\s*$", text)
+    if not m:
+        return None, None
+    return int(m.group(1)), int(m.group(2))
+
+
+def build_supporting_5xfad_slice() -> dict | None:
+    """Supporting 5xFAD kinase-enrichment slice.
+
+    5xFAD is intentionally not a schema-v2 context. Tissue is a filter
+    attribute inside this supporting block so Song remains the default AD
+    context and cortex/hippocampus do not become viewer tabs.
+    """
+    if not os.path.isdir(FIVEXFAD_KINASE_DIR):
+        return None
+
+    track_specs = [
+        ("cortex", "st", "IMAC", "ST"),
+        ("cortex", "py", "pY", "Y"),
+        ("hippocampus", "st", "IMAC", "ST"),
+        ("hippocampus", "py", "pY", "Y"),
+    ]
+    analysis_files = [
+        ("stoichiometry", "mea_stoichiometry"),
+        ("raw_phospho", "mea_raw_phospho"),
+    ]
+
+    qc_lookup: dict[tuple[str, str, str], dict] = {}
+    qc_rows: list[dict] = []
+    for tissue, track, assay, residue in track_specs:
+        qc_path = os.path.join(FIVEXFAD_KINASE_DIR, f"{tissue}_{track}_contrast_qc.csv")
+        if not os.path.exists(qc_path):
+            continue
+        qdf = pd.read_csv(qc_path)
+        for _, row in qdf.iterrows():
+            rec = {
+                "tissue": tissue,
+                "track": track,
+                "assay": assay,
+                "residue_type": residue,
+                "contrast": str(row.get("contrast", "")),
+                "age_months": int(row.get("age_months", 0) or 0),
+                "n_wt": int(row.get("n_wt", 0) or 0),
+                "n_tg": int(row.get("n_tg", 0) or 0),
+                "contrast_status": str(row.get("contrast_status", "")),
+            }
+            qc_rows.append(rec)
+            qc_lookup[(tissue, track, rec["contrast"])] = rec
+
+    rows: list[dict] = []
+    source_files: list[str] = []
+    for tissue, track, assay, residue in track_specs:
+        for analysis_track, basename in analysis_files:
+            path = os.path.join(FIVEXFAD_KINASE_DIR, f"{tissue}_{track}_{basename}.csv")
+            if not os.path.exists(path):
+                continue
+            source_files.append(os.path.relpath(path, UNIFIED_VIEWER_DIR))
+            df = pd.read_csv(path)
+            for _, row in df.iterrows():
+                contrast = str(row.get("contrast", ""))
+                qc = qc_lookup.get((tissue, track, contrast), {})
+                hits, universe = _subs_fraction_counts(row.get("Subs fraction"))
+                leading = str(row.get("Leading substrates", ""))
+                leading_count = 0 if not leading else len([x for x in leading.split(";") if x])
+                rows.append({
+                    "kinase": str(row.get("kinase", "")),
+                    "tissue": tissue,
+                    "track": track,
+                    "analysis_track": analysis_track,
+                    "assay": assay,
+                    "residue_type": residue,
+                    "contrast": contrast,
+                    "age_months": int(qc.get("age_months", _age_from_contrast_label(contrast)) or 0),
+                    "NES": float(row.get("NES")) if pd.notna(row.get("NES")) else None,
+                    "FDR": float(row.get("FDR")) if pd.notna(row.get("FDR")) else None,
+                    "ES": float(row.get("ES")) if pd.notna(row.get("ES")) else None,
+                    "p_value": float(row.get("p-value")) if pd.notna(row.get("p-value")) else None,
+                    "substrate_hits": hits,
+                    "substrate_universe": universe,
+                    "leading_substrate_count": leading_count,
+                    "n_wt": qc.get("n_wt"),
+                    "n_tg": qc.get("n_tg"),
+                    "contrast_status": qc.get("contrast_status", ""),
+                })
+
+    if not rows and not qc_rows:
+        return None
+
+    sample_counts: list[dict] = []
+    manifest_path = os.path.join(FIVEXFAD_KINASE_DIR, "sample_manifest.csv")
+    if os.path.exists(manifest_path):
+        manifest = pd.read_csv(manifest_path)
+        primary = manifest[
+            (manifest["analysis_action"] == "primary")
+            & (manifest["analysis_scope"] == "kinase_mea_v1")
+        ].drop_duplicates(["tissue", "assay", "biological_sample_id"])
+        if not primary.empty:
+            grouped = (
+                primary.groupby(["tissue", "assay", "age", "genotype"])
+                .size()
+                .rename("n_biological_samples")
+                .reset_index()
+            )
+            sample_counts = grouped.to_dict(orient="records")
+        source_files.append(os.path.relpath(manifest_path, UNIFIED_VIEWER_DIR))
+
+    print(f"  supporting_5xfad: {len(rows):,} MEA rows", flush=True)
+    return {
+        "schema_version": 1,
+        "cohort": "5xFAD",
+        "role": "supporting_ad_cohort",
+        "filters": {
+            "tissue": ["cortex", "hippocampus"],
+            "analysis_track": ["stoichiometry", "raw_phospho"],
+            "assay": ["IMAC", "pY"],
+            "age_months": [3, 6, 9, 12],
+        },
+        "rows": rows,
+        "contrast_qc": qc_rows,
+        "sample_counts": sample_counts,
+        "source_files": sorted(set(source_files)),
+    }
+
+
+def _age_from_contrast_label(contrast: str) -> int | None:
+    m = re.search(r"_(3|6|9|12)mo$", str(contrast))
+    return int(m.group(1)) if m else None
 
 
 def _build_celltypes_slice(data: UnifiedData) -> dict:
@@ -3262,6 +3400,7 @@ def build_payload(data: UnifiedData) -> dict:
                         song_concordance_slice_index.get("present_genes")
                     ),
                     "human_reference": False,
+                    "supporting_5xfad": False,
                     "subclass_breakdown": True,
                     "audit_tables": True,
                     "transcript_trace": True,
@@ -3280,6 +3419,7 @@ def build_payload(data: UnifiedData) -> dict:
                 song_concordance_slice_index.get("present_genes")
             ),
             "human_reference": False,
+            "supporting_5xfad": False,
             "subclass_breakdown": True,
             "audit_tables": True,
             "transcript_trace": True,
@@ -3443,10 +3583,16 @@ def build_payload(data: UnifiedData) -> dict:
         meta["contexts"][0]["capabilities"]["human_reference"] = True
         print(f"  human slice: {len(human_slice['kinases']['id']):,} kinase rows "
               f"× {len(human_slice['donors'])} donors", flush=True)
+    supporting_5xfad = build_supporting_5xfad_slice()
+    if supporting_5xfad is not None:
+        meta["capabilities"]["supporting_5xfad"] = True
+        meta["contexts"][0]["capabilities"]["supporting_5xfad"] = True
 
     motif_names = set(kinases_slice.get("name", []))
     if human_slice is not None:
         motif_names.update(human_slice["kinases"].get("name", []))
+    if supporting_5xfad is not None:
+        motif_names.update(r.get("kinase", "") for r in supporting_5xfad.get("rows", []))
     kinase_motifs = _build_kinase_motifs(sorted(motif_names))
 
     payload = {
@@ -3487,6 +3633,8 @@ def build_payload(data: UnifiedData) -> dict:
                 human_perdonor_substrate_index.get("present_kinase_ids", [])
             )
         payload["human"] = human_slice
+    if supporting_5xfad is not None:
+        payload["supporting_5xfad"] = supporting_5xfad
     return _sanitize(payload)
 
 

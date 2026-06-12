@@ -115,12 +115,13 @@ function _wireTabHandlers() {
 function wireTabs() {
   _buildTabBar();
   _wireTabHandlers();
-  // Mode toggle wiring (visible only when PAYLOAD.human exists).
+  // Mode toggle wiring (visible when any non-Song cohort section exists).
   const wrap = document.getElementById("mode-toggle");
-  if (wrap && HAS_HUMAN) {
+  if (wrap && (HAS_HUMAN || HAS_FIVEXFAD)) {
     wrap.querySelectorAll("button.mode-btn").forEach(btn => {
       btn.addEventListener("click", () => {
         const m = btn.dataset.mode;
+        if (!_modeAvailable(m)) return;
         if (m === Store.state.view.mode) return;
         Store.dispatch({type:"SET_VIEW", key:"mode", value:m});
       });
@@ -142,10 +143,11 @@ function wireTabs() {
 function _syncModeToggle() {
   const wrap = document.getElementById("mode-toggle");
   if (!wrap) return;
-  if (!HAS_HUMAN) { wrap.hidden = true; return; }
+  if (!HAS_HUMAN && !HAS_FIVEXFAD) { wrap.hidden = true; return; }
   wrap.hidden = false;
   const mode = Store.state.view.mode || "mouse";
   wrap.querySelectorAll("button.mode-btn").forEach(btn => {
+    btn.hidden = !_modeAvailable(btn.dataset.mode);
     const on = btn.dataset.mode === mode;
     btn.classList.toggle("active", on);
     btn.setAttribute("aria-selected", on ? "true" : "false");
@@ -164,7 +166,16 @@ function _syncDonorToggle() {
 }
 
 function _defaultTabForMode(mode) {
-  return mode === "human" ? "kinasehuman" : "kinase";
+  if (mode === "human") return "kinasehuman";
+  if (mode === "fivexfad") return "fivexfadkinase";
+  return "kinase";
+}
+
+function _modeAvailable(mode) {
+  if (mode === "mouse") return true;
+  if (mode === "human") return !!HAS_HUMAN;
+  if (mode === "fivexfad") return !!HAS_FIVEXFAD;
+  return false;
 }
 
 function syncTabsFromStore() {

@@ -307,7 +307,7 @@ function wireDrawerResizer() {
   }
 
   // Master/detail splitters between the ranked table and the detail panel.
-  // One helper drives all three tabs (kinase, human, crosstable); each persists
+  // One helper drives all table/detail tabs; each persists
   // its left-panel width under its own localStorage key.
   function _wireSplitter(splitterId, storageKey, minW, maxW) {
     const sp = document.getElementById(splitterId);
@@ -348,6 +348,7 @@ function wireDrawerResizer() {
   _wireSplitter("ka-splitter", "kinaseTab.leftWidth");
   _wireSplitter("kh-splitter", "humanTab.leftWidth");
   _wireSplitter("kx-splitter", "crosstableTab.leftWidth");
+  _wireSplitter("f5-splitter", "fivexfadTab.leftWidth");
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +410,16 @@ const TAB_MANIFEST = {
       if (kid != null) renderKinaseDetail(kid);
       return true;
     },
+  },
+  fivexfadkinase: {
+    group: "drilldown", label: "Kinase",
+    modes: ["fivexfad"],
+    filters: ["fdr"], requires: [{type:"payload", key:"supporting_5xfad",
+      message:"5xFAD payload data are not available in this viewer build.",
+      cta:"Use another tab"}],
+    wire: () => { if (typeof wireFiveXFADKinase === "function") wireFiveXFADKinase(); },
+    render: () => { if (typeof renderFiveXFADKinase === "function") renderFiveXFADKinase(); },
+    rerenderOn: { filters: true, selection: [] },
   },
   incytrheatmap: {
     group: "landscape", label: "Incytr Heatmap",

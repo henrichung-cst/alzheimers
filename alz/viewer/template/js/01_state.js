@@ -51,6 +51,8 @@ async function _loadPayload() {
   RECEIVERS = ViewerPayload.celltypes().name;
   DISEASE_COLORS = META.diseaseColors;
   HAS_HUMAN = !!(PAYLOAD && PAYLOAD.human);
+  HAS_FIVEXFAD = !!(PAYLOAD && PAYLOAD.supporting_5xfad
+    && Array.isArray(PAYLOAD.supporting_5xfad.rows));
   // Populate human-tab cached refs (declared in kinase_human.js).
   if (typeof _KH_HAS !== "undefined") {
     _KH_HAS = HAS_HUMAN;
@@ -63,6 +65,7 @@ async function _loadPayload() {
 // ---------------------------------------------------------------------------
 // Populated after _loadPayload() resolves.
 let HAS_HUMAN = false;
+let HAS_FIVEXFAD = false;
 const INITIAL_STATE = {
   selection: { kinase:null, backbone:null, celltype:null, kinaseHuman:null,
                context:"song_ad" },
@@ -244,6 +247,22 @@ const TAB_GUIDE = {
     preamble: "This panel contains the long-form methods documentation: pipeline stages, statistical model specifications, metric definitions, and integration design decisions. It is a reference companion to the analytical tabs, not an analytical view itself.",
     purpose: "Long-form methods reference: pipeline stages, statistical models, and metric definitions in full detail.",
     primary: "Start with the Key viewer concepts and Stage 6 Incytr integration sections when a term in another tab needs more context. Stage 7 covers cross-pair aggregation and the backbone permutation tests.",
+  },
+  fivexfadkinase: {
+    preamble: "A first-class 5xFAD kinase activity section. Rows summarize kinase-library MEA over cortex and hippocampus, modeled independently by tissue and shown together through filters.",
+    method: [
+      "5xFAD cortex and hippocampus reports are parsed into a sample manifest, excluding explicit pool runs and collapsing hippocampus IMAC technical duplicates after log2 transform. For IMAC/ST and pY, age-aware TG-vs-WT contrasts are estimated separately within each tissue.",
+      "The primary track is stoichiometry-corrected kinase enrichment where matched total proteome is available. Raw phosphosite enrichment is retained as a sensitivity track. MEA uses the same kinase-library runner as the Song and Mukesh workflows so NES, FDR, winsorization, and substrate-set handling are aligned.",
+    ],
+    shows: {
+      lead: "Each row is one kinase within a tissue, assay, and analysis track. The age profile shows the four TG-vs-WT contrasts at 3, 6, 9, and 12 months; under-replicated contrast cells are marked categorically instead of converted into scores.",
+      bullets: [
+        "Cortex and hippocampus are not pooled statistically; the tissue filter only combines presentation.",
+        "IMAC/ST and pY are kinase-library tracks. KGG and AcK remain provenance datasets and are not interpreted as kinase activity.",
+        "Use stoichiometry as the primary readout and raw phospho as a sensitivity readout.",
+      ],
+    },
+    howTo: "Use tissue, assay, track, age, FDR, and significant-age filters to inspect kinase calls in each 5xFAD slice. Select a row to inspect MEA scores, preparation/QC, site-level details, and measurement-trace availability in the audit workbench.",
   },
 };
 
