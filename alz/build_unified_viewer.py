@@ -1586,6 +1586,15 @@ def _f5_group_key(kinase: str, tissue: str, assay: str, analysis_track: str) -> 
     return "|".join([kinase or "", tissue or "", assay or "", analysis_track or ""])
 
 
+def _f5_manifest_assay_key(assay: str) -> str:
+    v = str(assay or "").strip().lower()
+    if v == "py":
+        return "py"
+    if v == "imac":
+        return "imac"
+    return v
+
+
 def _f5_norm_motif(v: Any) -> str:
     return str(v or "").strip().upper()
 
@@ -1745,7 +1754,9 @@ def _write_fivexfad_detail_shards(
     if not manifest.empty:
         primary = manifest[manifest["analysis_action"] == "primary"].copy()
         for (tissue, assay), g in primary.groupby(["tissue", "assay"], sort=False):
-            manifest_by_assay[(str(tissue), str(assay))] = g.drop_duplicates("biological_sample_id")
+            manifest_by_assay[
+                (str(tissue), _f5_manifest_assay_key(str(assay)))
+            ] = g.drop_duplicates("biological_sample_id")
 
     rows_by_group: dict[tuple[str, str, str, str, str], list[dict]] = {}
     for row in rows:
@@ -1793,7 +1804,7 @@ def _write_fivexfad_detail_shards(
             if c not in {"site_id", "gene_symbol", "motif", "site_position", "residue_type", "matched_protein"}
         ]
         sample_meta = {}
-        sm = manifest_by_assay.get((tissue, assay), pd.DataFrame())
+        sm = manifest_by_assay.get((tissue, _f5_manifest_assay_key(assay)), pd.DataFrame())
         if not sm.empty:
             for _, srow in sm.iterrows():
                 sid = str(srow.get("biological_sample_id", ""))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -87,8 +88,6 @@ class FiveXFADTests(unittest.TestCase):
             out.mkdir()
             detail_dir = Path(tmp) / "viewer" / "fivexfad_detail"
             detail_dir.mkdir(parents=True)
-            sentinel = detail_dir / "sentinel.json"
-            sentinel.write_text("{}")
             pd.DataFrame(
                 {
                     "tissue": ["cortex"],
@@ -116,11 +115,47 @@ class FiveXFADTests(unittest.TestCase):
             ).to_csv(out / "cortex_st_mea_stoichiometry.csv", index=False)
             pd.DataFrame(
                 {
+                    "kinase": ["AKT1"],
+                    "contrast": ["TG_vs_WT_3mo"],
+                    "analysis_track": ["stoichiometry"],
+                    "motif": ["A"],
+                }
+            ).to_csv(out / "cortex_st_mea_substrate_sets.csv", index=False)
+            matrix = pd.DataFrame(
+                {
+                    "site_id": ["site1"],
+                    "gene_symbol": ["Gene1"],
+                    "motif": ["A"],
+                    "site_position": [1],
+                    "residue_type": ["ST"],
+                    "matched_protein": ["Prot1"],
+                    "cortex_3mo_WT_1": [2.0],
+                }
+            )
+            matrix.to_csv(out / "cortex_st_raw_phospho_normalized.csv", index=False)
+            matrix.to_csv(out / "cortex_st_matched_total_protein.csv", index=False)
+            matrix.to_csv(out / "cortex_st_stoichiometry_matrix.csv", index=False)
+            pd.DataFrame(
+                {
+                    "site_id": ["site1"],
+                    "gene_symbol": ["Gene1"],
+                    "n_obs_stoich": [1],
+                    "n_obs_raw": [1],
+                    "stoich_lfc_TG_vs_WT_3mo": [0.5],
+                    "stoich_pval_TG_vs_WT_3mo": [0.01],
+                    "stoich_fdr_TG_vs_WT_3mo": [0.05],
+                    "stoich_n_wt_TG_vs_WT_3mo": [1],
+                    "stoich_n_tg_TG_vs_WT_3mo": [1],
+                }
+            ).to_csv(out / "cortex_st_site_level_ols.csv", index=False)
+            pd.DataFrame(
+                {
                     "tissue": ["cortex"],
                     "assay": ["imac"],
                     "analysis_action": ["primary"],
                     "analysis_scope": ["kinase_mea_v1"],
                     "biological_sample_id": ["cortex_3mo_WT_1"],
+                    "age_months": [3],
                     "age": ["3mo"],
                     "genotype": ["WT"],
                 }
@@ -132,7 +167,12 @@ class FiveXFADTests(unittest.TestCase):
             viewer.FIVEXFAD_DETAIL_DIR = str(detail_dir)
             try:
                 payload = viewer.build_supporting_5xfad_slice()
-                sentinel_preserved = sentinel.exists()
+                shard = next(detail_dir.glob("AKT1_cortex_IMAC_stoichiometry.json"), None)
+                self.assertIsNotNone(shard)
+                assert shard is not None
+                detail = json.loads(shard.read_text())
+                trace_age = detail["measurement_trace"][0]["age_months"]
+                trace_genotype = detail["measurement_trace"][0]["genotype"]
             finally:
                 viewer.FIVEXFAD_KINASE_DIR = old_dir
                 viewer.FIVEXFAD_DETAIL_DIR = old_detail_dir
@@ -146,7 +186,8 @@ class FiveXFADTests(unittest.TestCase):
         self.assertEqual(payload["rows"][0]["substrate_universe"], 100)
         self.assertEqual(payload["rows"][0]["n_wt"], 3)
         self.assertIn("detail_shards", payload)
-        self.assertTrue(sentinel_preserved)
+        self.assertEqual(trace_age, 3)
+        self.assertEqual(trace_genotype, "WT")
 
     def test_fivexfad_viewer_matches_single_kinase_tab_pattern(self) -> None:
         root = Path(__file__).resolve().parents[2]
