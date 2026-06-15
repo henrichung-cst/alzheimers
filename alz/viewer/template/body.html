@@ -439,23 +439,55 @@
               <option value="">Any</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Filter by phosphoproteomics assay. IMAC is the ST kinase-library track; pY is the tyrosine track.">Assay
-            <select id="f5-filter-assay" aria-label="5xFAD assay">
-              <option value="">Any</option>
-            </select>
-          </label>
-          <label class="ke-filter-label" title="Stoichiometry subtracts matched total-protein abundance when available; raw phospho is the sensitivity track.">Track
-            <select id="f5-filter-analysis" aria-label="5xFAD analysis track">
-              <option value="">Any</option>
-            </select>
-          </label>
           <label class="ke-filter-label" title="Age-specific TG-vs-WT contrast.">Age
             <select id="f5-filter-age" aria-label="5xFAD age">
               <option value="">Any</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Minimum number of selected ages with FDR below the header threshold.">sig ages &ge;
+          <label class="ke-filter-label" title="Require at least one high/moderate mouse attribution row in the selected cell type.">Cell type
+            <select id="f5-filter-celltype" aria-label="5xFAD attributed cell type">
+              <option value="">Any</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Minimum mouse attribution confidence tier.">Confidence
+            <select id="f5-filter-confidence" aria-label="Minimum 5xFAD attribution confidence">
+              <option value="">Any</option>
+              <option value="very_high">very high (only)</option>
+              <option value="high">high+</option>
+              <option value="moderate">moderate+</option>
+              <option value="low">low+</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Minimum Song location specificity, as fold over the even-split baseline.">Song
+            <select id="f5-filter-song" aria-label="Minimum 5xFAD Song location tier">
+              <option value="0">Any</option>
+              <option value="2">&geq;2&times;</option>
+              <option value="5">&geq;5&times;</option>
+              <option value="10">&geq;10&times;</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Minimum WMB location specificity tier.">WMB
+            <select id="f5-filter-wmb" aria-label="Minimum 5xFAD WMB location tier">
+              <option value="0">Any</option>
+              <option value="2">&geq;2&times;</option>
+              <option value="5">&geq;5&times;</option>
+              <option value="10">&geq;10&times;</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Minimum number of selected ages with FDR below the header threshold.">n_sig &ge;
             <input id="f5-filter-nsig" type="number" min="0" max="4" step="1" value="0" style="width:48px;" aria-label="Minimum significant 5xFAD ages"/>
+          </label>
+          <label class="ke-filter-label" title="Filter by NES trend across ordered 5xFAD ages.">Trend
+            <select id="f5-filter-pattern" aria-label="5xFAD NES trend">
+              <option value="">Any</option>
+              <option value="always_up">always up</option>
+              <option value="always_down">always down</option>
+              <option value="monotonic_up">monotonic up</option>
+              <option value="monotonic_down">monotonic down</option>
+              <option value="mixed">mixed</option>
+              <option value="peak">single peak</option>
+              <option value="trough">single trough</option>
+            </select>
           </label>
           <button id="f5-filter-reset" class="ke-filter-reset" title="Reset all 5xFAD filters">Reset</button>
           <span class="muted" id="f5-count"></span>
@@ -470,6 +502,10 @@
               <th data-col="profile" title="Age-wise TG-vs-WT NES profile. Color = direction, saturation = |NES|, outline = FDR below the header threshold.">NES Profile</th>
               <th data-col="peakAbsNes" title="Largest absolute finite NES across the active age scope.">|NES|</th>
               <th data-col="sigCount" title="Selected ages with FDR below the header threshold.">n_sig</th>
+              <th data-col="n_attributed_celltypes" title="Cell types attributed at high or moderate confidence.">Cell types</th>
+              <th data-col="song_spec" title="Song location evidence, shown as fold over the even-split baseline.">Song</th>
+              <th data-col="wmb_max_tier" title="WMB location cross-check tier.">WMB</th>
+              <th data-col="conf" title="Highest mouse attribution confidence tier.">Conf</th>
             </tr></thead>
             <tbody></tbody>
           </table>

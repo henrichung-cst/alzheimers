@@ -1599,6 +1599,64 @@ def _f5_norm_motif(v: Any) -> str:
     return str(v or "").strip().upper()
 
 
+_F5_CONF_RANK = {"very_high": 4, "high": 3, "moderate": 2, "low": 1, "none": 0}
+
+
+def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None) -> list[dict]:
+    """Mouse location/evidence rows for 5xFAD, keyed by kinase only.
+
+    5xFAD does not currently have a per-cell decomposition artifact analogous to
+    Song's disease-by-timepoint decomp table. Reuse the repository's canonical
+    kinase-by-cell-type mouse evidence table for location/confidence summaries
+    without broadcasting Song contrast NES/FDR as 5xFAD disease evidence.
+    """
+    if data is None or data.celltype_evidence.empty:
+        return []
+    kinases = {str(r.get("kinase", "")) for r in rows if str(r.get("kinase", ""))}
+    if not kinases:
+        return []
+    ev = data.celltype_evidence[data.celltype_evidence["kinase"].astype(str).isin(kinases)].copy()
+    if ev.empty:
+        return []
+    for col, default in [
+        ("gene_symbol", ""),
+        ("cell_type", ""),
+        ("confidence_tier", "none"),
+        ("confidence_basis", ""),
+        ("song_location_tier", "none"),
+        ("wmb_crosscheck_tier", "none"),
+        ("human_location_tier", "none"),
+        ("wmb_specificity", float("nan")),
+        ("wmb_fold_over_uniform", float("nan")),
+        ("song_specificity", float("nan")),
+        ("song_tau", float("nan")),
+        ("song_top_share", float("nan")),
+        ("song_top_cluster", ""),
+        ("sea_ad_lfc", float("nan")),
+        ("seaad_location_score", float("nan")),
+        ("hbca_location_score", float("nan")),
+        ("human_location_score", float("nan")),
+        ("wmb_tier", "none"),
+    ]:
+        if col not in ev.columns:
+            ev[col] = default
+    ev["_rank"] = ev["confidence_tier"].map(_F5_CONF_RANK).fillna(0)
+    ev["_song"] = pd.to_numeric(ev["song_specificity"], errors="coerce").fillna(-1.0)
+    ev["_wmb"] = pd.to_numeric(ev["wmb_specificity"], errors="coerce").fillna(-1.0)
+    ev = ev.sort_values(["kinase", "cell_type", "_rank", "_song", "_wmb"], ascending=[True, True, False, False, False])
+    ev = ev.drop_duplicates(["kinase", "cell_type"], keep="first")
+    ev = ev.sort_values(["kinase", "_rank", "_song", "_wmb"], ascending=[True, False, False, False])
+    cols = [
+        "kinase", "gene_symbol", "cell_type", "confidence_tier", "confidence_basis",
+        "song_location_tier", "wmb_crosscheck_tier", "human_location_tier",
+        "wmb_specificity", "wmb_fold_over_uniform", "song_specificity",
+        "song_tau", "song_top_share", "song_top_cluster", "sea_ad_lfc",
+        "seaad_location_score", "hbca_location_score", "human_location_score",
+        "wmb_tier",
+    ]
+    return _f5_records(ev, cols)
+
+
 def _f5_prerank_for_contrast(
     ols: pd.DataFrame,
     track_shift: pd.DataFrame,
@@ -1854,6 +1912,17 @@ def _write_fivexfad_detail_shards(
                             & (track_subs["contrast"] == contrast)
                         ]["motif"].dropna().astype(str)
                     )
+                    kl_by_motif: dict[str, float] = {}
+                    if "kl_percentile" in track_subs.columns:
+                        sub_rows = track_subs[
+                            (track_subs["kinase"] == kinase)
+                            & (track_subs["contrast"] == contrast)
+                        ]
+                        for _, srow in sub_rows.iterrows():
+                            motif_key = _f5_norm_motif(srow.get("motif"))
+                            pct = pd.to_numeric(srow.get("kl_percentile"), errors="coerce")
+                            if motif_key and pd.notna(pct):
+                                kl_by_motif[motif_key] = float(pct)
                     if not motif_set:
                         continue
                     prerank = prerank_by_contrast.get(contrast, pd.DataFrame())
@@ -1872,6 +1941,9 @@ def _write_fivexfad_detail_shards(
                         "yes",
                         "no",
                     )
+                    sub["kl_percentile"] = sub["motif"].map(
+                        lambda m: kl_by_motif.get(_f5_norm_motif(m))
+                    )
                     sub = sub.sort_values("rank_in_contrast").head(FIVEXFAD_DETAIL_SITES_PER_CONTRAST)
                     site_frames.append(sub)
                     prepared_frames.append(sub)
@@ -1889,6 +1961,10 @@ def _write_fivexfad_detail_shards(
                     site_stats = site_stats[site_stats["site_id"].astype(str).isin(site_ids)]
                     if not prepared_input.empty:
                         prepared_input = prepared_input[prepared_input["site_id"].astype(str).isin(site_ids)]
+                kl_by_site: dict[tuple[str, str], Any] = {}
+                if not site_stats.empty and "kl_percentile" in site_stats.columns:
+                    for _, srow in site_stats.iterrows():
+                        kl_by_site[(str(srow.get("contrast", "")), str(srow.get("site_id", "")))] = _f5_json_value(srow.get("kl_percentile"))
 
                 measurement_rows = []
                 for site_id in site_ids:
@@ -1899,10 +1975,12 @@ def _write_fivexfad_detail_shards(
                     prow = protein_by_site.loc[site_id] if site_id in protein_by_site.index else {}
                     for sample in sample_cols:
                         smeta = sample_meta.get(sample, {"sample": sample, "age_months": None, "age": "", "genotype": ""})
+                        contrast_label = f"TG_vs_WT_{smeta.get('age_months')}mo" if smeta.get("age_months") else ""
                         measurement_rows.append({
                             "site_id": site_id,
                             "gene_symbol": _f5_json_value(srow.get("gene_symbol")),
                             "motif": _f5_json_value(srow.get("motif")),
+                            "kl_percentile": kl_by_site.get((contrast_label, site_id)),
                             "sample": sample,
                             "age_months": smeta.get("age_months"),
                             "age": smeta.get("age"),
@@ -1955,7 +2033,7 @@ def _write_fivexfad_detail_shards(
     return detail_index
 
 
-def build_supporting_5xfad_slice() -> dict | None:
+def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None:
     """Supporting 5xFAD kinase-enrichment slice.
 
     5xFAD is intentionally not a schema-v2 context. Tissue is a filter
@@ -2013,8 +2091,12 @@ def build_supporting_5xfad_slice() -> dict | None:
                 hits, universe = _subs_fraction_counts(row.get("Subs fraction"))
                 leading = str(row.get("Leading substrates", ""))
                 leading_count = 0 if not leading else len([x for x in leading.split(";") if x])
+                gene_symbol = row.get("gene_symbol", row.get("kinase", ""))
+                if pd.isna(gene_symbol):
+                    gene_symbol = row.get("kinase", "")
                 rows.append({
                     "kinase": str(row.get("kinase", "")),
+                    "gene_symbol": str(gene_symbol),
                     "tissue": tissue,
                     "track": track,
                     "analysis_track": analysis_track,
@@ -2057,6 +2139,7 @@ def build_supporting_5xfad_slice() -> dict | None:
         source_files.append(os.path.relpath(manifest_path, UNIFIED_VIEWER_DIR))
 
     detail_shards = _write_fivexfad_detail_shards(track_specs, rows, manifest_path)
+    attribution_rows = _build_fivexfad_attribution_rows(rows, data)
 
     print(f"  supporting_5xfad: {len(rows):,} MEA rows", flush=True)
     return {
@@ -2065,11 +2148,10 @@ def build_supporting_5xfad_slice() -> dict | None:
         "role": "supporting_ad_cohort",
         "filters": {
             "tissue": ["cortex", "hippocampus"],
-            "analysis_track": ["stoichiometry", "raw_phospho"],
-            "assay": ["IMAC", "pY"],
             "age_months": [3, 6, 9, 12],
         },
         "rows": rows,
+        "attribution_rows": attribution_rows,
         "contrast_qc": qc_rows,
         "sample_counts": sample_counts,
         "detail_shards": detail_shards,
@@ -3999,7 +4081,7 @@ def build_payload(data: UnifiedData) -> dict:
         meta["contexts"][0]["capabilities"]["human_reference"] = True
         print(f"  human slice: {len(human_slice['kinases']['id']):,} kinase rows "
               f"× {len(human_slice['donors'])} donors", flush=True)
-    supporting_5xfad = build_supporting_5xfad_slice()
+    supporting_5xfad = build_supporting_5xfad_slice(data)
     if supporting_5xfad is not None:
         meta["capabilities"]["supporting_5xfad"] = True
         meta["contexts"][0]["capabilities"]["supporting_5xfad"] = True

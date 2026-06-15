@@ -119,6 +119,7 @@ class FiveXFADTests(unittest.TestCase):
                     "contrast": ["TG_vs_WT_3mo"],
                     "analysis_track": ["stoichiometry"],
                     "motif": ["A"],
+                    "kl_percentile": [91.2],
                 }
             ).to_csv(out / "cortex_st_mea_substrate_sets.csv", index=False)
             matrix = pd.DataFrame(
@@ -173,6 +174,7 @@ class FiveXFADTests(unittest.TestCase):
                 detail = json.loads(shard.read_text())
                 trace_age = detail["measurement_trace"][0]["age_months"]
                 trace_genotype = detail["measurement_trace"][0]["genotype"]
+                trace_kl = detail["measurement_trace"][0]["kl_percentile"]
             finally:
                 viewer.FIVEXFAD_KINASE_DIR = old_dir
                 viewer.FIVEXFAD_DETAIL_DIR = old_detail_dir
@@ -180,6 +182,8 @@ class FiveXFADTests(unittest.TestCase):
         self.assertIsNotNone(payload)
         assert payload is not None
         self.assertEqual(payload["filters"]["tissue"], ["cortex", "hippocampus"])
+        self.assertNotIn("assay", payload["filters"])
+        self.assertNotIn("analysis_track", payload["filters"])
         self.assertEqual(payload["rows"][0]["tissue"], "cortex")
         self.assertEqual(payload["rows"][0]["analysis_track"], "stoichiometry")
         self.assertEqual(payload["rows"][0]["substrate_hits"], 3)
@@ -188,6 +192,7 @@ class FiveXFADTests(unittest.TestCase):
         self.assertIn("detail_shards", payload)
         self.assertEqual(trace_age, 3)
         self.assertEqual(trace_genotype, "WT")
+        self.assertEqual(trace_kl, 91.2)
 
     def test_fivexfad_viewer_matches_single_kinase_tab_pattern(self) -> None:
         root = Path(__file__).resolve().parents[2]
@@ -212,10 +217,12 @@ class FiveXFADTests(unittest.TestCase):
         self.assertNotIn("5xFAD Methods", manifest)
         self.assertIn("nes-profile-cell", tab_js)
         self.assertIn("kinase-audit-tabs", tab_js)
-        self.assertIn("hasAttribution", tab_js)
+        self.assertIn('{id: "attribution", label: "Attribution"}', tab_js)
         self.assertNotIn("No attribution rows are packaged", tab_js)
         self.assertIn("measurement_trace", tab_js)
         self.assertIn("matched_total_protein", tab_js)
+        self.assertIn("kl_percentile", tab_js)
+        self.assertIn("SequenceLogo.buildBlock", tab_js)
         self.assertIn("detail_shards", tab_js)
         self.assertIn("prepared_mea_input", tab_js)
         self.assertIn("running_enrichment", tab_js)
@@ -229,6 +236,10 @@ class FiveXFADTests(unittest.TestCase):
         self.assertNotIn("<td>${_f5Esc(r.slice)}</td>", tab_js)
         self.assertNotIn("f5-audit-slice", tab_js)
         self.assertNotIn("Slice <select", tab_js)
+        self.assertNotIn("f5-filter-assay", body)
+        self.assertNotIn("f5-filter-analysis", body)
+        self.assertNotIn("f5-audit-assay", tab_js)
+        self.assertNotIn("f5-audit-track", tab_js)
         self.assertNotIn("Contrast evidence", tab_js)
         self.assertNotIn("Sample counts", tab_js)
         self.assertNotIn("Packaged source files", tab_js)
