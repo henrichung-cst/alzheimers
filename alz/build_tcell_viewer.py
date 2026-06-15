@@ -127,6 +127,7 @@ _INCYTR_LABEL_COLS = tuple(f"{n}_label" for n in _INCYTR_LABEL_NODES)
 _INCYTR_PATHWAY_PVALUES = (0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
 _INCYTR_PATHWAY_ABS_PDS = (0.0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
 _INCYTR_TOP_INSTANCE_LIMIT = 5000
+_INCYTR_INDEX_FILENAME = "incytr_index.bin.gz"
 _INCYTR_LOW_SIGNAL_MEDIAN_N_THRESHOLD = 3
 
 
@@ -1034,6 +1035,67 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         _build_pathway_counts(low_signal_where) if low_signal_where else None
     )
 
+    # Complete donor-local top-mode index. This mirrors the unified viewer's
+    # packed-column contract so the shared Incytr Pathways tab can filter over
+    # every row instead of a pre-capped top_instances table.
+    incytr_index_columns = (
+        [("PDS", "f4"), ("pvalue", "f4")]
+        + [(sc, "u2") for sc in _INCYTR_SCORE_COLS]
+        + [("ligandId", "u2"), ("receptorId", "u2"),
+           ("emId", "u2"), ("targetId", "u2")]
+        + [("senderId", "u1"), ("receiverId", "u1"), ("contrastId", "u1"),
+           ("labelBits", "u1"), ("trajBits", "u1")]
+    )
+    idx_gene_to_id: dict[str, int] = {}
+    idx_gene_vocab: list[str] = []
+    idx_chunks: list[dict] = []
+
+    def _idx_gene_ids(series) -> np.ndarray:
+        cat = series.astype(str)
+        for gene in cat.unique():
+            if gene not in idx_gene_to_id:
+                idx_gene_to_id[gene] = len(idx_gene_vocab)
+                idx_gene_vocab.append(gene)
+        return cat.map(idx_gene_to_id).to_numpy(dtype="<u2")
+
+    def _idx_label_bits(frame: pd.DataFrame) -> np.ndarray:
+        bits = np.zeros(len(frame), dtype="<u1")
+        for shift, col in zip((0, 2, 4, 6), _INCYTR_LABEL_COLS):
+            if col not in frame.columns:
+                continue
+            values = frame[col]
+            codes = (
+                values.cat.codes.to_numpy()
+                if isinstance(values.dtype, pd.CategoricalDtype)
+                else pd.Categorical(values, categories=_INCYTR_LABEL_VOCAB).codes
+            )
+            bits |= ((codes + 1).astype("<u1") << shift).astype("<u1")
+        return bits
+
+    def _accumulate_index(s_name: str, r_name: str, frame: pd.DataFrame) -> None:
+        n = len(frame)
+        if n == 0:
+            return
+        chunk = {
+            "senderId": np.full(n, sender_to_idx[s_name], dtype="<u1"),
+            "receiverId": np.full(n, receiver_to_idx[r_name], dtype="<u1"),
+            "contrastId": frame["contrast"].map(contrast_to_idx).to_numpy(dtype="<u1"),
+            "ligandId": _idx_gene_ids(frame["Ligand"]),
+            "receptorId": _idx_gene_ids(frame["Receptor"]),
+            "emId": _idx_gene_ids(frame["EM"]),
+            "targetId": _idx_gene_ids(frame["Target"]),
+            "labelBits": _idx_label_bits(frame),
+            "trajBits": np.zeros(n, dtype="<u1"),
+            "PDS": frame["PDS"].to_numpy(dtype="<f4"),
+            "pvalue": frame["pvalue"].to_numpy(dtype="<f4"),
+        }
+        for sc in _INCYTR_SCORE_COLS:
+            chunk[sc] = (
+                frame[sc].to_numpy(dtype="float16").view("<u2")
+                if sc in frame.columns else np.zeros(n, dtype="<u2")
+            )
+        idx_chunks.append(chunk)
+
     top = con.execute(f"""
         SELECT
           sender, receiver, Path, Ligand, Receptor, EM, Target,
@@ -1098,6 +1160,8 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         for col in _INCYTR_LABEL_COLS:
             if col in sub.columns:
                 sub[col] = pd.Categorical(sub[col], categories=_INCYTR_LABEL_VOCAB)
+        s, r = key
+        _accumulate_index(s, r, sub)
         for col in float32_cols:
             if col in sub.columns:
                 sub[col] = sub[col].astype("float32")
@@ -1109,7 +1173,6 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         if path_sort_cols:
             sub = sub.sort_values(path_sort_cols, kind="stable",
                                   na_position="last").reset_index(drop=True)
-        s, r = key
         fname = f"{donor}__{_incytr_sanitize(s)}__{_incytr_sanitize(r)}.parquet"
         path = os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, fname)
         present_floats = [c for c in float_cols if c in sub.columns]
@@ -1159,6 +1222,59 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
     print(f"  ({donor}) wrote {len(present_pairs)} shards ({total_rows:,} rows)",
           flush=True)
 
+    global_index = None
+    if idx_chunks:
+        if sys.byteorder != "little":
+            raise RuntimeError("T-cell Incytr global index assumes little-endian")
+        cols = {
+            name: np.concatenate([chunk[name] for chunk in idx_chunks])
+            for name, _dt in incytr_index_columns
+        }
+        idx_chunks.clear()
+        n_idx = int(len(cols["PDS"]))
+        perm = np.argsort(-np.abs(cols["PDS"]), kind="stable")
+        buf = bytearray()
+        columns_manifest = []
+        for name, dt in incytr_index_columns:
+            arr = np.ascontiguousarray(
+                cols[name][perm],
+                dtype=np.dtype("<" + dt[0] + dt[1]),
+            )
+            columns_manifest.append({
+                "name": name,
+                "type": dt,
+                "bytes": int(arr.nbytes),
+            })
+            buf += arr.tobytes()
+        raw_bin = bytes(buf)
+        gz_bin = gzip.compress(raw_bin, compresslevel=6)
+        index_fname = f"{donor}__{_INCYTR_INDEX_FILENAME}"
+        with open(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, index_fname), "wb") as f:
+            f.write(gz_bin)
+        global_index = {
+            "url": f"edge_slices/incytr_pathways/{index_fname}",
+            "nrows": n_idx,
+            "rank_by": "abs(PDS)",
+            "byteorder": "little",
+            "sender_vocab": senders_canonical,
+            "receiver_vocab": receivers_canonical,
+            "contrast_vocab": list(present_contrasts),
+            "gene_vocab": idx_gene_vocab,
+            "traj_label_vocab": [],
+            "label_states": ["", *_INCYTR_LABEL_VOCAB],
+            "label_nodes": list(_INCYTR_LABEL_NODES),
+            "score_columns": list(_INCYTR_SCORE_COLS),
+            "columns": columns_manifest,
+            "raw_bytes": len(raw_bin),
+            "gzip_bytes": len(gz_bin),
+        }
+        print(
+            f"  ({donor}) incytr global_index: {n_idx:,} rows × "
+            f"{len(columns_manifest)} cols, {len(idx_gene_vocab):,} genes; "
+            f"{len(raw_bin)/1e6:.1f} MB raw -> {len(gz_bin)/1e6:.1f} MB gz",
+            flush=True,
+        )
+
     # T-cell contrasts are of the form "<day>_d2" — derive the day axis once
     # so the JS doesn't have to parse contrast strings at render time. "Disease"
     # in the unified-viewer JS vocabulary maps to the variable day for T-cell;
@@ -1198,6 +1314,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         "direction_flag_columns": list(dir_flag_cols),
         "path_metric_columns": list(extra_path_cols),
         "top_instances": top_instances,
+        "global_index": global_index,
         "gene_node_index": gene_node_index,
         "slice_index": {
             "schema_version": SCHEMA_VERSION,

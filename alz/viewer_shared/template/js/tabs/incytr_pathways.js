@@ -191,6 +191,33 @@ function _ipScoreCols() {
   const block = _ipBlock();
   return (block && block.score_columns) || _IP_SCORE_COLS_FALLBACK;
 }
+function _ipScoreMinAbs() {
+  const f = IncytrFilter.get();
+  const raw = (f.scoreMinAbs && typeof f.scoreMinAbs === "object") ? f.scoreMinAbs : {};
+  const allowed = new Set(_ipScoreCols());
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!allowed.has(key)) continue;
+    if (value == null || value === "") continue;
+    const n = Number(value);
+    if (isFinite(n) && n >= 0) out[key] = n;
+  }
+  return out;
+}
+function _ipScoreGatesPass(row, gates) {
+  const entries = Object.entries(gates || {});
+  if (!entries.length) return true;
+  for (const [key, minAbs] of entries) {
+    const v = Number(row[key]);
+    if (!(isFinite(v) && Math.abs(v) >= minAbs)) return false;
+  }
+  return true;
+}
+function _ipPdsSignPass(pds, sign) {
+  if (sign === "up") return Number(pds) > 0;
+  if (sign === "down") return Number(pds) < 0;
+  return true;
+}
 function _ipRowKey(r) {
   return `${r._sender || r.sender || ""}||${r._receiver || r.receiver || ""}||${r.Path || ""}||${r.contrast}`;
 }
@@ -266,6 +293,21 @@ function _ipMountMultiselect(hostId, label, options, key) {
   });
 }
 
+function _ipRenderScoreFilterControls() {
+  const host = document.getElementById("ip-score-filters");
+  if (!host) return;
+  const gates = _ipScoreMinAbs();
+  const cols = _ipScoreCols();
+  host.innerHTML = cols.map(col => {
+    const label = col === "SiK_score" ? "SiK" : col;
+    const v = gates[col];
+    return `<label class="ke-filter-label" title="Keep rows with |${_escapeHtml(col)}| greater than or equal to this value. Blank = no constraint.">${_escapeHtml(label)} |≥`
+      + `<input data-ip-score-filter="${_escapeHtml(col)}" type="number" step="0.05" min="0" `
+      + `value="${v == null ? "" : _escapeHtml(v)}" style="width:58px;"/>`
+      + `</label>`;
+  }).join("");
+}
+
 function _ipSyncControls(block) {
   const f = IncytrFilter.get();
 
@@ -284,6 +326,9 @@ function _ipSyncControls(block) {
   };
   set("ip-slider-p",   f.sliderP);
   set("ip-slider-pds", f.sliderPds);
+  const signSel = document.getElementById("ip-pds-sign");
+  if (signSel) signSel.value = (f.pdsSign === "up" || f.pdsSign === "down") ? f.pdsSign : "both";
+  _ipRenderScoreFilterControls();
   const searchEl = document.getElementById("ip-search");
   if (searchEl) searchEl.value = f.searchText || "";
   const trendSel = document.getElementById("ip-trend");
@@ -349,6 +394,10 @@ function _ipSanitizeFilterState(block) {
   if (!_ipHasTraj() && f.trend) patch.trend = "";
   if (!["top", "pair"].includes(f.ipMode || "top")) patch.ipMode = "top";
   if (![500, 1000, 5000].includes(Number(f.topLimit))) patch.topLimit = 500;
+  if (!["both", "up", "down"].includes(f.pdsSign || "both")) patch.pdsSign = "both";
+  const cleanScores = _ipScoreMinAbs();
+  const currentScores = (f.scoreMinAbs && typeof f.scoreMinAbs === "object") ? f.scoreMinAbs : {};
+  if (JSON.stringify(cleanScores) !== JSON.stringify(currentScores)) patch.scoreMinAbs = cleanScores;
   if (f.pair && (!_ipPairPresent(block, f.pair)
       || IncytrCelltypeQc.pairExcluded(f.pair.sender, f.pair.receiver, block))) {
     patch.pair = null;
@@ -367,6 +416,11 @@ function _ipActiveFilterSummary(f) {
   if ((f.receiverIn || []).length) parts.push(`Receiver: ${(f.receiverIn || []).join(", ")}`);
   if (f.sliderP != null) parts.push(`pvalue < ${f.sliderP}`);
   if (f.sliderPds != null) parts.push(`|PDS| >= ${f.sliderPds}`);
+  if (f.pdsSign === "up") parts.push("PDS > 0");
+  if (f.pdsSign === "down") parts.push("PDS < 0");
+  for (const [key, value] of Object.entries(_ipScoreMinAbs())) {
+    parts.push(`|${key}| >= ${value}`);
+  }
   if (f.searchText) parts.push(`search: ${f.searchText}`);
   if (f.trend) parts.push(`Trend: ${TrendFilter.label(f.trend)}`);
   if ((f.recurContrasts || []).length) parts.push(`Recur in: ${(f.recurContrasts || []).join(", ")}`);
@@ -404,6 +458,7 @@ function _ipGeneIndexMatches(block, pairs) {
   const idx = block && block.gene_node_index;
   const terms = _ipGeneSearchTerms(IncytrFilter.get("searchText"));
   if (!idx || !terms.length) return null;
+  if (Object.keys(_ipScoreMinAbs()).length) return null;
   const map = _ipGeneIndexMap(block);
   if (!map) return null;
   const targetGeneIds = new Set();
@@ -431,10 +486,12 @@ function _ipGeneIndexMatches(block, pairs) {
     if (IncytrCelltypeQc.pairExcluded(sender, receiver, block)) continue;
     const bestAbs = idx.best_abs_pds[i];
     const bestP = idx.best_pvalue[i];
+    const bestPds = idx.best_pds[i];
     if (f.sliderPds != null && !(bestAbs != null && Number(bestAbs) >= f.sliderPds))
       continue;
     if (f.sliderP != null && !(bestP != null && Number(bestP) < f.sliderP))
       continue;
+    if (!_ipPdsSignPass(bestPds, f.pdsSign || "both")) continue;
     out.push({
       gene: canonicalById[gid] || idx.genes[gid],
       role: idx.roles[idx.role_id[i]],
@@ -442,7 +499,7 @@ function _ipGeneIndexMatches(block, pairs) {
       receiver,
       n_rows: idx.n_rows[i] || 0,
       best_abs_pds: bestAbs,
-      best_pds: idx.best_pds[i],
+      best_pds: bestPds,
       best_pvalue: bestP,
     });
   }
@@ -874,6 +931,8 @@ function _ipFilterRows() {
   const recurIdx = hasRecur ? _ipRecurIndex() : null;
   const searchTokens  = (f.searchText || "")
     .toLowerCase().split(/\s+/).filter(Boolean);
+  const pdsSign = (f.pdsSign === "up" || f.pdsSign === "down") ? f.pdsSign : "both";
+  const scoreGates = _ipScoreMinAbs();
 
   // For recur filtering: if recur_index is absent, build a fast pathStr →
   // disease-set map from the already-loaded rows (applying the active
@@ -918,6 +977,8 @@ function _ipFilterRows() {
     }
     if (sP   != null && !(r.pvalue < sP))          continue;
     if (sPds != null && !(Math.abs(r.PDS || 0) >= sPds)) continue;
+    if (!_ipPdsSignPass(r.PDS, pdsSign)) continue;
+    if (!_ipScoreGatesPass(r, scoreGates)) continue;
 
     if (hasSearch) {
       const hay = r._hay || "";
@@ -1445,6 +1506,93 @@ function _ipHexAlpha(hex, alpha) {
   return `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},${alpha})`;
 }
 
+function _ipCsvEscape(v) {
+  if (v == null || (typeof v === "number" && !isFinite(v))) return "";
+  const s = String(v);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function _ipCsvColumns(rows) {
+  const scoreCols = _ipScoreCols();
+  const cols = [
+    "sender", "receiver", "Path", "Ligand", "Ligand_label",
+    "Receptor", "Receptor_label", "EM", "EM_label", "Target", "Target_label",
+    "contrast", "pvalue", "PDS", ...scoreCols,
+  ];
+  if (rows.some(r => r.rank != null)) cols.unshift("rank");
+  if (rows.some(r => r.traj_labels != null)) cols.push("traj_labels");
+  if (rows.some(r => r.sign_vec != null)) cols.push("sign_vec");
+  if (rows.some(r => r.low_signal_endpoint != null)) cols.push("low_signal_endpoint");
+  return cols;
+}
+
+function _ipRowsToCsv(rows) {
+  const normalized = rows.map(r => {
+    const out = Object.assign({}, r);
+    if (out.sender == null) out.sender = out._sender || "";
+    if (out.receiver == null) out.receiver = out._receiver || "";
+    if (out.Path == null)
+      out.Path = [out.Ligand, out.Receptor, out.EM, out.Target].join("|");
+    return out;
+  });
+  const cols = _ipCsvColumns(normalized);
+  const lines = [cols.map(_ipCsvEscape).join(",")];
+  for (const r of normalized) {
+    lines.push(cols.map(c => _ipCsvEscape(r[c])).join(","));
+  }
+  return lines.join("\n") + "\n";
+}
+
+function _ipDownloadCsv(rows, filename) {
+  const blob = new Blob([_ipRowsToCsv(rows)], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function _ipExportCurrentView() {
+  const block = _ipBlock();
+  if (!block) {
+    alert("No Incytr pathways block is available for export.");
+    return;
+  }
+  const mode = IncytrFilter.get("ipMode") || "top";
+  let rows = [];
+  if (mode === "top") {
+    if (!IncytrGlobalIndex.available()) {
+      alert("This payload does not package a complete global Incytr pathway index. Switch to Cell Type mode and select one pair to export its filtered rows.");
+      return;
+    }
+    await IncytrGlobalIndex.ensureLoaded();
+    const { indices } = IncytrGlobalIndex.filterRank(IncytrFilter.get(), { limit: "all" });
+    rows = indices.map(i => IncytrGlobalIndex.materialize(i)).filter(Boolean);
+  } else {
+    const pairs = _ipPairsInScope(block);
+    if (pairs.length !== 1) {
+      alert("Select exactly one sender/receiver pair in Cell Type mode before exporting.");
+      return;
+    }
+    const sig = _ipScopeSig(pairs);
+    if (_ipRuntime.loadedKey !== sig || !_ipRuntime.rows) {
+      await _ipEnsureShards();
+    }
+    if (_ipRuntime.loadError) {
+      alert(`InCytr pathway shard could not be loaded: ${_ipRuntime.loadError}`);
+      return;
+    }
+    rows = _ipFilterRows();
+  }
+  const ctx = (ViewerPayload.activeContext && ViewerPayload.activeContext()) || "context";
+  const stamp = new Date().toISOString().slice(0, 10);
+  const safeCtx = String(ctx).replace(/[^A-Za-z0-9_.-]+/g, "_");
+  _ipDownloadCsv(rows, `incytr_pathways_${safeCtx}_${mode}_filtered_${stamp}.csv`);
+}
+
 function wireIncytrPathways() {
   // Numeric sliders. State updates synchronously (so a Reset/sync read sees
   // the latest values); the heavy re-render is debounced so dragging a slider
@@ -1464,6 +1612,27 @@ function wireIncytrPathways() {
   };
   wireSlider("ip-slider-p",   "sliderP");
   wireSlider("ip-slider-pds", "sliderPds");
+
+  const signSel = document.getElementById("ip-pds-sign");
+  if (signSel) signSel.addEventListener("change", () => {
+    IncytrFilter.set({ pdsSign: signSel.value || "both" });
+    _ipResetPage();
+    _ipRenderTable();
+  });
+
+  const scoreHost = document.getElementById("ip-score-filters");
+  if (scoreHost) scoreHost.addEventListener("input", ev => {
+    const input = ev.target.closest("input[data-ip-score-filter]");
+    if (!input) return;
+    const next = Object.assign({}, _ipScoreMinAbs());
+    const key = input.dataset.ipScoreFilter;
+    const raw = input.value === "" ? null : parseFloat(input.value);
+    if (raw == null || !isFinite(raw)) delete next[key];
+    else next[key] = raw;
+    IncytrFilter.set({ scoreMinAbs: next });
+    _ipResetPage();
+    _ipRenderTableDebounced();
+  });
 
   // Search box — substring AND across Path/nodes/sender/receiver/contrast.
   // Debounced for the same reason as sliders.
@@ -1525,6 +1694,19 @@ function wireIncytrPathways() {
     _ipInvalidateScope();
     _ipResetPage();
     _ipEnsureShards();
+  });
+
+  const exportBtn = document.getElementById("ip-export");
+  if (exportBtn) exportBtn.addEventListener("click", async () => {
+    const prev = exportBtn.textContent;
+    exportBtn.disabled = true;
+    exportBtn.textContent = "Exporting...";
+    try {
+      await _ipExportCurrentView();
+    } finally {
+      exportBtn.disabled = false;
+      exportBtn.textContent = prev || "Export CSV";
+    }
   });
 }
 

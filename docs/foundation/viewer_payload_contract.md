@@ -256,6 +256,40 @@ Incytr pathway payloads should expose context-specific shard indexes:
 The frontend should never hard-code donor prefixes or mouse-only filename templates. It should read
 `filename_template` and the active context's `present` list.
 
+Context-specific Incytr blocks may also expose a complete `global_index` manifest for Top-overall
+mode:
+
+```json
+{
+  "global_index": {
+    "url": "edge_slices/incytr_pathways/incytr_index.bin.gz",
+    "nrows": 4480000,
+    "rank_by": "abs(PDS)",
+    "byteorder": "little",
+    "sender_vocab": [],
+    "receiver_vocab": [],
+    "contrast_vocab": [],
+    "gene_vocab": [],
+    "traj_label_vocab": [],
+    "label_states": ["", "DEG", "prG"],
+    "label_nodes": ["Ligand", "Receptor", "EM", "Target"],
+    "score_columns": ["TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "SiK_score"],
+    "columns": [
+      {"name": "PDS", "type": "f4", "bytes": 17920000},
+      {"name": "TPDS", "type": "u2", "bytes": 8960000}
+    ]
+  }
+}
+```
+
+`global_index` is the complete row universe for the active context, pre-ranked by absolute PDS.
+The viewer uses it for Top-overall filtering, sorting, and CSV export. It must include every score
+column advertised in `score_columns` so shared controls can apply individual `|TPDS|`, `|PPDS|`,
+`|PhPDS_ps|`, `|PhPDS_py|`, and `|SiK_score|` floors without loading sender/receiver shards. T-cell
+payloads use donor-scoped index files such as
+`edge_slices/incytr_pathways/donor1__incytr_index.bin.gz`; the manifest URL is context-local and
+must be read rather than constructed.
+
 Song/AD Incytr payloads may also include sparse-cell QC metadata used for interpretation-only
 sensitivity views:
 

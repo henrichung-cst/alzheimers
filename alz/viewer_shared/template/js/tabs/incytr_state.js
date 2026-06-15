@@ -1,7 +1,11 @@
 // ---------------------------------------------------------------------------
 // IncytrFilter — shared filter state for the Incytr Heatmap + Pathways tabs.
 // Mirrors the KinaseFilter contract: localStorage-backed, get(k) / set(patch)
-// / reset() / subscribe(fn). Persistence key: incytrFilter.v9.
+// / reset() / subscribe(fn). Persistence key: incytrFilter.v10.
+//
+// v10:
+//   pdsSign        — "both" | "up" | "down" pathway PDS direction filter.
+//   scoreMinAbs    — per-score-column absolute-value floors, e.g. {TPDS: 0.2}.
 //
 // v9:
 //   trend          — canonical TrendFilter value applied to Incytr PDS
@@ -13,7 +17,7 @@
 // ---------------------------------------------------------------------------
 
 window.IncytrFilter = (function() {
-  const _KEY = "incytrFilter.v9";
+  const _KEY = "incytrFilter.v10";
   const _defaults = {
     // Heatmap projection — timeline contrast scrubber, ordinal selects, and
     // pvalue + |PDS| gates (snapped to heatmap_counts.thresholds /
@@ -43,6 +47,8 @@ window.IncytrFilter = (function() {
     receiverIn:     [],            // [] = any
     sliderP:        null,
     sliderPds:      0.5,
+    pdsSign:        "both",
+    scoreMinAbs:    {},
     searchText:     "",
     pairPage:       0,
     sortKey:        "rank",

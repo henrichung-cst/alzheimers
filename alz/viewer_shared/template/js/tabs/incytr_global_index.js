@@ -114,7 +114,7 @@ window.IncytrGlobalIndex = (function() {
   // Resolve filter state -> integer predicates, then single-scan the universe.
   // Returns { indices, total }: indices = capped+sorted row ids (<= topLimit),
   // total = full count of rows passing the filters (the true universe count).
-  function filterRank(f) {
+  function filterRank(f, opts = {}) {
     const d = _data;
     if (!d) return { indices: [], total: 0 };
     const { cols, gi, lc, rank } = d;
@@ -123,6 +123,17 @@ window.IncytrGlobalIndex = (function() {
     // --- effect-size + pvalue gates -------------------------------------
     const sPds = (f.sliderPds != null) ? Number(f.sliderPds) : null;
     const sP = (f.sliderP != null) ? Number(f.sliderP) : null;
+    const pdsSign = (f.pdsSign === "up" || f.pdsSign === "down") ? f.pdsSign : "both";
+    const scoreGates = [];
+    const scoreMinAbs = (f.scoreMinAbs && typeof f.scoreMinAbs === "object")
+      ? f.scoreMinAbs : {};
+    for (const key of gi.score_columns || []) {
+      const raw = scoreMinAbs[key];
+      if (raw == null || raw === "") continue;
+      const minAbs = Number(raw);
+      if (!isFinite(minAbs) || minAbs < 0) continue;
+      if (cols[key]) scoreGates.push({ col: cols[key], minAbs });
+    }
 
     // --- disease / timepoint -> allowed contrastId ----------------------
     const diseaseSet = new Set(f.disease || []);
@@ -133,6 +144,12 @@ window.IncytrGlobalIndex = (function() {
       contrastOk[c] = ((diseaseSet.size === 0 || diseaseSet.has(d.contrastDis[c]))
         && (timeSet.size === 0 || timeSet.has(d.contrastTp[c]))) ? 1 : 0;
     }
+    const senderSet = new Set(f.senderIn || []);
+    const receiverSet = new Set(f.receiverIn || []);
+    const senderOk = senderSet.size ? new Uint8Array(gi.sender_vocab.length) : null;
+    const receiverOk = receiverSet.size ? new Uint8Array(gi.receiver_vocab.length) : null;
+    if (senderOk) gi.sender_vocab.forEach((name, i) => { if (senderSet.has(name)) senderOk[i] = 1; });
+    if (receiverOk) gi.receiver_vocab.forEach((name, i) => { if (receiverSet.has(name)) receiverOk[i] = 1; });
 
     // --- sparse-cell QC: exclude low-signal sender/receiver endpoints ----
     let lowSender = null, lowReceiver = null;
@@ -172,10 +189,22 @@ window.IncytrGlobalIndex = (function() {
     let m = 0;
     for (let i = 0; i < N; i++) {
       if (sPds != null && !(Math.abs(PDS[i]) >= sPds)) continue;
+      if (pdsSign === "up" && !(PDS[i] > 0)) continue;
+      if (pdsSign === "down" && !(PDS[i] < 0)) continue;
       if (sP != null && !(PV[i] < sP)) continue;          // NaN pvalue excluded
       if (!contrastOk[cid[i]]) continue;
+      if (senderOk && !senderOk[sid[i]]) continue;
+      if (receiverOk && !receiverOk[rid[i]]) continue;
       if (lowSender && (lowSender[sid[i]] || lowReceiver[rid[i]])) continue;
       if (trendBit >= 0 && !((trj[i] >> trendBit) & 1)) continue;
+      if (scoreGates.length) {
+        let ok = true;
+        for (let g = 0; g < scoreGates.length; g++) {
+          const val = _f16(scoreGates[g].col[i]);
+          if (!(Math.abs(val) >= scoreGates[g].minAbs)) { ok = false; break; }
+        }
+        if (!ok) continue;
+      }
       if (tokMasks.length) {
         let ok = true;
         for (let k = 0; k < tokMasks.length; k++) {
@@ -192,8 +221,10 @@ window.IncytrGlobalIndex = (function() {
     const total = m;
 
     // --- order + cap -----------------------------------------------------
-    const topLimit = [500, 1000, 5000].includes(Number(f.topLimit))
-      ? Number(f.topLimit) : 500;
+    const topLimit = opts.limit === "all"
+      ? total
+      : ([500, 1000, 5000].includes(Number(f.topLimit))
+          ? Number(f.topLimit) : 500);
     const key = f.sortKey || "rank";
     const dir = f.sortDir || 1;
 

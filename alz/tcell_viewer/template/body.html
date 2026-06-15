@@ -206,6 +206,14 @@
         <label class="ke-filter-label" title="Keep rows with |PDS| &gt;= threshold. Blank = no constraint.">|PDS| ≥
           <input id="ip-slider-pds" type="number" step="0.05" min="0" style="width:64px;"/>
         </label>
+        <label class="ke-filter-label" title="Filter by the sign of the composite PDS. Up keeps positive PDS; Down keeps negative PDS.">PDS
+          <select id="ip-pds-sign" aria-label="Incytr PDS direction">
+            <option value="both">Both</option>
+            <option value="up">Up</option>
+            <option value="down">Down</option>
+          </select>
+        </label>
+        <span id="ip-score-filters"></span>
         <label class="ke-filter-label" title="Substring search across Ligand / Receptor / EM / Target / Path / Sender / Receiver / contrast. Case-insensitive. Space-separated tokens are AND'd.">search
           <input id="ip-search" type="search" placeholder="gene or path…" style="width:140px;"/>
         </label>
@@ -215,6 +223,7 @@
             <option value="exclude">Exclude median n &lt;= 3</option>
           </select>
         </label>
+        <button id="ip-export" class="ke-filter-reset" title="Export every row that matches the active Incytr Pathways filters">Export CSV</button>
         <button id="ip-reset" class="ke-filter-reset" title="Reset all pathway filters">Reset</button>
         <span class="muted" id="ip-count"></span>
       </div>

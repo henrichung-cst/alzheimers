@@ -141,6 +141,27 @@ inputs:
 - T-cell-specific copy warning that per-animal SigProb p-values are unreliable and `|PDS|` is the
   primary Incytr gate.
 
+### Shared Incytr Pathways Controls
+
+The Incytr Pathways tab is shared between the unified and T-cell viewers through
+`viewer_shared/template/js/tabs/incytr_pathways.js` and
+`viewer_shared/template/js/tabs/incytr_global_index.js`. Viewer-specific `body.html` files may
+provide the toolbar mount points, but filtering/export behavior should stay in shared code.
+
+Supported shared filters:
+
+- composite PDS magnitude: `|PDS| >= threshold`;
+- composite PDS direction: both, positive/up (`PDS > 0`), or negative/down (`PDS < 0`);
+- individual subscore magnitude floors from `block.score_columns`, currently `|TPDS|`, `|PPDS|`,
+  `|PhPDS_ps|`, `|PhPDS_py|`, and `|SiK_score|`;
+- existing disease/timepoint, sender/receiver, recurrence, trend, sparse-endpoint, and text search
+  filters.
+
+`Export CSV` must export the full current filtered result set, not only the visible page. In Top
+overall mode this requires `block.global_index` for the active context. In Cell Type mode it exports
+the fully filtered loaded sender/receiver shard. Do not reintroduce a build-time top-N payload cap as
+the export source.
+
 ## Consolidation Candidates
 
 These modules are parallel implementations and should be consolidated incrementally behind shared
