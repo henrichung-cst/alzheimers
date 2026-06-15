@@ -115,6 +115,62 @@ function _f5CmpAttr(a, b) {
   return (_f5Num(b.wmb_specificity) || -1) - (_f5Num(a.wmb_specificity) || -1);
 }
 
+const F5_ATTR_COLS = [
+  {key: "cell_type", label: "Cell type", type: "str", group: "id",
+   title: "Levy T5 cluster from the canonical mouse kinase attribution evidence table."},
+  {key: "confidence_tier", label: "Conf", type: "conf", group: "attr",
+   title: "Canonical mouse confidence tier. Hover the chip for the evidence basis."},
+  {key: "song_specificity", label: "Song", type: "num", group: "attr",
+   title: "Song mouse location evidence, shown as fold over the even-split baseline (1/31)."},
+  {key: "wmb_tier", label: "WMB tier", type: "num", group: "attr",
+   title: "WMB cross-check tier as a multiple of uniform expression across WMB classes."},
+  {key: "sea_ad_lfc", label: "SEA-AD LFC", type: "num", group: "attr",
+   title: "Human SEA-AD AD-vs-control log2 fold change mapped to this cell type where available."},
+  {key: "fivexfad_nes", label: "5xFAD NES", type: "num", group: "activity",
+   title: "Bulk 5xFAD kinase MEA NES for the selected tissue and age, broadcast to each attribution row."},
+  {key: "fivexfad_fdr", label: "5xFAD FDR", type: "num", group: "activity",
+   title: "Bulk 5xFAD kinase MEA FDR for the selected tissue and age, broadcast to each attribution row."},
+];
+
+function _f5AttrCmp(a, b, key, type, asc) {
+  let va, vb;
+  if (type === "num") {
+    va = a[key]; vb = b[key];
+    va = (va == null || !isFinite(va)) ? null : Number(va);
+    vb = (vb == null || !isFinite(vb)) ? null : Number(vb);
+  } else if (type === "conf") {
+    va = _f5ConfRank(a[key]);
+    vb = _f5ConfRank(b[key]);
+  } else {
+    va = (a[key] || "").toString();
+    vb = (b[key] || "").toString();
+  }
+  if (va == null && vb == null) return 0;
+  if (va == null) return 1;
+  if (vb == null) return -1;
+  if (typeof va === "string") return asc ? va.localeCompare(vb) : vb.localeCompare(va);
+  return asc ? (va - vb) : (vb - va);
+}
+
+function _f5SortAttrRows(rows, body) {
+  const sortKey = body.dataset.f5AttrSortKey || "confidence_tier";
+  const sortAsc = body.dataset.f5AttrSortAsc === "1";
+  const sortCol = F5_ATTR_COLS.find(c => c.key === sortKey)
+    || F5_ATTR_COLS.find(c => c.key === "confidence_tier")
+    || F5_ATTR_COLS[0];
+  rows.sort((a, b) => _f5AttrCmp(a, b, sortCol.key, sortCol.type, sortAsc));
+  if (sortCol.key === "confidence_tier") {
+    rows.sort((a, b) => {
+      const primary = _f5AttrCmp(a, b, sortCol.key, sortCol.type, sortAsc);
+      if (primary !== 0) return primary;
+      return (_f5SongTier(b) - _f5SongTier(a)) ||
+             (_f5WmbTier(b) - _f5WmbTier(a)) ||
+             ((_f5Num(b.song_specificity) || -Infinity) - (_f5Num(a.song_specificity) || -Infinity));
+    });
+  }
+  return {sortCol, sortAsc};
+}
+
 function _f5ScopedAttrRows(group) {
   const rows = _f5AttrRows(group.kinase).filter(r => {
     if (_F5State.celltype && r.cell_type !== _F5State.celltype) return false;
@@ -261,13 +317,6 @@ function _f5AgeScope() {
   return _F5State.age ? [Number(_F5State.age)] : _F5_AGES.slice();
 }
 
-function _f5StatusFor(group, age) {
-  const row = group.rows.get(Number(age));
-  if (row && row.contrast_status) return row.contrast_status;
-  const qc = _F5QcByKey && _F5QcByKey.get(_f5QcKey(group.tissue, group.track, age));
-  return qc ? (qc.contrast_status || "") : "";
-}
-
 function _f5Metric(group, ages) {
   let peakAbsNes = null;
   let sigCount = 0;
@@ -298,7 +347,7 @@ function _f5GroupPasses(group, ages, metric) {
   }
   if (_F5State.age) {
     const age = Number(_F5State.age);
-    if (!group.rows.has(age) && !_f5StatusFor(group, age)) return false;
+    if (!group.rows.has(age)) return false;
   }
   return true;
 }
@@ -354,9 +403,8 @@ function _f5MaxAbsVisible(rows) {
 
 function _f5ProfileCell(group, age, maxAbs) {
   const row = group.rows.get(Number(age));
-  const status = _f5StatusFor(group, age);
   if (!row) {
-    const title = `${age}mo: ${status || "no MEA row"}`;
+    const title = `${age}mo: no MEA row`;
     return `<div class="npc" title="${_f5Esc(title)}"></div>`;
   }
   const nes = _f5Num(row.NES);
@@ -368,8 +416,7 @@ function _f5ProfileCell(group, age, maxAbs) {
     const rgb = nes >= 0 ? [197, 48, 48] : [43, 108, 176];
     bg = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${(0.15 + 0.85 * a).toFixed(3)})`;
   }
-  const contrastStatus = status ? `, contrast status ${status}` : "";
-  const title = `${age}mo: NES ${_f5Fmt(nes, 2)}, FDR ${q == null ? "—" : q.toExponential(1)}${sig ? " (sig)" : ""}${contrastStatus}`;
+  const title = `${age}mo: NES ${_f5Fmt(nes, 2)}, FDR ${q == null ? "—" : q.toExponential(1)}${sig ? " (sig)" : ""}`;
   return `<div class="npc${sig ? " sig" : ""}" style="background:${bg};" title="${_f5Esc(title)}"></div>`;
 }
 
@@ -837,7 +884,7 @@ function _f5RenderRunningEnrichment(hostId, group, age) {
         y: hits.map(r => r.running_es),
         marker: {color: "#1f77b4", size: 5, opacity: 0.9},
         name: "substrate hit",
-        text: hits.map(r => `rank ${r.rank}<br>${_f5Esc(r.gene_symbol || "")} · ${_f5Esc(r.motif || "")}<br>clipped LFC ${_f5Fmt(r.clipped_lfc, 3)}<br>running ES ${_f5Fmt(r.running_es, 3)}`),
+        text: hits.map(r => `rank ${r.rank}<br>${_f5Esc(_f5SiteLabel(r))} · ${_f5Esc(r.motif || "")}<br>clipped LFC ${_f5Fmt(r.clipped_lfc, 3)}<br>running ES ${_f5Fmt(r.running_es, 3)}`),
         hovertemplate: "%{text}<extra></extra>",
       },
       {
@@ -902,7 +949,6 @@ function _f5RenderScore(body, group) {
           <dt>p-value</dt><dd>${_f5Fmt(row && row.p_value, 4)}</dd>
           <dt>Substrates tested</dt><dd>${_f5Esc(_f5SubstrateText(row))}</dd>
           <dt>Samples</dt><dd>WT ${row && row.n_wt != null ? row.n_wt : "—"} · TG ${row && row.n_tg != null ? row.n_tg : "—"}</dd>
-          <dt>Contrast status</dt><dd>${_f5Esc(_f5StatusFor(group, age) || "—")}</dd>
         </dl>
       </div>
     </section>
@@ -931,9 +977,33 @@ function _f5SmallTable(rows, cols) {
   const body = rows.map(r => `<tr>${cols.map(c => {
     const v = r[c.key];
     const txt = c.fmt ? c.fmt(v, r) : (v == null ? "" : v);
-    return `<td>${_f5Esc(txt)}</td>`;
+    return `<td>${c.html ? txt : _f5Esc(txt)}</td>`;
   }).join("")}</tr>`).join("");
   return `<div class="kh-audit-tablewrap"><table class="data-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function _f5SiteLabel(row) {
+  if (!row) return "";
+  const explicit = String(row.site_label || "").trim();
+  if (explicit) return explicit;
+  const gene = String(row.gene_symbol || "").trim();
+  const residue = String(row.residue_type || "").trim().toUpperCase();
+  const pos = String(row.site_position || "").trim();
+  if (gene && residue && pos) return `${gene}_${residue}${pos}`;
+  const sid = String(row.site_id || "").trim();
+  const match = sid.match(/_([STY])(\d+)(?:_[^_\s]+)*$/i);
+  if (gene && match) return `${gene}_${match[1].toUpperCase()}${match[2]}`;
+  const symbol = sid.match(/gene_symbol:([A-Za-z0-9_.-]+)/);
+  if (symbol && match) return `${symbol[1]}_${match[1].toUpperCase()}${match[2]}`;
+  return sid;
+}
+
+function _f5SiteCell(_value, row) {
+  const label = _f5SiteLabel(row);
+  const sid = String(row && row.site_id != null ? row.site_id : "");
+  return sid && sid !== label
+    ? `<span title="${_f5Esc(sid)}">${_f5Esc(label)}</span>`
+    : _f5Esc(label);
 }
 
 function _f5FmtShort(v) {
@@ -1011,7 +1081,7 @@ function _f5RenderPrep(body, group) {
         <h4>Step 2 · Winsorization</h4>
         <p class="kinase-stage-note">Centered LFCs clipped at the contrast bounds so individual sites cannot dominate the prerank.</p>
         ${_f5SmallTable(winRows, [
-          {key: "site_id", label: "Site"},
+          {key: "site_id", label: "Site", fmt: _f5SiteCell, html: true},
           {key: "gene_symbol", label: "Gene"},
           {key: "original_lfc", label: "Original LFC", fmt: _f5FmtShort},
           {key: "clipped_lfc", label: "Clipped LFC", fmt: _f5FmtShort},
@@ -1024,7 +1094,7 @@ function _f5RenderPrep(body, group) {
         <p class="kinase-stage-note">One row per site whose motif is in this kinase's substrate set and present in the contrast prerank. Rank, centered LFC, clipped LFC, and leading-edge status mirror the inputs used to score the kinase.</p>
         ${_f5SmallTable(prepRows, [
           {key: "rank_in_contrast", label: "Rank"},
-          {key: "site_id", label: "Site"},
+          {key: "site_id", label: "Site", fmt: _f5SiteCell, html: true},
           {key: "gene_symbol", label: "Gene"},
           {key: "motif", label: "Motif"},
           {key: "kl_percentile", label: "kl_%", fmt: v => _f5Fmt(v, 1)},
@@ -1040,7 +1110,7 @@ function _f5RenderPrep(body, group) {
         <p class="kinase-stage-note">Substrate-site contrast rows for this kinase, restricted to the same prepared input universe shown above.</p>
         ${_f5SmallTable(siteRows, [
           {key: "rank_in_contrast", label: "Rank"},
-          {key: "site_id", label: "Site"},
+          {key: "site_id", label: "Site", fmt: _f5SiteCell, html: true},
           {key: "gene_symbol", label: "Gene"},
           {key: "motif", label: "Motif"},
           {key: "kl_percentile", label: "kl_%", fmt: v => _f5Fmt(v, 1)},
@@ -1066,7 +1136,7 @@ function _f5RenderOls(body, group) {
         <p class="kinase-stage-note">Substrate-site rows for this kinase and contrast. LFC, p-value, FDR, and group counts come from the 5xFAD site-level OLS output used upstream of MEA.</p>
         ${_f5SmallTable(rows, [
           {key: "rank_in_contrast", label: "Rank"},
-          {key: "site_id", label: "Site"},
+          {key: "site_id", label: "Site", fmt: _f5SiteCell, html: true},
           {key: "gene_symbol", label: "Gene"},
           {key: "motif", label: "Motif"},
           {key: "lfc", label: "LFC", fmt: _f5FmtShort},
@@ -1097,7 +1167,7 @@ function _f5RenderTrace(body, group) {
         <h4>Measurement Trace <span class="muted">(${age}mo TG vs WT)</span></h4>
         <p class="kinase-stage-note">Sample-level receipt for leading substrate sites in the selected contrast. <code>kl_%</code> is the kinase-library substrate percentile; higher values indicate stronger kinase-library motif support.</p>
         ${_f5SmallTable(rows, [
-          {key: "site_id", label: "Site"},
+          {key: "site_id", label: "Site", fmt: _f5SiteCell, html: true},
           {key: "gene_symbol", label: "Gene"},
           {key: "motif", label: "Motif"},
           {key: "kl_percentile", label: "kl_%", fmt: v => _f5Fmt(v, 1)},
@@ -1119,45 +1189,150 @@ function _f5RenderAttribution(body, group) {
   const row = _f5SelectedRow(group);
   const nes = _f5Num(row && row.NES);
   const fdr = _f5Num(row && row.FDR);
-  const rows = _f5AttrRows(group.kinase).slice().sort(_f5CmpAttr);
+  const rows = _f5AttrRows(group.kinase).map(r => Object.assign({}, r, {
+    wmb_tier: _f5WmbTier(r),
+    fivexfad_nes: nes,
+    fivexfad_fdr: fdr,
+  }));
+  const {sortCol, sortAsc} = _f5SortAttrRows(rows, body);
+  const showAllId = "f5-attr-show-all";
+  const showAll = body.dataset.f5AttrShowAll === "1";
+  const visibleRows = showAll
+    ? rows
+    : rows.filter(r => ["very_high", "high", "moderate"].includes(r.confidence_tier || ""));
+  const hiddenCount = rows.length - visibleRows.length;
   const anchor = nes == null
     ? '<span class="attr-bulk-ns">NES n/a</span>'
     : (nes > 0
         ? `<span class="attr-bulk-up">↑ NES = +${nes.toFixed(2)}</span>`
         : `<span class="attr-bulk-down">↓ NES = ${nes.toFixed(2)}</span>`);
-  const tableRows = rows.map(r => {
+  const fdrText = fdr == null ? "FDR n/a" : `FDR = ${fdr.toFixed(3)}${fdr < Store.state.filters.fdr ? "" : " (n.s.)"}`;
+  const headCells = F5_ATTR_COLS.map(c => {
+    const arrow = c.key === sortCol.key ? (sortAsc ? " ▲" : " ▼") : "";
+    const title = c.title ? ` title="${_f5Esc(c.title)}"` : "";
+    return `<th class="attr-verdict-th" data-sort-key="${_f5Esc(c.key)}"${title}>${_f5Esc(c.label)}${arrow}</th>`;
+  }).join("");
+  const groupCounts = F5_ATTR_COLS.reduce((acc, c) => {
+    acc[c.group] = (acc[c.group] || 0) + 1;
+    return acc;
+  }, {});
+  const superHead =
+    `<tr class="attr-verdict-supergroup">` +
+      `<th class="attr-supergroup-spacer" colspan="${groupCounts.id || 0}"></th>` +
+      `<th class="attr-supergroup-attr" colspan="${groupCounts.attr || 0}" title="Cell-type attribution evidence from Song, WMB, and SEA-AD reference layers.">Attribution</th>` +
+      `<th class="attr-supergroup-decomp" colspan="${groupCounts.activity || 0}" title="Bulk 5xFAD kinase activity for the selected tissue and age.">5xFAD kinase activity</th>` +
+    `</tr>`;
+  const num = (v, d=3) => {
+    const n = _f5Num(v);
+    return n == null ? "" : n.toFixed(d);
+  };
+  const tbody = visibleRows.map((r, i) => {
     const conf = r.confidence_tier || "none";
-    const song = _f5Num(r.song_specificity);
-    const wmb = _f5Num(r.wmb_specificity);
-    return {
-      cell_type: r.cell_type || "",
-      confidence_tier: conf,
-      confidence_basis: r.confidence_basis || "",
-      song: song == null ? "" : `${(song / _MS_UNIFORM).toFixed(1)}x`,
-      song_location_tier: r.song_location_tier || "",
-      wmb: wmb == null ? "" : `${_f5WmbTier(r) ? "≥" + _f5WmbTier(r) + "x" : "—"}`,
-      wmb_specificity: wmb,
-      wmb_crosscheck_tier: r.wmb_crosscheck_tier || "",
-      human_location_tier: r.human_location_tier || "",
-      sea_ad_lfc: r.sea_ad_lfc,
-      confidence_chip: conf,
-    };
-  });
+    const confChip = `<span class="${_attrConfidenceClass(conf)}" title="${_f5Esc(r.confidence_basis || conf)}">${_f5Esc(conf.replace("_", " "))}</span>`;
+    const songCell = typeof _msTierBadge === "function"
+      ? _msTierBadge(_f5SongTier(r), _f5Num(r.song_specificity), r.song_top_cluster || "", _f5Num(r.song_tau))
+      : '<span class="muted">—</span>';
+    const wmbCell = typeof _wmbTierBadge === "function"
+      ? _wmbTierBadge(_f5WmbTier(r))
+      : '<span class="muted">—</span>';
+    const seaCell = _f5Num(r.sea_ad_lfc) == null
+      ? `<td class="attr-num attr-empty">—</td>`
+      : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(r.sea_ad_lfc)}">${num(r.sea_ad_lfc, 3)}</td>`;
+    const nesCell = nes == null
+      ? `<td class="attr-num attr-empty">—</td>`
+      : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(nes)}">${num(nes, 2)}</td>`;
+    const fdrCell = fdr == null
+      ? `<td class="attr-num attr-empty">—</td>`
+      : `<td class="attr-num"${fdr < Store.state.filters.fdr ? ' style="font-weight:600"' : ""}>${num(fdr, 3)}</td>`;
+    return `<tr data-cell-type="${_f5Esc(r.cell_type || "")}" class="attr-verdict-row${i === 0 ? " attr-verdict-selected" : ""}">` +
+      `<td class="attr-celltype">${_f5Esc(r.cell_type || "")}</td>` +
+      `<td>${confChip}</td>` +
+      `<td class="attr-num">${songCell}</td>` +
+      `<td class="attr-num">${wmbCell}</td>` +
+      seaCell +
+      nesCell +
+      fdrCell +
+      `</tr>`;
+  }).join("");
   body.innerHTML = `
-    <section class="audit-panel audit-wide">
-      <h4>Verdict across cell types <span class="muted">for ${_f5Esc(group.kinase)} / ${age}mo TG vs WT</span></h4>
-      <div class="attr-bulk-anchor">Bulk 5xFAD kinase activity: <span class="attr-bulk-pill">${anchor} · ${fdr == null ? "FDR n/a" : "FDR = " + fdr.toFixed(3)}</span>
-        <span class="muted">— 5xFAD NES is broadcast to each mouse location row; no 5xFAD cell-type decomposition is currently packaged.</span></div>
-      ${_f5SmallTable(tableRows, [
-        {key: "cell_type", label: "Cell type"},
-        {key: "confidence_tier", label: "Conf", fmt: v => String(v || "").replace("_", " ")},
-        {key: "confidence_basis", label: "Basis"},
-        {key: "song", label: "Song"},
-        {key: "song_location_tier", label: "Song tier"},
-        {key: "wmb", label: "WMB"},
-        {key: "wmb_crosscheck_tier", label: "WMB tier"},
-        {key: "human_location_tier", label: "Human tier"},
-        {key: "sea_ad_lfc", label: "SEA-AD LFC", fmt: _f5FmtShort},
-      ])}
-    </section>`;
+    <p class="kinase-stage-note">Cell-type attribution of <strong>${_f5Esc(group.gene_symbol || group.kinase)}</strong> uses the same canonical mouse reference evidence shown in the Song tab. The 5xFAD bulk kinase activity is shown as the activity anchor for the selected tissue and age.</p>
+    <div class="attr-bulk-anchor">Bulk MEA anchor for TG_vs_WT_${age}mo:
+      <span class="attr-bulk-pill" title="Positive NES = kinase substrates concentrated among sites higher in 5xFAD TG than WT.">${anchor} · ${fdrText}</span>
+      <span class="muted">— bulk 5xFAD activity is broadcast to each attribution row because no 5xFAD cell-type decomposition artifact is currently packaged.</span>
+    </div>
+    <table class="attr-verdict-table"><thead>${superHead}<tr>${headCells}</tr></thead><tbody>${tbody}</tbody></table>
+    ${hiddenCount > 0
+      ? `<div class="attr-verdict-toggle"><label><input type="checkbox" id="${showAllId}"${showAll ? " checked" : ""}> Show all Levy-t5 clusters <span class="muted">(${hiddenCount} hidden — low/none confidence)</span></label></div>`
+      : ""}
+    <details class="attr-explainer"><summary>How to read attribution confidence</summary>
+      <div class="attr-explainer-body">
+        <p>Confidence is a categorical evidence label, not a continuous score.</p>
+        <table class="attr-explainer-table" style="margin-bottom:8px;">
+          <thead><tr><th>Source</th><th>What it tells you</th></tr></thead><tbody>
+            <tr><td><strong>Song</strong></td><td>Mouse within-cohort location evidence for the kinase transcript across Levy T5 clusters.</td></tr>
+            <tr><td><strong>WMB</strong></td><td>Healthy mouse reference expression used as an independent location cross-check.</td></tr>
+            <tr><td><strong>SEA-AD</strong></td><td>Human Alzheimer's disease direction where a mapped cell-type effect is available.</td></tr>
+            <tr><td><strong>5xFAD NES / FDR</strong></td><td>Bulk 5xFAD kinase activity for the selected tissue and age; it is not a cell-type decomposition.</td></tr>
+          </tbody></table>
+      </div>
+    </details>
+    <div id="f5-attr-drawer"></div>`;
+  body.querySelectorAll("tr.attr-verdict-row").forEach(tr => tr.addEventListener("click", () => {
+    body.querySelectorAll("tr.attr-verdict-row").forEach(r => r.classList.remove("attr-verdict-selected"));
+    tr.classList.add("attr-verdict-selected");
+    const selected = rows.find(r => String(r.cell_type || "") === tr.dataset.cellType) || null;
+    _f5RenderAttributionDrawer("f5-attr-drawer", group, selected);
+  }));
+  body.querySelectorAll("th.attr-verdict-th").forEach(th => th.addEventListener("click", () => {
+    const k = th.dataset.sortKey;
+    if (body.dataset.f5AttrSortKey === k) {
+      body.dataset.f5AttrSortAsc = body.dataset.f5AttrSortAsc === "1" ? "0" : "1";
+    } else {
+      body.dataset.f5AttrSortKey = k;
+      const col = F5_ATTR_COLS.find(c => c.key === k);
+      body.dataset.f5AttrSortAsc = (col && col.type === "str") ? "1" : "0";
+    }
+    _f5RenderAttribution(body, group);
+  }));
+  const toggle = document.getElementById(showAllId);
+  if (toggle) toggle.addEventListener("change", () => {
+    body.dataset.f5AttrShowAll = toggle.checked ? "1" : "0";
+    _f5RenderAttribution(body, group);
+  });
+  if (visibleRows[0]) _f5RenderAttributionDrawer("f5-attr-drawer", group, visibleRows[0]);
+}
+
+function _f5RenderAttributionDrawer(hostId, group, row) {
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  if (!row) {
+    host.innerHTML = '<div class="muted" style="padding:1em;">No attribution row selected.</div>';
+    return;
+  }
+  const gene = group.gene_symbol || row.gene_symbol || group.kinase || "";
+  const song = _f5Num(row.song_specificity);
+  const songTxt = song == null ? "—" : `${(song / _MS_UNIFORM).toFixed(1)}x even-split`;
+  const wmb = _f5Num(row.wmb_specificity);
+  const wmbTxt = wmb == null ? "—" : wmb.toFixed(3);
+  const sea = _f5Num(row.sea_ad_lfc);
+  host.innerHTML =
+    `<div class="attr-drawer-header"><strong>${_f5Esc(row.cell_type || "")}</strong>` +
+      ` &middot; <span class="muted">${_f5Esc(gene)} / ${_f5Esc(group.tissue || "")}</span>` +
+      ` &middot; ${typeof _allenABALink === "function" ? _allenABALink(gene) : ""}</div>` +
+    `<div class="attr-drawer-grid">` +
+      `<section class="attr-section"><h5>Mouse location evidence</h5>` +
+        `<p class="muted attr-caption">Canonical Song/WMB attribution evidence reused by the mouse kinase viewers.</p>` +
+        `<div class="kh-audit-tablewrap"><table class="data-table"><tbody>` +
+          `<tr><th>Confidence</th><td><span class="${_attrConfidenceClass(row.confidence_tier || "none")}" title="${_f5Esc(row.confidence_basis || "")}">${_f5Esc(String(row.confidence_tier || "none").replace("_", " "))}</span></td></tr>` +
+          `<tr><th>Song</th><td>${typeof _msTierBadge === "function" ? _msTierBadge(_f5SongTier(row), song, row.song_top_cluster || "", _f5Num(row.song_tau)) : _f5Esc(songTxt)} <span class="muted">${_f5Esc(songTxt)}</span></td></tr>` +
+          `<tr><th>WMB</th><td>${typeof _wmbTierBadge === "function" ? _wmbTierBadge(_f5WmbTier(row)) : ""} <span class="muted">${_f5Esc(wmbTxt)}</span></td></tr>` +
+        `</tbody></table></div></section>` +
+      `<section class="attr-section"><h5>Cross-dataset disease evidence</h5>` +
+        `<p class="muted attr-caption">SEA-AD evidence is a reference disease-direction layer. 5xFAD activity remains bulk tissue-level activity.</p>` +
+        `<div class="kh-audit-tablewrap"><table class="data-table"><tbody>` +
+          `<tr><th>SEA-AD LFC</th><td>${sea == null ? '<span class="muted">—</span>' : `<span class="attr-num-lfc" style="background:${_attrLfcColor(sea)}">${sea.toFixed(3)}</span>`}</td></tr>` +
+          `<tr><th>5xFAD tissue</th><td>${_f5Esc(group.tissue || "")}</td></tr>` +
+          `<tr><th>5xFAD age</th><td>${_f5Esc(String(_f5SelectedAge(group)))}mo TG vs WT</td></tr>` +
+        `</tbody></table></div></section>` +
+    `</div>`;
 }

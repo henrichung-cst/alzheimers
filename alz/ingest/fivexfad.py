@@ -46,38 +46,32 @@ KINASE_TRACKS = {
 TISSUES = ("cortex", "hippocampus")
 AGES = (3, 6, 9, 12)
 
-# No separate sample sheet is present under data/datasets/5xFAD. These calls are
-# therefore centralized, exposed in sample_manifest.csv, and stamped with an
-# explicit provenance string. Known anchors come from data/datasets/5xFAD/INDEX.md
-# (duplicate-group genotypes and pool meanings); remaining calls follow the
-# delivered age/sample-number layout used across total, IMAC, KGG, AcK, and pY.
+# Delivered sample-list DOCX files are present in the Lucie proteomics report
+# bundle. These calls are centralized, exposed in sample_manifest.csv, and
+# stamped with an explicit provenance string.
 GENOTYPE_BY_AGE_SAMPLE: dict[int, dict[str, str]] = {
     3: {
         "1": "WT", "2": "WT", "4": "WT",
         "3": "TG", "9": "TG", "10": "TG", "11": "TG",
     },
     6: {
-        "11": "WT", "12": "WT", "13": "WT", "14": "WT",
-        "15": "TG", "16": "TG", "17": "TG", "18": "TG", "19": "TG",
+        "11": "WT", "12": "WT", "13": "WT", "14": "WT", "15": "WT",
+        "16": "TG", "17": "TG", "18": "TG", "19": "TG",
     },
     9: {
         "10": "WT", "11": "WT",
         "12": "TG", "13": "TG", "14": "TG",
     },
     12: {
-        "3": "WT", "4": "WT", "6": "WT", "7": "WT", "8": "WT",
-        "5": "TG", "9": "TG", "10": "TG", "11": "TG", "12": "TG",
+        "4": "WT", "7": "WT", "8": "WT", "10": "WT", "12": "WT",
+        "3": "TG", "5": "TG", "6": "TG", "9": "TG", "11": "TG",
     },
 }
 GENOTYPE_PROVENANCE = (
-    "centralized_from_local_5xfad_index_anchors_and_delivered_sample_number_layout"
+    "delivered_lucie_proteomics_docx_sample_lists"
 )
 
 SENSITIVITY_RAW_RUNS = {"101525_Hippo_IMAC_3mon_10.raw"}
-# Internal estimability guard: a contrast-level site effect must have replicated
-# biological evidence in both age-matched genotype groups.
-MIN_REPLICATED_GROUP_N = 2
-
 
 @dataclass(frozen=True)
 class ReportSpec:
@@ -506,7 +500,7 @@ def _contrast_qc(tissue: str, track: str, mapping: pd.DataFrame, sample_cols: li
             "age_months": age,
             "n_wt": n_wt,
             "n_tg": n_tg,
-            "contrast_status": "primary" if min(n_wt, n_tg) >= 2 else "under_replicated",
+            "contrast_status": "primary" if n_wt > 0 and n_tg > 0 else "missing_group",
         })
     return pd.DataFrame(rows)
 
@@ -531,26 +525,6 @@ def _contrast_group_counts(
     wt_counts = np.isfinite(y[:, wt_idx]).sum(axis=1) if len(wt_idx) else np.zeros(y.shape[0], dtype=int)
     tg_counts = np.isfinite(y[:, tg_idx]).sum(axis=1) if len(tg_idx) else np.zeros(y.shape[0], dtype=int)
     return wt_counts.astype(int), tg_counts.astype(int)
-
-
-def _mask_nonestimable(
-    lfc: np.ndarray,
-    pval: np.ndarray,
-    fdr: np.ndarray,
-    wt_counts: np.ndarray,
-    tg_counts: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    estimable = (
-        (wt_counts >= MIN_REPLICATED_GROUP_N)
-        & (tg_counts >= MIN_REPLICATED_GROUP_N)
-    )
-    lfc = lfc.copy()
-    pval = pval.copy()
-    fdr = fdr.copy()
-    lfc[~estimable] = np.nan
-    pval[~estimable] = np.nan
-    fdr[~estimable] = np.nan
-    return lfc, pval, fdr
 
 
 def fit_track(tissue: str, track: str, manifest: pd.DataFrame) -> dict[str, pd.DataFrame]:
@@ -600,8 +574,6 @@ def fit_track(tissue: str, track: str, manifest: pd.DataFrame) -> dict[str, pd.D
         )
         wt_s, tg_s = _contrast_group_counts(y_stoich, mapping, sample_cols, age)
         wt_r, tg_r = _contrast_group_counts(y_raw, mapping, sample_cols, age)
-        lfc_s, p_s, fdr_s = _mask_nonestimable(lfc_s, p_s, fdr_s, wt_s, tg_s)
-        lfc_r, p_r, fdr_r = _mask_nonestimable(lfc_r, p_r, fdr_r, wt_r, tg_r)
         results_by_contrast[contrast_name] = {
             "stoich_lfc": lfc_s,
             "stoich_pval": p_s,

@@ -1602,6 +1602,26 @@ def _f5_norm_motif(v: Any) -> str:
 _F5_CONF_RANK = {"very_high": 4, "high": 3, "moderate": 2, "low": 1, "none": 0}
 
 
+def _f5_site_label_value(row: Any) -> str:
+    """Compact viewer label for 5xFAD sites while preserving site_id as join key."""
+    get = row.get if hasattr(row, "get") else (lambda _k, _d=None: _d)
+    gene = str(get("gene_symbol", "") or "").strip()
+    residue = str(get("residue_type", "") or get("PTM.SiteAA", "") or "").strip().upper()
+    pos = str(get("site_position", "") or get("PTM.SiteLocation", "") or "").strip()
+    if gene and residue and pos:
+        return f"{gene}_{residue}{pos}"
+
+    site_id = str(get("site_id", "") or "").strip()
+    match = re.search(r"_([STY])(\d+)(?:_[^_\s]+)*$", site_id, flags=re.IGNORECASE)
+    if gene and match:
+        return f"{gene}_{match.group(1).upper()}{match.group(2)}"
+    if site_id:
+        symbol_match = re.search(r"gene_symbol:([A-Za-z0-9_.-]+)", site_id)
+        if symbol_match and match:
+            return f"{symbol_match.group(1)}_{match.group(1).upper()}{match.group(2)}"
+    return site_id
+
+
 def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None) -> list[dict]:
     """Mouse location/evidence rows for 5xFAD, keyed by kinase only.
 
@@ -1677,6 +1697,8 @@ def _f5_prerank_for_contrast(
         fdr_col, wt_col, tg_col,
     ]
     out = ols[[c for c in cols if c in ols.columns]].copy()
+    if "site_label" not in out.columns:
+        out["site_label"] = out.apply(_f5_site_label_value, axis=1)
     out = out.rename(columns={
         lfc_col: "lfc",
         p_col: "p_value",
@@ -1733,7 +1755,10 @@ def _f5_running_enrichment(prerank: pd.DataFrame, motif_set: set[str]) -> dict[s
     motifs = {_f5_norm_motif(m) for m in motif_set if _f5_norm_motif(m)}
     if not motifs:
         return None
-    ranked = prerank[["rank_in_contrast", "site_id", "gene_symbol", "motif", "clipped_lfc"]].copy()
+    ranked_cols = ["rank_in_contrast", "site_id", "site_label", "gene_symbol", "motif", "clipped_lfc"]
+    ranked = prerank[[c for c in ranked_cols if c in prerank.columns]].copy()
+    if "site_label" not in ranked.columns:
+        ranked["site_label"] = ranked.apply(_f5_site_label_value, axis=1)
     ranked["motif_norm"] = ranked["motif"].map(_f5_norm_motif)
     is_hit = ranked["motif_norm"].isin(motifs).to_numpy()
     n = len(ranked)
@@ -1776,6 +1801,7 @@ def _f5_running_enrichment(prerank: pd.DataFrame, motif_set: set[str]) -> dict[s
             "rank": int(r["rank_in_contrast"]),
             "running_es": _f5_json_value(running[i]),
             "site_id": _f5_json_value(r.get("site_id")),
+            "site_label": _f5_json_value(r.get("site_label")),
             "gene_symbol": _f5_json_value(r.get("gene_symbol")),
             "motif": _f5_json_value(r.get("motif")),
             "clipped_lfc": _f5_json_value(r.get("clipped_lfc")),
@@ -1944,6 +1970,8 @@ def _write_fivexfad_detail_shards(
                     sub["kl_percentile"] = sub["motif"].map(
                         lambda m: kl_by_motif.get(_f5_norm_motif(m))
                     )
+                    if "site_label" not in sub.columns:
+                        sub["site_label"] = sub.apply(_f5_site_label_value, axis=1)
                     sub = sub.sort_values("rank_in_contrast").head(FIVEXFAD_DETAIL_SITES_PER_CONTRAST)
                     site_frames.append(sub)
                     prepared_frames.append(sub)
@@ -1978,6 +2006,7 @@ def _write_fivexfad_detail_shards(
                         contrast_label = f"TG_vs_WT_{smeta.get('age_months')}mo" if smeta.get("age_months") else ""
                         measurement_rows.append({
                             "site_id": site_id,
+                            "site_label": _f5_site_label_value(srow),
                             "gene_symbol": _f5_json_value(srow.get("gene_symbol")),
                             "motif": _f5_json_value(srow.get("motif")),
                             "kl_percentile": kl_by_site.get((contrast_label, site_id)),
@@ -2014,7 +2043,11 @@ def _write_fivexfad_detail_shards(
                     "prepared_mea_input": _f5_records(prepared_input),
                     "running_enrichment": running_rows,
                     "global_shift": _f5_records(track_shift),
-                    "winsorized_sites": _f5_records(track_winsor[track_winsor["site_id"].astype(str).isin(site_ids)] if not track_winsor.empty and site_ids else pd.DataFrame()),
+                    "winsorized_sites": _f5_records(
+                        track_winsor[track_winsor["site_id"].astype(str).isin(site_ids)].assign(
+                            site_label=lambda d: d.apply(_f5_site_label_value, axis=1),
+                        ) if not track_winsor.empty and site_ids else pd.DataFrame()
+                    ),
                     "substrate_summary": _f5_records(substrate_summary),
                     "source_files": [os.path.basename(paths[k]) for k in paths if os.path.exists(paths[k])],
                 }

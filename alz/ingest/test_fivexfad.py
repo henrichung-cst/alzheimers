@@ -36,6 +36,22 @@ class FiveXFADTests(unittest.TestCase):
         self.assertEqual(row["genotype"], "TG")
         self.assertEqual(row["biological_sample_id"], "hippocampus_3mo_TG_11")
 
+    def test_delivered_docx_genotype_corrections(self) -> None:
+        cases = [
+            ("cortex", "total", "260203_LD_CTX_M6_15_TP_DIA.raw", "WT", "cortex_6mo_WT_15"),
+            ("hippocampus", "py", "052325_5x_6mth_15_pY_1.raw", "WT", "hippocampus_6mo_WT_15"),
+            ("cortex", "imac", "102425_CTX_IMAC_DIA_12mon_6.raw", "TG", "cortex_12mo_TG_6"),
+            ("hippocampus", "imac", "102025_Hippo_IMAC_DIA_12mon_6.raw", "TG", "hippocampus_12mo_TG_6"),
+            ("cortex", "total", "260203_LD_CTX_M12_10_TP_DIA.raw", "WT", "cortex_12mo_WT_10"),
+        ]
+
+        for tissue, assay, raw_run, genotype, bio_id in cases:
+            with self.subTest(raw_run=raw_run):
+                row = fivexfad.parse_raw_run(tissue, assay, raw_run)
+                self.assertEqual(row["genotype"], genotype)
+                self.assertEqual(row["biological_sample_id"], bio_id)
+                self.assertEqual(row["genotype_source"], "delivered_lucie_proteomics_docx_sample_lists")
+
     def test_pool_exclusion_and_hippocampus_imac_duplicate_group(self) -> None:
         pool = fivexfad.parse_raw_run(
             "cortex", "py", "011626_LD_Cort_M6_pool_pY.raw"
@@ -49,7 +65,7 @@ class FiveXFADTests(unittest.TestCase):
         self.assertEqual(dup["duplicate_group"], "1")
         self.assertEqual(dup["biological_sample_id"], "hippocampus_3mo_WT_1")
 
-    def test_contrast_group_counts_and_replicated_mask(self) -> None:
+    def test_contrast_group_counts_are_audit_only(self) -> None:
         mapping = pd.DataFrame(
             {
                 "biological_sample_id": ["s1", "s2", "s3", "s4"],
@@ -67,20 +83,8 @@ class FiveXFADTests(unittest.TestCase):
         wt, tg = fivexfad._contrast_group_counts(
             y, mapping, ["s1", "s2", "s3", "s4"], 3
         )
-        lfc, pval, fdr = fivexfad._mask_nonestimable(
-            np.array([1.0, 2.0]),
-            np.array([0.1, 0.2]),
-            np.array([0.1, 0.2]),
-            wt,
-            tg,
-        )
-
         self.assertEqual(wt.tolist(), [2, 1])
         self.assertEqual(tg.tolist(), [2, 2])
-        self.assertEqual(lfc[0], 1.0)
-        self.assertTrue(np.isnan(lfc[1]))
-        self.assertTrue(np.isnan(pval[1]))
-        self.assertTrue(np.isnan(fdr[1]))
 
     def test_supporting_5xfad_payload_tissue_filtering(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -122,13 +126,20 @@ class FiveXFADTests(unittest.TestCase):
                     "kl_percentile": [91.2],
                 }
             ).to_csv(out / "cortex_st_mea_substrate_sets.csv", index=False)
+            long_site_id = (
+                ">ENSMUSP00000079691.7 pep chromosome:GRCm39:7:24677592:24705383:-1 "
+                "gene:ENSMUSG00000040907.16 transcript:ENSMUST00000080882.11 "
+                "gene_biotype:protein_coding transcript_biotype:protein_coding "
+                "gene_symbol:Atp1a3 description:ATPase Na+/K+ transporting alpha 3 polypeptide "
+                "[Source:MGI SymbolAcc:MGI:88107]_S456_M1_0"
+            )
             matrix = pd.DataFrame(
                 {
-                    "site_id": ["site1"],
-                    "gene_symbol": ["Gene1"],
+                    "site_id": [long_site_id],
+                    "gene_symbol": ["Atp1a3"],
                     "motif": ["A"],
-                    "site_position": [1],
-                    "residue_type": ["ST"],
+                    "site_position": [456],
+                    "residue_type": ["S"],
                     "matched_protein": ["Prot1"],
                     "cortex_3mo_WT_1": [2.0],
                 }
@@ -138,8 +149,8 @@ class FiveXFADTests(unittest.TestCase):
             matrix.to_csv(out / "cortex_st_stoichiometry_matrix.csv", index=False)
             pd.DataFrame(
                 {
-                    "site_id": ["site1"],
-                    "gene_symbol": ["Gene1"],
+                    "site_id": [long_site_id],
+                    "gene_symbol": ["Atp1a3"],
                     "n_obs_stoich": [1],
                     "n_obs_raw": [1],
                     "stoich_lfc_TG_vs_WT_3mo": [0.5],
@@ -175,6 +186,8 @@ class FiveXFADTests(unittest.TestCase):
                 trace_age = detail["measurement_trace"][0]["age_months"]
                 trace_genotype = detail["measurement_trace"][0]["genotype"]
                 trace_kl = detail["measurement_trace"][0]["kl_percentile"]
+                trace_site_label = detail["measurement_trace"][0]["site_label"]
+                stats_site_label = detail["site_stats"][0]["site_label"]
             finally:
                 viewer.FIVEXFAD_KINASE_DIR = old_dir
                 viewer.FIVEXFAD_DETAIL_DIR = old_detail_dir
@@ -193,6 +206,8 @@ class FiveXFADTests(unittest.TestCase):
         self.assertEqual(trace_age, 3)
         self.assertEqual(trace_genotype, "WT")
         self.assertEqual(trace_kl, 91.2)
+        self.assertEqual(trace_site_label, "Atp1a3_S456")
+        self.assertEqual(stats_site_label, "Atp1a3_S456")
 
     def test_fivexfad_viewer_matches_single_kinase_tab_pattern(self) -> None:
         root = Path(__file__).resolve().parents[2]
@@ -223,11 +238,33 @@ class FiveXFADTests(unittest.TestCase):
         self.assertIn("matched_total_protein", tab_js)
         self.assertIn("kl_percentile", tab_js)
         self.assertIn("SequenceLogo.buildBlock", tab_js)
+        self.assertIn("function _f5SiteLabel", tab_js)
+        self.assertIn("function _f5SiteCell", tab_js)
+        self.assertIn("gene_symbol:([A-Za-z0-9_.-]+)", tab_js)
+        self.assertIn('label: "Site", fmt: _f5SiteCell, html: true', tab_js)
         self.assertIn("detail_shards", tab_js)
         self.assertIn("prepared_mea_input", tab_js)
         self.assertIn("running_enrichment", tab_js)
         self.assertIn("Running enrichment for", tab_js)
         self.assertIn("Stoichiometry vs raw phospho", tab_js)
+        self.assertIn("const F5_ATTR_COLS", tab_js)
+        self.assertIn("attr-verdict-table", tab_js)
+        self.assertIn("attr-verdict-supergroup", tab_js)
+        self.assertIn("attr-verdict-toggle", tab_js)
+        self.assertIn("attr-explainer", tab_js)
+        self.assertIn("_attrConfidenceClass", tab_js)
+        self.assertIn("_msTierBadge", tab_js)
+        self.assertIn("_wmbTierBadge", tab_js)
+        self.assertIn("_attrLfcColor", tab_js)
+        self.assertIn("f5-attr-drawer", tab_js)
+        attr_renderer = tab_js[
+            tab_js.index("function _f5RenderAttribution("):
+            tab_js.index("function _f5RenderAttributionDrawer(")
+        ]
+        self.assertNotIn("_f5SmallTable", attr_renderer)
+        self.assertNotIn('label: "Basis"', attr_renderer)
+        self.assertNotIn('label: "Song tier"', attr_renderer)
+        self.assertNotIn('label: "Human tier"', attr_renderer)
         self.assertIn("nes-profile-age-labels", tab_js)
         self.assertNotIn("f5-age-cell", tab_js)
         self.assertNotIn('data-col="slice"', body)
