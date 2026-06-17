@@ -4,7 +4,7 @@ For a handful of kinases that are FDR-significant and concordant in BOTH the AD 
 the suspicious controls (CTRL-07/08/10), show that the underlying motif signal MEA consumes
 -- the LFC at the kinase's substrate sites and its leading-edge -- is the same in the
 suspicious controls as in AD, and opposite in the clean controls. This closes the loop
-omic-signal -> NES at the site level. Plan: docs/plans/human_ctrl_outlier_audit_2026-05-25.md
+omic-signal -> NES at the site level. Plan: alz/ctrl_outlier_audit/README.md
 """
 from __future__ import annotations
 

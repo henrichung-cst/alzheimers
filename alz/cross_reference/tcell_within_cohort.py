@@ -10,7 +10,7 @@ to a state when its transcript is (a) preferentially expressed in that state
 (concordance, sign-checked against the MEA NES).
 
 Two deliberate departures from the mouse design (see
-`docs/plans/tcell_within_cohort_attribution.md`):
+`docs/tcell_exhaustion_analysis_summary.md`):
 
 1. **No per-cell significance test / no FDR.** Donor1 is a single donor with one
    scRNA library per day — no biological replicates, so a per-cell `FindMarkers`
@@ -34,8 +34,8 @@ Outputs (donor1) under outputs/reports/kinase_attribution_tcells/donor1/:
   unified_attribution_tcells.csv full kinase-track × state × day grid — EVERY row ships
                                  (no gate). `tcell_concordant` is a shown label,
                                  never a filter; concordance is directionally
-                                 uninformative for kinases (OR≈1, see docs/plans/
-                                 tcell_attribution_degate_2026-06-03.md).
+                                 uninformative for kinases (OR≈1; see
+                                 docs/tcell_exhaustion_analysis_summary.md).
 
 Usage:  python alz/cross_reference/tcell_within_cohort.py [donor1]
 """
@@ -267,7 +267,7 @@ def build(donor: str = "donor1") -> dict:
     # human reads them. Concordance is directionally uninformative for kinases
     # (activity is post-translational, decoupled from the kinase's own mRNA;
     # sign-agreement runs at chance, OR≈1 — same in the mouse Song reference), so
-    # it must not filter anything. See docs/plans/tcell_attribution_degate_2026-06-03.md.
+    # it must not filter anything. See docs/tcell_exhaustion_analysis_summary.md.
     grid["tcell_concordant"] = grid["tcell_concordance"] > 0
 
     cols = ["kinase", "residue_type", "gene_symbol", "contrast", "cell_type",

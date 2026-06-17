@@ -64,7 +64,7 @@ SKIP_DIRS = {
 }
 
 DIAGNOSTIC_FILE_PATTERNS = (
-    "docs/plans/*",
+    "docs/plans/repo_cleanup_targets_2026-06-17.md",
     "docs/integrations/*",
     "bench/*",
     "alz/incytr_pair/README.md",

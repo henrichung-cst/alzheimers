@@ -9,7 +9,7 @@ AD gene.use is sourced per-pair from sce4's own Allpathway rds
 (alz/incytr_pair/extract_sce4_geneuse.R), so the engine reproduces sce4's
 enumeration exactly — Micro→Cholin 1283/1283 (0 extra / 0 missing); Ndnf×Ndnf
 698/699 with the symmetric difference being App/Psen1 paths only. See
-docs/plans/sce4_reproduction.md §6 and §6.7 (the per-pair gene.use record).
+archive/sce4_reproduction_2026-06-08/README.md §6 and §6.7 (the per-pair gene.use record).
 
 WHY NOT THE TOP300 CAP: the shipped per-pair top-300 cap is ranked by PDS, and
 PDS carries two DOCUMENTED, off-box residuals — the phospho-substrate provenance
@@ -235,7 +235,7 @@ def main() -> int:
         return 0
     print("verify_sce4_parity: FAIL.")
     print("  - non-transgene missing/extra ⇒ gene.use (per-pair sce4 source) regressed")
-    print("    (extract_sce4_geneuse.R, docs/plans/sce4_reproduction.md §6).")
+    print("    (extract_sce4_geneuse.R, archive/sce4_reproduction_2026-06-08/README.md §6).")
     print("  - a Receptor/Target max|Δ| ⇒ one of the six engine fixes regressed")
     print("    (CLAUDE.md §Pair-mode Incytr, bench/bench.md §sce4 reproduction).")
     return 1

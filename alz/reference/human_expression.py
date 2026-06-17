@@ -221,7 +221,7 @@ def compute_seaad_specificity(force: bool = False) -> pd.DataFrame:
     if not os.path.exists(expr_path):
         raise FileNotFoundError(
             f"SEA-AD MTG expression file not found: {expr_path}\n"
-            "Run: python alz/atlas_reference.py --sea-ad-expression"
+            "Run: python alz/reference/atlas.py --sea-ad-expression"
         )
 
     print(f"  Loading expression: {expr_path}")
@@ -290,8 +290,8 @@ def compute_hbca_specificity(force: bool = False) -> pd.DataFrame:
     if not os.path.exists(expr_path):
         raise FileNotFoundError(
             f"HBCA expression file not found: {expr_path}\n"
-            "Run: python alz/atlas_reference.py --hbca-download\n"
-            "Then: python alz/human_reference_expression.py --ref hbca"
+            "Run: python alz/reference/atlas.py --hbca-download\n"
+            "Then: python alz/reference/human_expression.py --ref hbca"
         )
 
     print(f"  Loading expression: {expr_path}")

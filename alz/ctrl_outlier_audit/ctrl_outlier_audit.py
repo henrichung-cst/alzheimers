@@ -1,7 +1,7 @@
 """Read-only audit: do the last 3 sequential human controls (CTRL-07/08/10) carry a
 genuinely AD-like phospho-omic signal, or is it a technical artifact?
 
-Plan: docs/plans/human_ctrl_outlier_audit_2026-05-25.md
+Plan: alz/ctrl_outlier_audit/README.md
 Phases A-C here (sample structure, artifact controls, site-level attribution).
 Phase D (per-kinase leading-edge proof) is ctrl_outlier_audit_kinases.py.
 

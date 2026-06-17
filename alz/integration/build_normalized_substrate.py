@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Precompute per-(cluster, contrast, layer) limma-normalized condition means.
 
-Resolves cross-phase note #1 of ``docs/plans/merged_evidence_panel.md``:
+Resolves cross-phase note #1 of ``docs/foundation/viewer_payload_contract.md``:
 Incytr's ``integrate_omics_layer`` (``incytr/R/analysis.R:385,391``) calls
 ``limma::normalizeBetweenArrays(matrix(cond1, cond2))`` on the per-cluster
 (gene × {disease_mean, WT_mean}) matrix *before* ``Cal_foldchange``. A naive

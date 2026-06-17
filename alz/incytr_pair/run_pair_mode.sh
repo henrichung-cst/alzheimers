@@ -50,7 +50,7 @@ echo "  Phase 1 inputs OK"
 
 # AD gene.use IS sce4's own reconstructed per-PAIR node set (reproduction of
 # sce4's Top300), not a re-derivation — see
-# docs/plans/sce4_reproduction.md §6.7. The driver
+# archive/sce4_reproduction_2026-06-08/README.md §6.7. The driver
 # consumes it via SCE4_GENEUSE_DIR; the T-cell runner leaves this unset and
 # derives. Build the 9 frozen artifacts if absent (idempotent).
 GENEUSE_DIR="data/incytr_frozen/sce4_geneuse"

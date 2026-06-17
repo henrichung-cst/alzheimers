@@ -8,7 +8,7 @@ preprocessing tracks:
   * raw phospho (uncorrected, self-normalized intensity) — sensitivity check
 
 Contrasts are within-donor (timepoints are not comparable across donors; see
-``docs/plans/meeting_notes_triage_2026-05-27.md``). Because the D2 matrices are
+``docs/tcell_exhaustion_analysis_summary.md``). Because the D2 matrices are
 already log2 + per-run median-centered, the contrast for a later day is a plain
 subtraction `value(day) − value(d2)` = log2FC, sign convention `+ = up at the
 later timepoint`.

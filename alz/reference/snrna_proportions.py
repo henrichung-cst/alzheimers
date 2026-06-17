@@ -8,7 +8,8 @@ Computes per-cell-rate weights
 on the active spine (default Levy-t5; pass --spine to switch). Per-cell-rate
 units are used because Incytr's pathway scoring operates on per-cell
 ligand/receptor levels, not cluster mass shares. See
-`docs/incytr_deconvolution_pivot.md` for the full decision rationale.
+`docs/foundation/analysis_rationale.md` and
+`docs/foundation/statistical_constraints.md` for the full decision rationale.
 
 Per-animal where Song snRNA observed (28 animals); group-pooled by
 (genotype × timepoint × sex) for the 44 TMT-only animals, with fallback

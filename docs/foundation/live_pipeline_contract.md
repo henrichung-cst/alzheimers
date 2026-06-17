@@ -4,19 +4,19 @@ This document defines the operational contract for the live analysis arc.
 It turns the charter into a stage-by-stage runtime specification: what each
 stage requires, what it produces, and how the stages connect.
 
-The live arc is composed of Kedro pipelines registered in
-`alz/pipeline_registry.py`. Each pipeline can be invoked directly via
-`kedro run --pipeline=<name>`, via the CLI shim at `alz/<module>.py` (which
-delegates to a `KedroSession`), or via the pixi task alias.
+The live arc is invoked through Pixi task aliases. Kedro has been reintroduced
+incrementally for orchestration, but the only currently registered Kedro
+pipeline is `ingest` in `alz/pipelines/ingest/`; the downstream analysis stages
+still call their package modules directly.
 
-| Stage | Pixi task | Kedro pipeline | CLI shim |
-|:---|:---|:---|:---|
-| 1. Ingest | `pixi run ingest` | `ingest_mapping` | `python alz/data_ingest.py --run` |
-| 2. Normalize | `pixi run normalize` | `normalize` | `python alz/kinase_normalize.py` |
-| 3. Enrich | `pixi run enrich` | `enrich` | `python alz/kinase_enrich.py` |
-| 4. Attribute | `pixi run attribute` | `attribute` | `python alz/kinase_attribute.py` |
-| 5. Recover | `pixi run recover` | `recovery` | `python alz/attribution_recovery.py` |
-| Optional: mechanism | `pixi run mechanism` | `mechanism` | `python alz/kinase_mechanism.py` |
+| Stage | Pixi task | Current entry point |
+|:---|:---|:---|
+| 1. Ingest | `pixi run ingest` | `python alz/ingest/song.py --run` |
+| 2. Normalize | `pixi run normalize` | `python alz/bulk_mea/normalize.py` |
+| 3. Enrich | `pixi run enrich` | `python alz/bulk_mea/enrich.py` |
+| 4. Attribute | `pixi run attribute` | `python alz/bulk_mea/attribute.py` |
+| 5. Recover | `pixi run recover` | `python alz/bulk_mea/recover.py` |
+| Optional: mechanism | `pixi run mechanism` | `python alz/bulk_mea/mechanism.py` |
 
 Bundled front door (sequences ingest → normalize → enrich → attribute →
 recover):
@@ -39,7 +39,7 @@ the sensitivity track.
 
 Supporting setup is separate from the front door:
 
-- `alz/atlas_reference.py` — external-reference setup (SEA-AD + WMB)
+- `alz/reference/atlas.py` — external-reference setup (SEA-AD + WMB)
 - `outputs/reports/wmb_expression/wmb_kinase_expression.csv` — required
   supporting input for unified attribution
 - `outputs/reports/snrna_integration/song_*.csv` — Song within-cohort
@@ -55,11 +55,12 @@ These are not co-equal pipeline stages, but the live pipeline expects them.
 | `outputs/reports/wmb_expression/wmb_kinase_expression.csv` | required for unified attribution | WMB expression specificity for cell-type attribution |
 | SEA-AD effect sizes under `config.SEA_AD_DIR` | required for unified attribution | External transcriptomic concordance reference |
 
-## Stage 1 — Data Ingestion (`alz/pipelines/ingest_mapping/`)
+## Stage 1 — Data Ingestion (`alz/ingest/song.py`, `alz/pipelines/ingest/`)
 
 Establishes TMT channel-to-animal sample mapping. Phosphosite-to-protein
 matching, marker-protein diagnostics, PCA quality control, and outlier
-detection run as separate `data_ingest.py` flags (not yet Kedro-wired).
+detection run from `alz/ingest/song.py`. The current Kedro ingest pipeline
+wraps the sample-mapping and phospho-match steps.
 
 Inputs:
 
@@ -86,7 +87,7 @@ Failure modes:
 - missing mapping cache for marker summaries
 - sparse or malformed total-proteome matrices causing PCA or matching failure
 
-## Stage 2 — Normalize (`alz/pipelines/normalize/`)
+## Stage 2 — Normalize (`alz/bulk_mea/normalize.py`)
 
 IRS cross-plex normalization (all 72 samples, mode-independent) +
 stoichiometry computation (`log2 phospho − log2 protein`). Track-namespaced
@@ -105,10 +106,9 @@ Canonical outputs (per track; `st` is the suffix-less default, `py` adds
 - `outputs/reports/kinase_attribution/stoichiometry_qc{,_pY}.csv`
 - `outputs/reports/kinase_attribution/normalization_summary{,_pY}.json`
 
-Implementation: `alz/pipelines/normalize/{nodes,pipeline}.py` over pure
-helpers in `alz/kinase_normalize.py`.
+Implementation: `alz/bulk_mea/normalize.py`.
 
-## Stage 3 — Enrich (`alz/pipelines/enrich/`)
+## Stage 3 — Enrich (`alz/bulk_mea/enrich.py`)
 
 Sample filtering (outlier exclusion + sex per `analysis_mode`), factorial
 OLS with disease × timepoint interactions, and MEA (GSEA-based) kinase
@@ -138,7 +138,7 @@ synergistic interaction between the two transgenes, not an interaction
 with sex or timepoint.
 
 Nine time-resolved contrasts are derived from the coefficient vector
-(`alz/kinase_enrich.py:CONTRAST_COEFS`):
+(`alz/shared/config.py:CONTRAST_COEFS`):
 
 | Contrast | Coefficient vector |
 |:---|:---|
@@ -161,8 +161,7 @@ mode; not interacted with genotype or timepoint. Disease × timepoint
 interactions are first-class because the temporal trajectory is the
 biology of interest.
 
-Implementation: `alz/pipelines/enrich/{nodes,pipeline}.py` over pure
-helpers in `alz/kinase_enrich.py` (`_build_design_matrix`,
+Implementation: `alz/bulk_mea/enrich.py` (`_build_design_matrix`,
 `GENOTYPE_CODING`, `CONTRAST_COEFS`, `_run_ols_all_sites`, `_run_mea`).
 
 Canonical outputs (per track):
@@ -173,7 +172,7 @@ Canonical outputs (per track):
 - `outputs/reports/kinase_attribution/winsorized_sites{,_pY}.csv`
 - `outputs/reports/kinase_attribution/mea_substrate_sets{,_pY}.csv`
 
-## Stage 4 — Attribute (`alz/pipelines/attribute/`)
+## Stage 4 — Attribute (`alz/bulk_mea/attribute.py`)
 
 Unified cell-type attribution combining SEA-AD transcriptomic concordance,
 WMB expression specificity, and Song within-cohort concordance. Single
@@ -194,8 +193,7 @@ Canonical outputs:
 - `outputs/reports/kinase_attribution/sea_ad_supertype_lfc.csv`
 - `outputs/reports/kinase_attribution/attribution_summary.json`
 
-Implementation: `alz/pipelines/attribute/{nodes,pipeline}.py` over pure
-helpers in `alz/kinase_attribute.py`. Concordance model documented in
+Implementation: `alz/bulk_mea/attribute.py`. Concordance model documented in
 [`concordance.md`](concordance.md).
 
 Failure modes:
@@ -205,7 +203,7 @@ Failure modes:
 - missing SEA-AD reference files
 - mismatch between MEA kinase names and WMB / kinase-to-gene mapping
 
-## Stage 5 — Recover (`alz/pipelines/recovery/`)
+## Stage 5 — Recover (`alz/bulk_mea/recover.py`)
 
 Cross-contrast consistency analysis and final hypothesis-table assembly.
 
@@ -220,15 +218,14 @@ Canonical outputs:
 - `outputs/reports/attribution_recovery/celltype_evidence_table.csv`
 - `outputs/reports/attribution_recovery/kinase_hypothesis_table.csv`
 
-Implementation: `alz/pipelines/recovery/{nodes,pipeline}.py` over pure
-helpers in `alz/attribution_recovery.py`.
+Implementation: `alz/bulk_mea/recover.py`.
 
 Failure modes:
 
 - missing unified attribution outputs from Stage 4
 - empty or malformed MEA results
 
-## Optional — Mechanism (`alz/pipelines/mechanism/`)
+## Optional — Mechanism (`alz/bulk_mea/mechanism.py`)
 
 Off the live arc. Reviewer-response stage that re-runs MEA on raw
 (uncorrected) phospho LFCs and classifies each (kinase, contrast) as

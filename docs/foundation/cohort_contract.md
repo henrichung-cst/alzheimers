@@ -18,10 +18,10 @@ The four analysis modes:
 
 | # | Mode | Scope | Entry |
 |---|---|---|---|
-| 1 | Bulk MEA | mouse + human | `alz/kinase_normalize.py` → `alz/kinase_enrich.py`; human branch: `alz/ingest_mukesh_perdonor.py` |
-| 2 | Decomposition MEA | mouse only (requires matched snRNA) | `alz/snrna_proportions.py` → `alz/decomposition_mea/*` |
+| 1 | Bulk MEA | mouse + human | `alz/bulk_mea/normalize.py` → `alz/bulk_mea/enrich.py`; human branch: `alz/ingest/mukesh_perdonor.py` |
+| 2 | Decomposition MEA | mouse only (requires matched snRNA) | `alz/reference/snrna_proportions.py` → `alz/decomposition_mea/*` |
 | 3 | Incytr pair-mode | mouse only (requires snRNA spine) | `alz/incytr_pair/run_pair_mode.sh` |
-| 4 | Cross-reference correlation | atlas-based (cohort-agnostic) | `alz/atlas_reference.py`, `alz/wmb_expression.py`, `alz/human_reference_expression.py` |
+| 4 | Cross-reference correlation | atlas-based (cohort-agnostic) | `alz/reference/atlas.py`, `alz/reference/wmb_expression.py`, `alz/reference/human_expression.py` |
 
 Mode 4 has no cohort-specific input — it produces reference aggregates that
 modes 1–3 join into. Treat it as a one-time prerequisite.
@@ -203,7 +203,7 @@ Verified by `alz/decomposition_mea/verify_decomposition.py`:
 | `data/external/allen_abc/expression_matrices/WMB-10Xv3-{region}/log2/` | 13 region matrices | Allen ABC Atlas |
 | `data/external/allen_hbca/` | HBCA WHB-10Xv3 | Allen ABC Atlas |
 
-### 6.2 Aggregates (built by `atlas_reference.py`, `wmb_expression.py`, `human_reference_expression.py`)
+### 6.2 Aggregates (built by `alz/reference/atlas.py`, `alz/reference/wmb_expression.py`, `alz/reference/human_expression.py`)
 
 | Artifact | Schema |
 |---|---|
@@ -231,7 +231,7 @@ are forbidden — see [memory: direct_levy_t5_mapping].
 
 Checklist for adding cohort `<cohort>`:
 
-1. Write `alz/ingest_<cohort>.py` emitting:
+1. Write `alz/ingest/<cohort>.py` emitting:
    - `outputs/reports/data_ingest_<cohort>/sample_mapping.csv` (§2.1 shape that matches the design)
    - `outputs/reports/kinase_attribution_<cohort>/{stoichiometry,raw_phospho}_matrix{,_pY}.csv`
    - `outputs/reports/kinase_attribution_<cohort>/total_proteome_normalized.csv`
@@ -242,9 +242,9 @@ Checklist for adding cohort `<cohort>`:
 5. (Optional, if Incytr inputs exist) supply `kldata.csv` + spine artifacts and
    run mode 3.
 
-No edits to `alz/kinase_*.py`, `alz/decomposition_mea/*`, `alz/incytr_pair/*`, or
+No edits to `alz/bulk_mea/*`, `alz/decomposition_mea/*`, `alz/incytr_pair/*`, or
 `alz/integration/*` should be necessary. If they are, that's a contract gap
-to file under [`docs/plans/repo_organization_2026-05-21.md`].
+to file under [`docs/plans/repo_cleanup_targets_2026-06-17.md`].
 
 ## 8. Out of scope (deferred)
 
@@ -258,6 +258,6 @@ to file under [`docs/plans/repo_organization_2026-05-21.md`].
 
 ## References
 
-- Master plan: [`docs/plans/repo_organization_2026-05-21.md`](../plans/repo_organization_2026-05-21.md)
+- Current cleanup ledger: [`docs/plans/repo_cleanup_targets_2026-06-17.md`](../plans/repo_cleanup_targets_2026-06-17.md)
 - Live pipeline contract (runtime view, complementary): [`docs/foundation/live_pipeline_contract.md`](./live_pipeline_contract.md)
 - Analysis charter (scope, closed paths): [`docs/foundation/analysis_charter.md`](./analysis_charter.md)

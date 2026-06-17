@@ -8,7 +8,7 @@
 #                   conditions' markers (avg_log2FC > 1 & p < 1e-4) as the
 #                   per-contrast DEG arm — symmetric with prG's |aFC| > 1.
 #
-# sce4 reproduction (2026-05-31, docs/plans/sce4_reproduction.md §6.5):
+# sce4 reproduction (2026-05-31, archive/sce4_reproduction_2026-06-08/README.md §6.5):
 # sce4 used DEG ∪ prG, NO HEG (zero HEG labels across its ma_2mo + ma_4mo
 # reference). The former DEG>1.5 cutoff + logfc.threshold=1.2 pre-prune dropped
 # real DEGs (Prkca/Grm5/Robo2, FC 1.0-1.2) that sce4 kept; HEG was the leaky

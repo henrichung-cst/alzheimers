@@ -5,7 +5,7 @@
 # pre-emptively rots. Cluster I/O resolves against S3 via an env-specific
 # overlay (conf/{local,argo}/catalog.yml, Q2) — base holds the local default.
 #
-# See docs/plans/kedro_argo_reintroduction_2026-05-26.md.
+# See docs/foundation/live_pipeline_contract.md.
 
 # ---------------------------------------------------------------------------
 # P1 — ingest (song / mouse). Raw vendor Excel in; sample-mapping + phospho-

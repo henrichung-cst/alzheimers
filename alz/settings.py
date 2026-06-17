@@ -2,7 +2,7 @@
 
 Reintroduced 2026-05-27 (reverses the 2026-05-21 strip, commit 0c2a997) so the
 pipelines can be orchestrated on cellsignal/bioplat via Argo. See
-docs/plans/kedro_argo_reintroduction_2026-05-26.md.
+docs/foundation/live_pipeline_contract.md.
 
 Defaults are intentionally minimal. The config loader already honours the
 existing conf/{base,local,full_cohort,human_nbb}/ overlays selected by

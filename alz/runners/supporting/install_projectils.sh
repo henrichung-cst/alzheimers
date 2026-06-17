@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install the ProjecTILs reference-mapping stack for D4 cluster annotation
 # (T-cell exhaustion cohort). Replaces the prior Azimuth path (deleted
-# 2026-05-28; see docs/plans/projectils_pivot_2026-05-28.md).
+# 2026-05-28; see docs/tcell_exhaustion_analysis_summary.md).
 #
 # Packages (all GitHub, no system deps beyond what bioconductor pulls):
 #   carmonalab/UCell      signature scoring (ProjecTILs Imports)

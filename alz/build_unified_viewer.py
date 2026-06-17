@@ -3607,7 +3607,7 @@ _INCYTR_PATHWAY_ABS_PDS = (0.0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
 # shard rows), rows pre-sorted by ABS(PDS) DESC so global rank = row position.
 # The viewer maps it into TypedArrays and runs filter → rank → slice(N) over the
 # complete universe, making the per-page cap a true render budget. Format +
-# rationale: docs/plans/incytr_global_filter_index_2026-06-10.md.
+# rationale: docs/foundation/viewer_payload_contract.md.
 _INCYTR_INDEX_FILENAME = "incytr_index.bin.gz"
 
 # Pathway scoring stack — surfaced as table columns in the pathway tab.
@@ -4689,7 +4689,7 @@ def build_payload(data: UnifiedData) -> dict:
     # spine maps onto and that actually carry atlas cells (N≈9); the honest "even
     # split" baseline for its cross-check tier is 1/N, not 1/31 or 1/11. Read the
     # SAME ruler the recover.py gate uses so display and pipeline never diverge
-    # (see docs/plans/specificity_validation_2026-06-05.md §6, F1/F2/F6).
+    # (see docs/foundation/concordance.md §6, F1/F2/F6).
     meta = {
         "schema_version": SCHEMA_VERSION,
         "viewer_payload_schema_version": 2,

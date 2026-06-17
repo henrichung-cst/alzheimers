@@ -40,7 +40,7 @@ concat, per-pair scheduling, RSS monitors, and the sce4 call-site overrides
 (`mean_method=NULL`, `correction=0.01`, `cutoff_*=0`, `pr.correction=0.001`,
 `fold_threshold=10`, strict `>1` prG cutoff). Three method computations were
 reimplemented inline and moved to the package on 2026-05-29 (byte-identical swap;
-audit: `docs/plans/incytr_pair_reorg_2026-05-29.md`).
+audit: `docs/integrations/kinase_incytr_integration.md`).
 
 ## Entry point
 
@@ -115,7 +115,7 @@ and `filter_significant_paths.py`; the cohorts differ only in their input builde
 | `build_input_gene_list.R` | Builds `allmarkers.csv` (one-vs-rest `FindAllMarkers`, `Type_condition` idents, run broad at `logfc.threshold=0.1` to match sce4's frozen table). The driver assembles the per-contrast gene.use (this contrast's two conditions' DEG ∪ prG) from this — no HEG (dropped 2026-05-31), no pre-collapsed `input_gene_list.csv`. |
 | `build_tcells_seurat.R` | T-cell-cohort Seurat builder (per donor). pixi `tcells-build-incytr-seurat`. |
 | `build_tcells_input_gene_list.R` | T-cell-cohort `allmarkers.csv` builder (per donor); same per-contrast-DEG contract as the mouse path. pixi `tcells-build-input-gene-list`. |
-| `export_decomposition_for_pair.py` | Runs the **provenance deconvolution** `P_c = (N_total/N_c)×bulk×(specific_c/Σ_46 specific)` (min/10000 imputation): transcript share from frozen `aggexp.csv`, size factors from the Song h5ad, bulk from frozen `pr/imac/py_median.csv`. Emits 31-spine × 12 male-group `{pr,ps,py}_yuyu_deconvoluted.csv`. See `docs/plans/sce4_decomposition_reconciliation_2026-05-24.md`. |
+| `export_decomposition_for_pair.py` | Runs the **provenance deconvolution** `P_c = (N_total/N_c)×bulk×(specific_c/Σ_46 specific)` (min/10000 imputation): transcript share from frozen `aggexp.csv`, size factors from the Song h5ad, bulk from frozen `pr/imac/py_median.csv`. Emits 31-spine × 12 male-group `{pr,ps,py}_yuyu_deconvoluted.csv`. See `archive/sce4_reproduction_2026-06-08/README.md`. |
 | `pair_to_receiver_cache.py` | Reshapes the 9 wide driver outputs into the long-form `receiver_cache/` layout the unified viewer consumes. Also exports `_sanitize_celltype`, imported by 4 `alz/integration/` modules. |
 | `verify_sce4_parity.py` | Regression gate (`pixi run verify-incytr-sce4`): regenerates the two benchmark pairs unfiltered (nboot=0) and confirms the sce4-parity overrides still reproduce 599/600 + max \|Δ sclog2FC\|=0 on R/EM/T (App-transgene residual exempt). |
 | `verify_sce4_full.R` | Full sce4 reproduction gate (`pixi run verify-incytr-sce4-full`): compares every gated path tuple in the 9 unfiltered wide parquets against sce4's pre-cap pairwise RDS files. Fails loudly until all 9 RDS files are present. |
@@ -126,7 +126,7 @@ The sce4-reproduction forensic probes (`audit_*`, `forensic_sce4_afc.R`,
 `run_sce4_full_unfiltered.sh`) and the redundant `launch_pair_mode.sh` launcher
 were archived to `archive/sce4_reproduction_2026-06-08/` on 2026-06-08 — the
 reproduction is solved and they are referenced only by the investigation log
-`docs/plans/sce4_reproduction.md`. The active regression gates
+`archive/sce4_reproduction_2026-06-08/README.md`. The active regression gates
 (`verify_incytr_sce4.sh`, `verify_sce4_parity.py`, `verify_sce4_full.R`) and the
 production gene.use source (`extract_sce4_geneuse.R`) stay here.
 

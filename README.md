@@ -76,7 +76,7 @@ pixi run tcells-export-bulk       # linear per-day bulk matrices (pr/py/ps)
 pixi run tcells-decompose         # per-(state, day) substrate via P_s = (N_total/N_s) × bulk × share
 ```
 
-**Substrate is keyed on per-cell ProjecTILs `functional.cluster`, not Seurat clusters.** Cluster-level annotation was deleted (anti-shim) after losing 44.5% of donor1 to the Seurat–ProjecTILs partition mismatch. State-keyed aggregation drops only cells with no ProjecTILs call (~13% donor1, ~7% donor2 — scGate `none`-gate + doublets). See [`docs/plans/tcells_percell_aggregation_2026-05-28.md`](docs/plans/tcells_percell_aggregation_2026-05-28.md) for the rationale.
+**Substrate is keyed on per-cell ProjecTILs `functional.cluster`, not Seurat clusters.** Cluster-level annotation was deleted (anti-shim) after losing 44.5% of donor1 to the Seurat–ProjecTILs partition mismatch. State-keyed aggregation drops only cells with no ProjecTILs call (~13% donor1, ~7% donor2 — scGate `none`-gate + doublets). See [`docs/tcell_exhaustion_analysis_summary.md`](docs/tcell_exhaustion_analysis_summary.md) for the rationale.
 
 Outputs (under `data/derived/tcells_incytr_inputs/<donor>/`):
 - `scrna/aggexp_data.csv`, `cell_counts.csv`, `allmarkers.csv` — substrate keyed on sanitized ProjecTILs state (`CD8Tex`, `CD4Th17`, `Treg`, …; alphanumeric only — Incytr `<condition>_<cluster>` split constraint).
@@ -88,7 +88,7 @@ ProjecTILs reference atlases (carmonalab figshare doi 10.6084/m9.figshare.236083
 
 ### Per-cluster proportional decomposition (Levy-t5 branch)
 
-Forward projection only — `P_c = f_c × bulk` — **not** statistical deconvolution. See `docs/incytr_deconvolution_pivot.md` for the contract and `docs/plans/change_request_02_spine_rethreshold.md` for the levy19 → levy_t5 rethreshold (per-(cluster, animal) cell gate relaxed from the original `≥50` down to `≥5`, rank-gate dropped — 19 strict-rank clusters → 31 clusters covering 94.5% of nuclei).
+Forward projection only — `P_c = f_c × bulk` — **not** statistical deconvolution. See `docs/foundation/analysis_rationale.md` and `docs/foundation/statistical_constraints.md` for the closed-path rationale, and `alz/decomposition_mea/README.md` for the current Levy-t5 decomposition contract (per-(cluster, animal) cell gate relaxed from the original `≥50` down to `≥5`, rank-gate dropped — 19 strict-rank clusters → 31 clusters covering 94.5% of nuclei).
 
 End-to-end decomposition rebuild (pseudobulk → proportions → decompose → per-cluster MEA → verify):
 

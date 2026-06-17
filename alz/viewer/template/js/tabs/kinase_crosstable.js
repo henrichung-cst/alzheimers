@@ -43,7 +43,7 @@ let _KX_INITIALIZED = false;
 // the WMB cross-check and the detail pane: ≥10× / ≥5× / ≥2× / ≥1×. The fold is
 // the kinase's peak cell-type share (song_top_share); τ — the Yanai concentration
 // index over the 31 spine clusters — rides in the tooltip. See
-// docs/plans/specificity_validation_2026-06-05.md §6.
+// docs/foundation/concordance.md §6.
 const _KX_SONG_UNIFORM = (PAYLOAD && PAYLOAD.meta && PAYLOAD.meta.song_uniform) || (1 / 31);
 
 // Uniform baseline for the WMB cross-check tier. WMB specificity is a share

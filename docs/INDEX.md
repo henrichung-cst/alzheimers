@@ -22,7 +22,7 @@ Read by analytical role, not creation order.
 | [`foundation/cohort_contract.md`](./foundation/cohort_contract.md) | Canonical input/output schemas for the four shared analysis modes; per-cohort parameter knobs |
 | [`foundation/viewer_payload_contract.md`](./foundation/viewer_payload_contract.md) | Shared frontend payload schema for current and future viewers; builders stay separate but emit a common context/capability contract |
 | [`foundation/viewer_frontend_contract.md`](./foundation/viewer_frontend_contract.md) | Frontend sharing policy for AD/Song and T-cell viewers; documents shared modules, intentional forks, and consolidation targets |
-| [`foundation/mukesh_ingest_policies.yml`](./foundation/mukesh_ingest_policies.yml) | Mukesh / NBB human ingest edge-case policies (consumed by `ingest_mukesh.py`) |
+| [`foundation/mukesh_ingest_policies.yml`](./foundation/mukesh_ingest_policies.yml) | Mukesh / NBB human ingest edge-case policies (consumed by `alz/ingest/mukesh.py`) |
 
 ## Reference Guides
 
@@ -46,14 +46,13 @@ Stable docs that aren't authoritative specs but aren't plans either.
 
 ## Active Plans
 
-Live plans in `docs/plans/`. Only the **currently-executing** master plan
-lives here; everything else has been moved to `docs/archive/plans/` (see
-Archive below). Plans graduate back to active status by explicit user
-decision — the absence of an "active" plan does not imply the work is done.
+Live plans in `docs/plans/`. Superseded implementation plans were removed from
+the active plan directory during the 2026-06-17 cleanup pass. Use the cleanup
+ledger below as the active repo-organization tracker.
 
 | File | Status |
 |:---|:---|
-| [`plans/repo_organization_2026-05-21.md`](./plans/repo_organization_2026-05-21.md) | Master plan: two-layer architecture (bespoke ingest → canonical artifacts → shared analyses); methodical sequencing |
+| [`plans/repo_cleanup_targets_2026-06-17.md`](./plans/repo_cleanup_targets_2026-06-17.md) | Active cleanup ledger: target list and pass status |
 
 ## Archive
 
@@ -68,7 +67,7 @@ Archived material includes:
 
 ## Reading Rule
 
-- **What should we do next?** → [`foundation/`](./foundation/analysis_charter.md) + [`plans/repo_organization_2026-05-21.md`](./plans/repo_organization_2026-05-21.md)
+- **What should we do next?** → [`foundation/`](./foundation/analysis_charter.md) + [`plans/repo_cleanup_targets_2026-06-17.md`](./plans/repo_cleanup_targets_2026-06-17.md)
 - **How do external inputs map into runtime?** → [`integrations/kinase_incytr_integration.md`](./integrations/kinase_incytr_integration.md)
 - **Why was a path closed?** → [`foundation/analysis_rationale.md`](./foundation/analysis_rationale.md)
 - **What plans are open?** → [`plans/`](./plans/)
@@ -121,40 +120,40 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 ### Live bulk pipeline (`alz/`)
 | Stage | Script | Runner | Output dir |
 |:---|:---|:---|:---|
-| Config | `config.py` | — | — |
-| 1. Ingest | `data_ingest.py` / `kedro run --pipeline=ingest_mapping` | `pixi run ingest` | `outputs/reports/data_ingest/` |
-| 2. Normalize | `kinase_normalize.py` / `kedro run --pipeline=normalize` | `pixi run normalize` | `outputs/reports/kinase_attribution/` |
-| 3. Enrich | `kinase_enrich.py` / `kedro run --pipeline=enrich` | `pixi run enrich` | `outputs/reports/kinase_attribution/` |
-| 4. Attribute | `kinase_attribute.py` / `kedro run --pipeline=attribute` | `pixi run attribute` | `outputs/reports/kinase_attribution/` |
-| 5. Mechanism | `kinase_mechanism.py` / `kedro run --pipeline=mechanism` | `pixi run mechanism` (after attribute; merges into `unified_attribution.csv`) | `outputs/reports/kinase_attribution/` |
-| 6. Recovery | `attribution_recovery.py` / `kedro run --pipeline=recovery` | `pixi run recover` | `outputs/reports/attribution_recovery/` |
-| Plots | `plot_attribution_bubbles.py` | — | `outputs/reports/attribution_recovery/bubble_plots/` |
+| Config | `alz/shared/config.py` | — | — |
+| 1. Ingest | `alz/ingest/song.py` | `pixi run ingest` | `outputs/reports/data_ingest/` |
+| 2. Normalize | `alz/bulk_mea/normalize.py` | `pixi run normalize` | `outputs/reports/kinase_attribution/` |
+| 3. Enrich | `alz/bulk_mea/enrich.py` | `pixi run enrich` | `outputs/reports/kinase_attribution/` |
+| 4. Attribute | `alz/bulk_mea/attribute.py` | `pixi run attribute` | `outputs/reports/kinase_attribution/` |
+| 5. Mechanism | `alz/bulk_mea/mechanism.py` | `pixi run mechanism` (after attribute; merges into `unified_attribution.csv`) | `outputs/reports/kinase_attribution/` |
+| 6. Recovery | `alz/bulk_mea/recover.py` | `pixi run recover` | `outputs/reports/attribution_recovery/` |
+| Summary | `alz/bulk_mea/summary.py` | ad hoc | read-only report over cached outputs |
 | Bundled | — | `pixi run live` | all of the above |
-| Dual-track | — | `runners/main/run_dual_analysis.sh` | `*_males_only/`, `*_full_cohort/` |
-| End-to-end | — | `runners/main/run_all.sh` (= `pixi run all`) | everything |
+| Dual-track | — | `alz/runners/main/run_dual_analysis.sh` | `*_males_only/`, `*_full_cohort/` |
+| End-to-end | — | `alz/runners/main/run_all.sh` (= `pixi run all`) | everything |
 
 ### Mouse decomposition + Incytr pair-mode (not yet under kedro)
 | Stage | Script | Runner |
 |:---|:---|:---|
-| snRNA pseudobulk + concordance | `snrna_integration.py` | `runners/supporting/run_snrna_integration.sh` |
-| Per-(animal, cluster, gene) proportions | `snrna_proportions.py` | (part of decomposition rerun) |
-| Per-cluster decomposition | `decomposition/build_celltype_decomposition.py` | `runners/main/rerun_decomposition_chain.sh` |
-| Per-cluster MEA | `decomposition/enrich_celltype.py` | (above) |
-| Decomposition verification | `decomposition/verify_decomposition.py` | (above) |
-| Incytr pair-mode | `incytr/*` + `integration/pair_to_receiver_cache.py` | `runners/main/run_pair_mode_pipeline.sh` |
+| snRNA pseudobulk + concordance | `alz/reference/snrna_integration.py` | `alz/runners/supporting/run_snrna_integration.sh` |
+| Per-(animal, cluster, gene) proportions | `alz/reference/snrna_proportions.py` | part of decomposition rerun |
+| Per-cluster decomposition | `alz/decomposition_mea/build_celltype_decomposition.py` | `alz/runners/main/rerun_decomposition_chain.sh` |
+| Per-cluster MEA | `alz/decomposition_mea/enrich_celltype.py` | above |
+| Decomposition verification | `alz/decomposition_mea/verify_decomposition.py` | above |
+| Incytr pair-mode | `alz/incytr_pair/*` + `alz/integration/*` | `alz/runners/main/run_pair_mode_pipeline.sh` |
 
 ### Human cohort pipeline (not yet under kedro)
 | Stage | Script | Runner |
 |:---|:---|:---|
-| Ingest | `ingest_mukesh.py` | `runners/main/run_mukesh_perdonor.sh` |
-| Per-donor MEA | `ingest_mukesh_perdonor.py` | (above) |
-| SEA-AD agreement | `seaad_human_agreement.py` | (above; = `pixi run human`) |
+| Ingest | `alz/ingest/mukesh.py` | `alz/runners/main/run_mukesh_perdonor.sh` |
+| Per-donor MEA | `alz/ingest/mukesh_perdonor.py` | above |
+| SEA-AD agreement | `alz/cross_reference/seaad_human_agreement.py` | above; = `pixi run human` |
 
 ### Supporting (`alz/`)
 | Script | Runner | Output dir |
 |:---|:---|:---|
-| `atlas_reference.py` | `runners/supporting/run_atlas_reference.sh` | `data/external/sea_ad/`, `data/external/allen_abc/` |
-| `wmb_expression.py` | `runners/supporting/run_wmb_expression.sh` | `outputs/reports/wmb_expression/` |
+| `alz/reference/atlas.py` | `alz/runners/supporting/run_atlas_reference.sh` | `data/external/sea_ad/`, `data/external/allen_abc/` |
+| `alz/reference/wmb_expression.py` | `alz/runners/supporting/run_wmb_expression.sh` | `outputs/reports/wmb_expression/` |
 
 ### Supplementary diagnostics (`alz/supplementary/`)
 `fdr_stringent.py`, `threshold_sensitivity.py`, `aggregation_robustness.py`, `parent_protein_qc.py`, `deconvolution_feasibility.py` — run via `runners/supplementary/run_reviewer_diagnostics.sh`. Output: `outputs/reports/supplementary/`.
@@ -162,9 +161,9 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 ### Standalone utilities (`alz/`)
 | Script | Purpose |
 |:---|:---|
-| `map_kinases_to_genes.py` | Kinase → gene symbol mapping; emits `data/derived/caches/kinase_to_gene_mapping.csv` |
-| `lucie_5xfad_manifest.py` | Proteomics manifest builder for Lucie 5xFAD integration |
-| `build_unified_viewer.py` | See Viewers section below |
+| `alz/shared/map_kinases_to_genes.py` | Kinase → gene symbol mapping; emits `data/derived/caches/kinase_to_gene_mapping.csv` |
+| `alz/ingest/lucie.py` and `alz/ingest/build_5xfad_omics_join_manifest.py` | Proteomics and omics-join manifest builders for Lucie / 5xFAD integration |
+| `alz/build_unified_viewer.py` | See Viewers section below |
 
 ## Outputs
 

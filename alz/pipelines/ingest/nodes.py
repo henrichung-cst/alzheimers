@@ -4,7 +4,7 @@ Thin wrappers over the pure ``build_*`` cores in ``alz.ingest.song``: the
 catalog supplies pre-loaded inputs and persists the returns, while those same
 cores stay callable from ``song.py``'s CLI (``--mapping`` / ``--phospho-match``
 / ``--run``). Single implementation, two callers. See
-docs/plans/kedro_argo_reintroduction_2026-05-26.md.
+docs/foundation/live_pipeline_contract.md.
 """
 from __future__ import annotations
 

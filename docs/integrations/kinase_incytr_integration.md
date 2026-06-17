@@ -71,7 +71,7 @@ The factorial-era version of this document is preserved at `docs/archive/kinase_
 | `bash alz/incytr_pair/run_pair_mode.sh` | Incytr invocation in isolation (9 contrasts, reads from `data/derived/incytr_inputs/`). |
 | `pixi run install-incytr` | Reinstall upstream `Incytr` after changes in `~/Projects/work/incytr/`. |
 
-R dependencies still required: `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`. Integration config lives in `alz/integration/config_integration.py`, not `alz/config.py`.
+R dependencies still required: `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`. Integration config lives in `alz/integration/config_integration.py`, not the shared analysis config.
 
 ## Invariants
 
@@ -95,5 +95,5 @@ R dependencies still required: `Incytr`, `DBI`, `duckdb`, `data.table`, `arrow`.
 - `alz/integration/README.md` — file-by-file layout (this doc is the architectural view).
 - `README.md` — repo-level overview and the 2026-05-18 archival note.
 - `CLAUDE.md` — "Integration Code (Incytr)" section + Gotchas.
-- `docs/incytr_deconvolution_pivot.md` — rationale for the levy_t5 spine and the move to forward projection (P_c = f_c × bulk).
-- `docs/plans/change_request_02_spine_rethreshold.md` — current spine parameters (`min_cells = 5`, no rank gate).
+- `docs/foundation/analysis_rationale.md` and `docs/foundation/statistical_constraints.md` — rationale for the move away from inverse deconvolution.
+- `alz/decomposition_mea/README.md` — current Levy-t5 forward-projection contract (`min_cells = 5`, no rank gate).

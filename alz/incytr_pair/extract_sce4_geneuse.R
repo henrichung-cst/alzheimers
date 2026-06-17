@@ -14,7 +14,7 @@
 # receivers (Cholinergic = 1 cell) give every chain extreme SigProb/PDS, so our
 # gated set ballooned to 2952 vs sce4's 1283. Proven: feeding the per-pair node
 # set reproduces the pair EXACTLY (1283, 0 extra / 0 missing — bench/perf/
-# sce4_identity_test.R, docs/plans/sce4_reproduction.md §6).
+# sce4_identity_test.R, archive/sce4_reproduction_2026-06-08/README.md §6).
 #
 # So reconstruct, per (sender, receiver) PAIR, directly from that pair's element
 # of the `.rds` (a data.frame of every gated chain the pair produced):
@@ -40,7 +40,7 @@
 #
 # Consumed by incytr_commandline.R for the AD cohort (REPLACES the DEG∪prG
 # derivation there). The T-cell cohort has no sce4 reference and keeps deriving.
-# Record: docs/plans/sce4_reproduction.md §6.7
+# Record: archive/sce4_reproduction_2026-06-08/README.md §6.7
 suppressPackageStartupMessages({
   library(data.table)
 })

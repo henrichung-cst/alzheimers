@@ -1,6 +1,6 @@
 # Mukesh / NBB Human AD ingest — Phase C edge-case policies.
 #
-# Gating file for `alz/ingest_mukesh.py --reshape`. The script refuses to
+# Gating file for `alz/ingest/mukesh.py --reshape`. The script refuses to
 # run unless `policies_reviewed: true` and every category below has an
 # explicit policy. Prevalence numbers are from the Phase B audit run on
 # 2026-05-13 (see outputs/reports/data_ingest_human/synthesis_audit_summary.txt).

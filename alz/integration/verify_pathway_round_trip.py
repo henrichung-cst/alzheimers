@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build-time round-trip assertion for the Incytr pathway LFC display.
 
-Implements Item 3.5 of ``docs/plans/merged_evidence_panel.md``.
+Implements Item 3.5 of ``docs/foundation/viewer_payload_contract.md``.
 
 For each (contrast, sender, receiver) shard in
 ``edge_slices/incytr_pathways/<sender>__<receiver>.parquet``, this verifier

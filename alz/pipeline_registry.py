@@ -6,7 +6,7 @@ reference/viewer). Registering pipelines that don't exist yet would break
 `kedro run`; entries are added only as each `alz/pipelines/<name>/` is wired
 over its existing helpers and verified against its parity gate.
 
-See docs/plans/kedro_argo_reintroduction_2026-05-26.md.
+See docs/foundation/live_pipeline_contract.md.
 """
 from __future__ import annotations
 

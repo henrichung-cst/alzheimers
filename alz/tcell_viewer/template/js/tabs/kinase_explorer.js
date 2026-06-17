@@ -55,7 +55,7 @@ function getScopedAttribution(kinaseId, filter) {
   // PAYLOAD.attribution_index for one kinase. The T-cell attribution carries
   // binned specificity (tcell_tier ∈ {0,1,2,5,10}) + pseudobulk concordance vs
   // bulk NES (no confidence string, no FDR — see
-  // docs/plans/tcell_within_cohort_attribution.md). filter dimensions may be
+  // docs/tcell_exhaustion_analysis_summary.md). filter dimensions may be
   // string ("" = any) or array ([] = any); celltype scopes the cell_type axis.
   const AI = PAYLOAD.attribution_index || {};
   if (!AI.kinase_id) return [];
@@ -611,7 +611,7 @@ function renderKinaseExplorer() {
     // Opt-in specificity narrowing (tcellMin > 0, off by default): kinase passes
     // if any attribution row in scope reaches the requested tier (≥ tcellMin ×
     // uniform). Specificity only — concordance is never used to filter (de-gate
-    // directive, docs/plans/tcell_attribution_degate_2026-06-03.md). Skipped
+    // directive, docs/tcell_exhaustion_analysis_summary.md). Skipped
     // under text search so a targeted lookup always surfaces the kinase.
     if (!q && tcellMin > 0 && _kineMaxTcellTierScoped(r.id, kf) < tcellMin) continue;
     // Trajectory-shape pattern. Skipped under text search so a targeted lookup

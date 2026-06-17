@@ -50,7 +50,7 @@ function _ensureAttributionRowsByKinase() {
 // WMB location tiers as multiples of the even-split baseline. WMB specificity
 // is a share normalized over the retained WMB classes that carry atlas cells (~9),
 // so the honest uniform is 1/N_retained, read canonically from meta.wmb_uniform
-// (matches the crosstable; see docs/plans/specificity_validation_2026-06-05.md §6).
+// (matches the crosstable; see docs/foundation/concordance.md §6).
 const _WMB_UNIFORM = (typeof PAYLOAD !== "undefined" && PAYLOAD && PAYLOAD.meta && PAYLOAD.meta.wmb_uniform) || (1 / 9);
 const _WMB_TIER_VALUES = [10, 5, 2, 1];
 function _wmbTier(s) {

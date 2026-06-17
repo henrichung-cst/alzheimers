@@ -31,7 +31,7 @@
 #   - pmax(pr_*, 1) floor on deconvoluted proteomics (just below)
 # Receiver gene.use = DEG ∪ prG per cluster (t-cells) / sce4's frozen per-pair
 # node sets (AD, §6.7). Investigation history:
-# bench/bench.md A31–A33; docs/plans/sce4_reproduction.md §6.5/§6.7.
+# bench/bench.md A31–A33; archive/sce4_reproduction_2026-06-08/README.md §6.5/§6.7.
 # Verification gate: `pixi run verify-incytr-sce4`.
 #
 # Usage (from any working directory):
@@ -80,8 +80,7 @@ dir.create(OUTPUT_DIR, recursive = TRUE, showWarnings = FALSE)
 # Experiment B (parallel sweep re-run). ALWAYS run inside the cgroup scope in
 # alz/incytr_pair/README.md. Permutation inside each pair stays single-core
 # (perm.n.cores=NPERM_WORKERS, default 1) to avoid nested forking.
-# See docs/plans/pairmode_perf_oom_2026-05-25.md and
-# docs/plans/pairmode_memory_audit_2026-05-27.md.
+# See bench/bench.md.
 # =====================================================================
 N_PAIR_WORKERS <- as.integer(Sys.getenv("NPAIR_WORKERS", unset = "3"))
 N_PERM_WORKERS <- as.integer(Sys.getenv("NPERM_WORKERS", unset = "1"))
@@ -211,7 +210,7 @@ if (USE_KLDATA) {
 # Per-contrast DEG substrate, condition-keyed so the gene.use is assembled from
 # only THIS contrast's two conditions (not all 12 genotype x age splits — that
 # union was the dominant over-emission source vs sce4; see
-# docs/plans/sce4_reproduction.md §6.2). Built per cluster below
+# archive/sce4_reproduction_2026-06-08/README.md §6.2). Built per cluster below
 # once `clusters` is known.
 #   allmarkers.csv  one-vs-rest FindAllMarkers, cluster = "<cluster>_<condition>",
 #                   run BROAD (logfc.threshold = 0.1) to match sce4's frozen
@@ -219,7 +218,7 @@ if (USE_KLDATA) {
 #                   (avg_log2FC > 1 & p_val < 1e-4).
 # sce4 used DEG ∪ prG, NO HEG (zero HEG labels across its ma_2mo + ma_4mo
 # reference); HEG was a leaky patch for an over-strict DEG cutoff and is removed.
-# See docs/plans/sce4_reproduction.md §6.5.
+# See archive/sce4_reproduction_2026-06-08/README.md §6.5.
 # Gene.use SOURCE (per-cohort, not a fallback toggle). When SCE4_GENEUSE_DIR is
 # set and holds this contrast's reconstructed sce4 gene.use, the AD run CONSUMES
 # sce4's own per-PAIR node sets (alz/incytr_pair/extract_sce4_geneuse.R, read off
@@ -228,7 +227,7 @@ if (USE_KLDATA) {
 # feeding sce4's per-pair nodes yields 0 extra / 0 missing). The T-cell cohort has
 # no sce4 reference, leaves SCE4_GENEUSE_DIR unset, and derives. Two legitimate
 # sources for two datasets, selected by data availability — NOT a "switch back" flag.
-# Record: docs/plans/sce4_reproduction.md §6.7
+# Record: archive/sce4_reproduction_2026-06-08/README.md §6.7
 SCE4_GENEUSE_DIR <- Sys.getenv("SCE4_GENEUSE_DIR", unset = "")
 geneuse_csv <- if (nzchar(SCE4_GENEUSE_DIR))
   file.path(SCE4_GENEUSE_DIR, paste0(condition1, "_", condition2, ".csv")) else ""

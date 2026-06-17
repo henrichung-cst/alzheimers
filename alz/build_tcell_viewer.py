@@ -69,7 +69,7 @@ DONORS = ("donor1", "donor2")
 DONOR_WITH_MEA = ("donor1",)
 
 # Honest caveat surfaced wherever concordance is shown. Interrogation 2026-06-03
-# (docs/plans/tcell_attribution_degate_2026-06-03.md): a kinase's catalytic
+# (docs/tcell_exhaustion_analysis_summary.md): a kinase's catalytic
 # activity is post-translationally decoupled from its own mRNA, so concordance
 # (sign of bulk NES × transcript Δ) carries no directional information — sign-
 # agreement runs at chance (OR≈1; identical in the published mouse Song method).

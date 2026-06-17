@@ -8,9 +8,9 @@ Acquires Allen Institute transcriptomic datasets used by the live pipeline:
     (`effect_sizes{,_early,_late}.h5ad`).  Used by `alz/bulk_mea/attribute.py` for
     transcriptomic concordance.
   - SEA-AD MTG expression: per-supertype mean expression from the full donor-level
-    h5ad (~50 GB).  Used by `human_reference_expression.py`.  Phase-2 download.
+    h5ad (~50 GB).  Used by `human_expression.py`.  Phase-2 download.
   - Allen Human Brain Cell Atlas (HBCA): per-class expression via abc_atlas_access.
-    Human analog of WMB.  Used by `human_reference_expression.py`.  Phase-2 download.
+    Human analog of WMB.  Used by `human_expression.py`.  Phase-2 download.
 
 Also exports a small set of helpers consumed by `wmb_expression.py` and
 `runners/supporting/extract_wmb_gene_subset.py`:

@@ -31,7 +31,7 @@ mkdir -p "$INPUTS_DIR" "$LOG_DIR"
 # (aggexp.csv — the one unrecoverable upstream SCT normalization) + per-group
 # MS bulk medians, and regenerates cell-count size factors from the Song h5ad.
 # It no longer reads the levy_t5 decomposition parquets. See
-# docs/plans/sce4_decomposition_reconciliation_2026-05-24.md.
+# archive/sce4_reproduction_2026-06-08/README.md.
 echo "=== Pre-flight (spine=levy_t5) ==="
 for f in \
   "data/incytr_frozen/v2_46clusters/incytr input/incytr_obj.rds" \

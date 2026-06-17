@@ -43,13 +43,13 @@ Generated caches (`alz/__pycache__/`, etc.) are excluded from this index.
 
 | Path | Reason |
 |:---|:---|
-| `alz/data_ingest.py` | Live Stage 1 total-proteome ingestion and characterization (CLI shim; ingest_mapping is a Kedro pipeline) |
-| `alz/kinase_normalize.py` | Live Stage 2 IRS normalization + stoichiometry (CLI shim over `alz/pipelines/normalize/`) |
-| `alz/kinase_enrich.py` | Live Stage 3 factorial OLS + MEA kinase enrichment (CLI shim over `alz/pipelines/enrich/`) |
-| `alz/kinase_attribute.py` | Live Stage 4 unified cell-type attribution (CLI shim over `alz/pipelines/attribute/`) |
-| `alz/kinase_mechanism.py` | Optional supplementary stage: raw-phospho MEA + mechanism classification (CLI shim over `alz/pipelines/mechanism/`) |
-| `alz/attribution_recovery.py` | Live Stage 5 final hypothesis-table assembly (CLI shim over `alz/pipelines/recovery/`) |
-| `alz/pipelines/{ingest_mapping,normalize,enrich,attribute,mechanism,recovery}/` | Kedro pipeline definitions registered in `alz/pipeline_registry.py` |
+| `alz/ingest/song.py` | Live Stage 1 Song mouse ingestion and characterization; `pixi run ingest` |
+| `alz/bulk_mea/normalize.py` | Live Stage 2 IRS normalization + stoichiometry; `pixi run normalize` |
+| `alz/bulk_mea/enrich.py` | Live Stage 3 factorial OLS + MEA kinase enrichment; `pixi run enrich` |
+| `alz/bulk_mea/attribute.py` | Live Stage 4 unified cell-type attribution; `pixi run attribute` |
+| `alz/bulk_mea/mechanism.py` | Optional supplementary stage: raw-phospho MEA + mechanism classification; `pixi run mechanism` |
+| `alz/bulk_mea/recover.py` | Live Stage 5 final hypothesis-table assembly; `pixi run recover` |
+| `alz/pipelines/ingest/` | Current Kedro wrapper for ingest nodes; downstream bulk stages remain direct module entry points |
 | `alz/pipeline_registry.py`, `alz/settings.py`, `pyproject.toml` | Kedro project bootstrap |
 | `conf/base/{catalog,parameters}.yml`, `conf/full_cohort/parameters.yml` | Kedro Data Catalog + parameters (cohort selection lives here) |
 | `alz/runners/main/run_all.sh` | Canonical full end-to-end build (kinase + decomposition + Incytr + human + viewer); resumable sentinels; `pixi run all`. Auto-resolves WMB/SEA-AD downloads unless `--skip-atlas` |
@@ -88,18 +88,18 @@ Generated caches (`alz/__pycache__/`, etc.) are excluded from this index.
 
 | Path | Reason |
 |:---|:---|
-| `alz/config.py` | Shared configuration (still structurally mixed with legacy settings) |
-| `alz/atlas_reference.py` | External-reference acquisition for SEA-AD and WMB |
-| `alz/wmb_expression.py` | WMB expression export (required for unified attribution) |
-| `alz/snrna_integration.py` | Song snRNA-seq pseudobulk, specificity, and concordance |
-| `alz/plot_attribution_bubbles.py` | Attribution visualization |
+| `alz/shared/config.py` | Shared configuration, paths, thresholds, vocabularies, and sample-filter parameter loader |
+| `alz/reference/atlas.py` | External-reference acquisition for SEA-AD, WMB, and HBCA |
+| `alz/reference/wmb_expression.py` | WMB expression export (required for unified attribution) |
+| `alz/reference/snrna_integration.py` | Song snRNA-seq pseudobulk, specificity, and concordance |
 | `alz/build_unified_viewer.py` | Kinase + pathway HTML viewer (cross-entity) |
-| `alz/map_kinases_to_genes.py` | Shared kinase→gene mapping utility |
-| `alz/lucie_5xfad_manifest.py` | Lucie 5xFAD integration/provenance utility |
+| `alz/build_tcell_viewer.py` | Dedicated T-cell HTML viewer |
+| `alz/shared/map_kinases_to_genes.py` | Shared kinase-to-gene mapping utility |
+| `alz/ingest/lucie.py` and `alz/ingest/build_5xfad_omics_join_manifest.py` | Lucie / 5xFAD integration and provenance utilities |
 | `alz/runners/supporting/run_atlas_reference.sh` | Atlas/reference setup |
 | `alz/runners/supporting/run_wmb_expression.sh` | WMB expression export |
 | `alz/runners/supporting/run_snrna_integration.sh` | snRNA-seq integration |
-| `alz/integration/**` | Kinase ↔ Incytr integration — thin AD client (`factorial.R`, `load.R`, `persist.R`, `views.sql`, `run_factorial.sh`, `export_factorial_inputs.py`, `config_integration.py`); legacy wrappers/adapters preserved under `archive/incytr_integration/`; see `docs/integrations/kinase_incytr_integration.md` and `docs/incytr_remediation_plan.md` |
+| `alz/integration/**` | Consumer side of pair-mode Incytr outputs: viewer substrates, transcript/omics traces, cluster-spine config, and verification. Legacy factorial wrappers/adapters are preserved under `archive/incytr_integration/`; see `docs/integrations/kinase_incytr_integration.md` |
 
 ## Supplementary
 

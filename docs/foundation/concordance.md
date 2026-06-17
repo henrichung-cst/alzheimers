@@ -229,12 +229,11 @@ silently dropped.
 | Internal direction gate | `alz/bulk_mea/attribute.py` | `_assemble_unified()` |
 | Confidence + evidence basis | `alz/bulk_mea/confidence.py` | `assign_confidence()` |
 | Direction-source weighting | `alz/bulk_mea/attribute.py` | `_assemble_unified()` |
-| SEA-AD pathway matching | `alz/kinase_attribute.py` | `step_attribute()` |
-| Pipeline orchestration | `alz/pipelines/attribute/{nodes,pipeline}.py` | Kedro nodes wrap pure helpers |
-| CLI shim | `alz/kinase_attribute.py` | `main()` (delegates to `KedroSession`) |
-| Song pathway-specific LFCs | `alz/snrna_integration.py` | `step_concordance()` |
-| Song Allen-Cell-Type → WMB class mapping | `alz/config.py` | `SONG_TO_WMB_CLASS_MAP` |
-| Top cell-type ranking | `alz/attribution_recovery.py` | `_build_kinase_hypothesis_table()` |
-| High-confidence flag | `alz/attribution_recovery.py` | `_build_kinase_hypothesis_table()` |
+| SEA-AD pathway matching | `alz/bulk_mea/attribute.py` | `_assemble_unified()` |
+| Pipeline orchestration | `pixi.toml` | `attribute` task invokes `alz/bulk_mea/attribute.py` |
+| Song pathway-specific LFCs | `alz/reference/snrna_integration.py` | `step_concordance()` |
+| Song Allen-Cell-Type → WMB class mapping | `alz/shared/config.py` | `SONG_TO_WMB_CLASS_MAP` |
+| Top cell-type ranking | `alz/bulk_mea/recover.py` | `_build_kinase_hypothesis_table()` |
+| High-confidence flag | `alz/bulk_mea/recover.py` | `_build_kinase_hypothesis_table()` |
 | Viewer payload assembly | `alz/build_unified_viewer.py` | attribution payload block |
-| Weight configuration | `alz/config.py` | `SONG_CONCORDANCE_WEIGHT`, `SEA_AD_CONCORDANCE_WEIGHT` |
+| Weight configuration | `alz/shared/config.py` | `SONG_CONCORDANCE_WEIGHT`, `SEA_AD_CONCORDANCE_WEIGHT` |

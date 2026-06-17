@@ -1,5 +1,5 @@
 {
-  "generated_from": "alz/lucie_5xfad_manifest.py",
+  "generated_from": "alz/ingest/lucie.py",
   "data_root": "data/lucie_proteomics",
   "scan_bytes": 65536,
   "file_count": 5,

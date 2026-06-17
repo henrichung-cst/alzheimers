@@ -5,7 +5,7 @@
 
 with min/10000 zero-imputation. This is the method that reproduces sce4
 (Acvr1/Cholinergic ma_2mo = 50.74 / 28.22). See
-`docs/plans/sce4_decomposition_reconciliation_2026-05-24.md` for why the prior
+`archive/sce4_reproduction_2026-06-08/README.md` for why the prior
 levy_t5 forward-projection share (log2(CPM+1) x bulk) could NOT reproduce it:
 aggexp is `AggregateExpression(slot="data")` (a model-based / SCT normalization
 baked into an upstream Seurat object not on this box), so the transcript share

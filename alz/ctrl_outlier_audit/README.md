@@ -5,7 +5,7 @@ Self-contained investigation (2026-05-25) establishing that three human controls
 signature and must be excluded from the clean-control baseline. **Clean controls =
 CTRL-01/02/03/04.** Split out of `alz/cross_reference/` on 2026-05-29.
 
-Plan / findings: `docs/plans/human_ctrl_outlier_audit_2026-05-25.md` (+ `_findings`).
+Plan / findings: `alz/ctrl_outlier_audit/README.md` (+ `_findings`).
 Investigation outputs: `outputs/reports/kinase_attribution_human/ctrl_audit/`.
 
 ## File inventory
