@@ -22,7 +22,6 @@ per-tab branches to `boot.js`.
 
 | File | Lines | Notes |
 |---|---:|---|
-| `index.html.j2` | 36 | Jinja shell |
 | `body.html` | 596 | Live tab panels |
 | `styles.css` | 716 | Shared styles |
 
@@ -49,11 +48,12 @@ per-tab branches to `boot.js`.
 | `js/tabs/kinase_crosstable.js` | 1576 | Decomp/SEA-AD/5xFAD cross-table |
 | `js/tabs/kinase_human.js` | 1600 | Human (Mukesh/NBB) per-donor kinase explorer (active when PAYLOAD.human present) |
 
-## Shared JS fallback
+## Shared fallback
 
 The builder resolves missing local template files from `alz/viewer_shared/template`.
 Current shared modules used by this viewer:
 
+- `index.html.j2`
 - `head.html`
 - `js/00_payload_adapter.js`
 - `js/03_filters_hash.js`

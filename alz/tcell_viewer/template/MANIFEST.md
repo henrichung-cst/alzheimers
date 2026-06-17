@@ -22,7 +22,6 @@ per-tab branches to `boot.js`.
 
 | File | Lines | Notes |
 |---|---:|---|
-| `index.html.j2` | 34 | Jinja shell |
 | `body.html` | 299 | Live tab panels |
 | `styles.css` | 732 | Shared styles |
 
@@ -48,11 +47,12 @@ per-tab branches to `boot.js`.
 | `js/tabs/temporal_v2.js` | 696 | Temporal series builder |
 | `js/tabs/celltype_assignment.js` | 224 | ProjecTILs assignment summary |
 
-## Shared JS fallback
+## Shared fallback
 
 The builder resolves missing local template files from `alz/viewer_shared/template`.
 Current shared modules used by this viewer:
 
+- `index.html.j2`
 - `head.html`
 - `js/00_payload_adapter.js`
 - `js/03_filters_hash.js`

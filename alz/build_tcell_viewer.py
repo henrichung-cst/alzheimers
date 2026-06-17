@@ -2505,6 +2505,9 @@ from jinja2 import Environment, FileSystemLoader  # noqa: E402
 
 _TEMPLATE_DIR = os.path.join(HERE, "tcell_viewer", "template")
 _SHARED_TEMPLATE_DIR = os.path.join(HERE, "viewer_shared", "template")
+_VIEWER_SPECIFIC_TAB_INCLUDES = [
+    "js/tabs/celltype_assignment.js",
+]
 
 
 def _render_template() -> str:
@@ -2516,11 +2519,13 @@ def _render_template() -> str:
             return f.read()
 
     env = Environment(
-        loader=FileSystemLoader(_TEMPLATE_DIR),
+        loader=FileSystemLoader([_TEMPLATE_DIR, _SHARED_TEMPLATE_DIR]),
         keep_trailing_newline=True,
     )
     env.globals["raw"] = _raw
-    return env.get_template("index.html.j2").render()
+    return env.get_template("index.html.j2").render(
+        viewer_specific_tab_includes=_VIEWER_SPECIFIC_TAB_INCLUDES
+    )
 
 
 def write_html(payload: dict, json_str: str | None = None) -> dict:

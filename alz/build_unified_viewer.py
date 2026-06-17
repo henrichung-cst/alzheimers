@@ -5023,6 +5023,11 @@ _TEMPLATE_DIR = os.path.join(
 _SHARED_TEMPLATE_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "viewer_shared", "template"
 )
+_VIEWER_SPECIFIC_TAB_INCLUDES = [
+    "js/tabs/kinase_human.js",
+    "js/tabs/kinase_fivexfad.js",
+    "js/tabs/kinase_crosstable.js",
+]
 
 
 def _render_template() -> str:
@@ -5034,11 +5039,13 @@ def _render_template() -> str:
             return f.read()
 
     env = Environment(
-        loader=FileSystemLoader(_TEMPLATE_DIR),
+        loader=FileSystemLoader([_TEMPLATE_DIR, _SHARED_TEMPLATE_DIR]),
         keep_trailing_newline=True,
     )
     env.globals["raw"] = _raw
-    return env.get_template("index.html.j2").render()
+    return env.get_template("index.html.j2").render(
+        viewer_specific_tab_includes=_VIEWER_SPECIFIC_TAB_INCLUDES
+    )
 
 
 

@@ -28,7 +28,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
 TEMPLATE_DIR = Path(HERE) / "template"
 SHARED_TEMPLATE_DIR = Path(HERE).parent / "viewer_shared" / "template"
-INDEX_TEMPLATE = TEMPLATE_DIR / "index.html.j2"
+INDEX_TEMPLATE = SHARED_TEMPLATE_DIR / "index.html.j2"
+VIEWER_SPECIFIC_TAB_INCLUDES = [
+    "js/tabs/kinase_human.js",
+    "js/tabs/kinase_fivexfad.js",
+    "js/tabs/kinase_crosstable.js",
+]
 REQUIRED_SENTINELS = (
     "__APP_COLOR__",
     "__TAU_COLOR__",
@@ -39,7 +44,9 @@ REQUIRED_SENTINELS = (
 
 def _raw_refs() -> list[str]:
     text = INDEX_TEMPLATE.read_text()
-    return re.findall(r"""raw\(\s*['"]([^'"]+)['"]\s*\)""", text)
+    refs = re.findall(r"""raw\(\s*['"]([^'"]+)['"]\s*\)""", text)
+    refs.extend(VIEWER_SPECIFIC_TAB_INCLUDES)
+    return refs
 
 
 def _resolve_raw(path: str) -> Path:
@@ -71,9 +78,14 @@ def render_jinja() -> str:
     def raw(path: str) -> str:
         return _resolve_raw(path).read_text()
 
-    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), keep_trailing_newline=True)
+    env = Environment(
+        loader=FileSystemLoader([TEMPLATE_DIR, SHARED_TEMPLATE_DIR]),
+        keep_trailing_newline=True,
+    )
     env.globals["raw"] = raw
-    return env.get_template("index.html.j2").render()
+    return env.get_template("index.html.j2").render(
+        viewer_specific_tab_includes=VIEWER_SPECIFIC_TAB_INCLUDES
+    )
 
 
 def render_builder() -> str:
