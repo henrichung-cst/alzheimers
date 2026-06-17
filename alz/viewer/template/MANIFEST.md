@@ -71,6 +71,7 @@ Current shared modules used by this viewer:
 
 ## Verification
 
-Run `pixi run python alz/viewer/verify_template.py` to confirm the
-Jinja-rendered output is byte-equivalent to the legacy `HTML_TEMPLATE`
-in `build_unified_viewer.py`.
+Run `pixi run python alz/viewer/verify_template.py` to confirm every
+`raw(...)` include resolves through the local/shared template directories and
+the independent Jinja render is byte-equivalent to
+`build_unified_viewer._render_template()`.

@@ -6,11 +6,11 @@
 // and mouse/human location tiers at the selected cluster. The per-sample NES
 // detail lives in the DETAIL panel, not as wide columns.
 //
-// DETAIL (right, #kx-detail): a cross-dataset comparison of the selected kinase,
-// two columns (Mouse · Song | Human · Mukesh) under a verdict header, with two
-// sub-tabs that REUSE the per-dataset Kinase-tab renderers verbatim:
-//   Activity      — _renderKinaseNesPlot (mouse) | _khRenderNESAcrossDonors (human)
-//                   plus Song/SEA-AD LFC direction support.
+// DETAIL (right, #kx-detail): a cross-dataset comparison of the selected kinase:
+// Song mouse, Mukesh human AD (+ CTRL visual reference), and 5xFAD cortex /
+// hippocampus age tiles under a verdict header, with two sub-tabs:
+//   Activity      — _renderKinaseNesPlot (mouse), _khRenderNESAcrossDonors
+//                   (human), and local 5xFAD age/status summaries.
 //   Specificity   — _kxRenderSpecAligned: ONE cluster-aligned reference table,
 //                   Song (primary mouse) + WMB / SEA-AD / HBCA cross-check pills.
 //
@@ -29,6 +29,10 @@ let _KX_WMB_MAX_BY_KID = null;     // Map<kid, {frac, cluster}> — peak WMB spe
 let _KX_SONG_BY_KID = null;        // Map<kid, {tau, topCluster, topShare}> — Song location specificity (per kinase)
 let _KX_SEAAD_MAX_BY_NAME = null;  // Map<name, {score, cluster}> — peak SEA-AD specificity (for "Any")
 let _KX_DECOMP_BY_KIN_CTX = null;
+let _KX_F5_BY_KEY = null;          // Map<`kinase|residue|tissue`, {rows: Map<age,row>}>
+let _KX_F5_ATTR_BY_KEY = null;     // Map<`kinase|tissue`, compact attribution summary>
+let _KX_F5_AGREE_BY_KEY = null;    // Map<`kinase|tissue|track|age`, bulk-vs-decomp agreement>
+let _KX_F5_CELLTYPES = [];
 let _KX_CLUSTERS = null;
 let _KX_AD_DONORS = [];
 let _KX_CTRL_DONORS = [];
@@ -59,11 +63,82 @@ function _kxState() {
       hSpecMin: 0,            // minimum human SEA-AD expr tier (0=any,1,2,5,10 ×)
       allSamples: false,      // median + agreement over ALL measured units, not just sig
       agreeCat: "",           // agreement category to show ("" = any), via the toolbar dropdown
+      compareScope: "three_way",
+      compareState: "",
+      f5Celltype: "",
+      f5Confidence: "",
+      f5SnrnaMin: 0,
+      f5WmbMin: 0,
       selectedKey: null,      // `name|residue` of the kinase shown in the detail panel
       detailTab: "activity",  // "activity" | "specificity"
     };
   }
   return Store.state.view.crosstable;
+}
+
+const _KX_F5_AGES = [3, 6, 9, 12];
+const _KX_F5_TISSUES = ["cortex", "hippocampus"];
+const _KX_STATUS_META = {
+  sig_up: {cls: "badge vhi", label: "sig up", short: "up", dir: 1},
+  sig_down: {cls: "badge hi", label: "sig down", short: "down", dir: -1},
+  mixed_sig: {cls: "badge mix", label: "mixed_sig", short: "mixed", dir: 0},
+  nonsig_measured: {cls: "badge lo", label: "measured", short: "n/s", dir: 0},
+  missing: {cls: "badge lo", label: "missing", short: "n/a", dir: null},
+};
+const _KX_COMPARE_LABELS = {
+  three_way: "3-way",
+  song_mukesh: "Song vs Mukesh",
+  song_f5: "Song vs 5xFAD",
+  mukesh_f5: "Mukesh vs 5xFAD",
+  f5_tissue: "5xFAD tissue split",
+};
+const _KX_STATE_FILTER_LABELS = {
+  sig_agree: "significant agree",
+  agree: "agree",
+  sig_disagree: "significant disagree",
+  disagree: "disagree",
+};
+const _KX_STATE_FILTER_VALUES = new Set(Object.keys(_KX_STATE_FILTER_LABELS));
+
+function _kxNormResidue(v) {
+  const s = String(v || "").toUpperCase();
+  if (s === "Y" || s === "PY") return "Y";
+  return "ST";
+}
+
+function _kxF5TrackForResidue(residue) {
+  return _kxNormResidue(residue) === "Y" ? "y" : "st";
+}
+
+function _kxF5Key(name, residue, tissue) {
+  return `${name || ""}|${_kxNormResidue(residue)}|${tissue || ""}`;
+}
+
+function _kxF5AttrKey(name, tissue) {
+  return `${name || ""}|${tissue || ""}`;
+}
+
+function _kxF5Num(v) {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function _kxStatusDir(status) {
+  const m = _KX_STATUS_META[status || "missing"];
+  return m ? m.dir : null;
+}
+
+function _kxStatusIsSig(status) {
+  return status === "sig_up" || status === "sig_down";
+}
+
+function _kxDirectionStatus(nes, measured, sig) {
+  if (!measured) return "missing";
+  const n = _kxF5Num(nes);
+  if (!sig) return "nonsig_measured";
+  if (n == null || n === 0) return "nonsig_measured";
+  return n > 0 ? "sig_up" : "sig_down";
 }
 
 function _kxBuildIndexes() {
@@ -206,6 +281,72 @@ function _kxBuildIndexes() {
     }
   }
 
+  _KX_F5_BY_KEY = new Map();
+  _KX_F5_ATTR_BY_KEY = new Map();
+  _KX_F5_AGREE_BY_KEY = new Map();
+  _KX_F5_CELLTYPES = [];
+  const F5 = PAYLOAD.supporting_5xfad;
+  if (F5) {
+    for (const row of (F5.rows || [])) {
+      if (row.analysis_track === "raw_phospho") continue;
+      if (row.analysis_track && row.analysis_track !== "stoichiometry") continue;
+      const tissue = row.tissue || "";
+      if (!_KX_F5_TISSUES.includes(tissue)) continue;
+      const residue = _kxNormResidue(row.residue_type || row.track);
+      const key = _kxF5Key(row.kinase, residue, tissue);
+      let rec = _KX_F5_BY_KEY.get(key);
+      if (!rec) {
+        rec = {
+          kinase: row.kinase || "",
+          gene: row.gene_symbol || row.kinase || "",
+          tissue,
+          residue,
+          track: row.track || _kxF5TrackForResidue(residue),
+          assay: row.assay || "",
+          rows: new Map(),
+        };
+        _KX_F5_BY_KEY.set(key, rec);
+      }
+      rec.rows.set(Number(row.age_months), row);
+    }
+    const celltypes = new Set();
+    for (const row of (F5.celltype_attribution_summary_index || [])) {
+      const tissue = row.tissue || "";
+      if (!_KX_F5_TISSUES.includes(tissue)) continue;
+      const key = _kxF5AttrKey(row.kinase, tissue);
+      let rec = _KX_F5_ATTR_BY_KEY.get(key);
+      if (!rec) {
+        rec = {
+          kinase: row.kinase || "",
+          tissue,
+          celltypes: [],
+          best_confidence_tier: "none",
+          top_fivexfad_fold_over_uniform: null,
+        };
+        _KX_F5_ATTR_BY_KEY.set(key, rec);
+      }
+      if (_kxConfRank(row.best_confidence_tier) > _kxConfRank(rec.best_confidence_tier)) {
+        rec.best_confidence_tier = row.best_confidence_tier || "none";
+      }
+      const topFold = _kxF5Num(row.top_fivexfad_fold_over_uniform);
+      if (topFold != null && (rec.top_fivexfad_fold_over_uniform == null || topFold > rec.top_fivexfad_fold_over_uniform)) {
+        rec.top_fivexfad_fold_over_uniform = topFold;
+      }
+      for (const ct of (row.celltypes || [])) {
+        if (!ct.cell_type) continue;
+        celltypes.add(ct.cell_type);
+        rec.celltypes.push({...ct, age_months: row.age_months});
+      }
+    }
+    _KX_F5_CELLTYPES = Array.from(celltypes).sort();
+    for (const row of (F5.celltype_agreement_index || [])) {
+      const tissue = row.tissue || "";
+      if (!_KX_F5_TISSUES.includes(tissue)) continue;
+      const key = `${row.kinase || ""}|${tissue}|${row.track || _kxF5TrackForResidue(row.residue_type)}|${Number(row.age_months)}`;
+      _KX_F5_AGREE_BY_KEY.set(key, row);
+    }
+  }
+
   const clusters = Array.from(decompClusters);
   for (const c of specClusters) if (!decompClusters.has(c)) clusters.push(c);
   clusters.sort();
@@ -227,6 +368,20 @@ function _kxBuildIndexes() {
       peak_NES: null, trajectory: "", n_sig_contrasts: 0, n_celltype_candidates: 0,
       _nes: {}, _fdr: {}, _human: human, _humanOnly: true,
     });
+    seen.add(key);
+  }
+
+  if (_KX_F5_BY_KEY) {
+    for (const rec of _KX_F5_BY_KEY.values()) {
+      const key = `${rec.kinase}|${rec.residue}`;
+      if (seen.has(key)) continue;
+      _KX_ROWS.push({
+        kid: null, name: rec.kinase, gene: rec.gene || "", family: famMap[rec.kinase] || "", residue: rec.residue,
+        peak_NES: null, trajectory: "", n_sig_contrasts: 0, n_celltype_candidates: 0,
+        _nes: {}, _fdr: {}, _human: null, _humanOnly: true, _f5Only: true,
+      });
+      seen.add(key);
+    }
   }
 
   // Default pivot is "" = Any cell type (peak specificity across clusters).
@@ -415,6 +570,217 @@ function _kxMedian(arr) {
   return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
 }
 
+function _kxConfRank(conf) {
+  const rank = {none: 0, low: 1, moderate: 2, high: 3, very_high: 4};
+  return rank[conf || "none"] || 0;
+}
+
+function _kxConfPass(conf, threshold) {
+  if (!threshold) return true;
+  return _kxConfRank(conf || "none") >= _kxConfRank(threshold);
+}
+
+function _kxMeasuredDirection(nes) {
+  const n = _kxF5Num(nes);
+  if (n == null || n === 0) return 0;
+  return n > 0 ? 1 : -1;
+}
+
+function _kxSourceFromValues(values, fdrGate, allSamples) {
+  const measured = values
+    .filter(v => v && _kxF5Num(v.nes) != null)
+    .map(v => ({nes: _kxF5Num(v.nes), fdr: _kxF5Num(v.fdr)}));
+  if (!measured.length) {
+    return {status: "missing", sig: false, measured: false, nes: null, measuredNes: null, dir: null, measuredDir: null, nSig: 0, nMeasured: 0};
+  }
+  const sigVals = measured.filter(v => v.fdr != null && v.fdr < fdrGate);
+  const measuredNes = _kxMedian(measured.map(v => v.nes));
+  const sigNes = sigVals.length ? _kxMedian(sigVals.map(v => v.nes)) : null;
+  const callNes = allSamples ? measuredNes : sigNes;
+  const status = _kxDirectionStatus(callNes, true, allSamples || sigVals.length > 0);
+  return {
+    status,
+    sig: _kxStatusIsSig(status),
+    measured: true,
+    nes: callNes,
+    measuredNes,
+    dir: _kxStatusDir(status),
+    measuredDir: _kxMeasuredDirection(measuredNes),
+    nSig: sigVals.length,
+    nMeasured: measured.length,
+  };
+}
+
+function _kxF5Rec(row, tissue) {
+  return _KX_F5_BY_KEY ? (_KX_F5_BY_KEY.get(_kxF5Key(row.name, row.residue, tissue)) || null) : null;
+}
+
+function _kxF5AttrSummary(row, tissue) {
+  return _KX_F5_ATTR_BY_KEY ? (_KX_F5_ATTR_BY_KEY.get(_kxF5AttrKey(row.name, tissue)) || null) : null;
+}
+
+function _kxF5AttrRows(row, tissue) {
+  const s = _kxF5AttrSummary(row, tissue);
+  return s && Array.isArray(s.celltypes) ? s.celltypes : [];
+}
+
+function _kxF5WmbTier(attrRow) {
+  const spec = _kxF5Num(attrRow && attrRow.wmb_specificity);
+  if (typeof _wmbTier === "function") return _wmbTier(spec);
+  return _kxFoldTier(spec);
+}
+
+function _kxF5NativeTier(attrRow) {
+  const fold = _kxF5Num(attrRow && attrRow.fivexfad_fold_over_uniform);
+  return _kxFoldTier(fold);
+}
+
+function _kxF5ScopedAttrRows(row, tissue, state) {
+  const s = state || _kxState();
+  return _kxF5AttrRows(row, tissue).filter(r => {
+    if (s.f5Celltype && r.cell_type !== s.f5Celltype) return false;
+    if (!_kxConfPass(r.confidence_tier || "none", s.f5Confidence)) return false;
+    if (s.f5SnrnaMin && _kxF5NativeTier(r) < Number(s.f5SnrnaMin)) return false;
+    if (s.f5WmbMin && _kxF5WmbTier(r) < Number(s.f5WmbMin)) return false;
+    return true;
+  });
+}
+
+function _kxF5TissueSource(row, tissue, fdrGate, allSamples) {
+  const rec = _kxF5Rec(row, tissue);
+  if (!rec) {
+    return {status: "missing", sig: false, measured: false, nes: null, measuredNes: null, dir: null, measuredDir: null, nSig: 0, nMeasured: 0, _values: []};
+  }
+  const values = _KX_F5_AGES.map(age => {
+    const r = rec.rows.get(age);
+    return r ? {nes: r.NES, fdr: r.FDR} : null;
+  }).filter(Boolean);
+  const source = _kxSourceFromValues(values, fdrGate, allSamples);
+  source._values = values
+    .map(v => ({nes: _kxF5Num(v.nes), fdr: _kxF5Num(v.fdr)}))
+    .filter(v => v.nes != null);
+  if (!allSamples) {
+    const dirs = new Set(values
+      .filter(v => _kxF5Num(v.fdr) != null && _kxF5Num(v.fdr) < fdrGate)
+      .map(v => _kxMeasuredDirection(v.nes))
+      .filter(Boolean));
+    if (dirs.size > 1) {
+      source.status = "mixed_sig";
+      source.sig = true;
+      source.dir = 0;
+    }
+  }
+  return source;
+}
+
+function _kxAggregateF5(cortex, hippocampus, fdrGate, allSamples) {
+  const parts = [cortex, hippocampus];
+  const values = parts.flatMap(p => p._values || []);
+  const sigValues = values.filter(v => v.fdr != null && v.fdr < fdrGate);
+  const displayValues = allSamples ? values : sigValues;
+  const displayMedian = displayValues.length ? _kxMedian(displayValues.map(v => v.nes)) : null;
+  const measuredMedian = values.length ? _kxMedian(values.map(v => v.nes)) : null;
+  if (parts.some(p => p.status === "mixed_sig")) {
+    return {status: "mixed_sig", sig: true, measured: true, nes: displayMedian, measuredNes: measuredMedian, dir: 0, measuredDir: 0,
+      nSig: (cortex.nSig || 0) + (hippocampus.nSig || 0), nMeasured: (cortex.nMeasured || 0) + (hippocampus.nMeasured || 0)};
+  }
+  const sigDirs = parts.filter(p => _kxStatusIsSig(p.status)).map(p => p.dir);
+  if (sigDirs.includes(1) && sigDirs.includes(-1)) {
+    return {status: "mixed_sig", sig: true, measured: true, nes: displayMedian, measuredNes: measuredMedian, dir: 0, measuredDir: 0,
+      nSig: (cortex.nSig || 0) + (hippocampus.nSig || 0), nMeasured: (cortex.nMeasured || 0) + (hippocampus.nMeasured || 0)};
+  }
+  if (sigDirs.includes(1) || sigDirs.includes(-1)) {
+    const dir = sigDirs.includes(1) ? 1 : -1;
+    return {status: dir > 0 ? "sig_up" : "sig_down", sig: true, measured: true, nes: displayMedian, measuredNes: measuredMedian,
+      dir, measuredDir: dir, nSig: (cortex.nSig || 0) + (hippocampus.nSig || 0), nMeasured: (cortex.nMeasured || 0) + (hippocampus.nMeasured || 0)};
+  }
+  const measured = parts.filter(p => p.measured);
+  if (!measured.length) {
+    return {status: "missing", sig: false, measured: false, nes: null, measuredNes: null, dir: null, measuredDir: null, nSig: 0, nMeasured: 0};
+  }
+  const dirs = new Set(measured.map(p => p.measuredDir).filter(Boolean));
+  return {status: "nonsig_measured", sig: false, measured: true, nes: null, measuredNes: measuredMedian,
+    dir: 0, measuredDir: dirs.size === 1 ? Array.from(dirs)[0] : 0, nSig: 0, nMeasured: (cortex.nMeasured || 0) + (hippocampus.nMeasured || 0)};
+}
+
+function _kxComparePair(a, b) {
+  if (!a.measured && !b.measured) return "missing";
+  if (!a.measured || !b.measured) return "missing_one";
+  if (a.status === "mixed_sig" || b.status === "mixed_sig") return "mixed_sig";
+  if (a.sig && b.sig) return a.dir === b.dir ? "sig_same" : "sig_opposite";
+  if (a.sig || b.sig) return "source_only";
+  if (a.measuredDir && b.measuredDir && a.measuredDir === b.measuredDir) return "directional_same";
+  if (a.measuredDir && b.measuredDir && a.measuredDir !== b.measuredDir) return "directional_opposite";
+  return "measured";
+}
+
+function _kxThreeWayState(r) {
+  const sources = [r._songSource, r._mukeshSource, r._f5Source];
+  if (r._f5Source.status === "mixed_sig") return "mixed_sig";
+  const measured = sources.filter(s => s && s.measured);
+  if (measured.length < 3) return "missing_one";
+  const sig = sources.filter(s => s.sig);
+  if (sig.length === 3) {
+    const dirs = new Set(sig.map(s => s.dir));
+    return dirs.size === 1 ? "sig_same" : "sig_opposite";
+  }
+  if (sig.length >= 2 && new Set(sig.map(s => s.dir)).size > 1) return "sig_opposite";
+  const dirs = new Set(measured.map(s => s.measuredDir).filter(Boolean));
+  if (dirs.size === 1) return "directional_same";
+  if (dirs.size > 1) return "directional_opposite";
+  return "measured";
+}
+
+function _kxTissueState(r) {
+  const c = r._f5Tissues && r._f5Tissues.cortex;
+  const h = r._f5Tissues && r._f5Tissues.hippocampus;
+  if (!c || !h || (!c.measured && !h.measured)) return "missing";
+  if (!c.measured || !h.measured) return "missing_one";
+  if (c.status === "mixed_sig" || h.status === "mixed_sig" || r._f5Source.status === "mixed_sig") return "mixed_sig";
+  if (c.sig && h.sig) return c.dir === h.dir ? "sig_same" : "mixed_sig";
+  if (c.sig || h.sig) return c.sig ? "cortex_only" : "hippocampus_only";
+  if (c.measuredDir && h.measuredDir && c.measuredDir === h.measuredDir) return "directional_same";
+  if (c.measuredDir && h.measuredDir && c.measuredDir !== h.measuredDir) return "directional_opposite";
+  return "measured";
+}
+
+function _kxComparisonState(r, scope) {
+  if (scope === "song_mukesh") return _kxComparePair(r._songSource, r._mukeshSource);
+  if (scope === "song_f5") return _kxComparePair(r._songSource, r._f5Source);
+  if (scope === "mukesh_f5") return _kxComparePair(r._mukeshSource, r._f5Source);
+  if (scope === "f5_tissue") return _kxTissueState(r);
+  return _kxThreeWayState(r);
+}
+
+function _kxStatePassesComparison(r, scope, state) {
+  if (!state) return true;
+  if (!_KX_STATE_FILTER_VALUES.has(state)) return true;
+  const cat = _kxComparisonState(r, scope);
+  if (state === "sig_agree") return cat === "sig_same";
+  if (state === "agree") return cat === "sig_same" || cat === "directional_same";
+  if (state === "sig_disagree") return cat === "sig_opposite" || cat === "mixed_sig";
+  if (state === "disagree") return cat === "sig_opposite" || cat === "directional_opposite" || cat === "mixed_sig";
+  return cat === state;
+}
+
+function _kxComparisonMeta(scope, state) {
+  const scopeLabel = _KX_COMPARE_LABELS[scope] || _KX_COMPARE_LABELS.three_way;
+  const map = {
+    sig_same: {cls: "badge vhi", glyph: "sig same", label: "Significant same direction", tip: `${scopeLabel}: all required significant sources point the same direction.`},
+    directional_same: {cls: "badge hi", glyph: "dir same", label: "Directional agreement", tip: `${scopeLabel}: measured sources point the same direction, allowing nonsignificant evidence.`},
+    sig_opposite: {cls: "badge mix", glyph: "opposite", label: "Opposite significant direction", tip: `${scopeLabel}: significant sources oppose each other.`},
+    directional_opposite: {cls: "badge mix", glyph: "dir opp", label: "Directional opposition", tip: `${scopeLabel}: measured sources point opposite directions without all sides significant.`},
+    source_only: {cls: "badge mid", glyph: "one side", label: "Source-only", tip: `${scopeLabel}: only one side is significant at the active FDR.`},
+    cortex_only: {cls: "badge mid", glyph: "ctx only", label: "Cortex-only", tip: "5xFAD cortex is significant and hippocampus is not."},
+    hippocampus_only: {cls: "badge mid", glyph: "hip only", label: "Hippocampus-only", tip: "5xFAD hippocampus is significant and cortex is not."},
+    mixed_sig: {cls: "badge mix", glyph: "mixed_sig", label: "5xFAD mixed_sig", tip: "5xFAD cortex and hippocampus contain significant opposing evidence."},
+    missing_one: {cls: "badge imp", glyph: "missing", label: "Missing one side", tip: `${scopeLabel}: at least one required source is missing.`},
+    missing: {cls: "badge lo", glyph: "n/a", label: "Missing", tip: `${scopeLabel}: no comparable evidence is measured.`},
+    measured: {cls: "badge lo", glyph: "measured", label: "Measured", tip: `${scopeLabel}: evidence is measured but does not meet a stronger agreement category.`},
+  };
+  return map[state] || map.measured;
+}
+
 // Stamp _mouseSig / _humanSig / _agreeCategory / _agreeScore on each row, live
 // against the FDR gate. BOTH summary NES are the median over the dataset's units
 // (mouse contrasts / human AD donors) that are significant at the gate — the same
@@ -426,38 +792,34 @@ function _kxMedian(arr) {
 // significant at the gate. Lets the user see the all-sample direction/agreement.
 function _kxComputeAgreement(rows, fdrGate, allSamples) {
   for (const r of rows) {
-    let mouseSig = false, mNes = null;
-    const mSigNes = [];
-    for (const c of (CONTRASTS || [])) {
-      const nes = r._nes[c];
-      if (nes == null || !isFinite(nes)) continue;
-      const f = r._fdr[c];
-      if (allSamples || (f != null && isFinite(f) && f < fdrGate)) mSigNes.push(nes);
-    }
-    if (mSigNes.length) { mouseSig = true; mNes = _kxMedian(mSigNes); }
+    const songVals = [];
+    for (const c of (CONTRASTS || [])) songVals.push({nes: r._nes[c], fdr: r._fdr[c]});
+    const song = _kxSourceFromValues(songVals, fdrGate, allSamples);
 
-    let humanSig = false, hNes = null;
+    const humanVals = [];
     const pd = r._human ? _KX_HUMAN_PERDONOR.get(r._human.kid) : null;
-    if (pd) {
-      const sigNes = [];
-      for (const d of _KX_AD_DONORS) {
-        const e = pd.get(d);
-        if (!e || e.nes == null || !isFinite(e.nes)) continue;
-        if (allSamples || (e.fdr != null && isFinite(e.fdr) && e.fdr < fdrGate)) sigNes.push(e.nes);
-      }
-      if (sigNes.length) { humanSig = true; hNes = _kxMedian(sigNes); }
+    if (pd) for (const d of _KX_AD_DONORS) {
+      const e = pd.get(d);
+      if (e) humanVals.push({nes: e.nes, fdr: e.fdr});
     }
+    const mukesh = _kxSourceFromValues(humanVals, fdrGate, allSamples);
 
-    r._mouseSig = mouseSig; r._humanSig = humanSig; r._mNes = mNes; r._hNes = hNes;
-    let cat, score;
-    if (mouseSig && humanSig) {
-      if (mNes != null && hNes != null && mNes > 0 && hNes > 0)      { cat = "concordant-up";   score = Math.abs(mNes) * Math.abs(hNes); }
-      else if (mNes != null && hNes != null && mNes < 0 && hNes < 0) { cat = "concordant-down"; score = Math.abs(mNes) * Math.abs(hNes); }
-      else                                                           { cat = "discordant";      score = -Math.abs(mNes || 0) * Math.abs(hNes || 0); }
-    } else if (mouseSig) { cat = "mouse-only"; score = Math.abs(mNes || 0) * 0.1; }
-    else if (humanSig)   { cat = "human-only"; score = Math.abs(hNes || 0) * 0.1; }
-    else                 { cat = "neither";    score = 0; }
-    r._agreeCategory = cat; r._agreeScore = score;
+    const cortex = _kxF5TissueSource(r, "cortex", fdrGate, allSamples);
+    const hippocampus = _kxF5TissueSource(r, "hippocampus", fdrGate, allSamples);
+    const f5 = _kxAggregateF5(cortex, hippocampus, fdrGate, allSamples);
+
+    r._songSource = song;
+    r._mukeshSource = mukesh;
+    r._f5Tissues = {cortex, hippocampus};
+    r._f5Source = f5;
+    r._mouseSig = song.sig; r._humanSig = mukesh.sig;
+    r._mNes = song.nes; r._hNes = mukesh.nes; r._f5Nes = f5.nes;
+
+    const cat = _kxComparisonState(r, _kxState().compareScope || "three_way");
+    r._agreeCategory = cat;
+    // Internal sort rank only: categories first, then available evidence breadth.
+    const rank = {sig_same: 6, directional_same: 5, source_only: 4, cortex_only: 4, hippocampus_only: 4, measured: 3, missing_one: 2, missing: 1, directional_opposite: -2, mixed_sig: -3, sig_opposite: -4};
+    r._agreeScore = (rank[cat] || 0) * 100 + (song.nSig || 0) + (mukesh.nSig || 0) + (f5.nSig || 0);
   }
 }
 
@@ -471,7 +833,8 @@ function _kxMedNesCell(val) {
 }
 
 function _kxAgreeCategoryCell(cat) {
-  const m = _KX_AGREE_META[cat] || _KX_AGREE_META["neither"];
+  const s = _kxState();
+  const m = _kxComparisonMeta(s.compareScope || "three_way", cat);
   return `<td style="text-align:center;padding:2px 4px;"><span class="${m.cls}" title="${_escapeHtml(m.tip)}">${m.glyph}</span></td>`;
 }
 
@@ -526,6 +889,39 @@ function _kxHumanGlyphCell(r, fdrGate) {
     ? `<span class="nes-profile-spacer" aria-hidden="true"></span><div class="nes-profile-cell kh-ctrl-group" style="grid-template-columns:repeat(${ctrlCells.length},1fr);" title="CTRL donors scored against the same CTRL mean — reference only; they bias toward zero by design.">${ctrlCells.join("")}</div>`
     : "";
   return `<td class="kx-hglyph"><div class="nes-profile-wrap">${adBlock}${ctrlBlock}</div></td>`;
+}
+
+function _kxF5Tile(row, tissue, age, fdrGate) {
+  const rec = _kxF5Rec(row, tissue);
+  const entry = rec ? rec.rows.get(age) : null;
+  if (!entry) return `<div class="npc" title="${_escapeHtml(`5xFAD ${tissue} ${age}mo: not measured`)}"></div>`;
+  const nes = _kxF5Num(entry.NES);
+  const fdr = _kxF5Num(entry.FDR);
+  const sig = fdr != null && fdr < fdrGate;
+  let bg = "#fff";
+  if (nes != null) {
+    const a = Math.min(1, Math.abs(nes) / 3);
+    const rgb = nes >= 0 ? [197, 48, 48] : [43, 108, 176];
+    bg = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${(0.15 + 0.85 * a).toFixed(3)})`;
+  }
+  const title = `5xFAD ${tissue} ${age}mo TG vs WT: NES ${nes == null ? "n/a" : nes.toFixed(2)}, FDR ${fdr == null ? "n/a" : fdr.toExponential(1)}${sig ? " (sig)" : ""}`;
+  return `<div class="npc${sig ? " sig" : ""}" style="background:${bg};" title="${_escapeHtml(title)}"></div>`;
+}
+
+function _kxF5GlyphCell(row, tissue, fdrGate) {
+  const rec = _kxF5Rec(row, tissue);
+  if (!rec) return `<td class="kx-f5glyph muted" title="5xFAD ${_escapeHtml(tissue)} not measured">–</td>`;
+  const labels = _KX_F5_AGES.map(age => `<span>${age}</span>`).join("");
+  const cells = _KX_F5_AGES.map(age => _kxF5Tile(row, tissue, age, fdrGate)).join("");
+  const source = row._f5Tissues && row._f5Tissues[tissue] ? row._f5Tissues[tissue] : null;
+  const meta = _KX_STATUS_META[source ? source.status : "missing"] || _KX_STATUS_META.missing;
+  return `<td class="kx-f5glyph" title="${_escapeHtml(`5xFAD ${tissue}: ${meta.label}`)}">` +
+    `<div class="nes-profile-wrap kx-f5-wrap">` +
+    `<span class="kx-f5-tissue">${_escapeHtml(tissue === "hippocampus" ? "Hip" : "Ctx")}</span>` +
+    `<div class="nes-profile-age-stack">` +
+    `<div class="nes-profile-age-labels">${labels}</div>` +
+    `<div class="nes-profile-cell" style="grid-template-columns:repeat(4,1fr);">${cells}</div>` +
+    `</div></div></td>`;
 }
 
 // ---------- NES-tab LFC direction support ----------
@@ -608,6 +1004,23 @@ function _kxRenderDirectionSupport(hostEl, row) {
       confidence: "",
     });
   }
+  if (row._f5Source && row._f5Source.measured && row._f5Source.status !== "mixed_sig") {
+    const f5Attrs = _KX_F5_TISSUES.flatMap(t => _kxF5ScopedAttrRows(row, t, s)
+      .map(a => ({...a, _tissue: t})))
+      .filter(a => _kxF5Num(a.fivexfad_lfc) != null)
+      .sort((a, b) => Math.abs(_kxF5Num(b.fivexfad_lfc) || 0) - Math.abs(_kxF5Num(a.fivexfad_lfc) || 0));
+    const best = f5Attrs[0];
+    if (best) {
+      rows.push({
+        source: "5xFAD snRNA LFC",
+        scope: `${best._tissue} · ${best.cell_type || "cell type n/a"}`,
+        lfc: Number(best.fivexfad_lfc),
+        nes: row._f5Source.nes || row._f5Source.measuredNes,
+        fdr: null,
+        confidence: best.confidence_tier || "",
+      });
+    }
+  }
 
   if (!rows.length) {
     hostEl.innerHTML = `<div class="kx-direction-support muted">No Song LFC or SEA-AD LFC direction evidence for this kinase.</div>`;
@@ -641,6 +1054,87 @@ function _kxRenderDirectionSupport(hostEl, row) {
     `</section>`;
 }
 
+function _kxStatusBadge(status, title) {
+  const m = _KX_STATUS_META[status || "missing"] || _KX_STATUS_META.missing;
+  return `<span class="${m.cls}" title="${_escapeHtml(title || m.label)}">${_escapeHtml(m.label)}</span>`;
+}
+
+function _kxF5AgreementFor(row, tissue, age) {
+  const track = _kxF5TrackForResidue(row.residue);
+  return _KX_F5_AGREE_BY_KEY ? (_KX_F5_AGREE_BY_KEY.get(`${row.name}|${tissue}|${track}|${age}`) || null) : null;
+}
+
+function _kxRenderF5AgeTable(row, tissue, fdrGate) {
+  const rec = _kxF5Rec(row, tissue);
+  if (!rec) return `<div class="kx-detail-placeholder muted">5xFAD ${_escapeHtml(tissue)} not measured.</div>`;
+  const body = _KX_F5_AGES.map(age => {
+    const r = rec.rows.get(age);
+    const agr = _kxF5AgreementFor(row, tissue, age);
+    if (!r) {
+      return `<tr><td>${age}mo</td><td colspan="5" class="muted">not measured</td></tr>`;
+    }
+    const nes = _kxF5Num(r.NES);
+    const fdr = _kxF5Num(r.FDR);
+    const sig = fdr != null && fdr < fdrGate;
+    const col = nes == null ? "" : (nes >= 0 ? "color:#c53030;" : "color:#2b6cb0;");
+    return `<tr>` +
+      `<td>${age}mo</td>` +
+      `<td class="kx-nes-num" style="${col}">${nes == null ? "–" : `${nes >= 0 ? "+" : ""}${nes.toFixed(2)}`}</td>` +
+      `<td class="kx-nes-num">${fdr == null ? "–" : fdr.toExponential(1)}</td>` +
+      `<td>${sig ? `<span class="badge hi">sig</span>` : `<span class="muted">n/s</span>`}</td>` +
+      `<td>${agr ? _escapeHtml(agr.agreement_state || "–") : `<span class="muted">–</span>`}</td>` +
+      `<td class="muted">${agr && agr.top_cell_type ? _escapeHtml(agr.top_cell_type) : "–"}</td>` +
+      `</tr>`;
+  }).join("");
+  return `<table class="data-table kx-f5-detail-table"><thead><tr>` +
+    `<th>Age</th><th>NES</th><th>FDR</th><th>Call</th><th>Bulk/decomp</th><th>Top cell</th>` +
+    `</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function _kxRenderF5AttrMini(row, tissue) {
+  const rows = _kxF5ScopedAttrRows(row, tissue, _kxState())
+    .slice()
+    .sort((a, b) => (_kxConfRank(b.confidence_tier) - _kxConfRank(a.confidence_tier)) ||
+      ((_kxF5Num(b.fivexfad_fold_over_uniform) || -1) - (_kxF5Num(a.fivexfad_fold_over_uniform) || -1)))
+    .slice(0, 4);
+  if (!rows.length) return `<div class="muted">No matching 5xFAD attribution rows.</div>`;
+  const body = rows.map(r => {
+    const fold = _kxF5Num(r.fivexfad_fold_over_uniform);
+    const lfc = _kxF5Num(r.fivexfad_lfc);
+    return `<tr>` +
+      `<td>${_escapeHtml(r.cell_type || "")}${r.age_months ? ` <span class="muted">${_escapeHtml(String(r.age_months))}mo</span>` : ""}</td>` +
+      `<td>${_escapeHtml((r.confidence_tier || "none").replace("_", " "))}</td>` +
+      `<td class="kx-nes-num">${fold == null ? "–" : fold.toFixed(1) + "x"}</td>` +
+      `<td class="kx-nes-num">${lfc == null ? "–" : `${lfc >= 0 ? "+" : ""}${lfc.toFixed(2)}`}</td>` +
+      `</tr>`;
+  }).join("");
+  return `<table class="data-table kx-f5-attr-table"><thead><tr>` +
+    `<th>Cell type</th><th>Conf</th><th>snRNA</th><th>LFC</th>` +
+    `</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function _kxRenderF5Detail(hostEl, row, fdrGate) {
+  if (!hostEl) return;
+  const f5 = row._f5Source || _kxAggregateF5(
+    _kxF5TissueSource(row, "cortex", fdrGate, _kxState().allSamples),
+    _kxF5TissueSource(row, "hippocampus", fdrGate, _kxState().allSamples),
+    fdrGate,
+    _kxState().allSamples);
+  const cortex = row._f5Tissues ? row._f5Tissues.cortex : null;
+  const hip = row._f5Tissues ? row._f5Tissues.hippocampus : null;
+  const mixedNote = f5.status === "mixed_sig"
+    ? `<div class="notice show">5xFAD aggregate is <strong>mixed_sig</strong>: cortex and hippocampus contain significant opposing evidence.</div>`
+    : "";
+  hostEl.innerHTML = `<section class="kx-f5-detail">` +
+    `<div class="kx-detail-col-head">5xFAD · cortex and hippocampus</div>` +
+    `<p class="muted">Aggregate ${_kxStatusBadge(f5.status, "Aggregate 5xFAD cortex+hippocampus status")} · ` +
+    `cortex ${_kxStatusBadge(cortex ? cortex.status : "missing")} · hippocampus ${_kxStatusBadge(hip ? hip.status : "missing")}</p>` +
+    mixedNote +
+    `<h5>Cortex</h5>${_kxRenderF5AgeTable(row, "cortex", fdrGate)}${_kxRenderF5AttrMini(row, "cortex")}` +
+    `<h5>Hippocampus</h5>${_kxRenderF5AgeTable(row, "hippocampus", fdrGate)}${_kxRenderF5AttrMini(row, "hippocampus")}` +
+    `</section>`;
+}
+
 // ---------- slim master header + row builders ----------
 
 function _kxBuildHeader(s) {
@@ -656,9 +1150,12 @@ function _kxBuildHeader(s) {
   cells.push(TH("family", "Family", "Kinase family. Click to sort."));
   cells.push(TH(null, "Mouse", "Mouse (Song) bulk MEA NES across 3 diseases × 3 timepoints (red=up, blue=down; outlined=FDR<header).", "kx-mglyph"));
   cells.push(TH(null, "Human", "Human (Mukesh) per-donor MEA NES: AD donors, then a muted CTRL reference group (red=up, blue=down; outlined=FDR<header).", "kx-hglyph"));
+  cells.push(TH(null, "5xFAD cortex", "5xFAD cortex TG-vs-WT kinase MEA across 3/6/9/12 months. Red=up, blue=down, outline=FDR<header.", "kx-f5glyph"));
+  cells.push(TH(null, "5xFAD hip", "5xFAD hippocampus TG-vs-WT kinase MEA across 3/6/9/12 months. Red=up, blue=down, outline=FDR<header.", "kx-f5glyph"));
   cells.push(TH("m_med", "M med", "Mouse median NES over the contrasts feeding the direction call (FDR-significant, or all when 'All samples' is on). – = none. Sort by magnitude.", "kx-nes-num"));
   cells.push(TH("h_med", "H med", "Human median NES over the AD donors feeding the direction call (FDR-significant, or all when 'All samples' is on). – = none. Sort by magnitude.", "kx-nes-num"));
-  cells.push(TH("agree_score", "Direction", "Mouse/human direction support from M med + H med: both significant at the header FDR AND same direction in disease. Grouped by category; click to sort within groups.", "kx-agree-col"));
+  cells.push(TH("f5_med", "5xFAD med", "5xFAD median NES over cortex and hippocampus age units feeding the direction call (FDR-significant, or all when 'All samples' is on). – = none. Sort by magnitude.", "kx-nes-num"));
+  cells.push(TH("agree_score", "Crossplay", "Categorical comparison under the active scope: Song, Mukesh AD, and/or 5xFAD aggregate cortex+hippocampus. CTRL donors are visual reference only.", "kx-agree-col"));
   const specScope = s.cluster ? `at ${s.cluster}` : "— peak across all clusters (hover for the cluster)";
   cells.push(TH("m_spec", "Song", `Song location evidence, as fold over the even-split baseline (1/31 ≈ 0.032): ≥10× / ≥5× / ≥2× / ≥1×. The fold is the kinase's peak cell-type share; the concentration index τ and the cell type it concentrates in are in the tooltip. One value per kinase. ★ = the pinned cluster IS that cell type.`, "kx-spec"));
   cells.push(TH("wmb", "WMB", `WMB atlas cross-check: independent mouse-brain location tier ${specScope} (× uniform 1/${(1 / _KX_WMB_UNIFORM).toFixed(0)}). Confirms the Song call against an outside atlas.`, "kx-spec"));
@@ -698,8 +1195,11 @@ function _kxBuildRow(r, s, fdrGate) {
   tds.push(`<td class="muted">${_escapeHtml(r.family)}</td>`);
   tds.push(_kxMouseGlyphCell(r, fdrGate));
   tds.push(_kxHumanGlyphCell(r, fdrGate));
+  tds.push(_kxF5GlyphCell(r, "cortex", fdrGate));
+  tds.push(_kxF5GlyphCell(r, "hippocampus", fdrGate));
   tds.push(_kxMedNesCell(r._mNes));
   tds.push(_kxMedNesCell(r._hNes));
+  tds.push(_kxMedNesCell(r._f5Nes));
   tds.push(_kxAgreeCategoryCell(r._agreeCategory));
   tds.push(r._humanOnly ? `<td class="muted">–</td>` : _kxSongTierBadge(sp.song, s.cluster));
   tds.push(r._humanOnly ? `<td class="muted">–</td>` : _kxWmbTierBadge(sp.wmb, sp.wmbAt));
@@ -754,12 +1254,19 @@ function _kxSortRows(rows, s) {
       av = a._mNes; bv = b._mNes;
     } else if (s.sortKey === "h_med") {
       av = a._hNes; bv = b._hNes;
+    } else if (s.sortKey === "f5_med") {
+      av = a._f5Nes; bv = b._f5Nes;
     } else {
       av = a.peak_NES; bv = b.peak_NES;
     }
-    const ax = (av == null || !isFinite(av)) ? -Infinity : Math.abs(av);
-    const bx = (bv == null || !isFinite(bv)) ? -Infinity : Math.abs(bv);
-    return s.sortDir * (bx - ax);
+    const aMissing = av == null || !isFinite(av);
+    const bMissing = bv == null || !isFinite(bv);
+    if (aMissing && bMissing) return (a.name || "").localeCompare(b.name || "");
+    if (aMissing) return 1;
+    if (bMissing) return -1;
+    const ax = Math.abs(av);
+    const bx = Math.abs(bv);
+    return s.sortDir < 0 ? (bx - ax) : (ax - bx);
   });
 }
 
@@ -783,6 +1290,10 @@ function _kxFilteredRows(s) {
       if (mMin > 0 && (!sp.song || sp.song.topShare == null || sp.song.topShare < mMin * _KX_SONG_UNIFORM)) return false;
       if (hMin > 0 && (sp.seaad == null || sp.seaad < hLog2Min)) return false;
     }
+    if (s.f5Celltype || s.f5Confidence || s.f5SnrnaMin || s.f5WmbMin) {
+      const hasAttr = _KX_F5_TISSUES.some(tissue => _kxF5ScopedAttrRows(r, tissue, s).length > 0);
+      if (!hasAttr) return false;
+    }
     return true;
   });
 }
@@ -800,22 +1311,25 @@ function _kxRenderTable() {
 
   const head = _kxBuildHeader(s);
 
-  // Agreement-category filter lives here (post-agreement) because the category
-  // isn't known until _kxComputeAgreement runs against the live FDR. "" = any.
-  const shown = s.agreeCat ? rows.filter(r => r._agreeCategory === s.agreeCat) : rows.slice();
+  // Comparison-state filter lives here because source statuses are recomputed
+  // live against the active FDR threshold.
+  const shown = rows.filter(r => _kxStatePassesComparison(r, s.compareScope || "three_way", s.compareState || ""));
   _kxSortRows(shown, s);
   const bodyParts = shown.map(r => _kxBuildRow(r, s, fdrGate));
   wrap.innerHTML = `<div class="ke-table-wrap" style="overflow:auto;max-height:75vh;"><table class="data-table" id="kx-table">${head}<tbody>${bodyParts.join("")}</tbody></table></div>`;
 
   if (countEl) {
     const n = shown.length;
-    let cu = 0, cd = 0, dis = 0;
+    let sigAgree = 0, agree = 0, sigDisagree = 0, disagree = 0;
     for (const r of rows) {
-      if (r._agreeCategory === "concordant-up") cu++;
-      else if (r._agreeCategory === "concordant-down") cd++;
-      else if (r._agreeCategory === "discordant") dis++;
+      const scope = s.compareScope || "three_way";
+      if (_kxStatePassesComparison(r, scope, "sig_agree")) sigAgree++;
+      if (_kxStatePassesComparison(r, scope, "agree")) agree++;
+      if (_kxStatePassesComparison(r, scope, "sig_disagree")) sigDisagree++;
+      if (_kxStatePassesComparison(r, scope, "disagree")) disagree++;
     }
-    countEl.textContent = `${n.toLocaleString()} kinase${n === 1 ? "" : "s"} · same dir ↑${cu} ↓${cd} · opposite ${dis} · cluster=${s.cluster || "any"} · ${s.allSamples ? "all samples" : `fdr<${fdrGate}`}`;
+    const filterLabel = s.compareState ? ` · state=${_KX_STATE_FILTER_LABELS[s.compareState] || s.compareState}` : "";
+    countEl.textContent = `${n.toLocaleString()} kinase${n === 1 ? "" : "s"} · ${_KX_COMPARE_LABELS[s.compareScope] || "3-way"}${filterLabel} · sig agree ${sigAgree} · agree ${agree} · sig disagree ${sigDisagree} · disagree ${disagree} · cluster=${s.cluster || "any"} · ${s.allSamples ? "all samples" : `fdr<${fdrGate}`}`;
   }
 
   wrap.querySelectorAll("th[data-sortkey]").forEach(th => {
@@ -874,7 +1388,7 @@ function _kxRenderDetail() {
   }
   const fdrGate = (Store.state.filters && Store.state.filters.fdr) || 0.25;
   _kxComputeAgreement([row], fdrGate, s.allSamples);
-  const meta = _KX_AGREE_META[row._agreeCategory] || _KX_AGREE_META["neither"];
+  const meta = _kxComparisonMeta(s.compareScope || "three_way", row._agreeCategory);
   const mouseKid = row._humanOnly ? null : row.kid;
   const humanKid = row._human ? row._human.kid : null;
 
@@ -892,10 +1406,15 @@ function _kxRenderDetail() {
   }
   const mNesTxt = row._mNes != null ? `${row._mNes >= 0 ? "+" : ""}${row._mNes.toFixed(2)}` : "n/a";
   const hNesTxt = row._hNes != null ? `${row._hNes >= 0 ? "+" : ""}${row._hNes.toFixed(2)}` : "n/a";
+  const f5NesTxt = row._f5Nes != null ? `${row._f5Nes >= 0 ? "+" : ""}${row._f5Nes.toFixed(2)}` : "n/a";
   const allS = s.allSamples;
   const nesLbl = allS ? "median NES (all samples)" : "median NES";
   const mCntTxt = allS ? `${mTot} contrast${mTot === 1 ? "" : "s"}` : `${mSig}/${mTot || "–"} contrasts sig`;
   const hCntTxt = allS ? `${hTot} donor${hTot === 1 ? "" : "s"}` : `${hSig}/${hTot || "–"} donors sig`;
+  const f5Cnt = row._f5Source || {nSig: 0, nMeasured: 0};
+  const f5CntTxt = allS
+    ? `${f5Cnt.nMeasured || 0} tissue-age unit${(f5Cnt.nMeasured || 0) === 1 ? "" : "s"}`
+    : `${f5Cnt.nSig || 0}/${f5Cnt.nMeasured || "–"} tissue-age units sig`;
   const tab = s.detailTab || "activity";
 
   host.innerHTML = `
@@ -907,7 +1426,9 @@ function _kxRenderDetail() {
       </div>
       <div class="kx-detail-verdict muted">
         Mouse (Song) ${nesLbl} <b>${mNesTxt}</b> (${mCntTxt}) ·
-        Human (Mukesh) ${nesLbl} <b>${hNesTxt}</b> (${hCntTxt})
+        Human (Mukesh AD) ${nesLbl} <b>${hNesTxt}</b> (${hCntTxt}) ·
+        5xFAD ${nesLbl} <b>${f5NesTxt}</b> (${f5CntTxt}) ·
+        5xFAD aggregate ${_kxStatusBadge(row._f5Source ? row._f5Source.status : "missing")}
       </div>
     </div>
     <nav class="kx-detail-tabs">
@@ -919,6 +1440,7 @@ function _kxRenderDetail() {
       : `<div id="kx-detail-direction"></div><div class="kx-detail-grid">
       <div class="kx-detail-col"><div class="kx-detail-col-head">Mouse · Song</div><div id="kx-detail-m"></div></div>
       <div class="kx-detail-col"><div class="kx-detail-col-head">Human · Mukesh</div><div id="kx-detail-h"></div></div>
+      <div class="kx-detail-col"><div id="kx-detail-f5"></div></div>
     </div>`}`;
 
   host.querySelectorAll("button[data-kxd-tab]").forEach(b => b.addEventListener("click", () => {
@@ -932,6 +1454,7 @@ function _kxRenderDetail() {
     _kxRenderDirectionSupport(document.getElementById("kx-detail-direction"), row);
     const mEl = document.getElementById("kx-detail-m");
     const hEl = document.getElementById("kx-detail-h");
+    const f5El = document.getElementById("kx-detail-f5");
     const humanReady = (typeof _KH_HAS !== "undefined") && _KH_HAS && _KH;
     const hrow = (humanReady && humanKid != null && typeof _khAllRows === "function")
       ? _khAllRows().find(x => x.id === humanKid) : null;
@@ -941,6 +1464,7 @@ function _kxRenderDetail() {
       _kxPrimeHumanDonor(hrow);
       _khRenderNESAcrossDonors("kx-detail-h", hrow, _KHState.auditDonor);
     } else hEl.innerHTML = _kxNotMeasured("human");
+    _kxRenderF5Detail(f5El, row, fdrGate);
   } else {
     // Cell-type Specificity: one cluster-aligned reference-corroboration table
     // (Song primary + WMB / SEA-AD / HBCA cross-checks), not two verbatim tables.
@@ -972,6 +1496,28 @@ function _kxSyncControls() {
   if (aChk) aChk.checked = !!s.allSamples;
   const agSel = document.getElementById("kx-agree");
   if (agSel) agSel.value = s.agreeCat || "";
+  const scopeSel = document.getElementById("kx-compare-scope");
+  if (scopeSel) scopeSel.value = s.compareScope || "three_way";
+  const stateSel = document.getElementById("kx-compare-state");
+  if (stateSel) {
+    if (s.compareState && !_KX_STATE_FILTER_VALUES.has(s.compareState)) s.compareState = "";
+    stateSel.value = s.compareState || "";
+  }
+  const f5Cell = document.getElementById("kx-f5-celltype");
+  if (f5Cell) {
+    const cur = s.f5Celltype || "";
+    f5Cell.innerHTML = `<option value="">Any</option>` + (_KX_F5_CELLTYPES || []).map(c =>
+      `<option value="${_escapeHtml(c)}">${_escapeHtml(c)}</option>`
+    ).join("");
+    f5Cell.value = (_KX_F5_CELLTYPES || []).includes(cur) ? cur : "";
+    if (f5Cell.value !== cur) s.f5Celltype = "";
+  }
+  const f5Conf = document.getElementById("kx-f5-confidence");
+  if (f5Conf) f5Conf.value = s.f5Confidence || "";
+  const f5Snrna = document.getElementById("kx-f5-snrna");
+  if (f5Snrna) f5Snrna.value = String(s.f5SnrnaMin || 0);
+  const f5Wmb = document.getElementById("kx-f5-wmb");
+  if (f5Wmb) f5Wmb.value = String(s.f5WmbMin || 0);
 }
 
 function wireKinaseCrosstable() {
@@ -990,6 +1536,24 @@ function wireKinaseCrosstable() {
   if (aChk) aChk.addEventListener("change", () => { _kxState().allSamples = aChk.checked; _kxRenderTable(); });
   const agSel = document.getElementById("kx-agree");
   if (agSel) agSel.addEventListener("change", () => { _kxState().agreeCat = agSel.value; _kxRenderTable(); });
+  const scopeSel = document.getElementById("kx-compare-scope");
+  if (scopeSel) scopeSel.addEventListener("change", () => {
+    const s = _kxState();
+    s.compareScope = scopeSel.value || "three_way";
+    s.compareState = "";
+    _kxSyncControls();
+    _kxRenderTable();
+  });
+  const stateSel = document.getElementById("kx-compare-state");
+  if (stateSel) stateSel.addEventListener("change", () => { _kxState().compareState = stateSel.value; _kxRenderTable(); });
+  const f5Cell = document.getElementById("kx-f5-celltype");
+  if (f5Cell) f5Cell.addEventListener("change", () => { _kxState().f5Celltype = f5Cell.value; _kxRenderTable(); });
+  const f5Conf = document.getElementById("kx-f5-confidence");
+  if (f5Conf) f5Conf.addEventListener("change", () => { _kxState().f5Confidence = f5Conf.value; _kxRenderTable(); });
+  const f5Snrna = document.getElementById("kx-f5-snrna");
+  if (f5Snrna) f5Snrna.addEventListener("change", () => { _kxState().f5SnrnaMin = +f5Snrna.value; _kxRenderTable(); });
+  const f5Wmb = document.getElementById("kx-f5-wmb");
+  if (f5Wmb) f5Wmb.addEventListener("change", () => { _kxState().f5WmbMin = +f5Wmb.value; _kxRenderTable(); });
   const reset = document.getElementById("kx-reset");
   if (reset) reset.addEventListener("click", () => {
     const s = _kxState();
@@ -997,7 +1561,8 @@ function wireKinaseCrosstable() {
     s.residueTrack = ""; s.search = "";
     s.mSpecMin = 0; s.hSpecMin = 0; s.allSamples = false;
     s.sortKey = "agree_score"; s.sortDir = -1;
-    s.agreeCat = "";
+    s.agreeCat = ""; s.compareScope = "three_way"; s.compareState = "";
+    s.f5Celltype = ""; s.f5Confidence = ""; s.f5SnrnaMin = 0; s.f5WmbMin = 0;
     s.selectedKey = null; s.detailTab = "activity";
     _kxSyncControls();
     _kxRenderTable();

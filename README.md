@@ -62,6 +62,9 @@ Outputs land in `outputs/reports/kinase_attribution_human/` (per-donor NES, recu
 
 Net-new human T-cell exhaustion cohort (ingested 2026-05-27 from Google Drive folder `1YE_h1jIyBajtm6ArxJqevJ0rt0xLKQgX`). Two donors, each with matched TMT phosphoproteomics and CITE-seq scRNA along a time course (donor1 days 0/2/9/13/17/20, donor2 days 2/5/7/9/11). Donor1 carries Total + pY + IMAC; donor2 carries Total + pY only (no IMAC → no kinase MEA on donor2; Incytr pair-mode runs pr+py on donor2, pr+ps+py on donor1).
 
+For a stable, citation-ready summary of this analysis and the dedicated T-cell
+viewer, use [`docs/tcell_exhaustion_analysis_summary.md`](docs/tcell_exhaustion_analysis_summary.md).
+
 Pipeline (run in this order):
 
 ```bash
@@ -205,6 +208,8 @@ pixi run ingest-gdrive-shared         # → data/external/gdrive_shared/
 pixi run ingest-lucie-proteomics      # → data/external/lucie_proteomics/
 pixi run ingest-5xfad-reports         # → data/raw/external/lucie_proteomics/reports/ (parsed PTM tables)
 pixi run ingest-5xfad-raw-sne         # + ~28 GB raw .sne for the 2 unparsed cells
+pixi run ingest-5xfad-snrna           # 5xFAD snRNA metadata/provenance
+pixi run ingest-5xfad-snrna-rds       # + 2025 reclustering RDS objects (group: scrna)
 pixi run ingest-deconvolution-bulk    # → data/datasets/song/proteomics/source/ (filtered)
 pixi run ingest-tcells                # T-cell cohort proteomics
 pixi run ingest-tcells-scrna          # + ~10 GB scRNA .rds (group: scrna)

@@ -429,6 +429,71 @@ def _timepoint_label(contrast: str) -> str:
     return contrast.split("_", 1)[0] if "_" in contrast else contrast
 
 
+_KINASE_LIBRARY_MOTIF_ALIASES = {
+    # Kinase Library may expose activin receptor-like kinase aliases by either
+    # receptor shorthand or HGNC symbol, depending on the package data table.
+    "ALK1": "ACVRL1",
+    "ALK2": "ACVR1",
+    "ALK4": "ACVR1B",
+    "ALK7": "ACVR1C",
+}
+
+
+def _build_kinase_motifs(kinase_names: list[str]) -> dict[str, dict]:
+    """Build the global motif lookup consumed by the shared sequence-logo widget."""
+    try:
+        import kinase_library as kl
+    except ImportError as e:
+        print(f"  (warn) kinase_motifs unavailable: {e}", flush=True)
+        return {}
+
+    out: dict[str, dict] = {}
+    skipped: list[str] = []
+    for name in sorted({str(k) for k in kinase_names if str(k)}):
+        source_name = name
+        try:
+            mat = kl.get_matrix(source_name, mat_type="norm")
+            kin_type = kl.get_kinase_type(source_name)
+        except Exception:
+            alias = _KINASE_LIBRARY_MOTIF_ALIASES.get(name)
+            if not alias:
+                skipped.append(name)
+                continue
+            source_name = alias
+            try:
+                mat = kl.get_matrix(source_name, mat_type="norm")
+                kin_type = kl.get_kinase_type(source_name)
+            except Exception as e:
+                skipped.append(f"{name}->{source_name} ({e})")
+                continue
+
+        st_fav: dict[str, float] | None = None
+        if kin_type == "ser_thr":
+            try:
+                sf = kl.get_st_fav(source_name)
+                st_fav = {
+                    "S": float(sf.loc[source_name, "S"]),
+                    "T": float(sf.loc[source_name, "T"]),
+                }
+            except Exception:
+                st_fav = None
+
+        out[name] = {
+            "source_name": source_name,
+            "kin_type": kin_type,
+            "positions": [int(c) for c in mat.columns],
+            "amino_acids": [str(a) for a in mat.index],
+            "matrix": [[round(float(v), 4) for v in row] for row in mat.values],
+            "st_fav": st_fav,
+        }
+
+    if skipped:
+        print(f"  kinase_motifs: skipped {len(skipped)} kinases "
+              f"(first 3: {skipped[:3]})", flush=True)
+    print(f"  kinase_motifs: emitted PSSM for {len(out):,} kinases", flush=True)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Kinase slice (donor1 MEA only)
 # ---------------------------------------------------------------------------
@@ -481,6 +546,21 @@ def _load_tcell_attribution(donor: str) -> "pd.DataFrame | None":
     return df if len(df) else None
 
 
+def _load_kinase_to_gene_map() -> dict[str, str]:
+    """Kinase Library abbreviation -> gene symbol, with identity fallback."""
+    try:
+        df = pd.read_csv(config.MAPPING_CACHE_FILE)
+    except Exception:
+        return {}
+    if not {"kinase_abbreviation", "gene_symbol"}.issubset(df.columns):
+        return {}
+    return {
+        str(k): str(g)
+        for k, g in zip(df["kinase_abbreviation"], df["gene_symbol"])
+        if pd.notna(k) and pd.notna(g)
+    }
+
+
 def _tcell_attribution_uniform(donor: str) -> float | None:
     """Uniform specificity baseline 1/N_states for the badge tooltip."""
     cc = os.path.join(TCELLS_INCYTR_INPUTS_DIR, donor, "scrna", "cell_counts.csv")
@@ -506,7 +586,10 @@ def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list) ->
         return float(v) if pd.notna(v) else None
 
     for r in attr_df.itertuples(index=False):
-        kk = kid.get(str(r.kinase))
+        residue_type = str(getattr(r, "residue_type", "") or "")
+        kk = kid.get((str(r.kinase), residue_type)) if residue_type else None
+        if kk is None:
+            kk = kid.get(str(r.kinase))
         cc = c_idx.get(str(r.contrast))
         if kk is None or cc is None:
             continue
@@ -536,65 +619,94 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
     if attribution is None:
         return None
 
-    # Build a unified long-form (kinase × contrast) table across tracks.
-    # Default track is ST/stoich (residue=ST, variant="").
-    primary = attribution["tracks"].get("ST") or next(iter(attribution["tracks"].values()))
-    nes = primary["nes"].copy()
-    fdr = primary["fdr"].copy()
-    if "kinase" not in nes.columns:
+    # Build one visible row per primary MEA residue track, mirroring the
+    # unified viewer. ST and Y stoichiometry rows appear together; raw phospho
+    # remains an audit/sensitivity comparison, not a separate browser row.
+    track_frames: list[dict] = []
+    short_contrasts: list[str] = []
+    for residue_type in ("ST", "Y"):
+        track = attribution["tracks"].get(residue_type)
+        if track is None:
+            continue
+        nes = track["nes"].copy()
+        fdr = track["fdr"].copy()
+        if "kinase" not in nes.columns:
+            continue
+        contrasts = [c for c in nes.columns if c != "kinase"]
+        contrast_to_short = {c: re.sub(r"^D\d+_", "", c) for c in contrasts}
+        for c in contrasts:
+            sc = contrast_to_short[c]
+            if sc not in short_contrasts:
+                short_contrasts.append(sc)
+        for k in nes["kinase"].astype(str).tolist():
+            track_frames.append({
+                "kinase": k,
+                "residue_type": residue_type,
+                "nes": nes,
+                "fdr": fdr,
+                "contrasts": contrasts,
+                "contrast_to_short": contrast_to_short,
+            })
+    if not track_frames:
         return None
-    contrasts = [c for c in nes.columns if c != "kinase"]
-    # MEA columns: `D1_d13` style — strip the donor prefix to align with the
-    # pair-mode `d13_d2` vocabulary for the timepoint legend.
-    contrast_to_short = {
-        c: re.sub(r"^D\d+_", "", c) for c in contrasts
-    }
-    short_contrasts = [contrast_to_short[c] for c in contrasts]
 
-    kinases = nes["kinase"].astype(str).tolist()
-    kid = {k: i for i, k in enumerate(kinases)}
+    gene_map = _load_kinase_to_gene_map()
+    rows = [(r["kinase"], r["residue_type"]) for r in track_frames]
+    kid: dict = {}
+    name_counts: dict[str, int] = {}
+    for k, _residue_type in rows:
+        name_counts[k] = name_counts.get(k, 0) + 1
+    for i, (k, residue_type) in enumerate(rows):
+        kid[(k, residue_type)] = i
+        if name_counts.get(k, 0) == 1:
+            kid[k] = i
 
     cols: dict[str, list] = {
-        "id": list(range(len(kinases))),
-        "name": kinases,
-        "gene_symbol": kinases,
-        "residue_type": ["ST"] * len(kinases),
-        "trajectory": [""] * len(kinases),
+        "id": list(range(len(rows))),
+        "name": [k for k, _residue_type in rows],
+        "gene_symbol": [gene_map.get(k, k) for k, _residue_type in rows],
+        "residue_type": [residue_type for _k, residue_type in rows],
+        "trajectory": [""] * len(rows),
         "peak_contrast": [],
         "peak_NES": [],
         "n_sig_contrasts": [],
-        "top_celltype_1": [""] * len(kinases),
+        "top_celltype_1": [""] * len(rows),
     }
     for sc in short_contrasts:
         cols[f"NES_{sc}"] = []
         cols[f"FDR_{sc}"] = []
 
-    nes_idx = nes.set_index("kinase")
-    fdr_idx = fdr.set_index("kinase")
     fdr_thresh = float(attribution["manifest"].get("mea_fdr_thresh", 0.25))
 
-    for k in kinases:
+    for row in track_frames:
+        k = row["kinase"]
+        contrasts = row["contrasts"]
+        contrast_to_short = row["contrast_to_short"]
+        nes_idx = row["nes"].set_index("kinase")
+        fdr_idx = row["fdr"].set_index("kinase")
         nes_row = nes_idx.loc[k] if k in nes_idx.index else None
         fdr_row = fdr_idx.loc[k] if k in fdr_idx.index else None
-        nes_vec, fdr_vec = [], []
+        vals_by_short: dict[str, tuple[float, float]] = {}
         for c in contrasts:
             n_val = float(nes_row[c]) if nes_row is not None and pd.notna(nes_row[c]) else float("nan")
             f_val = float(fdr_row[c]) if fdr_row is not None and pd.notna(fdr_row[c]) else float("nan")
+            vals_by_short[contrast_to_short[c]] = (n_val, f_val)
+        nes_vec, fdr_vec = [], []
+        for scn in short_contrasts:
+            n_val, f_val = vals_by_short.get(scn, (float("nan"), float("nan")))
             nes_vec.append(n_val)
             fdr_vec.append(f_val)
-        sc = short_contrasts
-        for i, scn in enumerate(sc):
-            cols[f"NES_{scn}"].append(nes_vec[i])
-            cols[f"FDR_{scn}"].append(fdr_vec[i])
+            cols[f"NES_{scn}"].append(n_val)
+            cols[f"FDR_{scn}"].append(f_val)
         # Peak: largest |NES| among contrasts with finite FDR.
-        finite = [(i, nes_vec[i]) for i in range(len(contrasts))
+        finite = [(i, nes_vec[i]) for i in range(len(short_contrasts))
                   if not (np.isnan(nes_vec[i]) or np.isnan(fdr_vec[i]))]
         if finite:
             i_peak = max(finite, key=lambda t: abs(t[1]))[0]
-            cols["peak_contrast"].append(sc[i_peak])
+            cols["peak_contrast"].append(short_contrasts[i_peak])
             cols["peak_NES"].append(nes_vec[i_peak])
             cols["n_sig_contrasts"].append(
-                int(sum(1 for j in range(len(contrasts))
+                int(sum(1 for j in range(len(short_contrasts))
                         if not np.isnan(fdr_vec[j]) and fdr_vec[j] < fdr_thresh))
             )
         else:
@@ -611,15 +723,22 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
         attribution_index = _build_tcell_attribution_index(
             attr_df, kid, short_contrasts)
         attribution_uniform = _tcell_attribution_uniform(donor)
-        top = (attr_df.sort_values(["tcell_tier", "tcell_concordance"],
-                                   ascending=False)
-               .drop_duplicates("kinase"))
-        top_by_kinase = dict(zip(top["kinase"].astype(str), top["cell_type"]))
-        cols["top_celltype_1"] = [top_by_kinase.get(k, "") for k in kinases]
+        top = attr_df.sort_values(
+            ["tcell_tier", "tcell_concordance"], ascending=False)
+        top_by_key = {}
+        for r in top.itertuples(index=False):
+            residue_type = str(getattr(r, "residue_type", "") or "")
+            key = (str(r.kinase), residue_type)
+            if key not in top_by_key:
+                top_by_key[key] = str(r.cell_type)
+        cols["top_celltype_1"] = [
+            top_by_key.get((k, residue_type), "")
+            for k, residue_type in rows
+        ]
 
     return {
         "kinases_slice": cols,
-        "kinase_names": kinases,
+        "kinase_names": [k for k, _residue_type in rows],
         "contrasts": short_contrasts,
         "kid": kid,
         "fdr_threshold": fdr_thresh,
@@ -2243,8 +2362,7 @@ def build_tcell_payload() -> dict:
             print(f"  (warn) family resolve failed: {e}; using empty map",
                   flush=True)
 
-    # Empty per-tab payloads the existing viewer JS dereferences blindly.
-    kinase_motifs = {"name": [], "motifs": []}
+    kinase_motifs = _build_kinase_motifs(union_kinases)
     audit_tables = build_tcell_audit_manifest()
 
     # Timepoints actually seen across both donors → palette subset.

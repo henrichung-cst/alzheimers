@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Within-cohort cell-type attribution for the T-cell exhaustion cohort (donor1).
 
-Localizes a **bulk** kinase activity signal (the IMAC kinase MEA, donor1 only) to
-a ProjecTILs cell-type **state** using only the cohort's own paired scRNA — the
+Localizes **bulk** kinase activity signals (donor1 ST + pY stoichiometry MEA) to
+ProjecTILs cell-type **states** using only the cohort's own paired scRNA — the
 "Song" within-cohort method (`alz/reference/snrna_integration.py` +
 `alz/bulk_mea/attribute.py`), no disease reference required. A kinase attributes
 to a state when its transcript is (a) preferentially expressed in that state
@@ -31,7 +31,7 @@ the matching `cell_counts.csv` n_cells to recover per-cell mean log-expression
 Outputs (donor1) under outputs/reports/kinase_attribution_tcells/donor1/:
   tcell_specificity.csv          (gene, state, tcell_specificity, tcell_mean_log2_expression)
   tcell_concordance.csv          (gene, state, day, tcell_lfc)
-  unified_attribution_tcells.csv full kinase × state × day grid — EVERY row ships
+  unified_attribution_tcells.csv full kinase-track × state × day grid — EVERY row ships
                                  (no gate). `tcell_concordant` is a shown label,
                                  never a filter; concordance is directionally
                                  uninformative for kinases (OR≈1, see docs/plans/
@@ -170,18 +170,34 @@ def _compute_concordance(mean_long: pd.DataFrame) -> pd.DataFrame:
 
 
 def _load_mea(donor: str) -> pd.DataFrame:
-    """Long bulk MEA table: kinase, day (dNN), NES, FDR — contrast days only."""
-    nes = pd.read_csv(os.path.join(_mea_dir(donor), "kinase_timepoint_nes.csv"))
-    fdr = pd.read_csv(os.path.join(_mea_dir(donor), "kinase_timepoint_fdr.csv"))
+    """Long bulk MEA table: kinase, residue_type, day, NES, FDR.
+
+    Mirrors the unified viewer convention: primary stoichiometry MEA rows from
+    all residue tracks appear together, with `residue_type` carrying ST/Y.
+    Raw phospho remains a sensitivity/audit track, not a separate attribution
+    row family.
+    """
 
     def _melt(df, name):
         long = df.melt(id_vars=["kinase"], var_name="_col", value_name=name)
         long["day"] = long["_col"].str.replace(r"^D\d+_", "", regex=True)
         return long.drop(columns="_col")
 
-    nes_l = _melt(nes, "NES")
-    fdr_l = _melt(fdr, "FDR")
-    mea = nes_l.merge(fdr_l, on=["kinase", "day"])
+    frames = []
+    for suffix, residue_type in (("", "ST"), ("_pY", "Y")):
+        nes_path = os.path.join(_mea_dir(donor), f"kinase_timepoint_nes{suffix}.csv")
+        fdr_path = os.path.join(_mea_dir(donor), f"kinase_timepoint_fdr{suffix}.csv")
+        if not (os.path.exists(nes_path) and os.path.exists(fdr_path)):
+            continue
+        nes_l = _melt(pd.read_csv(nes_path), "NES")
+        fdr_l = _melt(pd.read_csv(fdr_path), "FDR")
+        sub = nes_l.merge(fdr_l, on=["kinase", "day"])
+        sub["residue_type"] = residue_type
+        frames.append(sub)
+    if not frames:
+        return pd.DataFrame(
+            columns=["kinase", "residue_type", "day", "NES", "FDR"])
+    mea = pd.concat(frames, ignore_index=True)
     return mea[mea["day"].isin(CONTRAST_DAYS)].copy()
 
 
@@ -210,15 +226,20 @@ def build(donor: str = "donor1") -> dict:
     print(f"  tcell_concordance.csv: {len(conc)} (gene × state × day) rows")
 
     # --- cross-join: kinase × state × contrast-day -------------------------
-    kinases = sorted(mea["kinase"].unique())
-    grid = pd.MultiIndex.from_product(
-        [kinases, states, list(CONTRAST_DAYS)],
-        names=["kinase", "cell_type", "contrast"]).to_frame(index=False)
+    kinases = (mea[["kinase", "residue_type"]].drop_duplicates()
+               .sort_values(["residue_type", "kinase"]).reset_index(drop=True))
+    state_day = pd.MultiIndex.from_product(
+        [states, list(CONTRAST_DAYS)],
+        names=["cell_type", "contrast"]).to_frame(index=False)
+    kinases["_join_key"] = 1
+    state_day["_join_key"] = 1
+    grid = (kinases.merge(state_day, on="_join_key")
+            .drop(columns="_join_key"))
     grid["gene_symbol"] = grid["kinase"].map(lambda k: k2g.get(k, k))
 
     # bulk anchor
     grid = grid.merge(mea.rename(columns={"day": "contrast"}),
-                      on=["kinase", "contrast"], how="left")
+                      on=["kinase", "residue_type", "contrast"], how="left")
     # specificity (per gene × state, repeated across days)
     grid = grid.merge(
         spec.rename(columns={"gene": "gene_symbol", "state": "cell_type"}),
@@ -235,9 +256,11 @@ def build(donor: str = "donor1") -> dict:
     # timecourse consistency: per (kinase, state), # of contrast days where the
     # transcript moves the same direction as that day's bulk NES.
     consist = (grid.assign(_agree=(grid["tcell_concordance"] > 0).astype(int))
-               .groupby(["kinase", "cell_type"], as_index=False)["_agree"].sum()
+               .groupby(["kinase", "residue_type", "cell_type"],
+                        as_index=False)["_agree"].sum()
                .rename(columns={"_agree": "tcell_consistency"}))
-    grid = grid.merge(consist, on=["kinase", "cell_type"], how="left")
+    grid = grid.merge(consist, on=["kinase", "residue_type", "cell_type"],
+                      how="left")
 
     # `tcell_concordant` is a SHOWN label (sign of concordance), never a gate.
     # Every kinase × state × day row ships; the viewer displays all axes and the
@@ -247,8 +270,8 @@ def build(donor: str = "donor1") -> dict:
     # it must not filter anything. See docs/plans/tcell_attribution_degate_2026-06-03.md.
     grid["tcell_concordant"] = grid["tcell_concordance"] > 0
 
-    cols = ["kinase", "gene_symbol", "contrast", "cell_type", "NES", "FDR",
-            "tcell_specificity", "tcell_tier", "tcell_lfc",
+    cols = ["kinase", "residue_type", "gene_symbol", "contrast", "cell_type",
+            "NES", "FDR", "tcell_specificity", "tcell_tier", "tcell_lfc",
             "tcell_concordance", "tcell_concordant", "tcell_consistency"]
     full = grid[cols].copy()
 
@@ -256,7 +279,7 @@ def build(donor: str = "donor1") -> dict:
     if len(full) != expected:
         raise AssertionError(
             f"full row count {len(full)} != expected {expected} "
-            f"(n_kinases {len(kinases)} × n_states {n_states} × "
+            f"(n_kinase_tracks {len(kinases)} × n_states {n_states} × "
             f"n_contrast_days {len(CONTRAST_DAYS)}) — silent drop in merge")
 
     # Ship the ENTIRE grid (no concordance/specificity gate). Sorted for
@@ -275,8 +298,8 @@ def build(donor: str = "donor1") -> dict:
           f"{len(shipped) - n_conc} discordant")
     print(f"  tier distribution (tier: rows): {tier_dist}")
     n_no_gene = full["tcell_specificity"].isna().groupby(
-        full["kinase"]).all().sum()
-    print(f"  kinases with no transcript in scRNA: {n_no_gene}")
+        [full["kinase"], full["residue_type"]]).all().sum()
+    print(f"  kinase tracks with no transcript in scRNA: {n_no_gene}")
 
     return {"n_states": n_states, "n_kinases": len(kinases),
             "n_full": len(full), "n_shipped": len(shipped),

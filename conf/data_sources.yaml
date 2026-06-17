@@ -52,6 +52,22 @@ sources:
       - { src: "ensembl_5XFAD_reviewed_con_myco.fasta", dest: "data/raw/external/lucie_proteomics/" }
       - { src: "Tcell_parsed_tables/Ensembl_sne_parser.R", dest: "data/raw/external/lucie_proteomics/" }
 
+  # Candidate matching 5xFAD snRNA-seq data from the Parse Biosciences workflow.
+  # Default transfers keep only small metadata/provenance files. Processed RDS
+  # reclustering objects are on demand (`--group scrna`) because they are ~0.8-1.9 GB each.
+  5xfad-snrna:
+    remote: gdrive
+    folder_id: 1Ad6Xc-hrBEz02PrrRw5DP6N165dQQyBG
+    transfers:
+      - { src: "obs_df.csv", dest: "data/datasets/5xFAD/primary/scrna/" }
+      - { src: "log00.md", dest: "data/datasets/5xFAD/primary/scrna/" }
+      - { src: "analysis/240712_ex1_comb1/agg_samp_ana_summary.csv", dest: "data/datasets/5xFAD/primary/scrna/analysis/240712_ex1_comb1/" }
+      - group: scrna
+        src: "reclustering/"
+        dest: "data/datasets/5xFAD/primary/scrna/reclustering/"
+        include: ["*.RDS"]
+        flags: ["--ignore-existing"]
+
   deconvolution-bulk:
     remote: gdrive_shared
     folder_id: 1syiic6d9DUJIc1sPL5wc8uL7Od3Dsq3Z

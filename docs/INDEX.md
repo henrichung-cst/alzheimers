@@ -32,6 +32,7 @@ Stable docs that aren't authoritative specs but aren't plans either.
 |:---|:---|
 | [`report_writing_checklist.md`](./report_writing_checklist.md) | Reviewer-facing report writing guidance |
 | [`result_analysis_plan.md`](./result_analysis_plan.md) | Interpretation framework: how to move from generated outputs to biological claims |
+| [`tcell_exhaustion_analysis_summary.md`](./tcell_exhaustion_analysis_summary.md) | Stable summary of the T-cell exhaustion cohort, attribution interpretation, and dedicated viewer |
 | [`allen_ctx_hpf_disagreement.md`](./allen_ctx_hpf_disagreement.md) | Reviewer FAQ: why our cell-type verdicts may differ from the Allen ctx+HPF Transcriptomics Explorer |
 | [`viewer_style.md`](./viewer_style.md) | Writing-style guide for unified-viewer copy (panels, drawers, tooltips) |
 
@@ -40,6 +41,7 @@ Stable docs that aren't authoritative specs but aren't plans either.
 | File | Role |
 |:---|:---|
 | [`integrations/kinase_incytr_integration.md`](./integrations/kinase_incytr_integration.md) | Current pair-mode integration architecture; in-tree file inventory; data-flow diagram |
+| [`integrations/5xfad-omics-status.md`](./integrations/5xfad-omics-status.md) | Current 5xFAD proteomics/transcriptomics availability, sample matching status, and unresolved label conflicts |
 | [`integrations/5xfad-lucie-manifest.json`](./integrations/5xfad-lucie-manifest.json) | Local inventory of Lucie 5xFAD upstream files |
 
 ## Active Plans

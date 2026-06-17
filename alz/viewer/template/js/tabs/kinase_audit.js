@@ -378,6 +378,19 @@ function _renderDecompPanel(hostId, kinase_id, ctx, leadRow) {
     host.innerHTML = `<div class="muted">No decomposition rows for this kinase &times; contrast.</div>`;
     return;
   }
+  _renderKinaseDecompBars(hostId, rows, leadRow, {
+    emptyMessage: "No decomposition rows for this kinase &times; contrast.",
+  });
+}
+
+function _renderKinaseDecompBars(hostId, rows, leadRow, opts) {
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  opts = opts || {};
+  if (!rows || !rows.length) {
+    host.innerHTML = `<div class="muted">${opts.emptyMessage || "No decomposition rows available."}</div>`;
+    return;
+  }
   const sorted = rows.slice().sort((a, b) => (a.nes ?? 0) - (b.nes ?? 0));
   const fdrThresh = (Store.state.filters && Store.state.filters.fdr) || 0.25;
   const bulkNes = leadRow && Number.isFinite(Number(leadRow.NES)) ? Number(leadRow.NES) : null;
@@ -396,7 +409,8 @@ function _renderDecompPanel(hostId, kinase_id, ctx, leadRow) {
   const lineWidths = sigMask.map(s => s ? 1.2 : 0);
   const hovers = sorted.map((r, i) =>
     `${r.cell_type}<br>decomp NES ${nes[i].toFixed(2)}` +
-    (r.fdr != null && isFinite(r.fdr) ? `<br>FDR ${Number(r.fdr).toExponential(2)}${sigMask[i] ? " (sig)" : ""}` : "")
+    (r.fdr != null && isFinite(r.fdr) ? `<br>FDR ${Number(r.fdr).toExponential(2)}${sigMask[i] ? " (sig)" : ""}` : "") +
+    (r.substrate_hits != null && r.substrate_universe != null ? `<br>substrates ${r.substrate_hits}/${r.substrate_universe}` : "")
   );
   const traces = [{
     type: "bar", orientation: "h",

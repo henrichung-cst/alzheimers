@@ -69,3 +69,107 @@ Viewer-facing site labels are compact gene-site labels such as `Atp1a3_S456`
 while preserving the original `site_id` in hover/title metadata and detail
 sidecars.
 
+5xFAD bulk audit detail sidecars are packaged as compressed per-kinase bundles
+under `outputs/reports/unified_viewer/edge_slices/fivexfad_detail/`. The
+`supporting_5xfad.detail_shards` map is keyed by kinase, and each
+`*.json.gz` bundle contains detail records keyed by
+`kinase|tissue|assay|analysis_track`. This keeps the 5xFAD lazy-loading layout
+parallel to Song/Mukesh per-kinase sidecars while avoiding thousands of broad
+uncompressed JSON files.
+
+## Native snRNA Attribution
+
+5xFAD attribution is now backed by matched 5xFAD snRNA data, not by Song
+attribution rows. The attribution builder reads the canonical Seurat object:
+
+`data/datasets/5xFAD/primary/scrna/reclustering/fivex_renamed_from_merged.RDS`
+
+The cell-type identity column is `new_clusters`. `fine_cluster` is not used as
+the modeling or viewer spine.
+
+The builder uses `data/datasets/5xFAD/metadata/omics_join_manifest.csv` and keeps
+only rows with `per_animal_integration_action == "use"`. The pooled-only
+`WildT_06mo_C_11` cortex sample remains excluded from matched per-animal
+integration.
+
+Generated attribution artifacts:
+
+- `outputs/reports/kinase_attribution_5xfad/fivexfad_snrna_attribution.csv`
+- `outputs/reports/kinase_attribution_5xfad/fivexfad_snrna_cell_counts.csv`
+
+The viewer payload exposes 5xFAD-native fields including
+`fivexfad_specificity`, `fivexfad_fold_over_uniform`, `fivexfad_tau`,
+`fivexfad_top_cluster`, `fivexfad_lfc`, snRNA sample/cell counts, and
+`cluster_source == "new_clusters"`. WMB and SEA-AD remain reference layers
+joined by kinase and shared 46-cluster label; they are not the primary 5xFAD
+attribution source.
+
+The native 5xFAD snRNA location fields are tissue-specific. For each kinase,
+the attribution builder computes expression share, fold-over-uniform, tau, and
+top cluster separately within cortex and hippocampus, pooling ages, genotypes,
+and samples inside the tissue. TG-vs-WT LFC, p-values, sample counts, and cell
+counts remain scoped to tissue x age x cell type. If a tissue x age x cell-type
+row has fewer than 3 local snRNA cells across the contrast, the categorical
+location confidence is set to `none` for that row rather than applying the
+tissue-pooled location tier. The same local cell-count gate is applied to
+packaged per-cell-type decomposition MEA rows, so sparse cell-type rows do not
+drive agreement calls, decomp bars, or `very_high` promotion.
+
+For first-load performance, the initial payload now carries only
+`celltype_attribution_summary_index`: compact per-kinase/tissue/age attribution
+summaries for table filters and badges. Full attribution rows, including long
+confidence-basis strings and snRNA sample/cell counts for detail drawers, are
+written as per-kinase JSON sidecars under
+`outputs/reports/unified_viewer/edge_slices/fivexfad_attribution/` and loaded
+only when the Attribution detail tab is opened.
+
+## Per-Cell-Type Decomposition MEA
+
+The 5xFAD attribution tab now includes a native per-cell-type kinase MEA
+cross-check, analogous to the Song/Mukesh decomposition layer. This is not a
+transcript-only enrichment. It projects 5xFAD raw phosphosite signal with matched
+5xFAD snRNA `new_clusters` weights, estimates TG-vs-WT phosphosite effects per
+tissue, age, track, and cell type, then runs the same
+`alz.bulk_mea.enrich._run_mea` path used by the bulk analyses.
+
+Generated artifacts live under:
+
+- `outputs/reports/kinase_attribution_5xfad/celltype_mea/fivexfad_snrna_pseudobulk_linear.csv.gz`
+- `outputs/reports/kinase_attribution_5xfad/celltype_mea/fivexfad_celltype_mea.parquet`
+- `outputs/reports/kinase_attribution_5xfad/celltype_mea/fivexfad_celltype_site_level_ols.parquet`
+- `outputs/reports/kinase_attribution_5xfad/celltype_mea/fivexfad_celltype_substrate_sets.csv`
+- `outputs/reports/kinase_attribution_5xfad/celltype_mea/fivexfad_celltype_mea_audit.json`
+
+The viewer fields `Decomp NES`, `Decomp FDR`, and `Bulk match` come from this
+per-cell-type phosphosite MEA layer. The bulk stoichiometry MEA remains the
+anchor for direction and significance; the decomposition layer is a cell-type
+cross-check, not a replacement for the bulk 5xFAD result.
+
+The 5xFAD confidence label mirrors the Song mouse convention at the top tier:
+native tissue-specific 5xFAD snRNA location evidence is not sufficient by
+itself for a confidence pill. During viewer packaging, a 5xFAD row must have
+significant bulk MEA and matching snRNA TG-vs-WT direction under the Song LFC
+gate before it can receive `moderate` or `high`. Tissue-specific location at
+least 2x uniform gives `high`; sub-high location with direction support gives
+`moderate`. A `high` row is promoted to `very_high` only when the matched
+per-cell-type MEA row agrees in sign with the bulk kinase MEA under the same
+decomposition-agreement FDR gate used by the Song attribution model.
+
+For first-load performance, full per-cell-type MEA rows are not embedded in the
+payload. The initial block carries `celltype_agreement_index`, a compact
+categorical bulk-vs-decomposition agreement index with raw NES/FDR and count
+evidence, plus `celltype_mea_plot_index`, a compact decomp-bar index containing
+only kinase, tissue, track, cell type, age, NES, FDR, and substrate counts. Full
+per-kinase decomposition rows are written under
+`outputs/reports/unified_viewer/edge_slices/fivexfad_celltype_mea/` and fetched
+only for detail fields outside that compact index. Large bulk `leading_substrates`
+strings remain in compressed `fivexfad_detail` sidecars rather than
+`supporting_5xfad.rows`.
+
+Run commands:
+
+- `pixi run 5xfad-snrna-decomp-pseudobulk` exports the matched 5xFAD snRNA
+  pseudobulk matrix used for decomposition weights.
+- `pixi run 5xfad-celltype-mea` runs the full tissue x track x cell-type MEA.
+- `pixi run 5xfad-celltype-mea-smoke` runs one bounded cortex/pY cell-type
+  batch for code-path validation only.

@@ -60,6 +60,18 @@ async function _loadPayload() {
   }
 }
 
+async function _fetchJsonSidecar(path) {
+  if (!path) return null;
+  const resp = await fetch(path);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} loading ${path}`);
+  if (String(path).endsWith(".gz")) {
+    const blob = await resp.blob();
+    const stream = blob.stream().pipeThrough(new DecompressionStream("gzip"));
+    return JSON.parse(await new Response(stream).text());
+  }
+  return resp.json();
+}
+
 // ---------------------------------------------------------------------------
 // Store — reducer-style with {selection, filters, view} slices
 // ---------------------------------------------------------------------------
@@ -242,6 +254,28 @@ const TAB_GUIDE = {
     toggles: [
       { name: "FDR threshold (false-discovery rate)", desc: "sets the cutoff for which kinases enter the table. 0.25 is hypothesis generation; 0.10 is closer to confirmatory." },
       { name: "Receiver, Support", desc: "when set in the global filter bar, restrict the backbone count column to chains landing on that receiver or carrying that support type, so the rank reflects the kinase's role in the chosen subset rather than its total prevalence." },
+    ],
+  },
+  crosstable: {
+    preamble: "A cross-dataset kinase comparison table for Song mouse, Mukesh human AD, and supporting 5xFAD mouse evidence. Each row is one kinase/residue pair. Song and Mukesh keep their existing activity strips; 5xFAD adds separate cortex and hippocampus 3/6/9/12 month tile rows beside the Mukesh data.",
+    method: [
+      "Song status is derived from disease-contrast kinase MEA NES/FDR. Mukesh status uses AD donors only; CTRL donors remain a visual reference strip and do not participate in agreement filters. 5xFAD status is derived separately for cortex and hippocampus from TG-vs-WT age-specific MEA evidence.",
+      "The aggregate 5xFAD call is categorical. If cortex and hippocampus significantly agree, the aggregate takes that direction. If only one tissue is significant, that tissue supplies the aggregate direction. If cortex and hippocampus are significant in opposite directions, the aggregate is mixed_sig.",
+    ],
+    shows: {
+      lead: "The Crossplay column reports categorical agreement under the selected comparison scope: 3-way, Song vs Mukesh, Song vs 5xFAD, Mukesh vs 5xFAD, or 5xFAD tissue split. No numeric crossplay score is exported.",
+      bullets: [
+        "5xFAD cortex and hippocampus are not pooled visually; each tissue remains a separate 1x4 age tile row.",
+        "Significant agree requires active-FDR support in the compared datasets.",
+        "Agree includes significant agreement plus measured same-direction evidence that is not significant in every compared source.",
+        "mixed_sig means 5xFAD cortex and hippocampus carry significant evidence in opposing directions.",
+      ],
+    },
+    howTo: "Start with the 3-way scope to find kinase/residue pairs that align across Song, Mukesh AD, and 5xFAD. Switch to pairwise scopes to diagnose which dataset drives a disagreement. Use the 5xFAD cell-type, confidence, snRNA, and WMB filters only when the question is specifically about 5xFAD attribution support.",
+    toggles: [
+      { name: "Compare", desc: "chooses the dataset relationship used by the Crossplay category." },
+      { name: "State", desc: "filters rows by simple agreement groups: significant agree, agree, significant disagree, or disagree." },
+      { name: "All samples", desc: "uses measured units for medians and direction instead of only FDR-significant units; leave off for significant agreement calls." },
     ],
   },
   methods: {

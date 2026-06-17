@@ -31,6 +31,8 @@ from alz.shared import config
 DATASET_DIR = Path(config.REPO_ROOT) / "data" / "datasets" / "5xFAD"
 PRIMARY_DIR = DATASET_DIR / "primary"
 OUTPUT_DIR = Path(config.REPO_ROOT) / "outputs" / "reports" / "kinase_attribution_5xfad"
+# Per-tissue Incytr pair-mode input root (mirrors data/derived/tcells_incytr_inputs).
+INCYTR_INPUT_DIR = Path(config.REPO_ROOT) / "data" / "derived" / "5xfad_incytr_inputs"
 
 ASSAY_LABELS = {
     "total": "total",
@@ -635,6 +637,77 @@ def fit_track(tissue: str, track: str, manifest: pd.DataFrame) -> dict[str, pd.D
     }
 
 
+def _sample_group_map(manifest: pd.DataFrame, tissue: str) -> dict[str, str]:
+    """biological_sample_id -> `<geno>_<age>mo` for primary, individual,
+    genotyped samples of this tissue. Pools (analysis_action=exclude_pool) and
+    ungenotyped rows are dropped — the group-level bulk uses every available
+    individual sample per `<geno>_<age>`, independent of the per-animal snRNA
+    join (matches the AD pr_median convention)."""
+    rows = manifest[
+        (manifest["tissue"] == tissue)
+        & (manifest["analysis_action"] == "primary")
+        & (manifest["genotype"].isin(["WT", "TG"]))
+    ].drop_duplicates("biological_sample_id")
+    return {
+        str(r["biological_sample_id"]): f"{r['genotype']}_{int(r['age_months'])}mo"
+        for _, r in rows.iterrows()
+        if str(r["biological_sample_id"])
+    }
+
+
+def _linear_group_bulk(
+    norm_log2: pd.DataFrame, key_cols: list[str], group_map: dict[str, str]
+) -> pd.DataFrame:
+    """Collapse a global-median-anchored log2 per-sample matrix to a LINEAR
+    per-group bulk for the multiplicative `P_c = (N_total/N_c)×bulk×share`
+    deconvolution.
+
+    `_median_center_log2` already loading-equalizes each sample and re-anchors to
+    the global median (so the scale stays in MS-intensity magnitude — the
+    `pmax(pr,1)` Incytr floor would otherwise clobber a median-0 scale). Here we
+    just exponentiate to linear and average the member samples within each
+    `<geno>_<age>` group. Undetected (row, group) cells stay NaN (honestly
+    missing). Columns are the `<geno>_<age>mo` group labels."""
+    sample_cols = [c for c in norm_log2.columns if c in group_map]
+    lin = np.power(2.0, norm_log2[sample_cols].apply(pd.to_numeric, errors="coerce"))
+    out = norm_log2[key_cols].copy()
+    by_group: dict[str, list[str]] = {}
+    for c in sample_cols:
+        by_group.setdefault(group_map[c], []).append(c)
+    for group in sorted(by_group):
+        out[group] = lin[by_group[group]].mean(axis=1, skipna=True)
+    return out
+
+
+def run_export_bulk() -> None:
+    """Write per-tissue LINEAR per-group bulk for the Incytr pair-mode
+    deconvolution: pr (total proteome, gene-keyed) + ps (IMAC/ST) + py (pY),
+    both site-keyed. Consumed by alz/ingest/fivexfad_decompose.py."""
+    _ensure_output_dir()
+    manifest_path = OUTPUT_DIR / "sample_manifest.csv"
+    manifest = (
+        pd.read_csv(manifest_path) if manifest_path.exists() else build_sample_manifest()
+    )
+    site_keys = ["site_id", "gene_symbol", "motif"]
+    for tissue in TISSUES:
+        outdir = INCYTR_INPUT_DIR / tissue
+        outdir.mkdir(parents=True, exist_ok=True)
+        group_map = _sample_group_map(manifest, tissue)
+
+        total, _ = _load_total_by_gene(tissue, manifest)
+        pr_bulk = _linear_group_bulk(total, ["gene_symbol"], group_map)
+        pr_bulk.to_csv(outdir / "pr_bulk_linear.csv", index=False)
+
+        track_out = {"st": "ps_bulk_linear.csv", "py": "py_bulk_linear.csv"}
+        for track, out_name in track_out.items():
+            raw = build_track_matrices(tissue, track, manifest)["raw_phospho_normalized"]
+            bulk = _linear_group_bulk(raw, site_keys, group_map)
+            bulk.to_csv(outdir / out_name, index=False)
+        groups = sorted(set(group_map.values()))
+        print(f"[5xfad-export-bulk] {tissue}: pr={len(pr_bulk)} genes, "
+              f"{len(groups)} groups {groups} -> {outdir}")
+
+
 def run_ingest() -> None:
     _ensure_output_dir()
     manifest = build_sample_manifest()
@@ -714,8 +787,10 @@ def main() -> None:
     parser.add_argument("--ingest", action="store_true", help="Write manifest and normalized matrices")
     parser.add_argument("--mea", action="store_true", help="Run age-aware OLS and MEA")
     parser.add_argument("--run", action="store_true", help="Run ingest and MEA")
+    parser.add_argument("--export-bulk", action="store_true",
+                        help="Write per-tissue linear per-group bulk for Incytr deconvolution")
     args = parser.parse_args()
-    if not any([args.summary, args.ingest, args.mea, args.run]):
+    if not any([args.summary, args.ingest, args.mea, args.run, args.export_bulk]):
         args.summary = True
     if args.summary:
         print_summary()
@@ -723,6 +798,8 @@ def main() -> None:
         run_ingest()
     if args.mea or args.run:
         run_mea()
+    if args.export_bulk:
+        run_export_bulk()
 
 
 if __name__ == "__main__":

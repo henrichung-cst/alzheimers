@@ -50,6 +50,7 @@ payload.decomposition_index
 payload.agreement_index
 payload.subclass_breakdown
 payload.human
+payload.supporting_5xfad
 ```
 
 Unavailable domain blocks should be omitted or represented as empty context slices, but capability
@@ -189,11 +190,15 @@ entry should provide the normalized Kinase Library matrix and phosphoacceptor me
       "positions": [-5, -4, -3, -2, -1, 1, 2, 3, 4],
       "amino_acids": ["P", "G", "A", "C", "S", "T", "...", "s", "t", "y"],
       "matrix": [[0.1, 0.2]],
-      "st_fav": {"S": 1.0, "T": 0.64}
+      "st_fav": {"S": 1.0, "T": 0.64},
+      "source_name": "AKT1"
     }
   }
 }
 ```
+
+`source_name` is optional and records the exact Kinase Library name used to fetch the matrix when a
+viewer-facing kinase label is an alias.
 
 The frontend renders this block with Kinase Library's default sequence-logo interpretation:
 `log2(position_value / per-position median)`. Flanking lowercase `t` and `y` are displayed as
@@ -321,6 +326,54 @@ excluding sender-receiver interactions where either endpoint is in `low_signal_c
 pathway counts must use the precomputed `pathway_counts_low_signal_excluded` cube instead of scanning
 lazy pathway shards in the browser. Payloads without this metadata should hide or disable the sparse
 filter and fall back to normal `pathway_counts`.
+
+### Supporting 5xFAD
+
+`payload.supporting_5xfad` is a supporting-cohort block, not a separate Song-style
+context. It keeps cortex/hippocampus, assay, age, and analysis-track fields
+inside the block so the primary AD context remains Song.
+
+The first-load block must stay compact:
+
+```json
+{
+  "supporting_5xfad": {
+    "schema_version": 1,
+    "cohort": "5xFAD",
+    "role": "supporting_ad_cohort",
+    "filters": {"tissue": ["cortex", "hippocampus"], "age_months": [3, 6, 9, 12]},
+    "rows": [],
+    "celltype_agreement_index": [],
+    "celltype_attribution_summary_index": [],
+    "celltype_mea_plot_index": [],
+    "detail_shards": {"AKT1": "edge_slices/fivexfad_detail/AKT1.json.gz"},
+    "celltype_mea_shards": {"AKT1": "edge_slices/fivexfad_celltype_mea/AKT1.json"},
+    "celltype_attribution_shards": {"AKT1": "edge_slices/fivexfad_attribution/AKT1.json"},
+    "celltype_ols_shards": {"AKT1": "edge_slices/fivexfad_celltype_ols/AKT1.json"}
+  }
+}
+```
+
+Initial `rows` contain bulk MEA evidence needed for the main table: kinase,
+tissue, track, assay, analysis track, contrast, age, NES, FDR, ES, p-value,
+substrate counts, sample counts, and contrast status. They must not embed
+`leading_substrates` or other large substrate-site strings; those remain in
+compressed per-kinase `detail_shards`. Each 5xFAD detail shard is a gzip JSON
+bundle keyed internally by `kinase|tissue|assay|analysis_track`, so its outer
+shard index has the same per-kinase shape as the Song/Mukesh lazy sidecars.
+
+`celltype_agreement_index` contains compact categorical bulk-vs-decomposition
+agreement calls and raw evidence counts per kinase, tissue, track, and age. It
+replaces any embedded `celltype_mea_index`. `celltype_mea_plot_index` contains
+only the compact raw fields needed for decomp bars and no-fetch fallback views:
+kinase, tissue, track, cell type, age, NES, FDR, and substrate counts. Full
+per-cell-type MEA rows are loaded from `celltype_mea_shards` only when detail
+views need fields outside that compact plot index.
+
+`celltype_attribution_summary_index` contains the compact attribution evidence
+needed for main-table filtering and badges. Full attribution rows, including
+long evidence-basis strings and cell/sample counts for drawers, are loaded from
+`celltype_attribution_shards` only when the Attribution detail tab is opened.
 
 ## Verification
 

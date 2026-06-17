@@ -417,18 +417,55 @@
           <label class="ke-filter-label" title="Compute M med, H med, and the direction category over ALL measured contrasts/donors, not just those significant at the header FDR. A dataset counts as present if it has any measurement; direction is the all-sample median.">
             <input type="checkbox" id="kx-allsamples"/> All samples
           </label>
-          <label class="ke-filter-label" title="Mouse/human direction category, computed live at the current FDR. 'Any' shows all categories.">Direction
-            <select id="kx-agree" aria-label="Agreement category">
-              <option value="">Any</option>
-              <option value="concordant-up">Same direction — up</option>
-              <option value="concordant-down">Same direction — down</option>
-              <option value="discordant">Opposite direction</option>
-              <option value="mouse-only">Mouse-only</option>
-              <option value="human-only">Human-only</option>
-              <option value="neither">Neither</option>
+          <label class="ke-filter-label" title="Which dataset comparison drives the Crossplay category. Mukesh CTRL donors remain visual reference only.">Compare
+            <select id="kx-compare-scope" aria-label="Crossplay comparison scope">
+              <option value="three_way">3-way</option>
+              <option value="song_mukesh">Song vs Mukesh</option>
+              <option value="song_f5">Song vs 5xFAD</option>
+              <option value="mukesh_f5">Mukesh vs 5xFAD</option>
+              <option value="f5_tissue">5xFAD tissue split</option>
             </select>
           </label>
-          <button id="kx-reset" class="ke-filter-reset" title="Reset cluster, track, search, direction filter, sort, and selection">Reset</button>
+          <label class="ke-filter-label" title="Simple agreement filter under the selected comparison scope, computed live at the current FDR.">State
+            <select id="kx-compare-state" aria-label="Crossplay agreement state">
+              <option value="">Any</option>
+              <option value="sig_agree">Significant agree</option>
+              <option value="agree">Agree</option>
+              <option value="sig_disagree">Significant disagree</option>
+              <option value="disagree">Disagree</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Require matching 5xFAD cortex or hippocampus attribution in this cell type.">5xFAD cell
+            <select id="kx-f5-celltype" aria-label="5xFAD cell-type filter">
+              <option value="">Any</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Minimum 5xFAD attribution confidence in cortex or hippocampus.">5xFAD conf
+            <select id="kx-f5-confidence" aria-label="Minimum 5xFAD attribution confidence">
+              <option value="">Any</option>
+              <option value="very_high">very high</option>
+              <option value="high">high+</option>
+              <option value="moderate">moderate+</option>
+              <option value="low">low+</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Minimum 5xFAD snRNA location specificity in cortex or hippocampus, as fold over the even-split baseline.">5xFAD snRNA
+            <select id="kx-f5-snrna" aria-label="Minimum 5xFAD snRNA tier">
+              <option value="0">Any</option>
+              <option value="2">&geq;2&times;</option>
+              <option value="5">&geq;5&times;</option>
+              <option value="10">&geq;10&times;</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Minimum WMB location specificity among matching 5xFAD attribution rows.">5xFAD WMB
+            <select id="kx-f5-wmb" aria-label="Minimum 5xFAD WMB tier">
+              <option value="0">Any</option>
+              <option value="2">&geq;2&times;</option>
+              <option value="5">&geq;5&times;</option>
+              <option value="10">&geq;10&times;</option>
+            </select>
+          </label>
+          <button id="kx-reset" class="ke-filter-reset" title="Reset cluster, track, search, crossplay filters, sort, and selection">Reset</button>
           <span class="muted" id="kx-count"></span>
         </div>
         <div id="kx-table-wrap"></div>
@@ -467,8 +504,8 @@
               <option value="low">low+</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Minimum Song location specificity, as fold over the even-split baseline.">Song
-            <select id="f5-filter-song" aria-label="Minimum 5xFAD Song location tier">
+          <label class="ke-filter-label" title="Minimum 5xFAD snRNA location specificity, as fold over the even-split baseline.">5xFAD snRNA
+            <select id="f5-filter-fivexfad" aria-label="Minimum 5xFAD snRNA location tier">
               <option value="0">Any</option>
               <option value="2">&geq;2&times;</option>
               <option value="5">&geq;5&times;</option>
@@ -507,12 +544,14 @@
               <th data-col="kinase" title="Kinase identifier from kinase-library MEA.">Kinase</th>
               <th data-col="gene_symbol" title="Gene symbol associated with the kinase.">Gene</th>
               <th data-col="family" title="Kinase family from kinase-library metadata. Click to sort.">Family</th>
+              <th data-col="tissue" title="Modeled 5xFAD tissue for this kinase row.">Tissue</th>
               <th data-col="residue_type" title="Phospho-residue track.">Res</th>
               <th data-col="profile" title="Age-wise TG-vs-WT NES profile. Color = direction, saturation = |NES|, outline = FDR below the header threshold.">NES Profile</th>
+              <th data-col="agreement_profile" title="Bulk-vs-decomp agreement across 5xFAD ages. Green = bulk and per-cell decomposition are both significant in the same direction; orange = decomp-only, bulk-only, mixed, or opposing significant decomposition; empty = neither significant.">Agreement</th>
               <th data-col="peakAbsNes" title="Largest absolute finite NES across the active age scope.">|NES|</th>
               <th data-col="sigCount" title="Selected ages with FDR below the header threshold.">n_sig</th>
               <th data-col="n_attributed_celltypes" title="Cell types attributed at high or moderate confidence.">Cell types</th>
-              <th data-col="song_spec" title="Song location evidence, shown as fold over the even-split baseline.">Song</th>
+              <th data-col="fivexfad_spec" title="5xFAD snRNA location evidence, shown as fold over the even-split baseline.">5xFAD snRNA</th>
               <th data-col="wmb_max_tier" title="WMB location cross-check tier.">WMB</th>
               <th data-col="conf" title="Highest mouse attribution confidence tier.">Conf</th>
             </tr></thead>

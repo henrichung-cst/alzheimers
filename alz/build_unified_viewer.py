@@ -31,8 +31,10 @@ import resource
 import shutil
 import sys
 import time
+import uuid
 import warnings
 from dataclasses import dataclass, field
+from functools import cmp_to_key
 from typing import Any
 
 # Some dependency paths import Matplotlib for motif/logo helpers. In managed
@@ -56,6 +58,7 @@ sys.path.insert(0, os.path.join(HERE, "bulk_mea"))
 sys.path.insert(0, os.path.join(HERE, "cross_reference"))
 
 from alz.shared import config  # noqa: E402
+from alz.bulk_mea.confidence import DECOMP_FDR_AGREEMENT  # noqa: E402
 import config_integration as icfg  # noqa: E402
 import normalize as kattr  # noqa: E402  (alz.bulk_mea.normalize — Stage 1 phospho-track + IRS helpers)
 try:
@@ -139,6 +142,16 @@ FIVEXFAD_KINASE_DIR = os.path.join(
 )
 FIVEXFAD_DETAIL_DIR = os.path.join(
     UNIFIED_VIEWER_DIR, "edge_slices", "fivexfad_detail"
+)
+FIVEXFAD_CELLTYPE_DIR = os.path.join(FIVEXFAD_KINASE_DIR, "celltype_mea")
+FIVEXFAD_CELLTYPE_OLS_DIR = os.path.join(
+    UNIFIED_VIEWER_DIR, "edge_slices", "fivexfad_celltype_ols"
+)
+FIVEXFAD_CELLTYPE_MEA_DIR = os.path.join(
+    UNIFIED_VIEWER_DIR, "edge_slices", "fivexfad_celltype_mea"
+)
+FIVEXFAD_ATTRIBUTION_DIR = os.path.join(
+    UNIFIED_VIEWER_DIR, "edge_slices", "fivexfad_attribution"
 )
 FIVEXFAD_DETAIL_SITES_PER_CONTRAST = 12
 FIVEXFAD_DETAIL_MAX_SITES = 40
@@ -1600,6 +1613,61 @@ def _f5_norm_motif(v: Any) -> str:
 
 
 _F5_CONF_RANK = {"very_high": 4, "high": 3, "moderate": 2, "low": 1, "none": 0}
+_F5_MIN_CELLS_PER_CONTRAST = 3
+
+
+def _f5_float_or_none(v: Any) -> float | None:
+    v = _f5_json_value(v)
+    if v is None:
+        return None
+    try:
+        out = float(v)
+    except (TypeError, ValueError):
+        return None
+    return out if np.isfinite(out) else None
+
+
+def _f5_celltype_contrast_cell_counts() -> dict[tuple[str, int, str], int]:
+    """Local snRNA cell support keyed by tissue, age, and cell type."""
+    candidates = [
+        os.path.join(FIVEXFAD_CELLTYPE_DIR, "fivexfad_snrna_pseudobulk_counts.csv"),
+        os.path.join(FIVEXFAD_KINASE_DIR, "fivexfad_snrna_cell_counts.csv"),
+    ]
+    path = next((p for p in candidates if os.path.exists(p)), None)
+    if path is None:
+        return {}
+    try:
+        counts = pd.read_csv(path, usecols=["tissue", "age_months", "cell_type", "n_cells"])
+    except Exception:
+        return {}
+    counts["age_months"] = pd.to_numeric(counts["age_months"], errors="coerce")
+    counts["n_cells"] = pd.to_numeric(counts["n_cells"], errors="coerce").fillna(0)
+    counts = counts.dropna(subset=["tissue", "age_months", "cell_type"])
+    grouped = counts.groupby(["tissue", "age_months", "cell_type"], sort=False)["n_cells"].sum()
+    out: dict[tuple[str, int, str], int] = {}
+    for key, value in grouped.items():
+        tissue, age, cell_type = key
+        out[(str(tissue), int(age), str(cell_type))] = int(value)
+    return out
+
+
+def _f5_kinase_gene_map() -> dict[str, str]:
+    path = config.MAPPING_CACHE_FILE
+    if not os.path.exists(path):
+        return {}
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return {}
+    if not {"kinase_abbreviation", "gene_symbol"}.issubset(df.columns):
+        return {}
+    out: dict[str, str] = {}
+    for _, row in df.iterrows():
+        kinase = str(row.get("kinase_abbreviation", "") or "").strip()
+        gene = str(row.get("gene_symbol", "") or "").strip()
+        if kinase and gene:
+            out[kinase] = gene
+    return out
 
 
 def _f5_site_label_value(row: Any) -> str:
@@ -1623,35 +1691,52 @@ def _f5_site_label_value(row: Any) -> str:
 
 
 def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None) -> list[dict]:
-    """Mouse location/evidence rows for 5xFAD, keyed by kinase only.
-
-    5xFAD does not currently have a per-cell decomposition artifact analogous to
-    Song's disease-by-timepoint decomp table. Reuse the repository's canonical
-    kinase-by-cell-type mouse evidence table for location/confidence summaries
-    without broadcasting Song contrast NES/FDR as 5xFAD disease evidence.
-    """
-    if data is None or data.celltype_evidence.empty:
+    """Native 5xFAD snRNA attribution rows keyed by kinase, tissue, and age."""
+    path = os.path.join(FIVEXFAD_KINASE_DIR, "fivexfad_snrna_attribution.csv")
+    if not os.path.exists(path):
         return []
     kinases = {str(r.get("kinase", "")) for r in rows if str(r.get("kinase", ""))}
     if not kinases:
         return []
-    ev = data.celltype_evidence[data.celltype_evidence["kinase"].astype(str).isin(kinases)].copy()
+    ev = pd.read_csv(path)
+    ev = ev[ev["kinase"].astype(str).isin(kinases)].copy()
+    if "cell_type" in ev.columns:
+        ev = ev[~ev["cell_type"].astype(str).str.match(r"^cluster-\d+$", na=False)].copy()
     if ev.empty:
         return []
+    if data is not None and not data.celltype_evidence.empty:
+        ref_cols = [
+            "kinase", "cell_type", "wmb_specificity", "wmb_fold_over_uniform",
+            "sea_ad_lfc", "seaad_location_score", "hbca_location_score",
+            "human_location_score", "wmb_tier",
+        ]
+        ref = data.celltype_evidence.copy()
+        for col in ref_cols:
+            if col not in ref.columns:
+                ref[col] = float("nan") if col not in {"kinase", "cell_type", "wmb_tier"} else ""
+        ref = ref[ref_cols].drop_duplicates(["kinase", "cell_type"], keep="first")
+        ev = ev.merge(ref, on=["kinase", "cell_type"], how="left", suffixes=("", "_ref"))
     for col, default in [
         ("gene_symbol", ""),
         ("cell_type", ""),
         ("confidence_tier", "none"),
         ("confidence_basis", ""),
-        ("song_location_tier", "none"),
-        ("wmb_crosscheck_tier", "none"),
-        ("human_location_tier", "none"),
+        ("tissue", ""),
+        ("age_months", 0),
         ("wmb_specificity", float("nan")),
         ("wmb_fold_over_uniform", float("nan")),
-        ("song_specificity", float("nan")),
-        ("song_tau", float("nan")),
-        ("song_top_share", float("nan")),
-        ("song_top_cluster", ""),
+        ("fivexfad_specificity", float("nan")),
+        ("fivexfad_fold_over_uniform", float("nan")),
+        ("fivexfad_tau", float("nan")),
+        ("fivexfad_top_cluster", ""),
+        ("fivexfad_lfc", float("nan")),
+        ("fivexfad_pval", float("nan")),
+        ("fivexfad_fdr", float("nan")),
+        ("n_snrna_samples_wt", float("nan")),
+        ("n_snrna_samples_tg", float("nan")),
+        ("n_cells_wt", float("nan")),
+        ("n_cells_tg", float("nan")),
+        ("cluster_source", "new_clusters"),
         ("sea_ad_lfc", float("nan")),
         ("seaad_location_score", float("nan")),
         ("hbca_location_score", float("nan")),
@@ -1661,20 +1746,632 @@ def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None)
         if col not in ev.columns:
             ev[col] = default
     ev["_rank"] = ev["confidence_tier"].map(_F5_CONF_RANK).fillna(0)
-    ev["_song"] = pd.to_numeric(ev["song_specificity"], errors="coerce").fillna(-1.0)
+    ev["_f5"] = pd.to_numeric(ev["fivexfad_specificity"], errors="coerce").fillna(-1.0)
     ev["_wmb"] = pd.to_numeric(ev["wmb_specificity"], errors="coerce").fillna(-1.0)
-    ev = ev.sort_values(["kinase", "cell_type", "_rank", "_song", "_wmb"], ascending=[True, True, False, False, False])
-    ev = ev.drop_duplicates(["kinase", "cell_type"], keep="first")
-    ev = ev.sort_values(["kinase", "_rank", "_song", "_wmb"], ascending=[True, False, False, False])
+    ev = ev.sort_values(["kinase", "tissue", "age_months", "cell_type", "_rank", "_f5", "_wmb"], ascending=[True, True, True, True, False, False, False])
+    ev = ev.drop_duplicates(["kinase", "tissue", "age_months", "cell_type"], keep="first")
+    ev = ev.sort_values(["kinase", "tissue", "age_months", "_rank", "_f5", "_wmb"], ascending=[True, True, True, False, False, False])
     cols = [
-        "kinase", "gene_symbol", "cell_type", "confidence_tier", "confidence_basis",
-        "song_location_tier", "wmb_crosscheck_tier", "human_location_tier",
-        "wmb_specificity", "wmb_fold_over_uniform", "song_specificity",
-        "song_tau", "song_top_share", "song_top_cluster", "sea_ad_lfc",
+        "kinase", "gene_symbol", "tissue", "age_months", "cell_type",
+        "confidence_tier", "confidence_basis", "wmb_specificity",
+        "wmb_fold_over_uniform", "fivexfad_specificity",
+        "fivexfad_fold_over_uniform", "fivexfad_tau",
+        "fivexfad_top_cluster", "fivexfad_lfc", "fivexfad_pval",
+        "fivexfad_fdr", "n_snrna_samples_wt", "n_snrna_samples_tg",
+        "n_cells_wt", "n_cells_tg", "cluster_source", "sea_ad_lfc",
         "seaad_location_score", "hbca_location_score", "human_location_score",
         "wmb_tier",
     ]
     return _f5_records(ev, cols)
+
+
+def _build_fivexfad_attribution_summary_index(attribution_rows: list[dict]) -> list[dict]:
+    """Compact 5xFAD attribution summaries for first-load table rendering."""
+    if not attribution_rows:
+        return []
+    grouped: dict[tuple[str, str, int], list[dict]] = {}
+    for row in attribution_rows:
+        kinase = str(row.get("kinase", ""))
+        tissue = str(row.get("tissue", ""))
+        age = row.get("age_months")
+        if not kinase or not tissue or age is None:
+            continue
+        grouped.setdefault((kinase, tissue, int(age)), []).append(row)
+
+    out: list[dict] = []
+    for (kinase, tissue, age), rows_for_group in sorted(grouped.items()):
+        rows_for_group = sorted(rows_for_group, key=cmp_to_key(_f5_attr_record_cmp))
+        display_rows = [
+            r for r in rows_for_group
+            if str(r.get("confidence_tier", "")) in {"very_high", "high", "moderate"}
+        ]
+        best = rows_for_group[0] if rows_for_group else {}
+        best_display = display_rows[0] if display_rows else best
+        celltypes = []
+        for r in rows_for_group:
+            celltypes.append({
+                "cell_type": r.get("cell_type"),
+                "confidence_tier": r.get("confidence_tier"),
+                "fivexfad_specificity": r.get("fivexfad_specificity"),
+                "fivexfad_fold_over_uniform": r.get("fivexfad_fold_over_uniform"),
+                "fivexfad_tau": r.get("fivexfad_tau"),
+                "fivexfad_top_cluster": r.get("fivexfad_top_cluster"),
+                "fivexfad_lfc": r.get("fivexfad_lfc"),
+                "wmb_specificity": r.get("wmb_specificity"),
+                "sea_ad_lfc": r.get("sea_ad_lfc"),
+            })
+        out.append({
+            "kinase": kinase,
+            "gene_symbol": best.get("gene_symbol") or kinase,
+            "tissue": tissue,
+            "age_months": age,
+            "high_moderate_celltype_count": len({r.get("cell_type") for r in display_rows if r.get("cell_type")}),
+            "best_confidence_tier": best.get("confidence_tier", "none"),
+            "top_cell_type": best_display.get("cell_type"),
+            "top_fivexfad_specificity": best_display.get("fivexfad_specificity"),
+            "top_fivexfad_fold_over_uniform": best_display.get("fivexfad_fold_over_uniform"),
+            "top_fivexfad_tau": best_display.get("fivexfad_tau"),
+            "top_fivexfad_cluster": best_display.get("fivexfad_top_cluster"),
+            "top_fivexfad_lfc": best_display.get("fivexfad_lfc"),
+            "top_wmb_specificity": best_display.get("wmb_specificity"),
+            "top_sea_ad_lfc": best_display.get("sea_ad_lfc"),
+            "celltypes": celltypes,
+        })
+    return _sanitize(out)
+
+
+def _assign_fivexfad_song_aligned_confidence(
+    attribution_rows: list[dict],
+    bulk_rows: list[dict],
+) -> list[dict]:
+    """Apply Song-style confidence semantics to 5xFAD attribution rows.
+
+    Native 5xFAD snRNA location remains raw evidence. The categorical confidence
+    tier requires significant bulk MEA plus snRNA disease-direction support,
+    matching the convention users see in the Song attribution pane.
+    """
+    if not attribution_rows:
+        return attribution_rows
+
+    bulk_by_key: dict[tuple[str, str, int], list[dict]] = {}
+    for row in bulk_rows:
+        if row.get("analysis_track") not in ("", None, "stoichiometry"):
+            continue
+        age = row.get("age_months")
+        if age is None:
+            continue
+        fdr = _f5_float_or_none(row.get("FDR"))
+        nes = _f5_float_or_none(row.get("NES"))
+        if fdr is None or nes is None or nes == 0 or fdr >= config.MEA_FDR_THRESH:
+            continue
+        key = (
+            str(row.get("kinase", "")),
+            str(row.get("tissue", "")),
+            int(age),
+        )
+        bulk_by_key.setdefault(key, []).append(row)
+
+    out: list[dict] = []
+    for row in attribution_rows:
+        rec = dict(row)
+        age = rec.get("age_months")
+        key = (
+            str(rec.get("kinase", "")),
+            str(rec.get("tissue", "")),
+            int(age) if age is not None else -1,
+        )
+        fold = _f5_float_or_none(rec.get("fivexfad_fold_over_uniform"))
+        lfc = _f5_float_or_none(rec.get("fivexfad_lfc"))
+        bulk_sig_rows = bulk_by_key.get(key, [])
+        sparse_basis = "Fewer than " in str(rec.get("confidence_basis", ""))
+
+        rec["decomp_agrees_bulk"] = False
+        if sparse_basis:
+            rec["confidence_tier"] = "none"
+        elif fold is None:
+            rec["confidence_tier"] = "none"
+            rec["confidence_basis"] = "No usable 5xFAD snRNA location evidence; confidence tier not applied"
+        elif not bulk_sig_rows:
+            rec["confidence_tier"] = "none"
+            rec["confidence_basis"] = "5xFAD bulk MEA is not significant; Song-aligned confidence tier not applied"
+        elif lfc is None or abs(lfc) <= config.SONG_LFC_MIN:
+            rec["confidence_tier"] = "none"
+            rec["confidence_basis"] = "5xFAD snRNA LFC does not pass the Song direction-support gate"
+        else:
+            direction_support = any(
+                (lfc > 0) == (_f5_float_or_none(bulk.get("NES")) > 0)
+                for bulk in bulk_sig_rows
+                if _f5_float_or_none(bulk.get("NES")) is not None
+            )
+            if not direction_support:
+                rec["confidence_tier"] = "none"
+                rec["confidence_basis"] = "5xFAD snRNA LFC direction does not match significant bulk MEA"
+            elif fold >= 2.0:
+                rec["confidence_tier"] = "high"
+                rec["confidence_basis"] = "5xFAD snRNA direction + tissue-specific high location"
+            else:
+                rec["confidence_tier"] = "moderate"
+                rec["confidence_basis"] = "5xFAD snRNA direction with sub-high tissue-specific location"
+        out.append(rec)
+    return out
+
+
+def _promote_fivexfad_attribution_confidence(
+    attribution_rows: list[dict],
+    bulk_rows: list[dict],
+    celltype_rows: list[dict],
+) -> list[dict]:
+    """Mirror Song confidence promotion for 5xFAD native attribution rows.
+
+    A native 5xFAD high-confidence location row becomes very_high when the
+    matching per-cell-type MEA row agrees in sign with the bulk kinase MEA under
+    the same decomposition FDR agreement gate used by the Song attribution
+    model. This is a categorical cross-check; it does not create or expose a
+    synthetic score.
+    """
+    if not attribution_rows or not celltype_rows:
+        return attribution_rows
+
+    bulk_by_key: dict[tuple[str, str, str, int], dict] = {}
+    for row in bulk_rows:
+        if row.get("analysis_track") not in ("", None, "stoichiometry"):
+            continue
+        age = row.get("age_months")
+        if age is None:
+            continue
+        key = (
+            str(row.get("kinase", "")),
+            str(row.get("tissue", "")),
+            str(row.get("track", "")),
+            int(age),
+        )
+        bulk_by_key[key] = row
+
+    decomp_by_key: dict[tuple[str, str, int, str], list[dict]] = {}
+    for row in celltype_rows:
+        age = row.get("age_months")
+        if age is None:
+            continue
+        key = (
+            str(row.get("kinase", "")),
+            str(row.get("tissue", "")),
+            int(age),
+            str(row.get("cell_type", "")),
+        )
+        decomp_by_key.setdefault(key, []).append(row)
+
+    promoted = 0
+    out: list[dict] = []
+    for row in attribution_rows:
+        rec = dict(row)
+        if str(rec.get("confidence_tier", "")) != "high":
+            out.append(rec)
+            continue
+        age = rec.get("age_months")
+        if age is None:
+            out.append(rec)
+            continue
+        key = (
+            str(rec.get("kinase", "")),
+            str(rec.get("tissue", "")),
+            int(age),
+            str(rec.get("cell_type", "")),
+        )
+        agrees = False
+        best: dict | None = None
+        for drow in decomp_by_key.get(key, []):
+            track = str(drow.get("track", ""))
+            bulk = bulk_by_key.get((key[0], key[1], track, key[2]), {})
+            bulk_nes = _f5_float_or_none(bulk.get("NES"))
+            decomp_nes = _f5_float_or_none(drow.get("NES"))
+            decomp_fdr = _f5_float_or_none(drow.get("FDR"))
+            if (
+                bulk_nes is None
+                or decomp_nes is None
+                or decomp_fdr is None
+                or bulk_nes == 0
+                or decomp_nes == 0
+                or decomp_fdr >= DECOMP_FDR_AGREEMENT
+            ):
+                continue
+            if (bulk_nes > 0) == (decomp_nes > 0):
+                agrees = True
+                best = drow
+                break
+        if agrees:
+            rec["confidence_tier"] = "very_high"
+            rec["confidence_basis"] = "5xFAD snRNA high + decomp agreement"
+            rec["decomp_agrees_bulk"] = True
+            rec["decomp_nes"] = _f5_json_value((best or {}).get("NES"))
+            rec["decomp_fdr"] = _f5_json_value((best or {}).get("FDR"))
+            promoted += 1
+        out.append(rec)
+    if promoted:
+        print(f"  supporting_5xfad_attribution: {promoted:,} high rows promoted to very_high", flush=True)
+    return out
+
+
+def _build_fivexfad_celltype_mea_plot_index(rows: list[dict]) -> list[dict]:
+    """Compact embedded decomp rows used for bars and no-fetch fallback views."""
+    keep = [
+        "kinase", "tissue", "track", "cell_type", "age_months", "NES", "FDR",
+        "substrate_hits", "substrate_universe",
+    ]
+    out = []
+    for row in rows:
+        rec = {k: row.get(k) for k in keep}
+        if rec.get("kinase") and rec.get("tissue") and rec.get("track") and rec.get("cell_type"):
+            out.append(rec)
+    return _sanitize(out)
+
+
+def _f5_attr_record_cmp(a: dict, b: dict) -> int:
+    cr = _F5_CONF_RANK.get(str(b.get("confidence_tier", "none")), 0) - _F5_CONF_RANK.get(str(a.get("confidence_tier", "none")), 0)
+    if cr:
+        return cr
+    af5 = _f5_sort_num(a.get("fivexfad_specificity"))
+    bf5 = _f5_sort_num(b.get("fivexfad_specificity"))
+    if af5 != bf5:
+        return -1 if bf5 < af5 else 1
+    awmb = _f5_sort_num(a.get("wmb_specificity"))
+    bwmb = _f5_sort_num(b.get("wmb_specificity"))
+    if awmb != bwmb:
+        return -1 if bwmb < awmb else 1
+    acell = str(a.get("cell_type", "")).lower()
+    bcell = str(b.get("cell_type", "")).lower()
+    if acell < bcell:
+        return -1
+    if acell > bcell:
+        return 1
+    return 0
+
+
+def _f5_sort_num(v: Any) -> float:
+    try:
+        if v is None or pd.isna(v):
+            return -1.0
+        return float(v)
+    except Exception:
+        return -1.0
+
+
+def _write_fivexfad_attribution_shards(rows: list[dict]) -> dict[str, str]:
+    """Write full per-kinase 5xFAD cell-type attribution sidecars."""
+    if not rows:
+        return {}
+    tmp_dir = f"{FIVEXFAD_ATTRIBUTION_DIR}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    shard_index: dict[str, str] = {}
+    by_kinase: dict[str, list[dict]] = {}
+    for row in rows:
+        kinase = str(row.get("kinase", ""))
+        if kinase:
+            by_kinase.setdefault(kinase, []).append(row)
+
+    for kinase, kinase_rows in sorted(by_kinase.items()):
+        kinase_rows = sorted(kinase_rows, key=cmp_to_key(_f5_attr_record_cmp))
+        fname = _f5_shard_name(kinase)
+        payload = {
+            "schema_version": 1,
+            "kinase": kinase,
+            "rows": kinase_rows,
+        }
+        with open(os.path.join(tmp_dir, fname), "w") as f:
+            json.dump(_sanitize(payload), f, allow_nan=False, separators=(",", ":"))
+        shard_index[kinase] = os.path.relpath(
+            os.path.join(FIVEXFAD_ATTRIBUTION_DIR, fname),
+            UNIFIED_VIEWER_DIR,
+        )
+
+    if shard_index:
+        with open(os.path.join(tmp_dir, "index.json"), "w") as f:
+            json.dump({"schema_version": 1, "shards": shard_index}, f, separators=(",", ":"))
+        shutil.rmtree(FIVEXFAD_ATTRIBUTION_DIR, ignore_errors=True)
+        shutil.move(tmp_dir, FIVEXFAD_ATTRIBUTION_DIR)
+    else:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    print(f"  supporting_5xfad_attribution: {len(shard_index):,} shards", flush=True)
+    return shard_index
+
+
+def _f5_track_assay(track: str) -> str:
+    return "pY" if str(track) == "py" else "IMAC"
+
+
+def _f5_track_residue(track: str) -> str:
+    return "Y" if str(track) == "py" else "ST"
+
+
+def _build_fivexfad_celltype_mea_rows(rows: list[dict]) -> list[dict]:
+    path = os.path.join(FIVEXFAD_CELLTYPE_DIR, "fivexfad_celltype_mea.parquet")
+    if not os.path.exists(path):
+        return []
+    kinases = {str(r.get("kinase", "")) for r in rows if str(r.get("kinase", ""))}
+    if not kinases:
+        return []
+    cols = [
+        "tissue", "track", "cell_type", "kinase", "contrast", "NES", "FDR",
+        "ES", "p-value", "Subs fraction", "residue_type",
+    ]
+    schema_names = set(pq.read_schema(path).names)
+    table = pq.read_table(path, columns=[c for c in cols if c in schema_names])
+    df = table.to_pandas()
+    if df.empty:
+        return []
+    df = df[df["kinase"].astype(str).isin(kinases)].copy()
+    if "cell_type" in df.columns:
+        df = df[~df["cell_type"].astype(str).str.match(r"^cluster-\d+$", na=False)].copy()
+    if df.empty:
+        return []
+    df["age_months"] = df["contrast"].map(_age_from_contrast_label)
+    support = _f5_celltype_contrast_cell_counts()
+    if support:
+        local_cells = [
+            support.get((
+                str(row.get("tissue", "")),
+                int(row.get("age_months")),
+                str(row.get("cell_type", "")),
+            ), 0) if pd.notna(row.get("age_months")) else 0
+            for row in df.to_dict(orient="records")
+        ]
+        df = df[np.asarray(local_cells) >= _F5_MIN_CELLS_PER_CONTRAST].copy()
+        if df.empty:
+            return []
+    for col in ["ES", "NES", "FDR", "p-value"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    if "Subs fraction" in df.columns:
+        counts = df["Subs fraction"].map(_subs_fraction_counts)
+        df["substrate_hits"] = [x[0] for x in counts]
+        df["substrate_universe"] = [x[1] for x in counts]
+    else:
+        df["substrate_hits"] = np.nan
+        df["substrate_universe"] = np.nan
+    df["assay"] = df["track"].map(_f5_track_assay)
+    df["residue_type"] = df["track"].map(_f5_track_residue)
+    out_cols = [
+        "kinase", "tissue", "track", "assay", "residue_type", "cell_type",
+        "contrast", "age_months", "NES", "FDR", "ES", "p-value",
+        "substrate_hits", "substrate_universe",
+    ]
+    df = df.sort_values(["kinase", "tissue", "track", "contrast", "cell_type"])
+    return _f5_records(df, out_cols)
+
+
+def _build_fivexfad_celltype_agreement_index(
+    bulk_rows: list[dict],
+    celltype_rows: list[dict],
+) -> list[dict]:
+    """Compact categorical agreement calls for the 5xFAD main table."""
+    bulk_by_key: dict[tuple[str, str, str, int], dict] = {}
+    for row in bulk_rows:
+        if row.get("analysis_track") not in ("", None, "stoichiometry"):
+            continue
+        age = row.get("age_months")
+        if age is None:
+            continue
+        key = (
+            str(row.get("kinase", "")),
+            str(row.get("tissue", "")),
+            str(row.get("track", "")),
+            int(age),
+        )
+        bulk_by_key[key] = row
+
+    by_key: dict[tuple[str, str, str, int], list[dict]] = {}
+    for row in celltype_rows:
+        age = row.get("age_months")
+        if age is None:
+            continue
+        key = (
+            str(row.get("kinase", "")),
+            str(row.get("tissue", "")),
+            str(row.get("track", "")),
+            int(age),
+        )
+        by_key.setdefault(key, []).append(row)
+
+    fdr_gate = config.MEA_FDR_THRESH
+    out: list[dict] = []
+    for key in sorted(set(bulk_by_key) | set(by_key)):
+        kinase, tissue, track, age = key
+        bulk = bulk_by_key.get(key, {})
+        rows_for_key = by_key.get(key, [])
+        bulk_nes = _f5_json_value(bulk.get("NES"))
+        bulk_fdr = _f5_json_value(bulk.get("FDR"))
+        bulk_sig = (
+            bulk_nes is not None
+            and bulk_fdr is not None
+            and float(bulk_fdr) < fdr_gate
+        )
+        sig_rows = [
+            r for r in rows_for_key
+            if _f5_json_value(r.get("NES")) not in (None, 0)
+            and _f5_json_value(r.get("FDR")) is not None
+            and float(r.get("FDR")) < fdr_gate
+        ]
+        same = [
+            r for r in sig_rows
+            if bulk_nes is not None and (float(r.get("NES")) > 0) == (float(bulk_nes) > 0)
+        ]
+        opposite = [
+            r for r in sig_rows
+            if bulk_nes is not None and (float(r.get("NES")) > 0) != (float(bulk_nes) > 0)
+        ]
+        if not bulk_sig and not sig_rows:
+            state = "none"
+        elif not bulk_sig:
+            state = "decomp_only"
+        elif not sig_rows:
+            state = "bulk_only"
+        elif same and not opposite:
+            state = "agree"
+        else:
+            state = "mixed" if same else "disagree"
+
+        top = None
+        if sig_rows:
+            top = sorted(sig_rows, key=lambda r: abs(float(r.get("NES") or 0)), reverse=True)[0]
+        hits, universe = _subs_fraction_counts(bulk.get("Subs fraction"))
+        out.append({
+            "kinase": kinase,
+            "tissue": tissue,
+            "track": track,
+            "assay": _f5_track_assay(track),
+            "residue_type": _f5_track_residue(track),
+            "contrast": bulk.get("contrast") or (top or {}).get("contrast") or f"TG_vs_WT_{age}mo",
+            "age_months": age,
+            "agreement_state": state,
+            "bulk_NES": bulk_nes,
+            "bulk_FDR": bulk_fdr,
+            "bulk_substrate_hits": bulk.get("substrate_hits", hits),
+            "bulk_substrate_universe": bulk.get("substrate_universe", universe),
+            "decomp_celltype_count": len(rows_for_key),
+            "decomp_sig_celltype_count": len(sig_rows),
+            "decomp_same_direction_count": len(same),
+            "decomp_opposite_direction_count": len(opposite),
+            "top_cell_type": (top or {}).get("cell_type"),
+            "top_celltype_NES": _f5_json_value((top or {}).get("NES")),
+            "top_celltype_FDR": _f5_json_value((top or {}).get("FDR")),
+            "top_celltype_substrate_hits": (top or {}).get("substrate_hits"),
+            "top_celltype_substrate_universe": (top or {}).get("substrate_universe"),
+        })
+    return _sanitize(out)
+
+
+def _write_fivexfad_celltype_mea_shards(rows: list[dict]) -> dict[str, str]:
+    """Write full per-kinase 5xFAD cell-type MEA sidecars for lazy detail views."""
+    if not rows:
+        return {}
+    tmp_dir = f"{FIVEXFAD_CELLTYPE_MEA_DIR}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    shard_index: dict[str, str] = {}
+    by_kinase: dict[str, list[dict]] = {}
+    for row in rows:
+        kinase = str(row.get("kinase", ""))
+        if kinase:
+            by_kinase.setdefault(kinase, []).append(row)
+
+    for kinase, kinase_rows in sorted(by_kinase.items()):
+        fname = _f5_shard_name(kinase)
+        payload = {
+            "schema_version": 1,
+            "kinase": kinase,
+            "rows": kinase_rows,
+        }
+        with open(os.path.join(tmp_dir, fname), "w") as f:
+            json.dump(_sanitize(payload), f, allow_nan=False, separators=(",", ":"))
+        shard_index[kinase] = os.path.relpath(
+            os.path.join(FIVEXFAD_CELLTYPE_MEA_DIR, fname),
+            UNIFIED_VIEWER_DIR,
+        )
+
+    if shard_index:
+        with open(os.path.join(tmp_dir, "index.json"), "w") as f:
+            json.dump({"schema_version": 1, "shards": shard_index}, f, separators=(",", ":"))
+        shutil.rmtree(FIVEXFAD_CELLTYPE_MEA_DIR, ignore_errors=True)
+        shutil.move(tmp_dir, FIVEXFAD_CELLTYPE_MEA_DIR)
+    else:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    print(f"  supporting_5xfad_celltype_mea: {len(shard_index):,} shards", flush=True)
+    return shard_index
+
+
+def _write_fivexfad_celltype_ols_shards(rows: list[dict]) -> dict[str, str]:
+    """Write per-kinase 5xFAD cell-type substrate-site OLS sidecars."""
+    site_path = os.path.join(FIVEXFAD_CELLTYPE_DIR, "fivexfad_celltype_site_level_ols.parquet")
+    subs_path = os.path.join(FIVEXFAD_CELLTYPE_DIR, "fivexfad_celltype_substrate_sets.csv")
+    if not rows or not os.path.exists(site_path) or not os.path.exists(subs_path):
+        return {}
+
+    kinases = sorted({str(r.get("kinase", "")) for r in rows if r.get("kinase")})
+    if not kinases:
+        return {}
+
+    existing_index = os.path.join(FIVEXFAD_CELLTYPE_OLS_DIR, "index.json")
+    if os.path.exists(existing_index):
+        try:
+            with open(existing_index) as f:
+                existing = json.load(f)
+            shards = existing.get("shards", {})
+            if isinstance(shards, dict) and len(shards) > 1:
+                print(f"  supporting_5xfad_celltype_ols: {len(shards):,} shards (reused)", flush=True)
+                return shards
+            if isinstance(shards, dict) and shards:
+                print(
+                    "  supporting_5xfad_celltype_ols: existing shard index is incomplete; "
+                    "skipping heavy rebuild unless FIVEXFAD_REBUILD_CELLTYPE_OLS=1",
+                    flush=True,
+                )
+                if os.environ.get("FIVEXFAD_REBUILD_CELLTYPE_OLS") != "1":
+                    shutil.rmtree(FIVEXFAD_CELLTYPE_OLS_DIR, ignore_errors=True)
+                    return {}
+        except (OSError, json.JSONDecodeError):
+            pass
+    elif os.environ.get("FIVEXFAD_REBUILD_CELLTYPE_OLS") != "1":
+        print(
+            "  supporting_5xfad_celltype_ols: skipped heavy shard build "
+            "(set FIVEXFAD_REBUILD_CELLTYPE_OLS=1 to regenerate)",
+            flush=True,
+        )
+        return {}
+
+    subs = pd.read_csv(subs_path)
+    subs = subs[subs["kinase"].astype(str).isin(kinases)].copy()
+    if "cell_type" in subs.columns:
+        subs = subs[~subs["cell_type"].astype(str).str.match(r"^cluster-\d+$", na=False)].copy()
+    if subs.empty:
+        return {}
+    subs["motif_norm"] = subs["motif"].map(_f5_norm_motif)
+    key_cols = ["tissue", "track", "cell_type", "contrast", "motif_norm"]
+    selector = subs[key_cols + ["kinase"]].dropna(subset=["motif_norm"]).drop_duplicates()
+
+    site_cols = [
+        "tissue", "track", "cell_type", "contrast", "site_id", "gene_symbol",
+        "motif", "lfc", "se", "t", "pval", "fdr", "n_obs", "n_wt", "n_tg",
+    ]
+    site = pq.read_table(site_path, columns=site_cols).to_pandas()
+    site = site[~site["cell_type"].astype(str).str.match(r"^cluster-\d+$", na=False)].copy()
+    site["motif_norm"] = site["motif"].map(_f5_norm_motif)
+    joined = site.merge(selector, on=key_cols, how="inner")
+    if joined.empty:
+        return {}
+
+    tmp_dir = f"{FIVEXFAD_CELLTYPE_OLS_DIR}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    shard_index: dict[str, str] = {}
+    keep_cols = [
+        "tissue", "track", "cell_type", "contrast", "site_id", "gene_symbol",
+        "motif", "lfc", "se", "t", "pval", "fdr", "n_obs", "n_wt", "n_tg",
+    ]
+    for kinase, g in joined.groupby("kinase", sort=True):
+        out = g[keep_cols].drop_duplicates().copy()
+        out = out.sort_values(["tissue", "track", "contrast", "cell_type", "lfc"], ascending=[True, True, True, True, False])
+        fname = _f5_shard_name(str(kinase))
+        payload = {
+            "schema_version": 1,
+            "kinase": str(kinase),
+            "rows": _f5_records(out),
+        }
+        with open(os.path.join(tmp_dir, fname), "w") as f:
+            json.dump(payload, f, allow_nan=False, separators=(",", ":"))
+        shard_index[str(kinase)] = os.path.relpath(os.path.join(FIVEXFAD_CELLTYPE_OLS_DIR, fname), UNIFIED_VIEWER_DIR)
+
+    if shard_index:
+        with open(os.path.join(tmp_dir, "index.json"), "w") as f:
+            json.dump({"schema_version": 1, "shards": shard_index}, f, separators=(",", ":"))
+        shutil.rmtree(FIVEXFAD_CELLTYPE_OLS_DIR, ignore_errors=True)
+        shutil.move(tmp_dir, FIVEXFAD_CELLTYPE_OLS_DIR)
+    else:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    print(f"  supporting_5xfad_celltype_ols: {len(shard_index):,} shards", flush=True)
+    return shard_index
 
 
 def _f5_prerank_for_contrast(
@@ -1829,7 +2526,22 @@ def _write_fivexfad_detail_shards(
     """Write per-kinase 5xFAD audit sidecars for the detail workbench."""
     if not rows:
         return {}
-    tmp_dir = FIVEXFAD_DETAIL_DIR + ".tmp"
+    existing_index = os.path.join(FIVEXFAD_DETAIL_DIR, "index.json")
+    if os.path.exists(existing_index):
+        try:
+            with open(existing_index) as f:
+                existing = json.load(f)
+            shards = existing.get("shards", {})
+            if (
+                existing.get("layout") == "per_kinase_bundle_v2"
+                and isinstance(shards, dict)
+                and shards
+            ):
+                print(f"  supporting_5xfad_detail: {len(shards):,} shards (reused)", flush=True)
+                return shards
+        except (OSError, json.JSONDecodeError):
+            pass
+    tmp_dir = f"{FIVEXFAD_DETAIL_DIR}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
     shutil.rmtree(tmp_dir, ignore_errors=True)
     os.makedirs(tmp_dir, exist_ok=True)
 
@@ -1853,7 +2565,9 @@ def _write_fivexfad_detail_shards(
         )
         rows_by_group.setdefault(key, []).append(row)
 
-    detail_index: dict[str, str] = {}
+    parts_dir = os.path.join(tmp_dir, "_parts")
+    os.makedirs(parts_dir, exist_ok=True)
+    detail_parts_by_kinase: dict[str, list[tuple[str, str]]] = {}
     for tissue, track, assay, residue in track_specs:
         prefix = f"{tissue}_{track}"
         paths = {
@@ -2027,7 +2741,6 @@ def _write_fivexfad_detail_shards(
                     .reset_index()
                 ) if not track_subs.empty else pd.DataFrame()
                 key = _f5_group_key(kinase, tissue, assay, analysis_track)
-                fname = _f5_shard_name(key)
                 payload = {
                     "schema_version": 1,
                     "key": key,
@@ -2051,13 +2764,43 @@ def _write_fivexfad_detail_shards(
                     "substrate_summary": _f5_records(substrate_summary),
                     "source_files": [os.path.basename(paths[k]) for k in paths if os.path.exists(paths[k])],
                 }
-                with open(os.path.join(tmp_dir, fname), "w") as f:
-                    json.dump(payload, f, allow_nan=False, separators=(",", ":"))
-                detail_index[key] = os.path.relpath(os.path.join(FIVEXFAD_DETAIL_DIR, fname), UNIFIED_VIEWER_DIR)
+                kinase_parts_dir = os.path.join(parts_dir, _f5_shard_name(kinase).removesuffix(".json"))
+                os.makedirs(kinase_parts_dir, exist_ok=True)
+                part_path = os.path.join(kinase_parts_dir, _f5_shard_name(key))
+                with open(part_path, "w") as f:
+                    json.dump(_sanitize(payload), f, allow_nan=False, separators=(",", ":"))
+                detail_parts_by_kinase.setdefault(kinase, []).append((key, part_path))
 
+    detail_index: dict[str, str] = {}
+    for kinase, parts in sorted(detail_parts_by_kinase.items()):
+        details: dict[str, dict] = {}
+        for key, part_path in sorted(parts):
+            with open(part_path) as f:
+                details[key] = json.load(f)
+        fname = _f5_shard_name(kinase) + ".gz"
+        bundle = {
+            "schema_version": 2,
+            "layout": "per_kinase_bundle",
+            "kinase": kinase,
+            "details": details,
+        }
+        raw = json.dumps(bundle, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        with gzip.open(os.path.join(tmp_dir, fname), "wb", compresslevel=6) as f:
+            f.write(raw)
+        detail_index[kinase] = os.path.relpath(os.path.join(FIVEXFAD_DETAIL_DIR, fname), UNIFIED_VIEWER_DIR)
+
+    shutil.rmtree(parts_dir, ignore_errors=True)
     if detail_index:
         with open(os.path.join(tmp_dir, "index.json"), "w") as f:
-            json.dump({"schema_version": 1, "shards": detail_index}, f, separators=(",", ":"))
+            json.dump(
+                {
+                    "schema_version": 2,
+                    "layout": "per_kinase_bundle_v2",
+                    "shards": detail_index,
+                },
+                f,
+                separators=(",", ":"),
+            )
         shutil.rmtree(FIVEXFAD_DETAIL_DIR, ignore_errors=True)
         shutil.move(tmp_dir, FIVEXFAD_DETAIL_DIR)
     else:
@@ -2111,6 +2854,7 @@ def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None
 
     rows: list[dict] = []
     source_files: list[str] = []
+    kinase_gene_map = _f5_kinase_gene_map()
     for tissue, track, assay, residue in track_specs:
         for analysis_track, basename in analysis_files:
             path = os.path.join(FIVEXFAD_KINASE_DIR, f"{tissue}_{track}_{basename}.csv")
@@ -2127,8 +2871,11 @@ def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None
                 gene_symbol = row.get("gene_symbol", row.get("kinase", ""))
                 if pd.isna(gene_symbol):
                     gene_symbol = row.get("kinase", "")
+                kinase = str(row.get("kinase", ""))
+                if not str(gene_symbol or "").strip() or str(gene_symbol) == kinase:
+                    gene_symbol = kinase_gene_map.get(kinase, gene_symbol)
                 rows.append({
-                    "kinase": str(row.get("kinase", "")),
+                    "kinase": kinase,
                     "gene_symbol": str(gene_symbol),
                     "tissue": tissue,
                     "track": track,
@@ -2172,7 +2919,46 @@ def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None
         source_files.append(os.path.relpath(manifest_path, UNIFIED_VIEWER_DIR))
 
     detail_shards = _write_fivexfad_detail_shards(track_specs, rows, manifest_path)
+    rows_payload = [
+        {
+            k: v for k, v in row.items()
+            if k not in {"leading_substrates", "leading_substrate_count"}
+        }
+        for row in rows
+    ]
+    celltype_mea_rows = _build_fivexfad_celltype_mea_rows(rows)
     attribution_rows = _build_fivexfad_attribution_rows(rows, data)
+    attribution_rows = _assign_fivexfad_song_aligned_confidence(attribution_rows, rows)
+    attribution_rows = _promote_fivexfad_attribution_confidence(
+        attribution_rows,
+        rows,
+        celltype_mea_rows,
+    )
+    celltype_attribution_summary_index = _build_fivexfad_attribution_summary_index(attribution_rows)
+    celltype_attribution_shards = _write_fivexfad_attribution_shards(attribution_rows)
+    celltype_mea_plot_index = _build_fivexfad_celltype_mea_plot_index(celltype_mea_rows)
+    celltype_agreement_index = _build_fivexfad_celltype_agreement_index(rows, celltype_mea_rows)
+    celltype_mea_shards = _write_fivexfad_celltype_mea_shards(celltype_mea_rows)
+    celltype_ols_shards = _write_fivexfad_celltype_ols_shards(celltype_mea_rows)
+    for extra in ("fivexfad_snrna_attribution.csv", "fivexfad_snrna_cell_counts.csv"):
+        extra_path = os.path.join(FIVEXFAD_KINASE_DIR, extra)
+        if os.path.exists(extra_path):
+            source_files.append(os.path.relpath(extra_path, UNIFIED_VIEWER_DIR))
+    for extra in (
+        "fivexfad_snrna_pseudobulk_linear.csv.gz",
+        "fivexfad_snrna_pseudobulk_counts.csv",
+        "fivexfad_snrna_gene_map.csv",
+        "fivexfad_celltype_mea.parquet",
+        "fivexfad_celltype_site_level_ols.parquet",
+        "fivexfad_celltype_mea_global_shift.csv",
+        "fivexfad_celltype_winsorized_sites.csv",
+        "fivexfad_celltype_substrate_sets.csv",
+        "fivexfad_celltype_counts.csv",
+        "fivexfad_celltype_mea_audit.json",
+    ):
+        extra_path = os.path.join(FIVEXFAD_CELLTYPE_DIR, extra)
+        if os.path.exists(extra_path):
+            source_files.append(os.path.relpath(extra_path, UNIFIED_VIEWER_DIR))
 
     print(f"  supporting_5xfad: {len(rows):,} MEA rows", flush=True)
     return {
@@ -2183,11 +2969,16 @@ def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None
             "tissue": ["cortex", "hippocampus"],
             "age_months": [3, 6, 9, 12],
         },
-        "rows": rows,
-        "attribution_rows": attribution_rows,
+        "rows": rows_payload,
+        "celltype_attribution_summary_index": celltype_attribution_summary_index,
+        "celltype_attribution_shards": celltype_attribution_shards,
+        "celltype_agreement_index": celltype_agreement_index,
+        "celltype_mea_plot_index": celltype_mea_plot_index,
+        "celltype_mea_shards": celltype_mea_shards,
         "contrast_qc": qc_rows,
         "sample_counts": sample_counts,
         "detail_shards": detail_shards,
+        "celltype_ols_shards": celltype_ols_shards,
         "source_files": sorted(set(source_files)),
     }
 
@@ -4181,6 +4972,41 @@ def write_payload(payload: dict) -> dict:
     return {"raw_bytes": len(raw), "gzip_bytes": len(gz), "json_str": json_str}
 
 
+def refresh_supporting_5xfad_payload() -> dict:
+    """Refresh only the 5xFAD supporting block in an existing viewer payload."""
+    if not os.path.exists(PAYLOAD_JSON):
+        raise SystemExit(
+            f"payload missing at {PAYLOAD_JSON}; run the full viewer build once before "
+            "using --supporting-5xfad-only"
+        )
+    with open(PAYLOAD_JSON) as f:
+        payload = json.load(f)
+
+    supporting_5xfad = build_supporting_5xfad_slice(data=None)
+    meta = payload.setdefault("meta", {})
+    capabilities = meta.setdefault("capabilities", {})
+    contexts = meta.setdefault("contexts", [])
+    if supporting_5xfad is None:
+        payload.pop("supporting_5xfad", None)
+        capabilities["supporting_5xfad"] = False
+        for ctx in contexts:
+            ctx.setdefault("capabilities", {})["supporting_5xfad"] = False
+    else:
+        payload["supporting_5xfad"] = supporting_5xfad
+        capabilities["supporting_5xfad"] = True
+        for ctx in contexts:
+            ctx.setdefault("capabilities", {})["supporting_5xfad"] = True
+
+    sizes = write_payload(_sanitize(payload))
+    html = write_html(inline_payload=False)
+    return {
+        "raw_bytes": sizes["raw_bytes"],
+        "gzip_bytes": sizes["gzip_bytes"],
+        "html_bytes": html["html_bytes"],
+        "output": html["output"],
+    }
+
+
 # ---------------------------------------------------------------------------
 # HTML shell — rendered from alz/viewer/template/index.html.j2 via Jinja.
 # Sentinel substitution (__APP_COLOR__, __PAYLOAD_SENTINEL__, etc.) happens
@@ -4482,6 +5308,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--payload", action="store_true", help="Write JSON payload")
     ap.add_argument("--html", action="store_true", help="Write unified_viewer.html (requires payload)")
     ap.add_argument("--validate", action="store_true", help="Write Phase 2 validation report")
+    ap.add_argument("--supporting-5xfad-only", action="store_true",
+                    help="Refresh only payload.supporting_5xfad and the static HTML shell "
+                         "from existing viewer outputs. Does not rebuild Song/Mukesh/Incytr "
+                         "payload sections or sidecar shards.")
     ap.add_argument("--inline-payload", action="store_true",
                     help="Embed the full JSON payload in index.html for a "
                          "single-file archival/offline artifact. Default "
@@ -4499,6 +5329,13 @@ def main(argv: list[str] | None = None) -> int:
                          "(checks every (contrast, pair, node, layer) cell). "
                          "Intended for pre-publish / CI builds.")
     args = ap.parse_args(argv)
+
+    if args.supporting_5xfad_only:
+        info = refresh_supporting_5xfad_payload()
+        print(f"  payload raw={info['raw_bytes']/1e6:.2f} MB "
+              f"gzip={info['gzip_bytes']/1e6:.2f} MB")
+        print(f"  html {info['html_bytes']/1e6:.2f} MB -> {info['output']}")
+        return 0
 
     if not any([args.summary, args.payload, args.html, args.validate]):
         args.payload = True

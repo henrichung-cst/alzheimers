@@ -401,8 +401,11 @@ main#app-main { padding:14px; }
   border-left:2px solid #b0bec5; }
 .nes-profile-cell.kh-ctrl-group .npc { opacity:0.65; }
 /* Crosstable agreement view: glyph columns. Category filtering is a toolbar dropdown. */
-#kx-table .kx-mglyph, #kx-table .kx-hglyph { text-align:center; padding:2px 4px;
+#kx-table .kx-mglyph, #kx-table .kx-hglyph, #kx-table .kx-f5glyph { text-align:center; padding:2px 4px;
   white-space:nowrap; }
+#kx-table .kx-f5glyph .nes-profile-cell { grid-template-columns:repeat(4, 12px); }
+.kx-f5-wrap { justify-content:center; }
+.kx-f5-tissue { display:inline-block; min-width:22px; font-size:10px; color:var(--muted); text-align:right; }
 #kx-table th.kx-agree-col, #kx-table td.kx-agree-col { min-width:72px;
   text-align:center; }
 #kx-table th.kx-spec, #kx-table td.kx-spec { text-align:center; }
@@ -422,7 +425,7 @@ main#app-main { padding:14px; }
   background:#f5f5f5; border-radius:4px 4px 0 0; cursor:pointer; }
 .kx-detail-tabs button.active { background:#fff; border-bottom-color:#fff;
   font-weight:600; }
-.kx-detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.kx-detail-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
 .kx-detail-col { min-width:0; }
 .kx-detail-col-head { font-size:11px; font-weight:700; text-transform:uppercase;
   letter-spacing:0.3px; color:#546e7a; margin-bottom:4px; }
@@ -431,6 +434,10 @@ main#app-main { padding:14px; }
 .kx-direction-support p { font-size:12px; margin:0 0 6px; line-height:1.35; }
 .kx-direction-table { width:100%; margin-bottom:8px; }
 .kx-direction-table th, .kx-direction-table td { font-size:11px; }
+.kx-f5-detail h5 { margin:8px 0 4px; font-size:12px; }
+.kx-f5-detail-table, .kx-f5-attr-table { width:100%; margin:4px 0 8px; }
+.kx-f5-detail-table th, .kx-f5-detail-table td,
+.kx-f5-attr-table th, .kx-f5-attr-table td { font-size:11px; }
 /* Cell-type Specificity sub-tab: single cluster-aligned reference table. */
 .kx-spec-note { font-size:12px; margin:0 2px 8px; line-height:1.4; }
 .kx-spec-table-wrap { overflow:auto; max-height:60vh; }
@@ -448,6 +455,7 @@ main#app-main { padding:14px; }
 .agreement-profile-cell .apc { width:12px; height:12px; box-sizing:border-box; background:#fff; }
 .agreement-profile-cell .apc.agree { background:#43a047; }
 .agreement-profile-cell .apc.disagree { background:#ef6c00; }
+.agreement-profile-cell.f5-agreement-profile-cell { grid-template-columns:repeat(4, 12px); }
 .agreement-profile-wrap { display:inline-flex; align-items:center; gap:2px; }
 .ke-table-wrap { max-height:70vh; overflow-y:auto; }
 .data-table { border-collapse:collapse; font-size:12px; width:100%; }
