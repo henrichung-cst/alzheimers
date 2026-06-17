@@ -259,6 +259,16 @@ const TAB_GUIDE = {
     },
     howTo: "Set sender/receiver/contrast filters or arrive via a heatmap click. Use the |PDS| floor as the primary gate. Search matches any of Ligand/Receptor/EM/Target/Path/Sender/Receiver/contrast.",
   },
+  celltype: {
+    preamble: "Per-donor ProjecTILs assignment summary for the single-cell input used by the T-cell Incytr runs.",
+    method: [
+      "The builder packages donor-specific state totals, state-by-day counts, and optional ProjecTILs embedding coordinates from the T-cell Incytr input directory.",
+    ],
+    shows: {
+      lead: "The active donor's projected cell states, total state composition, and day-by-state cell counts.",
+    },
+    howTo: "Use the donor toggle to switch cohorts. If embedding coordinates are present, choose a projection reference and reduction from the controls above the canvas.",
+  },
 };
 
 function _escapeHtml(s) {

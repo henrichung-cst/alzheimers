@@ -60,11 +60,28 @@ Completed in this pass:
 
 ## Pass 4 — viewer template duplication
 
-Status: pending.
+Status: partially completed.
 
-`alz/viewer/template` and `alz/tcell_viewer/template` share 11 same-path template files. Only
-`head.html` is byte-identical; the rest diverge. Consolidation should be done against
-`alz/viewer_shared` with payload/context checks, not by blind deduplication.
+`alz/viewer/template` and `alz/tcell_viewer/template` still share 10 same-path template files after
+the identical `head.html` chunk was moved to `alz/viewer_shared`. The remaining overlaps all
+diverge. Consolidation should be done against `alz/viewer_shared` with payload/context checks, not by
+blind deduplication.
+
+Completed in this pass:
+
+- Moved identical `head.html` into `alz/viewer_shared/template/head.html`; both viewers now resolve
+  it through the existing shared-template fallback.
+- Removed the inactive legacy T-cell `TemporalV2` implementation and its orphaned `.tv2-*` styles;
+  the live T-cell `Temporal` tab remains intact.
+- Restored the existing T-cell cell-type assignment workbench by adding its missing template include,
+  tab panel, `TAB_GUIDE`, and `TAB_MANIFEST` entry.
+
+Still pending:
+
+- Function-level consolidation of shared helper code in `js/01_state.js`, `js/02_ui_chrome.js`, and
+  the kinase tab scripts.
+- A deliberate strategy for `index.html.j2`; the two shells differ only by viewer-specific tab
+  includes, so this should be conditionalized rather than duplicated blindly.
 
 ## Pass 5 — storage/provenance policy cleanup
 

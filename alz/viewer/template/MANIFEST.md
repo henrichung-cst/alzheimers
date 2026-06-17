@@ -22,17 +22,16 @@ per-tab branches to `boot.js`.
 
 | File | Lines | Notes |
 |---|---:|---|
-| `index.html.j2` | 23 | Jinja shell |
-| `head.html` | 17 | HTML head + ESM imports |
-| `body.html` | 349 | Live tab panels |
-| `styles.css` | 652 | Shared styles |
+| `index.html.j2` | 36 | Jinja shell |
+| `body.html` | 596 | Live tab panels |
+| `styles.css` | 716 | Shared styles |
 
 ## JS — shared infrastructure
 
 | File | Lines | Notes |
 |---|---:|---|
-| `js/01_state.js` | 510 | Store + reducer, METRIC_DEFS, TAB_GUIDE, audit/measurement-trace stores |
-| `js/02_ui_chrome.js` | 457 | how-to drawer, kinase-tab view export, splitter / drawer resizer, TAB_MANIFEST |
+| `js/01_state.js` | 563 | Store + reducer, METRIC_DEFS, TAB_GUIDE, audit/measurement-trace stores |
+| `js/02_ui_chrome.js` | 479 | how-to drawer, kinase-tab view export, splitter / drawer resizer, TAB_MANIFEST |
 
 ## JS — widgets
 
@@ -43,18 +42,19 @@ per-tab branches to `boot.js`.
 
 | File | Lines | Notes |
 |---|---:|---|
-| `js/tabs/kinase_explorer.js` | 769 | Kinase Explorer scoring + render |
-| `js/tabs/kinase_audit.js` | 1400 | Audit infra + MEA + WMB + SEA-AD + Song panels |
-| `js/tabs/kinase_wiring.js` | 133 | wireKinaseTable, filter UI |
-| `js/tabs/temporal_v2.js` | 792 | Decomp series builder |
-| `js/tabs/kinase_crosstable.js` | 564 | Decomp/SEA-AD cross-table |
-| `js/tabs/kinase_human.js` | 1637 | Human (Mukesh/NBB) per-donor kinase explorer (active when PAYLOAD.human present) |
+| `js/tabs/kinase_explorer.js` | 895 | Kinase Explorer scoring + render |
+| `js/tabs/kinase_audit.js` | 1407 | Audit infra + MEA + WMB + SEA-AD + Song panels |
+| `js/tabs/kinase_wiring.js` | 143 | wireKinaseTable, filter UI |
+| `js/tabs/temporal_v2.js` | 820 | Decomp series builder |
+| `js/tabs/kinase_crosstable.js` | 1576 | Decomp/SEA-AD/5xFAD cross-table |
+| `js/tabs/kinase_human.js` | 1600 | Human (Mukesh/NBB) per-donor kinase explorer (active when PAYLOAD.human present) |
 
 ## Shared JS fallback
 
 The builder resolves missing local template files from `alz/viewer_shared/template`.
 Current shared modules used by this viewer:
 
+- `head.html`
 - `js/00_payload_adapter.js`
 - `js/03_filters_hash.js`
 - `js/04_slice_cache.js`
@@ -65,6 +65,7 @@ Current shared modules used by this viewer:
 - `js/tabs/incytr_pathways.js`
 - `js/tabs/kinase_detail.js`
 - `js/widgets/multiselect.js`
+- `js/widgets/trend_filter.js`
 - `js/widgets/sequence_logo.js`
 - `js/widgets/transcript_trace.js`
 - `js/widgets/evidence_row.js`

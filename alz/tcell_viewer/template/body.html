@@ -240,6 +240,40 @@
       <div id="ip-table-wrap"></div>
     </div>
   </div>
+  <div id="tab-celltype" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-celltype" hidden>
+    <div class="card ct-assign-layout">
+      <div class="ct-assign-head">
+        <h2>Cell-Type Assignment</h2>
+        <span class="ct-context-chip" id="ct-context-label"></span>
+      </div>
+      <section>
+        <div class="ct-section-head">
+          <h3>Projection</h3>
+          <div class="ct-section-meta">
+            <label class="ke-filter-label">Reference
+              <select id="ct-embedding-ref" aria-label="Projection reference"></select>
+            </label>
+            <label class="ke-filter-label">Reduction
+              <select id="ct-embedding-reduction" aria-label="Embedding reduction"></select>
+            </label>
+          </div>
+        </div>
+        <div class="muted" id="ct-embedding-status"></div>
+        <div class="ct-embedding-wrap">
+          <canvas id="ct-embedding-canvas" width="920" height="420"></canvas>
+          <div class="ct-embedding-legend" id="ct-embedding-legend"></div>
+        </div>
+      </section>
+      <section style="margin-top:14px;">
+        <div class="ct-section-head"><h3>States</h3></div>
+        <div class="ct-bars" id="ct-state-bars"></div>
+      </section>
+      <section style="margin-top:14px;">
+        <div class="ct-section-head"><h3>Day Counts</h3></div>
+        <div class="ct-day-grid" id="ct-day-grid"></div>
+      </section>
+    </div>
+  </div>
 </main>
 <div id="drawer-resizer" title="Drag to resize"></div>
 <button id="howto-drawer-toggle" type="button" aria-label="Toggle how-to drawer" aria-expanded="false" title="Show/hide the 'How to read' drawer">?</button>

@@ -165,9 +165,6 @@ function resetKinaseContextCaches() {
   _agreementByKey = null;
   _highlightKinaseIds = null;
   _highlightForBid = null;
-  _tv2State = null;
-  _tv2DecompCellsCache = null;
-  _tv2AttrTierByKinCtx = null;
 }
 
 function _ensureKinaseIndexes() {

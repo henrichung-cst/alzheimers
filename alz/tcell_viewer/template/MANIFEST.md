@@ -22,17 +22,16 @@ per-tab branches to `boot.js`.
 
 | File | Lines | Notes |
 |---|---:|---|
-| `index.html.j2` | 23 | Jinja shell |
-| `head.html` | 17 | HTML head + ESM imports |
-| `body.html` | 152 | Live tab panels |
-| `styles.css` | 652 | Shared styles |
+| `index.html.j2` | 34 | Jinja shell |
+| `body.html` | 299 | Live tab panels |
+| `styles.css` | 732 | Shared styles |
 
 ## JS — shared infrastructure
 
 | File | Lines | Notes |
 |---|---:|---|
-| `js/01_state.js` | 522 | Store + reducer, METRIC_DEFS, TAB_GUIDE, audit/measurement-trace stores |
-| `js/02_ui_chrome.js` | 431 | how-to drawer, kinase-tab view export, splitter / drawer resizer, TAB_MANIFEST |
+| `js/01_state.js` | 533 | Store + reducer, METRIC_DEFS, TAB_GUIDE, audit/measurement-trace stores |
+| `js/02_ui_chrome.js` | 445 | how-to drawer, kinase-tab view export, splitter / drawer resizer, TAB_MANIFEST |
 
 ## JS — widgets
 
@@ -43,16 +42,18 @@ per-tab branches to `boot.js`.
 
 | File | Lines | Notes |
 |---|---:|---|
-| `js/tabs/kinase_explorer.js` | 827 | T-cell donor1 kinase MEA explorer |
-| `js/tabs/kinase_audit.js` | 1405 | T-cell kinase audit/detail support |
-| `js/tabs/kinase_wiring.js` | 83 | wireKinaseTable, filter UI |
-| `js/tabs/temporal_v2.js` | 793 | Temporal series builder |
+| `js/tabs/kinase_explorer.js` | 715 | T-cell donor1 kinase MEA explorer |
+| `js/tabs/kinase_audit.js` | 1329 | T-cell kinase audit/detail support |
+| `js/tabs/kinase_wiring.js` | 134 | wireKinaseTable, filter UI |
+| `js/tabs/temporal_v2.js` | 696 | Temporal series builder |
+| `js/tabs/celltype_assignment.js` | 224 | ProjecTILs assignment summary |
 
 ## Shared JS fallback
 
 The builder resolves missing local template files from `alz/viewer_shared/template`.
 Current shared modules used by this viewer:
 
+- `head.html`
 - `js/00_payload_adapter.js`
 - `js/03_filters_hash.js`
 - `js/04_slice_cache.js`
@@ -63,12 +64,12 @@ Current shared modules used by this viewer:
 - `js/tabs/incytr_pathways.js`
 - `js/tabs/kinase_detail.js`
 - `js/widgets/multiselect.js`
+- `js/widgets/trend_filter.js`
 - `js/widgets/sequence_logo.js`
 - `js/widgets/transcript_trace.js`
 - `js/widgets/evidence_row.js`
 
 ## Verification
 
-Run `pixi run python alz/viewer/verify_template.py` to confirm the
-Jinja-rendered output is byte-equivalent to the legacy `HTML_TEMPLATE`
-in `build_unified_viewer.py`.
+Render `alz.build_tcell_viewer._render_template()` to confirm every raw include resolves through
+the local/shared template directories.
