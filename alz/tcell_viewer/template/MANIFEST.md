@@ -30,7 +30,7 @@ per-tab branches to `boot.js`.
 | File | Lines | Notes |
 |---|---:|---|
 | `js/01_state.js` | 533 | Store + reducer, METRIC_DEFS, TAB_GUIDE, audit/measurement-trace stores |
-| `js/02_ui_chrome.js` | 445 | how-to drawer, kinase-tab view export, splitter / drawer resizer, TAB_MANIFEST |
+| `js/02_ui_chrome.js` | 67 | viewer splitter registrations and TAB_MANIFEST |
 
 ## JS — widgets
 
@@ -55,6 +55,7 @@ Current shared modules used by this viewer:
 - `index.html.j2`
 - `head.html`
 - `js/00_payload_adapter.js`
+- `js/02_ui_chrome_common.js`
 - `js/03_filters_hash.js`
 - `js/04_slice_cache.js`
 - `js/05_header.js`

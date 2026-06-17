@@ -77,11 +77,13 @@ Completed in this pass:
   tab panel, `TAB_GUIDE`, and `TAB_MANIFEST` entry.
 - Moved the common `index.html.j2` shell into `alz/viewer_shared/template/index.html.j2`; builders
   now pass only viewer-specific tab include paths into the shared shell.
+- Moved shared UI chrome helpers into `alz/viewer_shared/template/js/02_ui_chrome_common.js`;
+  local `js/02_ui_chrome.js` files now keep viewer-specific splitter registrations and
+  `TAB_MANIFEST` entries.
 
 Still pending:
 
-- Function-level consolidation of shared helper code in `js/01_state.js`, `js/02_ui_chrome.js`, and
-  the kinase tab scripts.
+- Function-level consolidation of shared helper code in `js/01_state.js` and the kinase tab scripts.
 
 ## Pass 5 — storage/provenance policy cleanup
 
