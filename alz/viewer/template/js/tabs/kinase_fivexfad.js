@@ -514,6 +514,7 @@ function _f5AgeScope() {
 
 function _f5Metric(group, ages) {
   let peakAbsNes = null;
+  let peakSignedNes = null;
   let sigCount = 0;
   const fdr = Store.state.filters.fdr;
   for (const age of ages) {
@@ -522,12 +523,15 @@ function _f5Metric(group, ages) {
     const nes = _f5Num(row.NES);
     if (nes != null) {
       const abs = Math.abs(nes);
-      if (peakAbsNes == null || abs > peakAbsNes) peakAbsNes = abs;
+      if (peakAbsNes == null || abs > peakAbsNes) {
+        peakAbsNes = abs;
+        peakSignedNes = nes;
+      }
     }
     const q = _f5Num(row.FDR);
     if (q != null && q < fdr) sigCount += 1;
   }
-  return {peakAbsNes, sigCount};
+  return {peakAbsNes, peakSignedNes, sigCount};
 }
 
 function _f5GroupPasses(group, ages, metric) {
@@ -793,7 +797,7 @@ function renderFiveXFADKinase() {
       <td>${_f5Esc(r.residue_type || "")}</td>
       <td>${_f5Profile(r, maxAbs)}</td>
       <td>${_f5AgreementProfile(r)}</td>
-      <td class="attr-num">${r.peakAbsNes == null ? '<span class="muted">—</span>' : r.peakAbsNes.toFixed(2)}</td>
+      <td class="attr-num">${r.peakSignedNes == null ? '<span class="muted">—</span>' : (r.peakSignedNes > 0 ? "+" : "") + r.peakSignedNes.toFixed(2)}</td>
       <td class="attr-num">${r.sigCount}<span class="muted" style="font-size:10px;"> / ${denom}</span></td>
       <td>${_f5CellTypesCell(r)}</td>
       <td style="text-align:center;">${_f5NativeBadge(r)}</td>

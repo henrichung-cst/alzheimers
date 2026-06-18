@@ -85,7 +85,7 @@
               <th data-col="family" data-metric="kinaseFamily" title="Display label: Family&#10;Raw column: family&#10;Definition: Kinase family from kinase-library metadata. Click to sort.">Family</th>
               <th data-col="nes_profile" data-metric="nesProfile" title="NES profile across 9 contrasts (3 diseases × 3 timepoints). Color = direction (red up, blue down), saturation = |NES|, black outline = FDR < threshold. Click to sort by max |NES| in scope.">NES Profile</th>
               <th data-col="agreement_profile" data-metric="agreementProfile" title="Bulk-vs-decomp agreement across 9 contrasts. Green = both pipelines significant, same direction; orange = disagreement (decomp_only / bulk_only / mixed / pure disagreement); empty = neither significant. Click to sort by count of disagreement contrasts (in scope).">Agreement</th>
-              <th data-col="peak_NES" data-metric="peakNes" title="Peak |NES| — max absolute NES across the active disease/timepoint scope (or all 9 contrasts if no scope). Click to sort.">|NES|</th>
+              <th data-col="peak_NES" data-metric="peakNes" title="Peak NES — signed NES at the contrast with the largest |NES| in the active disease/timepoint scope (or all 9 contrasts if no scope). Click to sort by |NES|.">NES</th>
               <th data-col="n_sig" data-metric="nSig" title="n_sig — count of contrasts where FDR < threshold, within the active disease/timepoint scope (or out of 9 if no scope). Click to sort.">n_sig</th>
               <th data-col="n_attributed_celltypes" data-metric="nAttributed" title="Cell types attributed at high or moderate confidence in the active scope. Click to sort by count (matches the pill column).">Cell types</th>
               <th data-col="song_spec" data-metric="songTau" title="Song location evidence, shown as fold over the even-split baseline (1/31 ≈ 0.032): ≥10× / ≥5× / ≥2× / ≥1×. The fold is the kinase's peak cell-type share; the concentration index τ and the cell type are in the tooltip. Click to sort.">Song</th>
@@ -548,7 +548,7 @@
               <th data-col="residue_type" title="Phospho-residue track.">Res</th>
               <th data-col="profile" title="Age-wise TG-vs-WT NES profile. Color = direction, saturation = |NES|, outline = FDR below the header threshold.">NES Profile</th>
               <th data-col="agreement_profile" title="Bulk-vs-decomp agreement across 5xFAD ages. Green = bulk and per-cell decomposition are both significant in the same direction; orange = decomp-only, bulk-only, mixed, or opposing significant decomposition; empty = neither significant.">Agreement</th>
-              <th data-col="peakAbsNes" title="Largest absolute finite NES across the active age scope.">|NES|</th>
+              <th data-col="peakAbsNes" title="Signed NES at the age with the largest |NES| in the active age scope. Sorted by |NES|.">NES</th>
               <th data-col="sigCount" title="Selected ages with FDR below the header threshold.">n_sig</th>
               <th data-col="n_attributed_celltypes" title="Cell types attributed at high or moderate confidence.">Cell types</th>
               <th data-col="fivexfad_spec" title="5xFAD snRNA location evidence, shown as fold over the even-split baseline.">5xFAD snRNA</th>

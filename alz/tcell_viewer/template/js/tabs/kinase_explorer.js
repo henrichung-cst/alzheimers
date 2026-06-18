@@ -675,7 +675,7 @@ function renderKinaseExplorer() {
       `<td>${r.gene_symbol}</td>` +
       `<td>${_escapeHtml(r.family || "")}</td>` +
       `<td>${profile}</td>` +
-      `<td class="attr-num">${peakAbsNes != null ? peakAbsNes.toFixed(2) : '<span class="muted">—</span>'}</td>` +
+      `<td class="attr-num">${r.peak_NES != null && isFinite(r.peak_NES) ? (r.peak_NES > 0 ? "+" : "") + r.peak_NES.toFixed(2) : '<span class="muted">—</span>'}</td>` +
       `<td class="attr-num">${scopedSig}<span class="muted" style="font-size:10px;"> / ${sigDenom}</span></td>` +
       `<td>${specBadge}</td>` +
       `<td>${cellTypesCell}</td>` +
