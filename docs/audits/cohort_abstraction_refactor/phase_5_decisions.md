@@ -1,0 +1,168 @@
+# Phase 5 Decisions — Viewer Slice Contract
+
+**Branch:** `refactor/cohort-namespaces`
+**Base commit:** `240af6b` (Phase 4 committed)
+
+---
+
+## Packet 5A — Payload field inventory
+
+Read-only survey delivered to
+`docs/audits/cohort_abstraction_refactor/phase_5A_payload_inventory.md`: 14
+unified top-level keys, 9 lazy shard families, the T-cell payload, the
+frontend payload-key→consumer map, the two validators + their blind spots, and 8
+risky extraction points (R1–R8). Adapter order confirmed mukesh → tcell →
+fivexfad → song.
+
+---
+
+## Packet 5B — Slice schema
+
+New files (schema only; NOT wired into any builder this packet):
+- `alz/viewer/shared/__init__.py`
+- `alz/viewer/shared/cohort_slice.py` — `CohortViewerSlice`, `EdgeSliceContribution`
+- `alz/viewer/shared/compose.py` — `compose_viewer_slices` + merge primitives
+
+### Design: owned sections vs merge contributions
+A slice splits its payload contribution into two disjoint parts:
+- **owned sections** — top-level keys produced by exactly one cohort, placed
+  verbatim by the composer (no re-mapping).
+- **merge contributions** — values several cohorts feed into a SHARED key, which
+  the composer reduces: `capabilities`→`meta.capabilities`,
+  `audit_entries`→`audit_tables.tables`, `edge_slice_ref`→`edge_slice_ref`,
+  `kinase_names`→`kinase_motifs` (name union; PSSM matrices built by an injected
+  `kinase_motifs_builder`, so the composer never touches the motif data source).
+
+`SHARED_TOP_LEVEL_KEYS = {meta, kinase_motifs, audit_tables, edge_slice_ref}` —
+a cohort claiming any of these as `owned_sections` is rejected at construction.
+
+### Payload versioning: NONE
+The slice is an INTERNAL representation. Composing slices must reproduce today's
+v2 payload structurally identically — no new keys, no renamed keys, no version
+bump, no dropped fields. `meta.viewer_payload_schema_version` stays `2`. This is
+forced by the Phase-5 parity invariant, not a design choice; there is no
+versioned-contract-change here. (Non-goal restated: "do not change viewer payload
+semantics without a versioned contract change" — we are changing none.)
+
+### Canonical key order
+`compose.TOP_LEVEL_ORDER` pins the exact emission order of
+`build_unified_viewer.build_payload()` (meta, kinases, kinase_motifs, celltypes,
+kinase_celltype_evidence, attribution_index, decomposition_index,
+agreement_index, subclass_breakdown, audit_tables, edge_slice_ref,
+incytr_pathways, [human], [supporting_5xfad]). The composer emits keys in this
+order; optional cohort blocks appear only when a slice owns them. Any composed
+key absent from the order raises (contract-drift guard).
+
+### Merge rules (handle the inventory's risky points)
+- **R1 audit_tables** — `merge_audit_tables`: per-cohort `audit_entries` folded
+  under `tables`; duplicate table key across cohorts raises (no silent
+  last-writer-wins).
+- **R3 kinase_motifs** — `union_kinase_names` → sorted union, fed to the injected
+  builder; composer responsibility, no per-cohort logic.
+- **R4 capabilities** — `merge_capabilities`: monotone `False`→`True` promotion
+  (reproduces the builder's two-pass behavior); never demotes a `True`.
+- **R8 edge_slice_ref** — `merge_edge_slice_ref`: per-cohort shard pointers
+  aggregated by exact payload key name; cross-cohort key collision raises.
+
+### R2 cross-cohort seam (fivexfad ← song MEA) — DESIGNED, implemented in 5E
+The `supporting_5xfad` confidence alignment
+(`_assign_fivexfad_song_aligned_confidence`) depends on song's bulk MEA. Decision:
+this is an INPUT to the **fivexfad adapter** — its `build_viewer_slice(...)` will
+take the song MEA reference as an explicit named argument — NOT a step inside the
+composer and NOT a hidden cross-cohort read in the slice. The composer's only
+obligation is ordering: build the song slice before the fivexfad slice so the
+song MEA is available to pass along. The composer itself never reaches across
+cohorts. (5B defines the seam; 5E implements the fivexfad adapter.)
+
+### R6 attribution_index schema divergence
+The unified `attribution_index` (~30 song/WMB/SEA-AD columns) and the T-cell
+`attribution_index` (11 tcell-specific columns) are NOT unified. Each is an
+`owned_sections["attribution_index"]` of its own cohort/viewer; the schema models
+one per cohort, never a merged schema. (Attempting unification is explicitly
+out of scope — high risk per R6.)
+
+### Composer status: defined, not wired
+`compose_viewer_slices` is a pure reducer, exercised by an in-process self-check
+(key order, all four merges, and three contract invariants — shared-key claim,
+duplicate owner, pointer collision — all pass). It is NOT yet called from
+`build_unified_viewer.build_payload()`. Phase 5C wires the first real adapter
+(mukesh) and verifies payload parity against the current builder.
+
+### 14-key representability self-check
+Every current top-level payload key maps to a slice field — none is
+unrepresentable:
+
+| Payload key | Carried by |
+|---|---|
+| `meta` | composer-assembled (+ `capabilities` merge) |
+| `kinases` | song `owned_sections` |
+| `kinase_motifs` | composer (`kinase_names` union → builder) |
+| `celltypes` | song `owned_sections` |
+| `kinase_celltype_evidence` | song `owned_sections` |
+| `attribution_index` | song `owned_sections` (tcell: tcell `owned_sections`) |
+| `decomposition_index` | song `owned_sections` |
+| `agreement_index` | song `owned_sections` |
+| `subclass_breakdown` | song `owned_sections` |
+| `audit_tables` | composer (`audit_entries` merge) |
+| `edge_slice_ref` | composer (`edge_slice_ref` merge) |
+| `incytr_pathways` | song `owned_sections` (tcell: tcell `owned_sections`) |
+| `human` | mukesh `owned_sections` (optional) |
+| `supporting_5xfad` | fivexfad `owned_sections` (optional) |
+
+T-cell-only keys (`celltype_assignment`) are `owned_sections` of the tcell slice;
+the tcell viewer is a separate deliverable that composes its own slice set (5D).
+
+---
+
+## Packet 5C — mukesh adapter (first parity-bearing extraction)
+
+First real extraction out of the `alz/build_unified_viewer.py` monolith. Mukesh
+(human NBB per-donor) payload construction moved into a cohort adapter; the
+monolith now consumes a `CohortViewerSlice` instead of inlining the human block.
+
+### What moved
+`build_human_slice`, `_human_track_load`, `_write_human_perdonor_substrate_slices`,
+and the two constants `HUMAN_PERDONOR_DIR` / `HUMAN_TRACK_SUFFIXES` moved verbatim
+from `build_unified_viewer.py` into new `alz/viewer/cohorts/mukesh.py`. Net
+monolith change: **+13 / −499 lines** (one changed file). The nested `_gr` helper
+stays nested inside `build_human_slice`; no monolith-local helper dependency
+existed, so no circular import. The now-dead `EDGE_SLICES_HUMAN_PERDONOR_DIR`
+import was removed from the monolith.
+
+### The adapter
+`build_mukesh_viewer_slice() -> CohortViewerSlice | None`. Returns `None` when the
+perdonor outputs are absent (mouse-only build omits `PAYLOAD.human`, byte-equivalent).
+When present: `cohort_id="mukesh"`, `owned_sections={"human": human_slice}`,
+`capabilities={"human_reference": True}`, one `EdgeSliceContribution("human_perdonor",
+{"present_human_perdonor_kinase_ids": …})`, `kinase_names` = the human kinase names.
+
+### Incremental wiring (NOT the composer yet)
+`build_payload()` calls the adapter and unpacks `owned_sections["human"]`, the
+capability flag, the `present_human_perdonor_kinase_ids` edge-ref entry, and the
+kinase-name union into the **existing inline assembly**. `compose_viewer_slices`
+stays unit-tested but is NOT the assembly path this wave — it becomes the path at
+5F when all cohorts are adapters, so the old inline path remains intact and
+revertible until full parity is accepted (matches the plan's rollback criteria).
+This keeps 5C output **byte-identical**, not merely structurally identical.
+
+### Parity gate (byte-identical, memory-safe)
+The diff is confined to the human path, so the other 12 payload keys cannot drift
+and a full 104 MB rebuild is unnecessary. Gate = a targeted snapshot of the mukesh
+contribution captured BEFORE the edit (`build_human_slice()` output + the 390
+on-disk `human_perdonor` shard sha256s) and re-checked AFTER: 389 human kinase
+rows, 390 shards, **byte-identical**. The pre-edit `if human_perdonor_substrate_index:`
+guard was provably always-True (`_write_human_perdonor_substrate_slices` always
+returns a non-empty dict), so dropping it is behavior-preserving.
+
+### Independent verification (verifier ≠ implementer)
+A separate `audit-pipeline` verifier re-ran the parity check and audited the diff:
+parity PASS; clean import / no cycle; complete move with zero residual references
+to the five moved names (no stub/alias/commented block); faithful move (function
+bodies byte-identical); rewiring semantically byte-identical including the
+None/mouse-only path; adapter claims no `SHARED_TOP_LEVEL_KEYS`; no frozen-path
+(`_run_mea`) contamination. Verdict **PASS — 5C closes**. The lone finding (a dead
+import) was fixed and re-verified.
+
+### Status
+5C closed, byte-identical. Next: 5D tcell adapter (independent builder), then 5E
+fivexfad (resolves the R2 song-MEA seam), then 5F song + composer cutover.
