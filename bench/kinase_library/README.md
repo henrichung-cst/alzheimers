@@ -55,6 +55,33 @@ Profile the local source only after the parity check passes:
 
 Run artifacts are written under `bench/kinase_library/runs/`, which is ignored.
 
+## Scheduler Benchmarks
+
+Use `benchmark_scheduler.py` to test exact-backend scheduling with explicit
+thread control. The command runs each case in its own Python subprocess and sets
+`ALZ_MEA_THREADS` per process.
+
+Example sequential run:
+
+```bash
+.pixi/envs/default/bin/python bench/kinase_library/benchmark_scheduler.py \
+  --mode sequential --source local --threads-per-process 16 \
+  --case workload=projected-state,donor=donor1,track=st,state=CD8Naive \
+  --case workload=projected-state,donor=donor1,track=py,state=CD8Naive
+```
+
+Example parallel run on a 16-CPU host:
+
+```bash
+.pixi/envs/default/bin/python bench/kinase_library/benchmark_scheduler.py \
+  --mode parallel --source local --max-workers 2 --threads-per-process 8 \
+  --case workload=projected-state,donor=donor1,track=st,state=CD8Naive \
+  --case workload=projected-state,donor=donor1,track=py,state=CD8Naive
+```
+
+The invariant to preserve is simple: `max-workers * threads-per-process`
+should stay near the machine CPU count for CPU-bound S/T MEA workloads.
+
 ## Initial Baseline
 
 On 2026-06-18, the unmodified local copy of `kinase-library==1.7.0` matched the
