@@ -128,6 +128,7 @@ def main(argv: list[str] | None = None) -> None:
     _prepare_import_path(args.source, args.local_src)
 
     import kinase_library
+    import gseapy
 
     out_dir = args.out_dir
     temp_dir = None
@@ -147,6 +148,8 @@ def main(argv: list[str] | None = None) -> None:
         "source": args.source,
         "kinase_library_file": str(Path(kinase_library.__file__).resolve()),
         "kinase_library_version": getattr(kinase_library, "__version__", "unknown"),
+        "gseapy_file": str(Path(gseapy.__file__).resolve()),
+        "gseapy_version": getattr(gseapy, "__version__", "unknown"),
         "workload": args.workload,
         "donor": args.donor,
         "track": args.track,

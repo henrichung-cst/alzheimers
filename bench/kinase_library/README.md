@@ -230,6 +230,39 @@ A C++ rewrite is possible but not the first choice: the current bottleneck is
 already native Rust. The more direct path is either a Rust patch to GSEApy or a
 careful GSEApy version experiment.
 
+### GSEApy 1.2.1 Temporary Override Probe
+
+GSEApy 1.2.1 was installed into `/tmp/alz_gseapy_1_2_1` with `pip --target`
+and tested via `PYTHONPATH`, without modifying pixi.
+
+Projected-state `donor1/pY/CD8Naive`:
+
+| backend | elapsed | parity |
+| --- | ---: | --- |
+| installed GSEApy 1.1.13 | 0.83s | baseline |
+| temporary GSEApy 1.2.1 | 0.81s | exact hash match |
+
+Projected-state `donor1/ST/CD8Naive` with `ALZ_MEA_THREADS=16`:
+
+| backend | elapsed | parity |
+| --- | ---: | --- |
+| installed GSEApy 1.1.13 | 31.33s | baseline |
+| temporary GSEApy 1.2.1 | 29.79s | not byte-identical |
+
+For the ST probe, `ES`, `NES`, nominal `p-value`, `Subs fraction`, and
+`Leading substrates` matched exactly across 311 kinases. The changed values
+were FDR only:
+
+- 161/311 kinase rows had different FDR values.
+- Maximum absolute FDR difference was `0.0009904730882456293`.
+- The mechanism call category counts were unchanged in this one probe.
+
+Conclusion: GSEApy 1.2.1 is promising but cannot be adopted as a silent
+drop-in upgrade. It changes canonical FDR outputs for this workload, likely due
+to changed zero-FDR handling or FDR calculation details in the newer backend.
+Any upgrade should be treated as an explicit analysis-output migration, not a
+pure performance patch.
+
 ## Rules for Optimization Attempts
 
 - Keep local-source edits inside `bench/kinase_library/local_src` until parity
