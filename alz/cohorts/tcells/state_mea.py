@@ -75,6 +75,59 @@ class ProjectedInputs:
     cell_counts_path: Path | None
 
 
+@dataclass
+class ProjectedStateMatrixCache:
+    """Cached matrix-preparation state for one donor/track input bundle."""
+
+    inputs: ProjectedInputs
+    projected_by_state: dict[str, list[StateDayColumn]]
+    protein_by_state: dict[str, list[StateDayColumn]]
+    metadata: pd.DataFrame
+    projected_numeric: pd.DataFrame
+    protein_by_projected_gene: pd.DataFrame
+
+    def build(self, state: str, track: str) -> dict[str, pd.DataFrame]:
+        """Build raw and stoich matrices for ``state`` using cached inputs."""
+        inputs = self.inputs
+        if track != inputs.track:
+            raise ValueError(
+                f"requested track {track!r} does not match loaded inputs track {inputs.track!r}"
+            )
+
+        projected_state_cols = self.projected_by_state.get(state, [])
+        protein_state_cols = self.protein_by_state.get(state, [])
+
+        if not projected_state_cols:
+            raise ValueError(f"no projected columns for state={state!r} in {inputs.projected_path}")
+
+        protein_col_by_day = {col.day: col.column for col in protein_state_cols}
+
+        projected_cols = [col.column for col in projected_state_cols]
+        projected_state_vals = self.projected_numeric[projected_cols]
+        renamed_cols = {col.column: f"d{col.day}" for col in projected_state_cols}
+
+        raw = pd.concat(
+            [self.metadata, projected_state_vals.rename(columns=renamed_cols)],
+            axis=1,
+        )
+
+        stoich_data: dict[str, pd.Series] = {}
+        for rec in projected_state_cols:
+            day_label = f"d{rec.day}"
+            pcol = protein_col_by_day.get(rec.day)
+            projected_log = _positive_log2(projected_state_vals[rec.column].reset_index(drop=True))
+            if pcol is None or pcol not in self.protein_by_projected_gene.columns:
+                stoich_data[day_label] = pd.Series([np.nan] * len(inputs.projected))
+                continue
+
+            protein_for_gene = self.protein_by_projected_gene[pcol].reset_index(drop=True)
+            protein_log = _positive_log2(protein_for_gene)
+            stoich_data[day_label] = projected_log - protein_log
+
+        stoich = pd.concat([self.metadata, pd.DataFrame(stoich_data)], axis=1)
+        return {"raw": raw, "stoich": stoich}
+
+
 def parse_state_day_columns(columns: Iterable[str]) -> list[StateDayColumn]:
     """Extract ``d{day}_{state}`` columns in source order."""
     parsed: list[StateDayColumn] = []
@@ -416,6 +469,56 @@ def _build_metadata_frame(projected: pd.DataFrame) -> pd.DataFrame:
     })
 
 
+def _columns_by_state(columns: Iterable[str]) -> dict[str, list[StateDayColumn]]:
+    by_state: dict[str, list[StateDayColumn]] = {}
+    for col in parse_state_day_columns(columns):
+        by_state.setdefault(col.state, []).append(col)
+    return by_state
+
+
+def build_state_matrix_cache(inputs: ProjectedInputs) -> ProjectedStateMatrixCache:
+    """Precompute reusable state-matrix inputs for one projected donor/track.
+
+    This preserves the public ``build_state_matrices`` output shape while
+    avoiding repeated parsing, numeric coercion, and protein-by-gene reindexing
+    for each state in a full projected-state MEA run.
+    """
+    projected_by_state = _columns_by_state(inputs.projected.columns)
+    protein_by_state = _columns_by_state(inputs.protein.columns)
+
+    projected_columns = [
+        col.column
+        for state_columns in projected_by_state.values()
+        for col in state_columns
+    ]
+    protein_columns = [
+        col.column
+        for state_columns in protein_by_state.values()
+        for col in state_columns
+    ]
+
+    projected_numeric = _to_numeric(inputs.projected[projected_columns])
+    protein_numeric = (
+        _to_numeric(inputs.protein[protein_columns])
+        if protein_columns
+        else pd.DataFrame(index=inputs.protein.index)
+    )
+    proteins = protein_numeric.copy()
+    proteins["gene_symbol"] = inputs.protein["gene_symbol"].astype(str)
+    proteins_by_gene = proteins.set_index("gene_symbol").groupby(level=0).first()
+    gene_keys = inputs.projected["gene_symbol"].astype(str)
+    protein_by_projected_gene = proteins_by_gene.reindex(gene_keys).reset_index(drop=True)
+
+    return ProjectedStateMatrixCache(
+        inputs=inputs,
+        projected_by_state=projected_by_state,
+        protein_by_state=protein_by_state,
+        metadata=_build_metadata_frame(inputs.projected),
+        projected_numeric=projected_numeric,
+        protein_by_projected_gene=protein_by_projected_gene,
+    )
+
+
 def build_state_matrices(
     inputs: ProjectedInputs,
     state: str,
@@ -428,49 +531,7 @@ def build_state_matrices(
         - "raw": metadata + raw projected phospho values (`d{day}`)
         - "stoich": metadata + stoich values (`log2(projected) - log2(protein)`)
     """
-    if track != inputs.track:
-        raise ValueError(
-            f"requested track {track!r} does not match loaded inputs track {inputs.track!r}"
-        )
-
-    projected_state_cols = [c for c in parse_state_day_columns(inputs.projected.columns) if c.state == state]
-    protein_state_cols = [c for c in parse_state_day_columns(inputs.protein.columns) if c.state == state]
-
-    if not projected_state_cols:
-        raise ValueError(f"no projected columns for state={state!r} in {inputs.projected_path}")
-
-    protein_col_by_day = {col.day: col.column for col in protein_state_cols}
-
-    projected_cols = [col.column for col in projected_state_cols]
-    projected_state_vals = _to_numeric(inputs.projected[projected_cols])
-    renamed_cols = {col.column: f"d{col.day}" for col in projected_state_cols}
-
-    metadata = _build_metadata_frame(inputs.projected)
-    raw = pd.concat([metadata, projected_state_vals], axis=1)
-    raw = raw.rename(columns=renamed_cols)
-
-    protein_columns = [c.column for c in protein_state_cols]
-    proteins = _to_numeric(inputs.protein[protein_columns]) if protein_columns else pd.DataFrame(index=inputs.protein.index)
-    proteins["gene_symbol"] = inputs.protein["gene_symbol"].astype(str)
-    proteins_by_gene = proteins.set_index("gene_symbol").groupby(level=0).first()
-
-    gene_keys = inputs.projected["gene_symbol"].astype(str).tolist()
-
-    stoich_data: dict[str, pd.Series] = {}
-    for rec in projected_state_cols:
-        day_label = f"d{rec.day}"
-        pcol = protein_col_by_day.get(rec.day)
-        projected_log = _positive_log2(projected_state_vals[rec.column].reset_index(drop=True))
-        if pcol is None or pcol not in proteins_by_gene.columns:
-            stoich_data[day_label] = pd.Series([np.nan] * len(inputs.projected))
-            continue
-
-        protein_for_gene = proteins_by_gene[pcol].reindex(gene_keys).reset_index(drop=True)
-        protein_log = _positive_log2(protein_for_gene)
-        stoich_data[day_label] = projected_log - protein_log
-
-    stoich = pd.concat([metadata, pd.DataFrame(stoich_data)], axis=1)
-    return {"raw": raw, "stoich": stoich}
+    return build_state_matrix_cache(inputs).build(state=state, track=track)
 
 
 def _add_metadata_columns(
@@ -739,13 +800,16 @@ def run_projected_state_mea(
     all_shift: list[pd.DataFrame] = []
     all_winsorized: list[pd.DataFrame] = []
     all_substrate: list[pd.DataFrame] = []
+    matrix_cache: ProjectedStateMatrixCache | None = None
 
     for row in records:
         if row.get("skip_reason") is not None:
             continue
 
         state = row["state"]
-        matrices = build_state_matrices(inputs, state=state, track=track)
+        if matrix_cache is None:
+            matrix_cache = build_state_matrix_cache(inputs)
+        matrices = matrix_cache.build(state=state, track=track)
         days = [day for day in row.get("days_run", []) if isinstance(day, int)]
         if not days:
             continue
