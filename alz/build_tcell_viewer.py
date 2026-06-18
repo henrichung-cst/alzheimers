@@ -44,6 +44,7 @@ sys.path.insert(0, HERE)
 
 from alz.shared import config  # noqa: E402
 from alz.viewer.shared.payload_helpers import (_sanitize, _configure_duckdb_tempdir, _json_clean_value, _INCYTR_FC_NODES, _build_incytr_gene_node_index, _build_kinase_motifs)  # noqa: E402
+from alz.viewer.shared.incytr_index import (_INCYTR_LABEL_NODES, _INCYTR_LABEL_COLS, _INCYTR_LABEL_VOCAB, _INCYTR_SCORE_COLS, _idx_label_bits)  # noqa: E402
 
 from tcell_viewer.paths import (  # noqa: E402
     AUDIT_PREVIEW_ROWS,
@@ -113,15 +114,11 @@ PROJECTILS_LABEL_MAP = {
     "CD4.Treg": "Treg",
 }
 
-_INCYTR_SCORE_COLS = ("TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "SiK_score")
 _INCYTR_FC_METRICS = ("sclog2FC", "pr_log2FC", "ps_log2FC", "py_log2FC")
 _INCYTR_FC_COLS = tuple(
     f"{node}_{metric}" for node in _INCYTR_FC_NODES for metric in _INCYTR_FC_METRICS
 )
-_INCYTR_LABEL_NODES = _INCYTR_FC_NODES
-_INCYTR_LABEL_VOCAB = ("DEG", "prG")
 _INCYTR_LABEL_SRC = tuple(f"{n}.label" for n in _INCYTR_LABEL_NODES)
-_INCYTR_LABEL_COLS = tuple(f"{n}_label" for n in _INCYTR_LABEL_NODES)
 
 # Pre-aggregated heatmap thresholds (matches mouse-cohort viewer contract).
 _INCYTR_PATHWAY_PVALUES = (0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
@@ -993,20 +990,6 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
                 idx_gene_to_id[gene] = len(idx_gene_vocab)
                 idx_gene_vocab.append(gene)
         return cat.map(idx_gene_to_id).to_numpy(dtype="<u2")
-
-    def _idx_label_bits(frame: pd.DataFrame) -> np.ndarray:
-        bits = np.zeros(len(frame), dtype="<u1")
-        for shift, col in zip((0, 2, 4, 6), _INCYTR_LABEL_COLS):
-            if col not in frame.columns:
-                continue
-            values = frame[col]
-            codes = (
-                values.cat.codes.to_numpy()
-                if isinstance(values.dtype, pd.CategoricalDtype)
-                else pd.Categorical(values, categories=_INCYTR_LABEL_VOCAB).codes
-            )
-            bits |= ((codes + 1).astype("<u1") << shift).astype("<u1")
-        return bits
 
     def _accumulate_index(s_name: str, r_name: str, frame: pd.DataFrame) -> None:
         n = len(frame)

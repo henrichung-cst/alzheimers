@@ -80,9 +80,54 @@ Options:
    scope); verified against both viewers' incytr shard trees. Not folded into the
    safe lift because of its volume + parity sensitivity.
 
-## Parity gate
+## Parity gate (wave 1)
 Per helper: AST-diff the lifted body against both originals; for the safe three,
 output-equivalence is by construction. For `_build_kinase_motifs`, build the
 `kinase_motifs` block for both viewers' real kinase-name sets before/after and
 diff the resulting dict (key set + values), reporting any delta. No full 104 MB
 payload rebuild required — the dedup is function-local.
+
+---
+
+## 5D-2 — incytr pair-shard writer: MEASUREMENT (2026-06-18)
+
+The 5A inventory called these "~70% common." **Measured: 53%.**
+
+| | `_write_incytr_pair_pathways` (unified) | `_write_donor_pair_pathways` (tcell) |
+|---|---|---|
+| Size | 725 src lines (L3235–3959) | 537 src lines (L727–1263) |
+| SequenceMatcher ratio | \multicolumn — **0.53** (265 matched lines / 28 scattered blocks) |
+
+Nested-helper structure is parallel but each has DRIFTED — and the drift is
+**almost entirely cosmetic**:
+- `_idx_gene_ids` (7/7 ln): identical logic; only loop var `g`→`gene`. Closes over
+  `idx_gene_to_id`/`idx_gene_vocab`.
+- `_idx_label_bits` (13/13 ln): identical logic; only annotation/comment/var name.
+  **Pure** (uses module consts `_INCYTR_LABEL_COLS`/`_INCYTR_LABEL_VOCAB`).
+- `_idx_traj_bits`: **unified-only** (tcell has no trajectory).
+- `_accumulate_index` (21/23 ln): one ESSENTIAL diff — `trajBits =
+  _idx_traj_bits(frame["traj_labels"])` (unified) vs `np.zeros(n)` (tcell); rest cosmetic.
+- `_build_pathway_counts`, `_flush`, the SQL union builder, the per-sender
+  streaming write: **legitimately divergent** (AD 9-contrast 31×31 grid + CR-04
+  trajectory + global `.bin.gz` vs tcell donor-scoped 3-part filenames, simpler flush).
+
+### Conclusion: do NOT merge the orchestrators
+The genuinely-shared surface is ~50 lines of an interdependent binary-index
+encoder. The 700-line orchestrators differ for real reasons; parameterizing one
+shared function over (SQL shape, filename template, trajectory on/off, streaming
+scope) yields a worse abstraction than two clear copies — the classic wrong-
+abstraction trap. The 5A "70% common, extract a shared core" recommendation is
+**rejected on measurement.**
+
+### The only defensible dedup: the binary-index FORMAT layer
+The one correctness-grade motive is that both viewers must emit the SAME
+`.bin.gz` layout that the frontend `incytr_global_index.js` decodes. Lifting the
+pure encoders (`_idx_label_bits`, `_idx_traj_bits`) + the index column constants
+(`_INCYTR_LABEL_COLS`/`_INCYTR_LABEL_VOCAB`/`_INCYTR_SCORE_COLS`) into one shared
+`incytr_index` module makes that a single source of truth. `_idx_gene_ids` /
+`_accumulate_index` are tiny and entangled with per-call vocab/chunk state —
+marginal to lift, and a parameterization-bug risk on the sce4-sensitive index.
+
+Parity gate (if done): function-level array-equality of the lifted encoders
+(old-vs-new on synthetic frames) — orchestration untouched, so identical encoder
+bytes ⇒ identical shard trees by construction. No shard-tree regeneration.

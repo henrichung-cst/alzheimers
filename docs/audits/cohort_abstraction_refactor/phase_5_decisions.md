@@ -210,3 +210,36 @@ and `_run_mea` untouched). Verdict **PASS — 5D wave-1 closes**.
 ### Status
 5D wave-1 closed (unified byte-identical; tcell −unread `source_name`). Next: 5D-2
 incytr pair-shard writer dedup, then 5E fivexfad, then 5F song + composer cutover.
+
+---
+
+## Packet 5D-2 — incytr shard writer: index-format layer only
+
+The 5A "70% common, extract a shared core" recommendation for the two incytr
+shard writers was **rejected on measurement** (`phase_5D_dedup_audit.md` §5D-2):
+they are 53% common (725 vs 537 lines); the 700-line orchestrators differ for real
+reasons (AD 9-contrast 31×31 grid + CR-04 trajectory + global `.bin.gz` vs tcell
+donor-scoped 3-part filenames). Merging them = wrong-abstraction trap.
+
+**User decision: lift the binary-index FORMAT layer only.** The one
+correctness-grade motive is that both viewers must emit the SAME `.bin.gz` layout
+that `incytr_global_index.js` decodes — so make that one source of truth.
+
+New `alz/viewer/shared/incytr_index.py` (42 lines): the vocab constants
+(`_INCYTR_LABEL_NODES`/`_INCYTR_LABEL_COLS`/`_INCYTR_LABEL_VOCAB`/`_INCYTR_SCORE_COLS`/
+`_SIGN_VEC_LABELS`) + the two PURE encoders (`_idx_label_bits`, `_idx_traj_bits`),
+lifted verbatim from the unified builder's nested defs. Both builders import them
+(names preserved; tcell omits the unused `_SIGN_VEC_LABELS`/`_idx_traj_bits`). The
+700-line orchestrators are **untouched** — SQL, streaming, `_flush`,
+`_idx_gene_ids`, `_accumulate_index` all stay per-builder (`_idx_gene_ids` /
+`_accumulate_index` are tiny + state-entangled; not worth lifting). Net −66 lines.
+
+**Parity (no shard-tree rebuild):** function-level bit + dtype array-equality of
+the lifted encoders vs both builders' HEAD copies (synthetic label frames + traj
+series) — orchestration untouched ⇒ identical encoder bytes ⇒ identical shard
+trees by construction. Independent verifier PASS; the diff's only `+` lines are
+the two import statements (critical check: zero stray orchestrator edits).
+
+### Status
+5D fully closed (wave-1 dedup + 5D-2 index-format lift). Next: 5E fivexfad
+(resolves the R2 song-MEA seam), then 5F song + composer cutover.
