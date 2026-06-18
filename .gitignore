@@ -37,3 +37,8 @@ alz/integration/intermediates/
 !/bench/
 /bench/*
 !/bench/bench.md
+!/bench/kinase_library/
+!/bench/kinase_library/*.py
+!/bench/kinase_library/README.md
+/bench/kinase_library/local_src/
+/bench/kinase_library/runs/
