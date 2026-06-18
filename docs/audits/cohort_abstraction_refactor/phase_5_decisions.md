@@ -315,3 +315,111 @@ with 6,224 rows and all 15 top-level keys; scope contained. **R2 retired as a
 documentation error — fivexfad is self-contained given `data`; no song-MEA
 argument, no composer ordering constraint.** Next: 5F song + composer cutover →
 Phase 5 boundary gate (hard human stop; final phase).
+
+---
+
+## Packet 5F — song adapter + composer cutover (the LAST wave)
+
+5F is the culminating wave: extract the song cohort into its own adapter and
+retire `build_payload`'s inline hand-assembly in favor of `compose_viewer_slices`.
+Unlike 5C/5E this is **restructuring, not pure relocation** — three of song's
+owned sections (`kinase_celltype_evidence`, `attribution_index`,
+`decomposition_index`) are built INLINE in `build_payload` (L2602–2737), not as
+standalone functions, so they must be wrapped into functions as they move.
+
+**User decision (full extraction):** move ALL song construction into the adapter,
+collapsing `build_payload` to slice-build + compose. Risk is limited not by
+leaving code behind but by **classifying each piece by the parity rigor it needs** —
+verbatim relocations preserve their invariants by construction and are NOT
+re-verified. Specifically: **sce4 parity is NOT re-ported into the recomposed
+viewer** — `_write_incytr_pair_pathways` moves byte-identically, so every sce4
+correctness invariant is preserved by construction; `verify-incytr-sce4` already
+owns that gate and a verbatim move cannot perturb it.
+
+Three verifier-gated sub-waves, tiered by parity rigor:
+
+### 5F-1 — Tier A: verbatim relocation of the 16 standalone song functions
+Move into `alz/viewer/cohorts/song.py`, verbatim: `_build_kinases_slice`,
+`_build_celltypes_slice`, `_as_single_context_block`, `_build_subclass_breakdown`,
+`_build_agreement_index`, `_norm_motif`, `_to_float32_estimable`,
+`_write_decomp_ols_slices`, `_write_song_concordance_slices`,
+`_annotate_trajectory_columns`, `_incytr_celltype_qc_counts_path`,
+`_read_incytr_celltype_qc`, `_incytr_sanitize`, `_pair_mode_contrast_from_filename`,
+`_write_incytr_pair_pathways` (705 L), `_read_empty_deg_celltypes`. All are
+song-exclusive (grep: called only from `build_payload` or within the song
+closure; none used by mukesh/fivexfad/tcell/validate/main). They reference only
+already-shared imports (`payload_helpers`, `incytr_index`, `config`, paths,
+`DECOMP_FDR_AGREEMENT`) — same pattern as fivexfad; `UnifiedData` via
+TYPE_CHECKING. `build_payload` calls them unchanged.
+**Parity:** ast byte-identity vs HEAD + import/cycle/scope + build smoke. sce4 and
+decomp-OLS parity preserved by construction — NOT re-verified.
+
+### 5F-2 — Tier B/C: wrap the restructured pieces + meta; assemble the slice
+Wrap the 3 inline blocks (`build_unified_viewer.py` HEAD L2602–2737) verbatim into
+`_build_kinase_celltype_evidence(data, kid)`,
+`_build_attribution_index(data, kid, contrast_to_id)`,
+`_build_decomposition_index(data, kid, contrast_to_id)`. Move `meta`-building into
+a song function. Expose `build_song_viewer_slice(data)` returning the
+`CohortViewerSlice` (8 owned sections + 3 edge contributions + kinase_names) plus
+the `meta` block and the `edge_slice_ref_base` shell (the meta block is a SHARED
+key — it cannot be an owned_section, so the adapter returns it alongside the slice
+for the composer's `meta=` arg). `build_payload` sources the 8 sections + edge
+pointers + meta from the adapter.
+**Parity:** output-equality of the 3 wrapped blocks + `meta` (excluding the
+non-deterministic `generated_at`) vs HEAD inline, on real `data`. No full rebuild.
+
+The `CohortViewerSlice`: **owned_sections** (8) = `kinases`, `celltypes`,
+`kinase_celltype_evidence`, `attribution_index`, `decomposition_index`,
+`agreement_index`, `subclass_breakdown`, `incytr_pathways`; **edge_slice_ref** (3
+contributions) = `decomp_ols` (4 keys), `incytr_pathways` (2 keys),
+`song_concordance` (3 keys); **kinase_names** = `kinases_slice["name"]`;
+**capabilities/audit_entries** empty (song's capability flags live in the meta
+base; the audit manifest is the base).
+
+### 5F-3 — composer cutover
+Replace `build_payload`'s inline `payload = {...}` assembly with
+`compose_viewer_slices([song_slice, *present(mukesh, fivexfad)], meta=meta,
+audit_manifest_base=build_audit_manifest(), edge_slice_ref_base=<shell>,
+kinase_motifs_builder=_build_kinase_motifs)`. Three contract reconciliations
+(all in `alz/viewer/shared/compose.py`, our own 5B code, never frozen):
+1. **`merge_edge_slice_ref` base-override semantics:** a base-provided key may be
+   overridden by *exactly one* slice (base = defaults; two slices colliding on the
+   same key = error). This lets the always-present `present_human_perdonor_kinase_ids:
+   []` shell in the base be overridden by mukesh through the composer, with NO
+   post-step — preserving mouse-only byte-identity AND keeping assembly in one place.
+   `edge_slice_ref_base = {schema_version, human_perdonor_url, human_perdonor_index,
+   present_human_perdonor_kinase_ids: []}`.
+2. **Per-context capabilities** stay as explicit `meta` mutations in `build_payload`
+   BEFORE composing (they flip `meta.contexts[0].capabilities` on cohort presence —
+   trivial 4 lines, no composer change; the composer merges only top-level
+   `meta.capabilities` via `merge_capabilities`, which already ORs base+slice flags).
+3. **Stale R2 docstring** in `compose.py` (L14–20, "fivexfad derives from song's
+   bulk MEA / receives song MEA as an argument / song-before-fivexfad ordering")
+   is corrected to match the 5E finding (no cross-cohort data seam; composer only
+   places + merges already-built sections).
+**Parity:** the assembly is pure given its inputs — capture the real inputs
+(owned sections, meta, bases, slice contributions) from one build and assert
+`compose_viewer_slices(...)` deep-equals the HEAD inline-assembled dict for all
+four presence branches (mukesh × fivexfad present/absent). Plus a real build smoke
++ `merge_edge_slice_ref` unit coverage for the new override rule. Anti-shim: the
+inline `payload = {...}` block and the two `if slice: payload[...] =` patches are
+DELETED, not flag-guarded.
+
+### 5F-1 status — CLOSED
+Implementer relocated 16 functions + 6 build-cache helpers + 15 constants into
+`alz/viewer/cohorts/song.py` (≈1,670 lines; monolith −1,610). Closure was larger
+than pre-traced: the build-cache infra (`_input_signature`, `_load_build_cache`,
+`_write_build_cache`, `_build_cache_path`, `_sha256_file`, `_file_fingerprint`) and
+`TISSUE_CATEGORIES`/`RECEIVER_TO_TISSUE` proved song-exclusive and moved too (the 6
+helpers are song-internal → correctly absent from the monolith import block). No
+shared helper needed importing from the monolith (no cycle). Independent verifier
+(audit-pipeline, ≠ implementer) PASS on all 6 checks: ast byte-identity on all 22
+functions + 15 constants; **dangling-reference sweep clean** (zero leftover callers
+of any moved symbol in the monolith's trace/audit/validate/main paths — the
+call-time break that `import` can't catch); **full `build_payload(load_all_data())`
+ran to exit 0** (incytr 4,480,480 rows / 653 shards, attribution 108,531, decomp
+53,181, all keys present — both the relocated writers and the remaining monolith
+functions exercised together); TYPE_CHECKING-only monolith import; `__file__` only
+in the 3 `_input_signature` cache keys (one-time identical-shard rebuild, not
+drift); scope contained. sce4/decomp parity preserved by construction — not
+re-verified. Next: 5F-2.
