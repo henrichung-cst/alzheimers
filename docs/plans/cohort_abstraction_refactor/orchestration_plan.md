@@ -1,7 +1,11 @@
 # Cohort Abstraction Refactor — Orchestration Plan
 
 Date: 2026-06-17
-Status: DRAFT — awaiting human review gate (see §9)
+Status: SUPERSEDED BY IMPLEMENTATION — kept as historical orchestration context
+
+Implementation note (2026-06-18): the implemented repository differs from this
+pre-implementation plan in the places explicitly called out below. Current
+source state and compatibility policy win over draft orchestration guidance.
 
 This document defines **how** the control pack (`README.md`, `agent_protocol.md`,
 `phase_0..5_*.md`) gets executed by an orchestrator + subagent model. The control
@@ -33,9 +37,9 @@ packet. Parity is adversarial by construction.
 These are facts from the repo maps that override the control pack's assumed
 shapes. Carry them into every packet.
 
-1. **`alz/core/` does not exist yet.** All `alz/core/*` modules across phases 0–3
-   are new files. Low conflict risk, but the package + `__init__.py` must be
-   created in the first packet that needs it (Phase 0, packet 0C).
+1. **SUPERSEDED: `alz/core/` exists.** The original draft assumed all
+   `alz/core/*` modules were future files. Implementation created the package
+   and the shared runner/validation/output modules.
 2. **The shared MEA engine already exists and is already shared.** Every cohort
    calls `alz/bulk_mea/enrich.py::_run_mea()` (line 206). Phase 3 must **not**
    touch `_run_mea` or any statistics. Phase 3 wraps the *orchestration around*
@@ -85,11 +89,10 @@ From `agent_protocol.md`, made executable:
   `outputs/reports/{kinase_attribution*,decomposition,unified_viewer,tcell_viewer,
   incytr_pair_mode*}/` are **never** overwritten until a separate, explicitly
   approved switch.
-- **Additive compatibility.** Old commands/imports keep working via wrappers until
-  a phase explicitly retires them. (Note: this is the one place the global
-  anti-shim rule is *suspended by design* — the control pack mandates a true
-  migration window. Wrappers are time-boxed and tracked in each phase decision
-  log, and retired in Phase 4. They are not permanent shims.)
+- **SUPERSEDED: module-only compatibility.** The implemented Phase 4 retired old
+  Mukesh/T-cell/5xFAD Python paths without wrappers. Canonical cohort commands
+  are `python -m alz.cohorts...`; old `alz/ingest/{mukesh,tcells,fivexfad}*.py`
+  paths are historical provenance only.
 - **Decision log per packet** at
   `docs/audits/cohort_abstraction_refactor/phase_N_decisions.md` using the
   protocol template. Any behavior/schema/naming/provenance change = an entry.
@@ -211,14 +214,14 @@ Legend: `→` sequence, `∥` parallel-safe (disjoint scope), `⟂` read-only.
    → 4F runner/pixi/docs update
 4E Song assessment (decision doc)  ⟂
 ```
-- Each move leaves a **compatibility wrapper at the old path** (`from alz.cohorts...
-  import *`). Old imports keep resolving.
+- **SUPERSEDED:** moved Mukesh/T-cell/5xFAD modules do not leave compatibility
+  wrappers at old paths. Old imports do not resolve by design.
 - Moves are sequenced, not parallel — they perturb the shared import graph and a
   stale-import scan must pass cleanly after each.
-- **Verify:** `py_compile` moved + wrapper modules; old and new import paths both
-  import; stale-direct-import scan clean; Phase-1 validators still pass; **no
-  protected output changes** (this phase touches no producers).
-- This is where time-boxed Phase-2/3 wrappers get retired (anti-shim re-asserts).
+- **Verify:** `py_compile` moved modules; new import paths import;
+  stale-direct-import scan clean; Phase-1 validators still pass; **no protected
+  output changes** (this phase touches no producers).
+- This is where the no-wrapper policy was recorded and old paths were retired.
 
 ### Phase 5 — Viewer Slice Contract  *(largest extraction)*
 

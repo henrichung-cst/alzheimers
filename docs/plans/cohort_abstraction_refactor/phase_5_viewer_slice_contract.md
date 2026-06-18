@@ -21,10 +21,10 @@ viewer builders should compose slices.
 
 ## Implementation Scaffold
 
-Suggested module:
+Suggested module (corrected to the implemented singular viewer namespace):
 
 ```text
-alz/viewers/shared/cohort_slice.py
+alz/viewer/shared/cohort_slice.py
 ```
 
 Shared slice concepts:

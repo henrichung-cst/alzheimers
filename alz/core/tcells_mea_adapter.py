@@ -99,7 +99,7 @@ class TcellsMeaAdapter:
                         meta={"donor": donor},
                     )
 
-    def load_inputs(self, unit: MeaUnit) -> MeaUnit:
+    def load_inputs(self, unit: MeaUnit) -> MeaUnit | None:
         """Read the per-donor track matrix and populate motif/site/gene arrays.
 
         Returns unit with motif_series=None if the CSV is absent (matrix_absent

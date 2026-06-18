@@ -4,6 +4,11 @@ Date: 2026-06-17
 Wave: 3A — runner skeleton + Mukesh adapter (scratch only)  
 Status: implementation CLOSED; parity pending external verifier
 
+Cleanup note (2026-06-18): command examples in this historical decision log that
+use old `alz/ingest/{mukesh,tcells,fivexfad}*.py` paths are superseded by the
+Phase 4 module-only policy. Live cohort commands use `python -m
+alz.cohorts...`.
+
 ---
 
 ## Runner API (`alz/core/mea_runner.py`)
@@ -34,7 +39,7 @@ runner does not interpret `meta`; `write_aggregates` extracts what it needs.
 ```python
 class MeaAdapter(Protocol):
     def iter_units(self) -> Iterable[MeaUnit]: ...
-    def load_inputs(self, unit: MeaUnit) -> MeaUnit: ...
+    def load_inputs(self, unit: MeaUnit) -> MeaUnit | None: ...
     def build_contrasts(self, unit: MeaUnit) -> MeaUnit: ...
     def skip_check(self, unit: MeaUnit) -> tuple[bool, str | None]: ...
     def write_aggregates(self, result: RunResult) -> None: ...

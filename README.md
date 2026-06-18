@@ -48,8 +48,8 @@ The legacy factorial Incytr engine was archived 2026-05-18 (`archive/incytr_fact
 
 A parallel human AD cohort mirrors the mouse stoichiometry pipeline to provide cross-species support for the primary mouse hypothesis table. It is **hypothesis-generating cross-species evidence**, not an independent primary deliverable.
 
-1. **Ingest** (`alz/cohorts/mukesh/ingest.py`) — UniProt canonical-isoform cache, diagnostic pass, and reshape of NBB donor × site tables into Song-shaped artifacts (`--reshape`).
-2. **Per-donor MEA** (`alz/cohorts/mukesh/mea.py --track both`) — for each AD donor, builds a per-site delta vs the CTRL mean on two tracks (stoichiometry primary, raw phospho as abundance-vs-activity sensitivity check). MEA → kinase × donor NES matrix + recurrence summary at FDR < `MEA_FDR_THRESH` in ≥ k donors. A CTRL leave-one-out null distribution calibrates recurrence (CR-01).
+1. **Ingest** (`python -m alz.cohorts.mukesh.ingest --reshape`) — UniProt canonical-isoform cache, diagnostic pass, and reshape of NBB donor x site tables into Song-shaped artifacts.
+2. **Per-donor MEA** (`python -m alz.cohorts.mukesh.mea --track both`) — for each AD donor, builds a per-site delta vs the CTRL mean on two tracks (stoichiometry primary, raw phospho as abundance-vs-activity sensitivity check). MEA -> kinase x donor NES matrix + recurrence summary at FDR < `MEA_FDR_THRESH` in >= k donors. A CTRL leave-one-out null distribution calibrates recurrence (CR-01).
 3. **Human cell-type attribution** (CR-03):
    - `alz/reference/atlas.py --sea-ad-expression` — SEA-AD MTG per-supertype expression (139 cortical supertypes)
    - `alz/reference/atlas.py --hbca-download` — Allen HBCA whole-brain class-level expression
@@ -184,8 +184,8 @@ bash alz/incytr_pair/run_pair_mode.sh        # Incytr invocation only (9 contras
 ### Human cross-species cohort (NBB / Mukesh)
 
 ```bash
-pixi run python alz/cohorts/mukesh/ingest.py --reshape                  # CR-01: NBB → Song-shaped tables
-pixi run python alz/cohorts/mukesh/mea.py --track both                  # CR-01: per-donor MEA + CTRL LOO
+pixi run python -m alz.cohorts.mukesh.ingest --reshape                  # CR-01: NBB → Song-shaped tables
+pixi run python -m alz.cohorts.mukesh.mea --track both                  # CR-01: per-donor MEA + CTRL LOO
 pixi run python alz/reference/atlas.py --sea-ad-expression              # CR-03: SEA-AD MTG expression
 pixi run python alz/reference/atlas.py --hbca-download                  # CR-03: Allen HBCA download
 pixi run python alz/reference/human_expression.py --ref both            # CR-03: SEA-AD + HBCA specificity

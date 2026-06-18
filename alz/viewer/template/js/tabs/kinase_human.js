@@ -724,7 +724,7 @@ async function _khRenderRunningEnrichment(hostId, r, donor) {
   const sub = await _khSubstrateFor(r.id, donor);
   const motifsStr = sub.motifs || "";
   if (!motifsStr) {
-    host.innerHTML = `<div class="muted" style="padding:1em">No substrate-set motifs recorded for ${_escapeHtml(r.name)} in ${_escapeHtml(donor)} (mea_substrate_sets.csv). Re-run <code>python alz/cohorts/mukesh/mea.py</code>.</div>`;
+    host.innerHTML = `<div class="muted" style="padding:1em">No substrate-set motifs recorded for ${_escapeHtml(r.name)} in ${_escapeHtml(donor)} (mea_substrate_sets.csv). Re-run <code>python -m alz.cohorts.mukesh.mea</code>.</div>`;
     return;
   }
   const ranked = _khBuildPrerank(donor, r.residue_type);
@@ -926,7 +926,7 @@ function _khRenderScore(body, r) {
     ? `<div class="kh-audit-tablewrap"><table class="data-table">`
       + `<thead><tr><th>metric</th><th>stoich</th><th>raw</th><th>Δ (stoich − raw)</th></tr></thead>`
       + `<tbody>${cmpHtml}</tbody></table></div>`
-    : `<div class="muted" style="padding:1em">Per-donor raw-phospho MEA not yet exported for this kinase / donor. Re-run <code>python alz/cohorts/mukesh/mea.py</code> to regenerate the <code>mea_perdonor_raw{,_pY}.csv</code> files.</div>`;
+    : `<div class="muted" style="padding:1em">Per-donor raw-phospho MEA not yet exported for this kinase / donor. Re-run <code>python -m alz.cohorts.mukesh.mea</code> to regenerate the <code>mea_perdonor_raw{,_pY}.csv</code> files.</div>`;
 
   body.innerHTML =
     `<p class="kinase-stage-note">Per-donor MEA score for ${_escapeHtml(r.name)} (${_escapeHtml(r.residue_type)}) on ${_escapeHtml(donor)} vs CTRL mean.</p>`

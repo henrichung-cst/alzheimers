@@ -49,7 +49,7 @@ Outputs (mirroring the Mukesh split):
       sample_mapping.csv                 sample_id, donor, day, baseline
       ingest_manifest.json
 
-Usage:  python alz/cohorts/tcells/ingest.py --reshape
+Usage:  python -m alz.cohorts.tcells.ingest --reshape
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 

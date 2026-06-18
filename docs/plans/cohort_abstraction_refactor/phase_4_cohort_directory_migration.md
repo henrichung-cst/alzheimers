@@ -5,6 +5,11 @@
 Move cohort-specific modules into explicit cohort namespaces after shared
 runners are stable.
 
+Implementation note (2026-06-18): this pre-implementation plan has been
+superseded where it mentions compatibility wrappers. Final policy is no old-path
+wrappers for the moved Mukesh/T-cell/5xFAD Python modules; use
+`python -m alz.cohorts...` for live commands.
+
 Target layout:
 
 ```text
@@ -23,8 +28,8 @@ change behavior.
 - Do not change analysis logic.
 - Do not change output schemas.
 - Do not change canonical output roots.
-- Do not remove compatibility wrappers until downstream references are updated
-  and verified.
+- Do not restore old-path compatibility wrappers; downstream references have
+  been updated and verified.
 - Do not combine this move with shared-runner behavior changes.
 
 ## Prerequisites
@@ -46,8 +51,7 @@ alz/ingest/fivexfad.py            -> alz/cohorts/fivexfad/ingest.py
 alz/ingest/fivexfad_celltype_mea.py -> alz/cohorts/fivexfad/celltype_mea.py
 ```
 
-Exact names should be decided during the phase. Keep wrappers at old paths
-initially.
+Exact names were decided during the phase. Wrappers at old paths were not kept.
 
 ## Agent Work Packets
 
@@ -57,15 +61,15 @@ Create `alz/cohorts/` package and empty cohort packages with README files.
 
 ### Packet 4B — Mukesh Move
 
-Move Mukesh-specific modules and add compatibility wrappers.
+Move Mukesh-specific modules and update consumers.
 
 ### Packet 4C — T-cell Move
 
-Move T-cell-specific modules and add compatibility wrappers.
+Move T-cell-specific modules and update consumers.
 
 ### Packet 4D — 5xFAD Move
 
-Move 5xFAD-specific modules and add compatibility wrappers.
+Move 5xFAD-specific modules and update consumers.
 
 ### Packet 4E — Song Assessment
 
@@ -79,8 +83,8 @@ or fail with clear migration messages.
 
 ## Required Checks
 
-- `python -m py_compile` for moved Python modules and wrappers.
-- Old import paths still import where compatibility is promised.
+- `python -m py_compile` for moved Python modules.
+- Old import paths are absent for moved Mukesh/T-cell/5xFAD modules by policy.
 - New import paths import.
 - Stale direct-import scan passes.
 - Phase 1 validators still pass.
@@ -89,7 +93,7 @@ or fail with clear migration messages.
 ## Exit Criteria
 
 - Cohort namespaces exist.
-- Compatibility wrappers are present and documented.
+- No old-path wrappers are present; module execution is documented.
 - Import scans are clean.
 - No behavior drift.
 
@@ -103,10 +107,10 @@ outputs, rollback should be a normal source revert.
 Log decisions for:
 
 - final module names,
-- compatibility-wrapper duration,
+- no-wrapper compatibility policy,
 - any old command retired,
 - any module intentionally left in legacy location,
-- ownership boundaries between `alz/cohorts`, `alz/core`, and `alz/viewers`.
+- ownership boundaries between `alz/cohorts`, `alz/core`, and `alz/viewer`.
 
 Decision log path:
 

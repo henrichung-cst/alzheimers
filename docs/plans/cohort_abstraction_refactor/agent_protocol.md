@@ -35,7 +35,9 @@ It is mandatory for every phase.
 
 6. **Prefer additive compatibility.**
    When introducing new modules, keep existing commands/imports working through
-   wrappers or adapters until the phase explicitly retires them.
+   wrappers or adapters until the phase explicitly retires them. Superseding
+   note for the implemented cohort move: Mukesh/T-cell/5xFAD old Python paths
+   are retired without wrappers; use `python -m alz.cohorts...`.
 
 7. **Do not mix provenance.**
    Scratch, diagnostic, frozen, and canonical inputs must remain clearly labeled.

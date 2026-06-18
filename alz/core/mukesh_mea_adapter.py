@@ -89,7 +89,7 @@ class MukeshMeaAdapter:
                     # populated by load_inputs / build_contrasts below.
                 )
 
-    def load_inputs(self, unit: MeaUnit) -> MeaUnit:
+    def load_inputs(self, unit: MeaUnit) -> MeaUnit | None:
         """Populate motif_series, site_ids, gene_symbols from the track matrix.
 
         Returns unit with motif_series=None if the input file is absent (raw

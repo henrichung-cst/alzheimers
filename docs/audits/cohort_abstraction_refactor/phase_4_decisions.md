@@ -33,6 +33,11 @@ Created:
 
 **Anti-shim rule applies.** This is a solo-dev repository with all consumers in-repo. No compatibility wrappers, stubs, or re-export shims were created at the old paths. The global anti-shim rule (CLAUDE.md) overrides any "migration window" convention from the control pack: the old import paths are wrong now, not "one of two valid options." Every consumer was updated in the same pass.
 
+Cleanup confirmation (2026-06-18): this remains the active compatibility policy.
+Live commands use module execution (`python -m alz.cohorts...`). Direct
+new-path execution is only best-effort supported by the moved modules'
+repo-root bootstrap and is not the documented interface.
+
 ---
 
 ## Modules intentionally left in `alz/ingest/` (deferred, NOT forgotten)

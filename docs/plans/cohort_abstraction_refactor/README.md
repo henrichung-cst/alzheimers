@@ -2,6 +2,13 @@
 
 Date: 2026-06-17
 
+Implementation status update (2026-06-18): phases 0-5 have been implemented.
+This pack is now historical control documentation, with the final source state
+recorded in `docs/audits/cohort_abstraction_refactor/`. Current policy:
+`alz/core/` exists, viewer shared code lives under `alz/viewer/`, the moved
+Mukesh/T-cell/5xFAD modules have no old-path wrappers, and cohort CLIs are
+invoked with `python -m alz.cohorts...`.
+
 ## Purpose
 
 This control pack prepares the cohort abstraction refactor for implementation by

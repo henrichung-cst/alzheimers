@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats as sp_stats
 
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
@@ -411,7 +411,7 @@ def run_mea_via_runner(
 
     Opt-in entry point.  Does NOT overwrite canonical outputs under OUT_DIR.
     Invoke via:
-        pixi run python alz/cohorts/fivexfad/celltype_mea.py --runner-scratch-dir <DIR>
+        pixi run python -m alz.cohorts.fivexfad.celltype_mea --runner-scratch-dir <DIR>
     or via the adapter directly:
         from alz.core.fivexfad_celltype_mea_adapter import run_via_runner
         run_via_runner(scratch_dir, ...)

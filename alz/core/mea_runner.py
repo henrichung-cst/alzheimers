@@ -151,7 +151,7 @@ class MeaAdapter(Protocol):
         """Yield one MeaUnit per _run_mea call."""
         ...
 
-    def load_inputs(self, unit: MeaUnit) -> MeaUnit:
+    def load_inputs(self, unit: MeaUnit) -> MeaUnit | None:
         """Populate motif_series, site_ids, gene_symbols on the unit.
 
         Returns the unit (mutated or replaced).  Returning None signals a
@@ -304,10 +304,18 @@ class MeaRunner:
     # Single-unit execution
     # ------------------------------------------------------------------
 
+    def _record_skip(self, unit: MeaUnit, reason: str) -> None:
+        """Append a SkipRecord for ``unit`` and echo it (the standard skip path)."""
+        rec = SkipRecord(unit_label=unit.label, reason=reason)
+        self._skips.append(rec)
+        print(f"  [{unit.label}] SKIP: {rec.reason}")
+
     def _call_mea_unit(
         self,
         unit: MeaUnit,
         adapter: MeaAdapter,
+        *,
+        skip_check_fn: Callable[[MeaUnit], tuple[bool, str | None]] | None = None,
     ) -> RunResult | None:
         """Skip-check + _run_mea call only — NO table writes, NO write_aggregates.
 
@@ -320,31 +328,31 @@ class MeaRunner:
         assembling its own output files (e.g. the 5xFAD bulk adapter that calls
         _run_mea twice and concatenates before writing).
         """
+        # Caller-supplied skip check (public run_unit API) takes precedence over
+        # adapter policy.
+        if skip_check_fn is not None:
+            do_skip, reason = skip_check_fn(unit)
+            if do_skip:
+                self._record_skip(unit, reason or "skip_check_fn")
+                return None
+
         # Adapter skip check
         do_skip, reason = adapter.skip_check(unit)
         if do_skip:
-            rec = SkipRecord(unit_label=unit.label, reason=reason or "adapter skip_check")
-            self._skips.append(rec)
-            print(f"  [{unit.label}] SKIP: {rec.reason}")
+            self._record_skip(unit, reason or "adapter skip_check")
             return None
 
         if unit.motif_series is None:
-            rec = SkipRecord(unit_label=unit.label, reason="motif_series is None (missing input)")
-            self._skips.append(rec)
-            print(f"  [{unit.label}] SKIP: {rec.reason}")
+            self._record_skip(unit, "motif_series is None (missing input)")
             return None
 
-        n_motifs = unit.motif_series.notna().sum() if unit.motif_series is not None else 0
+        n_motifs = unit.motif_series.notna().sum()
         if n_motifs == 0:
-            rec = SkipRecord(unit_label=unit.label, reason="0 non-null motifs in input")
-            self._skips.append(rec)
-            print(f"  [{unit.label}] SKIP: {rec.reason}")
+            self._record_skip(unit, "0 non-null motifs in input")
             return None
 
         if not unit.results_by_contrast:
-            rec = SkipRecord(unit_label=unit.label, reason="results_by_contrast is empty")
-            self._skips.append(rec)
-            print(f"  [{unit.label}] SKIP: {rec.reason}")
+            self._record_skip(unit, "results_by_contrast is empty")
             return None
 
         # Call the FROZEN _run_mea
@@ -386,7 +394,11 @@ class MeaRunner:
 
         Returns None if the unit is skipped.
         """
-        result = self._call_mea_unit(unit, adapter)
+        result = self._call_mea_unit(
+            unit,
+            adapter,
+            skip_check_fn=skip_check_fn,
+        )
         if result is None:
             return None
 
@@ -431,7 +443,11 @@ class MeaRunner:
         """
         results: list[RunResult] = []
         for unit in adapter.iter_units():
-            unit = adapter.load_inputs(unit)
+            loaded_unit = adapter.load_inputs(unit)
+            if loaded_unit is None:
+                self._record_skip(unit, "load_inputs returned None")
+                continue
+            unit = loaded_unit
             unit = adapter.build_contrasts(unit)
             result = self.run_unit(unit, adapter)
             if result is not None:
