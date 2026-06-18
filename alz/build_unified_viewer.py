@@ -61,6 +61,7 @@ from alz.shared import config  # noqa: E402
 from alz.bulk_mea.confidence import DECOMP_FDR_AGREEMENT  # noqa: E402
 import config_integration as icfg  # noqa: E402
 import normalize as kattr  # noqa: E402  (alz.bulk_mea.normalize — Stage 1 phospho-track + IRS helpers)
+from alz.viewer.shared.payload_helpers import (_sanitize, _configure_duckdb_tempdir, _json_clean_value, _INCYTR_FC_NODES, _build_incytr_gene_node_index, _build_kinase_motifs)  # noqa: E402
 try:
     from human_celltype_attribution import build_celltype_specificity_payload  # noqa: E402
     _HAS_HUMAN_CELLTYPE = True
@@ -461,15 +462,6 @@ def _log2_series(values: pd.Series) -> pd.Series:
     positive = vals > 0
     out.loc[positive] = np.log2(vals.loc[positive])
     return out
-
-
-def _configure_duckdb_tempdir(con) -> None:
-    d = os.environ.get("DUCKDB_TEMP_DIR", os.path.expanduser("~/.cache/duckdb"))
-    os.makedirs(d, exist_ok=True)
-    con.execute(f"SET temp_directory='{d}';")
-    # Cap spill so a large sort (e.g. the per-sender ORDER BY over the 181M-row
-    # nboot=0 pair-mode set) fails fast instead of filling the shared disk.
-    con.execute("SET max_temp_directory_size='40GiB';")
 
 
 def _measurement_trace_columns() -> list[str]:
@@ -984,34 +976,6 @@ def load_all_data() -> UnifiedData:
 # ---------------------------------------------------------------------------
 # Step C — JSON payload
 # ---------------------------------------------------------------------------
-
-def _sanitize(obj: Any, decimals: int = 4):
-    """JSON-safe: NaN/Inf -> None, numpy -> native, floats rounded."""
-    if isinstance(obj, float):
-        if np.isnan(obj) or np.isinf(obj):
-            return None
-        return round(obj, decimals)
-    if isinstance(obj, dict):
-        return {k: _sanitize(v, decimals) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_sanitize(v, decimals) for v in obj]
-    if isinstance(obj, np.ndarray):
-        return _sanitize(obj.tolist(), decimals)
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
-    if isinstance(obj, (np.floating,)):
-        x = float(obj)
-        if np.isnan(x) or np.isinf(x):
-            return None
-        return round(x, decimals)
-    if isinstance(obj, (np.bool_,)):
-        return bool(obj)
-    if isinstance(obj, pd.Timestamp):
-        return obj.isoformat()
-    if obj is pd.NA:
-        return None
-    return obj
-
 
 def _build_kinases_slice(data: UnifiedData) -> dict:
     """Columnar kinases table. IDs follow edge_metadata['kinases'] ordering."""
@@ -3219,7 +3183,6 @@ def _read_incytr_celltype_qc(celltypes: list[str]) -> dict:
 # shipped — the Hill-shrunk aFC variants emitted by Incytr are NOT log2 fold-
 # changes (β × adjustment in (0,1]) and were dropped from the viewer payload
 # to avoid mixed-units confusion. 4 nodes × 4 metrics = 16 columns.
-_INCYTR_FC_NODES = ("Ligand", "Receptor", "EM", "Target")
 _INCYTR_FC_METRICS = (
     "sclog2FC",
     "pr_log2FC",
@@ -3241,101 +3204,9 @@ _INCYTR_LABEL_SRC = tuple(f"{n}.label" for n in _INCYTR_LABEL_NODES)
 _INCYTR_LABEL_COLS = tuple(f"{n}_label" for n in _INCYTR_LABEL_NODES)
 
 
-def _json_clean_value(v, digits: int | None = None):
-    """JSON-safe scalar conversion for compact viewer payload rows."""
-    if v is None:
-        return None
-    if pd.isna(v):
-        return None
-    if isinstance(v, (np.integer, int)) and not isinstance(v, bool):
-        return int(v)
-    if isinstance(v, (np.floating, float)):
-        x = float(v)
-        if not np.isfinite(x):
-            return None
-        return round(x, digits) if digits is not None else x
-    if isinstance(v, (np.bool_, bool)):
-        return bool(v)
-    return str(v)
-
 def _incytr_sanitize(name: str) -> str:
     """Match the upstream sanitize in alz/integration/load.R:sanitize_celltype."""
     return name.replace("/", "-").replace(" ", "_")
-
-
-def _build_incytr_gene_node_index(con) -> dict:
-    """Compact exact gene-symbol index over Ligand/Receptor/EM/Target."""
-    roles = list(_INCYTR_FC_NODES)
-    df = con.execute("""
-        WITH long AS (
-          SELECT Ligand AS gene, 'Ligand' AS role, sender, receiver,
-                 pvalue, PDS
-          FROM src WHERE Ligand IS NOT NULL AND Ligand <> ''
-          UNION ALL
-          SELECT Receptor AS gene, 'Receptor' AS role, sender, receiver,
-                 pvalue, PDS
-          FROM src WHERE Receptor IS NOT NULL AND Receptor <> ''
-          UNION ALL
-          SELECT EM AS gene, 'EM' AS role, sender, receiver, pvalue, PDS
-          FROM src WHERE EM IS NOT NULL AND EM <> ''
-          UNION ALL
-          SELECT Target AS gene, 'Target' AS role, sender, receiver,
-                 pvalue, PDS
-          FROM src WHERE Target IS NOT NULL AND Target <> ''
-        )
-        SELECT gene, role, sender, receiver,
-               COUNT(*)::INTEGER AS n_rows,
-               MAX(ABS(PDS)) AS best_abs_pds,
-               arg_max(PDS, ABS(PDS)) AS best_pds,
-               MIN(pvalue) AS best_pvalue
-        FROM long
-        GROUP BY gene, role, sender, receiver
-        ORDER BY gene, role, sender, receiver
-    """).fetchdf()
-    if df.empty:
-        return {
-            "schema_version": 1,
-            "index_type": "gene_node_pair_summary",
-            "match_columns": roles,
-            "genes": [],
-            "roles": roles,
-            "senders": [],
-            "receivers": [],
-            "gene_id": [],
-            "role_id": [],
-            "sender_id": [],
-            "receiver_id": [],
-            "n_rows": [],
-            "best_abs_pds": [],
-            "best_pds": [],
-            "best_pvalue": [],
-        }
-
-    genes = sorted(df["gene"].dropna().astype(str).unique().tolist())
-    senders = sorted(df["sender"].dropna().astype(str).unique().tolist())
-    receivers = sorted(df["receiver"].dropna().astype(str).unique().tolist())
-    gene_to_id = {v: i for i, v in enumerate(genes)}
-    role_to_id = {v: i for i, v in enumerate(roles)}
-    sender_to_id = {v: i for i, v in enumerate(senders)}
-    receiver_to_id = {v: i for i, v in enumerate(receivers)}
-
-    return {
-        "schema_version": 1,
-        "index_type": "gene_node_pair_summary",
-        "match_columns": roles,
-        "genes": genes,
-        "roles": roles,
-        "senders": senders,
-        "receivers": receivers,
-        "gene_id": [gene_to_id[str(v)] for v in df["gene"]],
-        "role_id": [role_to_id[str(v)] for v in df["role"]],
-        "sender_id": [sender_to_id[str(v)] for v in df["sender"]],
-        "receiver_id": [receiver_to_id[str(v)] for v in df["receiver"]],
-        "n_rows": [int(v) for v in df["n_rows"]],
-        "best_abs_pds": [_json_clean_value(v, 4) for v in df["best_abs_pds"]],
-        "best_pds": [_json_clean_value(v, 4) for v in df["best_pds"]],
-        "best_pvalue": [_json_clean_value(v, 6) for v in df["best_pvalue"]],
-    }
 
 
 _INCYTR_PAIR_GENO_NORMALIZE = {
@@ -4117,52 +3988,6 @@ def _read_empty_deg_celltypes() -> list[str]:
         elif isinstance(info, str) and info.lower() in {"empty", "no_degs"}:
             empty.append(ct)
     return sorted(empty)
-
-
-def _build_kinase_motifs(kinase_names: list) -> dict:
-    """Per-kinase library PSSM (normalized probabilities) + ST favorability.
-
-    Output is keyed by kinase name. Each entry:
-        {
-          "kin_type": "ser_thr" | "tyrosine",
-          "positions": [-5, -4, ..., 4]  (or +5 for tyrosine),
-          "amino_acids": [..., 23 entries ...],
-          "matrix":  [[...], ...]  (n_aa x n_positions, normalized probs),
-          "st_fav":  {"S": float, "T": float} | null,
-        }
-    Sequence-logo widget on the viewer side scales letter heights by
-    information content (log2(20) - entropy) at each position.
-    """
-    import kinase_library as kl
-    out: dict[str, dict] = {}
-    skipped: list[str] = []
-    for name in kinase_names:
-        try:
-            mat = kl.get_matrix(name, mat_type="norm")
-            kin_type = kl.get_kinase_type(name)
-        except Exception as e:
-            skipped.append(f"{name} ({e})")
-            continue
-        st_fav: dict | None = None
-        if kin_type == "ser_thr":
-            try:
-                sf = kl.get_st_fav(name)
-                st_fav = {"S": float(sf.loc[name, "S"]),
-                          "T": float(sf.loc[name, "T"])}
-            except Exception:
-                st_fav = None
-        out[name] = {
-            "kin_type": kin_type,
-            "positions": [int(c) for c in mat.columns],
-            "amino_acids": [str(a) for a in mat.index],
-            "matrix": [[round(float(v), 4) for v in row] for row in mat.values],
-            "st_fav": st_fav,
-        }
-    if skipped:
-        print(f"  kinase_motifs: skipped {len(skipped)} kinases "
-              f"(first 3: {skipped[:3]})", flush=True)
-    print(f"  kinase_motifs: emitted PSSM for {len(out):,} kinases", flush=True)
-    return out
 
 
 def build_payload(data: UnifiedData) -> dict:

@@ -166,3 +166,47 @@ import) was fixed and re-verified.
 ### Status
 5C closed, byte-identical. Next: 5D tcell adapter (independent builder), then 5E
 fivexfad (resolves the R2 song-MEA seam), then 5F song + composer cutover.
+
+---
+
+## Packet 5D (wave 1) — shared-machinery dedup
+
+5D was rescoped after reading the tcell builder: it is **already cohort-pure** (one
+builder, one cohort, separate output), so a 5C-style cohort extraction buys little.
+User chose **shared-machinery dedup** — collapse the helpers duplicated across the
+unified and tcell builders into one shared module. Audit:
+`phase_5D_dedup_audit.md`.
+
+### Finding: the "byte-identical" premise (5A §3C) was false
+The two builders had DRIFTED. Of the five flagged helpers, three are
+output-equivalent, one genuinely diverges, one is deferred:
+
+- **Lifted (output-equivalent) → `alz/viewer/shared/payload_helpers.py`:**
+  `_sanitize` (single-type vs 1-tuple `isinstance` — equivalent), `_configure_duckdb_tempdir`
+  (comment-only diff), `_build_incytr_gene_node_index` (+ `_json_clean_value`,
+  `_INCYTR_FC_NODES`; tcell's local `clean_float` ≡ `_json_clean_value` on the
+  float-only aggregate inputs). Both builders now import these; names preserved
+  (no rename — `_sanitize` alone has 25 call sites). Both payloads byte-identical.
+- **`_build_kinase_motifs` — reconciled per approved option B:** shared = tcell's
+  alias-aware logic with the **unread `source_name` key removed**. The alias map
+  `_KINASE_LIBRARY_MOTIF_ALIASES` moved to the shared module.
+- **incytr pair-shard writer — deferred to 5D-2** (user decision): ~70% common,
+  high-volume DuckDB streaming, sce4-sensitive; its own wave.
+
+### Real-payload delta (verified, memory-safe — no 104 MB rebuild)
+The independent verifier streamed each viewer's actual 389-name kinase set and ran
+old-vs-new `_build_kinase_motifs`:
+- **unified: ZERO change** — `kinase_library` resolves ALK1/2/4/7 **natively**, so
+  old-unified already emitted them. The audit's "unified silently skips ALK" premise
+  was wrong; corrected in the audit doc. No bug existed to fix.
+- **tcell: `source_name` removed from all 389 entries** (unread by any JS),
+  otherwise identical.
+
+Net diff: **−360 lines** across the two builders (+2 import lines), new shared
+module. Independent `audit-pipeline` verifier PASS (function gate + AST verbatim
+checks on the safe three + real-payload stream + scope containment: incytr writers
+and `_run_mea` untouched). Verdict **PASS — 5D wave-1 closes**.
+
+### Status
+5D wave-1 closed (unified byte-identical; tcell −unread `source_name`). Next: 5D-2
+incytr pair-shard writer dedup, then 5E fivexfad, then 5F song + composer cutover.

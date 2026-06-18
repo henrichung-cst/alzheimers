@@ -43,6 +43,7 @@ if _REPO_ROOT not in sys.path:
 sys.path.insert(0, HERE)
 
 from alz.shared import config  # noqa: E402
+from alz.viewer.shared.payload_helpers import (_sanitize, _configure_duckdb_tempdir, _json_clean_value, _INCYTR_FC_NODES, _build_incytr_gene_node_index, _build_kinase_motifs)  # noqa: E402
 
 from tcell_viewer.paths import (  # noqa: E402
     AUDIT_PREVIEW_ROWS,
@@ -113,7 +114,6 @@ PROJECTILS_LABEL_MAP = {
 }
 
 _INCYTR_SCORE_COLS = ("TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "SiK_score")
-_INCYTR_FC_NODES = ("Ligand", "Receptor", "EM", "Target")
 _INCYTR_FC_METRICS = ("sclog2FC", "pr_log2FC", "ps_log2FC", "py_log2FC")
 _INCYTR_FC_COLS = tuple(
     f"{node}_{metric}" for node in _INCYTR_FC_NODES for metric in _INCYTR_FC_METRICS
@@ -279,120 +279,9 @@ def _build_tcell_celltype_pathway_qc(con, celltype_qc: dict) -> dict:
     }
 
 
-def _build_incytr_gene_node_index(con) -> dict:
-    """Compact exact gene-symbol index over Ligand/Receptor/EM/Target."""
-    df = con.execute("""
-        WITH long AS (
-          SELECT Ligand AS gene, 'Ligand' AS role, sender, receiver,
-                 pvalue, PDS
-          FROM src WHERE Ligand IS NOT NULL AND Ligand <> ''
-          UNION ALL
-          SELECT Receptor AS gene, 'Receptor' AS role, sender, receiver,
-                 pvalue, PDS
-          FROM src WHERE Receptor IS NOT NULL AND Receptor <> ''
-          UNION ALL
-          SELECT EM AS gene, 'EM' AS role, sender, receiver, pvalue, PDS
-          FROM src WHERE EM IS NOT NULL AND EM <> ''
-          UNION ALL
-          SELECT Target AS gene, 'Target' AS role, sender, receiver,
-                 pvalue, PDS
-          FROM src WHERE Target IS NOT NULL AND Target <> ''
-        )
-        SELECT gene, role, sender, receiver,
-               COUNT(*)::INTEGER AS n_rows,
-               MAX(ABS(PDS)) AS best_abs_pds,
-               arg_max(PDS, ABS(PDS)) AS best_pds,
-               MIN(pvalue) AS best_pvalue
-        FROM long
-        GROUP BY gene, role, sender, receiver
-        ORDER BY gene, role, sender, receiver
-    """).fetchdf()
-    roles = list(_INCYTR_FC_NODES)
-    if df.empty:
-        return {
-            "schema_version": 1,
-            "index_type": "gene_node_pair_summary",
-            "match_columns": roles,
-            "genes": [],
-            "roles": roles,
-            "senders": [],
-            "receivers": [],
-            "gene_id": [],
-            "role_id": [],
-            "sender_id": [],
-            "receiver_id": [],
-            "n_rows": [],
-            "best_abs_pds": [],
-            "best_pds": [],
-            "best_pvalue": [],
-        }
-
-    genes = sorted(df["gene"].dropna().astype(str).unique().tolist())
-    senders = sorted(df["sender"].dropna().astype(str).unique().tolist())
-    receivers = sorted(df["receiver"].dropna().astype(str).unique().tolist())
-    gene_to_id = {v: i for i, v in enumerate(genes)}
-    role_to_id = {v: i for i, v in enumerate(roles)}
-    sender_to_id = {v: i for i, v in enumerate(senders)}
-    receiver_to_id = {v: i for i, v in enumerate(receivers)}
-
-    def clean_float(v, digits: int) -> float | None:
-        if pd.isna(v):
-            return None
-        x = float(v)
-        if not np.isfinite(x):
-            return None
-        return round(x, digits)
-
-    return {
-        "schema_version": 1,
-        "index_type": "gene_node_pair_summary",
-        "match_columns": roles,
-        "genes": genes,
-        "roles": roles,
-        "senders": senders,
-        "receivers": receivers,
-        "gene_id": [gene_to_id[str(v)] for v in df["gene"]],
-        "role_id": [role_to_id[str(v)] for v in df["role"]],
-        "sender_id": [sender_to_id[str(v)] for v in df["sender"]],
-        "receiver_id": [receiver_to_id[str(v)] for v in df["receiver"]],
-        "n_rows": [int(v) for v in df["n_rows"]],
-        "best_abs_pds": [clean_float(v, 4) for v in df["best_abs_pds"]],
-        "best_pds": [clean_float(v, 4) for v in df["best_pds"]],
-        "best_pvalue": [clean_float(v, 6) for v in df["best_pvalue"]],
-    }
-
-
 # ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
-
-def _sanitize(obj: Any, decimals: int = 4):
-    """JSON-safe: NaN/Inf -> None, numpy -> native, floats rounded."""
-    if isinstance(obj, float):
-        if np.isnan(obj) or np.isinf(obj):
-            return None
-        return round(obj, decimals)
-    if isinstance(obj, dict):
-        return {k: _sanitize(v, decimals) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_sanitize(v, decimals) for v in obj]
-    if isinstance(obj, np.ndarray):
-        return _sanitize(obj.tolist(), decimals)
-    if isinstance(obj, np.integer):
-        return int(obj)
-    if isinstance(obj, np.floating):
-        x = float(obj)
-        if np.isnan(x) or np.isinf(x):
-            return None
-        return round(x, decimals)
-    if isinstance(obj, np.bool_):
-        return bool(obj)
-    if isinstance(obj, pd.Timestamp):
-        return obj.isoformat()
-    if obj is pd.NA:
-        return None
-    return obj
-
 
 def _peak_rss_mb() -> float:
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
@@ -401,13 +290,6 @@ def _peak_rss_mb() -> float:
 def _incytr_sanitize(name: str) -> str:
     """Match the upstream sanitize in alz/integration/load.R:sanitize_celltype."""
     return name.replace("/", "-").replace(" ", "_").replace(".", "")
-
-
-def _configure_duckdb_tempdir(con) -> None:
-    d = os.environ.get("DUCKDB_TEMP_DIR", os.path.expanduser("~/.cache/duckdb"))
-    os.makedirs(d, exist_ok=True)
-    con.execute(f"SET temp_directory='{d}';")
-    con.execute("SET max_temp_directory_size='40GiB';")
 
 
 def _count_csv_rows(path: str) -> int:
@@ -427,71 +309,6 @@ def _contrast_from_filename(fname: str) -> str | None:
 def _timepoint_label(contrast: str) -> str:
     """`d13_d2` → `d13` (the disease timepoint; d2 is the baseline)."""
     return contrast.split("_", 1)[0] if "_" in contrast else contrast
-
-
-_KINASE_LIBRARY_MOTIF_ALIASES = {
-    # Kinase Library may expose activin receptor-like kinase aliases by either
-    # receptor shorthand or HGNC symbol, depending on the package data table.
-    "ALK1": "ACVRL1",
-    "ALK2": "ACVR1",
-    "ALK4": "ACVR1B",
-    "ALK7": "ACVR1C",
-}
-
-
-def _build_kinase_motifs(kinase_names: list[str]) -> dict[str, dict]:
-    """Build the global motif lookup consumed by the shared sequence-logo widget."""
-    try:
-        import kinase_library as kl
-    except ImportError as e:
-        print(f"  (warn) kinase_motifs unavailable: {e}", flush=True)
-        return {}
-
-    out: dict[str, dict] = {}
-    skipped: list[str] = []
-    for name in sorted({str(k) for k in kinase_names if str(k)}):
-        source_name = name
-        try:
-            mat = kl.get_matrix(source_name, mat_type="norm")
-            kin_type = kl.get_kinase_type(source_name)
-        except Exception:
-            alias = _KINASE_LIBRARY_MOTIF_ALIASES.get(name)
-            if not alias:
-                skipped.append(name)
-                continue
-            source_name = alias
-            try:
-                mat = kl.get_matrix(source_name, mat_type="norm")
-                kin_type = kl.get_kinase_type(source_name)
-            except Exception as e:
-                skipped.append(f"{name}->{source_name} ({e})")
-                continue
-
-        st_fav: dict[str, float] | None = None
-        if kin_type == "ser_thr":
-            try:
-                sf = kl.get_st_fav(source_name)
-                st_fav = {
-                    "S": float(sf.loc[source_name, "S"]),
-                    "T": float(sf.loc[source_name, "T"]),
-                }
-            except Exception:
-                st_fav = None
-
-        out[name] = {
-            "source_name": source_name,
-            "kin_type": kin_type,
-            "positions": [int(c) for c in mat.columns],
-            "amino_acids": [str(a) for a in mat.index],
-            "matrix": [[round(float(v), 4) for v in row] for row in mat.values],
-            "st_fav": st_fav,
-        }
-
-    if skipped:
-        print(f"  kinase_motifs: skipped {len(skipped)} kinases "
-              f"(first 3: {skipped[:3]})", flush=True)
-    print(f"  kinase_motifs: emitted PSSM for {len(out):,} kinases", flush=True)
-    return out
 
 
 # ---------------------------------------------------------------------------
