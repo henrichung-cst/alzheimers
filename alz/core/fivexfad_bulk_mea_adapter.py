@@ -30,7 +30,7 @@ import pandas as pd
 
 from alz.bulk_mea import enrich as kinase_enrich
 from alz.core.mea_runner import MeaRunner, MeaUnit, RunResult, SkipRecord
-from alz.ingest.fivexfad import (
+from alz.cohorts.fivexfad.ingest import (
     KINASE_TRACKS,
     TISSUES,
     OUTPUT_DIR,

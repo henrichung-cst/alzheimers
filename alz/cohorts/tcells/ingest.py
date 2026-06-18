@@ -49,7 +49,7 @@ Outputs (mirroring the Mukesh split):
       sample_mapping.csv                 sample_id, donor, day, baseline
       ingest_manifest.json
 
-Usage:  python alz/ingest/tcells.py --reshape
+Usage:  python alz/cohorts/tcells/ingest.py --reshape
 """
 
 from __future__ import annotations

@@ -33,14 +33,14 @@ from alz.shared import config
 from alz.bulk_mea import enrich as kinase_enrich
 from alz.core.mea_runner import MeaRunner, _series_fingerprint, _array_fingerprint, _contrast_fingerprint
 from alz.core.mukesh_mea_adapter import MukeshMeaAdapter
-from alz.ingest.mukesh_perdonor import (
+from alz.cohorts.mukesh.mea import (
     _load_track_matrix,
     _split_samples,
     _build_donor_deltas,
     _KIND_SPEC as _LOCAL_KIND_SPEC,
     PERDONOR_DIR,
 )
-from alz.ingest.mukesh import SAMPLE_MAPPING_CSV
+from alz.cohorts.mukesh.ingest import SAMPLE_MAPPING_CSV
 
 
 # ---------------------------------------------------------------------------

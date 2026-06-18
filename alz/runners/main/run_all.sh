@@ -128,8 +128,8 @@ if [[ $SKIP_INCYTR -eq 0 ]]; then
 fi
 
 # --- human cohort ---
-run_step H-ingest    "ingest_mukesh --reshape"        pixi run python alz/ingest/mukesh.py --reshape
-run_step H-perdonor  "ingest_mukesh_perdonor"         pixi run python alz/ingest/mukesh_perdonor.py --track both
+run_step H-ingest    "ingest_mukesh --reshape"        pixi run python alz/cohorts/mukesh/ingest.py --reshape
+run_step H-perdonor  "ingest_mukesh_perdonor"         pixi run python alz/cohorts/mukesh/mea.py --track both
 run_step H-seaad     "seaad_human_agreement"          pixi run python alz/cross_reference/seaad_human_agreement.py
 
 # --- viewer rebuild (asserts all upstream provenance) ---

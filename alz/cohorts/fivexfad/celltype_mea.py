@@ -26,7 +26,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from alz.bulk_mea import enrich as kinase_enrich  # noqa: E402
-from alz.ingest import fivexfad  # noqa: E402
+from alz.cohorts.fivexfad import ingest as fivexfad  # noqa: E402
 from alz.shared import config  # noqa: E402
 
 KINASE_DIR = Path(config.REPO_ROOT) / "outputs" / "reports" / "kinase_attribution_5xfad"
@@ -411,7 +411,7 @@ def run_mea_via_runner(
 
     Opt-in entry point.  Does NOT overwrite canonical outputs under OUT_DIR.
     Invoke via:
-        pixi run python alz/ingest/fivexfad_celltype_mea.py --runner-scratch-dir <DIR>
+        pixi run python alz/cohorts/fivexfad/celltype_mea.py --runner-scratch-dir <DIR>
     or via the adapter directly:
         from alz.core.fivexfad_celltype_mea_adapter import run_via_runner
         run_via_runner(scratch_dir, ...)

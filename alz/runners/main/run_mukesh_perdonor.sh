@@ -25,9 +25,9 @@ mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/run_mukesh_perdonor.log"
 
 echo "[run_mukesh_perdonor] $(date -Is)" | tee "$LOG"
-echo "[run_mukesh_perdonor] running python alz/ingest/mukesh_perdonor.py --track both" | tee -a "$LOG"
+echo "[run_mukesh_perdonor] running python alz/cohorts/mukesh/mea.py --track both" | tee -a "$LOG"
 
-pixi run python alz/ingest/mukesh_perdonor.py --track both 2>&1 | tee -a "$LOG"
+pixi run python alz/cohorts/mukesh/mea.py --track both 2>&1 | tee -a "$LOG"
 
 echo "[run_mukesh_perdonor] running python alz/cross_reference/seaad_human_agreement.py" | tee -a "$LOG"
 pixi run python alz/cross_reference/seaad_human_agreement.py 2>&1 | tee -a "$LOG"

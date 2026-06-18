@@ -793,7 +793,7 @@ def run_mea_via_runner(scratch_dir: str) -> None:
 
     Opt-in entry point.  Does NOT overwrite canonical outputs under OUTPUT_DIR.
     Invoke via:
-        pixi run python alz/ingest/fivexfad.py --runner-scratch-dir <DIR>
+        pixi run python alz/cohorts/fivexfad/ingest.py --runner-scratch-dir <DIR>
     or via the adapter directly:
         from alz.core.fivexfad_bulk_mea_adapter import run_via_runner
         run_via_runner(scratch_dir, manifest)

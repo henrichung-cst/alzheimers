@@ -18,7 +18,7 @@ The four analysis modes:
 
 | # | Mode | Scope | Entry |
 |---|---|---|---|
-| 1 | Bulk MEA | mouse + human | `alz/bulk_mea/normalize.py` → `alz/bulk_mea/enrich.py`; human branch: `alz/ingest/mukesh_perdonor.py` |
+| 1 | Bulk MEA | mouse + human | `alz/bulk_mea/normalize.py` → `alz/bulk_mea/enrich.py`; human branch: `alz/cohorts/mukesh/mea.py` |
 | 2 | Decomposition MEA | mouse only (requires matched snRNA) | `alz/reference/snrna_proportions.py` → `alz/decomposition_mea/*` |
 | 3 | Incytr pair-mode | mouse only (requires snRNA spine) | `alz/incytr_pair/run_pair_mode.sh` |
 | 4 | Cross-reference correlation | atlas-based (cohort-agnostic) | `alz/reference/atlas.py`, `alz/reference/wmb_expression.py`, `alz/reference/human_expression.py` |

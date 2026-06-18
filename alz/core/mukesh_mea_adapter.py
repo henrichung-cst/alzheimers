@@ -1,6 +1,6 @@
 """Mukesh (human NBB) MEA adapter for the Phase-3 shared runner.
 
-Wraps the existing pure functions in `alz/ingest/mukesh_perdonor.py` and the
+Wraps the existing pure functions in `alz/cohorts/mukesh/mea.py` and the
 Phase-2 aggregate writers in `alz/core/mea_outputs.py`.  No new logic is
 introduced here; the adapter is a thin connector.
 
@@ -29,7 +29,7 @@ import pandas as pd
 from alz.shared import config
 from alz.core.mea_runner import MeaAdapter, MeaUnit, RunResult, SkipRecord
 from alz.core.mea_outputs import KIND_SPEC as _SHARED_KIND_SPEC
-from alz.ingest.mukesh_perdonor import (
+from alz.cohorts.mukesh.mea import (
     _load_track_matrix,
     _split_samples,
     _build_donor_deltas,
@@ -37,7 +37,7 @@ from alz.ingest.mukesh_perdonor import (
     _KIND_SPEC as _LOCAL_KIND_SPEC,
     PERDONOR_DIR,
 )
-from alz.ingest.mukesh import SAMPLE_MAPPING_CSV
+from alz.cohorts.mukesh.ingest import SAMPLE_MAPPING_CSV
 
 
 class MukeshMeaAdapter:

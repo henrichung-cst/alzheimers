@@ -13,7 +13,7 @@ the viewer cross-check whether a per-donor stoichiometry signal is
 abundance-driven vs activity-driven.
 
 Inputs (under outputs/reports/kinase_attribution_human/, written by
-``alz/ingest/mukesh.py --reshape``):
+``alz/cohorts/mukesh/ingest.py --reshape``):
   stoichiometry_matrix{,_pY}.csv     — stoichiometry track per residue class
   raw_phospho_normalized{,_pY}.csv   — raw phospho track per residue class
   ../data_ingest_human/sample_mapping.csv
@@ -46,7 +46,7 @@ import pandas as pd
 
 from alz.shared import config
 from alz.bulk_mea import enrich as kinase_enrich
-from alz.ingest.mukesh import (
+from alz.cohorts.mukesh.ingest import (
     HUMAN_DATA_INGEST_DIR,
     HUMAN_KINASE_DIR,
     SAMPLE_MAPPING_CSV,

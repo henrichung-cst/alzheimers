@@ -8,8 +8,8 @@ the AD `export_decomposition_for_pair.py`). Applies the provenance deconvolution
 per (cell_type, condition), with min/10000 zero-imputation on the share. The
 scRNA share and size factors come from `alz/ingest/fivexfad_scrna_extract.R`
 (`aggexp_data.csv` + `cell_counts.csv`); the linear per-group bulk comes from
-`fivexfad.py --export-bulk` (`{pr,ps,py}_bulk_linear.csv`). Both are pre-computed
-per tissue; this module never touches the raw RDS.
+`alz/cohorts/fivexfad/ingest.py --export-bulk` (`{pr,ps,py}_bulk_linear.csv`).
+Both are pre-computed per tissue; this module never touches the raw RDS.
 
 Channels (all three present both tissues):
     pr (gene-keyed)   — total proteome → pr_deconvoluted.csv
@@ -45,7 +45,7 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from alz.ingest.fivexfad import INCYTR_INPUT_DIR, TISSUES
+from alz.cohorts.fivexfad.ingest import INCYTR_INPUT_DIR, TISSUES
 
 KEY_COLS = {"pr": ["gene_symbol"], "ps": ["site_id", "gene_symbol", "motif"],
             "py": ["site_id", "gene_symbol", "motif"]}

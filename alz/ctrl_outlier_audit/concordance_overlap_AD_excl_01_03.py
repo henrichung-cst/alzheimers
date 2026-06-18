@@ -47,8 +47,8 @@ import pandas as pd
 
 from alz.shared import config
 from alz.bulk_mea import enrich as kinase_enrich
-from alz.ingest.mukesh import SAMPLE_MAPPING_CSV
-from alz.ingest.mukesh_perdonor import _load_track_matrix, PERDONOR_DIR
+from alz.cohorts.mukesh.ingest import SAMPLE_MAPPING_CSV
+from alz.cohorts.mukesh.mea import _load_track_matrix, PERDONOR_DIR
 
 # Audit verdict (2026-05-25): CTRL-07/08/10 carry a genuine AD-like phospho signature. The
 # suspect pool for THIS analysis is CTRL-08/CTRL-10 only (CTRL-07 is excluded entirely — see

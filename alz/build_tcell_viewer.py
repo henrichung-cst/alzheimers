@@ -1642,7 +1642,7 @@ def _synthesize_site_level_ols(stoich_matrix_path: str,
                                ) -> dict | None:
     """Derive per-site centered LFC from stoichiometry_matrix.csv.
 
-    The T-cell MEA pipeline (alz/ingest/tcells_perdonor.py::_run_mea) takes
+    The T-cell MEA pipeline (alz/cohorts/tcells/mea.py::_run_mea) takes
     raw `D1_dXX − D1_d2` deltas, median-centers, winsorizes, then GSEA-prerank.
     The drawer's _ensurePreRank applies the centering + winsorization itself
     (lines 115-116 in kinase_audit.js), so we only need raw stoich_lfc per
@@ -1798,7 +1798,7 @@ def _register_kinase_audit_tables(tables: dict) -> None:
 # write one CSV per phosphosite carrying the normalized log2 phospho, the
 # gene-matched parent-protein log2 abundance, and the median-centered
 # stoichiometry that feeds MEA (stoichiometry_matrix = the same per-day value the
-# pipeline computes in alz/ingest/tcells.py::_stoichiometry). The manifest shape
+# pipeline computes in alz/cohorts/tcells/ingest.py::_stoichiometry). The manifest shape
 # mirrors build_unified_viewer (tracks{ST,Y} + top-level ST defaults) so the
 # viewer's MeasurementTraceStore.load() works unchanged.
 # ---------------------------------------------------------------------------

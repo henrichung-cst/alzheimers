@@ -164,10 +164,10 @@ if [[ $SKIP_INCYTR -eq 0 ]]; then
 fi
 
 run_step F1 "human ingest (reshape)" \
-  pixi run python alz/ingest/mukesh.py --reshape
+  pixi run python alz/cohorts/mukesh/ingest.py --reshape
 
 run_step F2 "human per-donor MEA + CTRL LOO (CR01)" \
-  pixi run python alz/ingest/mukesh_perdonor.py --track both
+  pixi run python alz/cohorts/mukesh/mea.py --track both
 
 if [[ $SKIP_ATLAS -eq 0 ]]; then
   run_step G1 "SEA-AD MTG expression download (CR03)" \

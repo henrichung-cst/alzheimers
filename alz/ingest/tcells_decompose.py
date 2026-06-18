@@ -48,7 +48,7 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from alz.ingest.tcells import INCYTR_INPUT_DIR, _donor_prefix
+from alz.cohorts.tcells.ingest import INCYTR_INPUT_DIR, _donor_prefix
 
 _AGG_COL_RE = re.compile(r"^(?P<st>[A-Za-z0-9]+)__d(?P<d>\d+)$")  # state-keyed
 _BULK_COL_RE = re.compile(r"^D\d+_d(?P<d>\d+)$")

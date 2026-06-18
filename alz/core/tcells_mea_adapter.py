@@ -1,6 +1,6 @@
 """T-cell exhaustion MEA adapter for the Phase-3 shared runner.
 
-Wraps the existing pure functions in `alz/ingest/tcells_perdonor.py` and the
+Wraps the existing pure functions in `alz/cohorts/tcells/mea.py` and the
 Phase-2 aggregate writers in `alz/core/mea_outputs.py`.  No new logic is
 introduced here; the adapter is a thin connector.
 
@@ -35,7 +35,7 @@ import pandas as pd
 
 from alz.shared import config
 from alz.core.mea_runner import MeaAdapter, MeaUnit, RunResult, SkipRecord
-from alz.ingest.tcells_perdonor import (
+from alz.cohorts.tcells.mea import (
     _KIND_SPEC,
     _baseline_and_days,
     _build_timepoint_deltas,

@@ -54,7 +54,7 @@ def run_via_runner(
     max_celltypes : int | None
         Cap on the number of cell types processed per (tissue, track).
     """
-    from alz.ingest.fivexfad_celltype_mea import run
+    from alz.cohorts.fivexfad.celltype_mea import run
 
     scratch_dir = Path(scratch_dir)
     scratch_dir.mkdir(parents=True, exist_ok=True)

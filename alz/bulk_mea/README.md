@@ -5,8 +5,8 @@ total-proteome and phospho workbooks into the project's primary deliverable,
 `kinase_hypothesis_table.csv` — a ranked, cell-type-attributed table of kinase
 activity changes across Alzheimer's genotypes and timepoints.
 
-The same code also serves the NBB human cohort indirectly: `alz/ingest/
-mukesh_perdonor.py` reshapes human data into Song-shaped artifacts and reuses the
+The same code also serves the NBB human cohort indirectly: `alz/cohorts/mukesh/
+mea.py` reshapes human data into Song-shaped artifacts and reuses the
 Stage-2 OLS/MEA helpers exported from `enrich.py`.
 
 ---

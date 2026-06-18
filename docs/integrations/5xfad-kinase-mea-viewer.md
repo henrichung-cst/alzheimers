@@ -1,7 +1,7 @@
 # 5xFAD Kinase MEA and Viewer Notes
 
 This note records the 5xFAD kinase enrichment conventions used by
-`alz/ingest/fivexfad.py` and the unified viewer 5xFAD kinase tab.
+`alz/cohorts/fivexfad/ingest.py` and the unified viewer 5xFAD kinase tab.
 
 ## Scope
 

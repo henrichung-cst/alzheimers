@@ -10,8 +10,8 @@ import numpy as np
 import pandas as pd
 
 import alz.build_unified_viewer as viewer
-from alz.ingest import fivexfad
-from alz.ingest import fivexfad_celltype_mea
+from alz.cohorts.fivexfad import ingest as fivexfad
+from alz.cohorts.fivexfad import celltype_mea as fivexfad_celltype_mea
 
 
 class FiveXFADTests(unittest.TestCase):

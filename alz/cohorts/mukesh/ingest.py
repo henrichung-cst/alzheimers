@@ -4,8 +4,8 @@ See ``docs/mukesh_human_ingest_plan.md`` for full spec. This module implements
 Phase A (UniProt canonical-isoform cache) and Phase B (diagnostic pass); Phase
 C (reshape) is stubbed.
 
-Phase A:  python alz/ingest/mukesh.py --uniprot-cache
-Phase B:  python alz/ingest/mukesh.py --diagnose
+Phase A:  python alz/cohorts/mukesh/ingest.py --uniprot-cache
+Phase B:  python alz/cohorts/mukesh/ingest.py --diagnose
 """
 
 from __future__ import annotations

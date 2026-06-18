@@ -22,7 +22,7 @@ Scope (hard constraints, do not re-litigate — see the cohort memory):
     hidden.
 
 Inputs (under outputs/reports/kinase_attribution_tcells/donor{1,2}/, written by
-``alz/ingest/tcells.py --reshape``):
+``alz/cohorts/tcells/ingest.py --reshape``):
   stoichiometry_matrix{,_pY}.csv     — stoichiometry track
   raw_phospho_normalized{,_pY}.csv   — raw phospho track
   ../data_ingest_tcells/donor{n}/sample_mapping.csv
@@ -53,7 +53,7 @@ import pandas as pd
 
 from alz.shared import config
 from alz.bulk_mea import enrich as kinase_enrich
-from alz.ingest.tcells import KINASE_DIR, INGEST_DIR, META_COLS
+from alz.cohorts.tcells.ingest import KINASE_DIR, INGEST_DIR, META_COLS
 from alz.core.mea_outputs import (
     KIND_SPEC as _SHARED_KIND_SPEC,
     build_nes_fdr_matrices,

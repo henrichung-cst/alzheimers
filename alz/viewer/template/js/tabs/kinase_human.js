@@ -724,7 +724,7 @@ async function _khRenderRunningEnrichment(hostId, r, donor) {
   const sub = await _khSubstrateFor(r.id, donor);
   const motifsStr = sub.motifs || "";
   if (!motifsStr) {
-    host.innerHTML = `<div class="muted" style="padding:1em">No substrate-set motifs recorded for ${_escapeHtml(r.name)} in ${_escapeHtml(donor)} (mea_substrate_sets.csv). Re-run <code>python alz/ingest/mukesh_perdonor.py</code>.</div>`;
+    host.innerHTML = `<div class="muted" style="padding:1em">No substrate-set motifs recorded for ${_escapeHtml(r.name)} in ${_escapeHtml(donor)} (mea_substrate_sets.csv). Re-run <code>python alz/cohorts/mukesh/mea.py</code>.</div>`;
     return;
   }
   const ranked = _khBuildPrerank(donor, r.residue_type);
@@ -926,7 +926,7 @@ function _khRenderScore(body, r) {
     ? `<div class="kh-audit-tablewrap"><table class="data-table">`
       + `<thead><tr><th>metric</th><th>stoich</th><th>raw</th><th>Δ (stoich − raw)</th></tr></thead>`
       + `<tbody>${cmpHtml}</tbody></table></div>`
-    : `<div class="muted" style="padding:1em">Per-donor raw-phospho MEA not yet exported for this kinase / donor. Re-run <code>python alz/ingest/mukesh_perdonor.py</code> to regenerate the <code>mea_perdonor_raw{,_pY}.csv</code> files.</div>`;
+    : `<div class="muted" style="padding:1em">Per-donor raw-phospho MEA not yet exported for this kinase / donor. Re-run <code>python alz/cohorts/mukesh/mea.py</code> to regenerate the <code>mea_perdonor_raw{,_pY}.csv</code> files.</div>`;
 
   body.innerHTML =
     `<p class="kinase-stage-note">Per-donor MEA score for ${_escapeHtml(r.name)} (${_escapeHtml(r.residue_type)}) on ${_escapeHtml(donor)} vs CTRL mean.</p>`
@@ -941,7 +941,7 @@ function _khRenderScore(body, r) {
     +     `<dt>ES</dt><dd>${_khFmt(esVal, 3)}</dd>`
     +     `<dt>p-value</dt><dd>${_khFmt(pVal, 4)}</dd>`
     +     `<dt>Substrates tested</dt><dd>${_escapeHtml(subsFrac || "—")}<span class="muted"> (kinase substrates &cap; donor prerank)</span></dd>`
-    +     `<dt>Raw phospho NES</dt><dd>${rawAvailable ? fmt(rawNes, 2) : "—"}${rawAvailable ? `<span class="muted"> · FDR ${fmt(rawFdr, 3)}</span>` : `<span class="muted"> (re-run alz/ingest/mukesh_perdonor.py for raw track)</span>`}</dd>`
+    +     `<dt>Raw phospho NES</dt><dd>${rawAvailable ? fmt(rawNes, 2) : "—"}${rawAvailable ? `<span class="muted"> · FDR ${fmt(rawFdr, 3)}</span>` : `<span class="muted"> (re-run alz/cohorts/mukesh/mea.py for raw track)</span>`}</dd>`
     +   `</dl>`
     + `</div></section>`
     + `<section class="audit-panel"><h4>Running enrichment for ${_escapeHtml(donor)}</h4>`

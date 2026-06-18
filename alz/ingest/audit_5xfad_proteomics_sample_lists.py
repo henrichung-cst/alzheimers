@@ -15,7 +15,7 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from alz.ingest.fivexfad import GENOTYPE_BY_AGE_SAMPLE  # noqa: E402
+from alz.cohorts.fivexfad.ingest import GENOTYPE_BY_AGE_SAMPLE  # noqa: E402
 
 
 REPO = Path(__file__).resolve().parents[2]
