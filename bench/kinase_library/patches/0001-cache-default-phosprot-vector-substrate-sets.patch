@@ -1,0 +1,30 @@
+diff --git a/kinase_library/objects/phosphoproteomics.py b/kinase_library/objects/phosphoproteomics.py
+index 0000000..0000000 100644
+--- a/kinase_library/objects/phosphoproteomics.py
++++ b/kinase_library/objects/phosphoproteomics.py
+@@ -433,6 +433,8 @@ class PhosphoProteomics(object):
+ 
+         if customized_scored_phosprot is not None:
+             all_scored_phosprot = customized_scored_phosprot
++        elif phosprot_path == './../databases/substrates' and hasattr(_global_vars, 'all_scored_phosprot'):
++            all_scored_phosprot = _global_vars.all_scored_phosprot
+         else:
+             all_scored_phosprot = core.ScoredPhosphoProteome(phosprot_name=_global_vars.phosprot_name, phosprot_path=phosprot_path)
+ 
+diff --git a/kinase_library/modules/enrichment.py b/kinase_library/modules/enrichment.py
+index 0000000..0000000 100644
+--- a/kinase_library/modules/enrichment.py
++++ b/kinase_library/modules/enrichment.py
+@@ -289,8 +289,10 @@ def create_kin_sub_sets(data_values, threshold, comp_direction):
+     elif comp_direction == 'lower':
+         pred_kins = (data_values<=threshold)
+ 
++    pred_values = pred_kins.to_numpy(dtype=bool, copy=False)
++    substrates = pred_kins.index
+     kins_subs_dict = {}
+-    for kin in tqdm(pred_kins.columns):
+-        kins_subs_dict[kin] = pred_kins.loc[pred_kins[kin],kin].index.to_list()
++    for idx, kin in enumerate(tqdm(pred_kins.columns)):
++        kins_subs_dict[kin] = substrates[pred_values[:, idx]].to_list()
+ 
+     return(kins_subs_dict)
