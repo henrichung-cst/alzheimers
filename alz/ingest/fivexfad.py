@@ -16,7 +16,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 import numpy as np
 import pandas as pd
@@ -529,7 +529,45 @@ def _contrast_group_counts(
     return wt_counts.astype(int), tg_counts.astype(int)
 
 
-def fit_track(tissue: str, track: str, manifest: pd.DataFrame) -> dict[str, pd.DataFrame]:
+def fit_track(
+    tissue: str,
+    track: str,
+    manifest: pd.DataFrame,
+    mea_caller: Callable[..., tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]] | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Fit OLS contrasts and run MEA for one (tissue, track) combination.
+
+    Parameters
+    ----------
+    tissue : str
+        One of TISSUES (``"cortex"`` or ``"hippocampus"``).
+    track : str
+        One of KINASE_TRACKS (``"st"`` or ``"py"``).
+    manifest : pd.DataFrame
+        Loaded sample_manifest.csv.
+    mea_caller : Callable | None
+        Injectable MEA function.  Signature must match ``kinase_enrich._run_mea``
+        exactly (positional motif_series, results_by_contrast, lfc_key; keyword
+        site_ids, gene_symbols, track) and return the same 4-tuple
+        ``(mea_df, shift_df, wins_df, substrate_df)``.
+
+        ``None`` (default) → calls ``kinase_enrich._run_mea`` directly; this is
+        the canonical path used by ``run_mea()`` and produces byte-identical
+        output to historical runs.
+
+        Provide a wrapper around ``MeaRunner._call_mea_unit`` when routing
+        through the Phase-3 runner (e.g. from ``run_via_runner`` in the adapter)
+        to record SkipRecords without duplicating OLS/concat logic here.
+
+    Returns
+    -------
+    dict[str, pd.DataFrame]
+        Keys: ``site_level_ols``, ``mea_stoichiometry``, ``mea_raw_phospho``,
+        ``mea_global_shift``, ``winsorized_sites``, ``mea_substrate_sets``,
+        ``contrast_qc``.  The caller is responsible for writing these to disk.
+    """
+    _call_mea = mea_caller if mea_caller is not None else kinase_enrich._run_mea
+
     prefix = _track_prefix(tissue, track)
     stoich = pd.read_csv(OUTPUT_DIR / f"{prefix}_stoichiometry_matrix.csv")
     raw = pd.read_csv(OUTPUT_DIR / f"{prefix}_raw_phospho_normalized.csv")
@@ -596,7 +634,7 @@ def fit_track(tissue: str, track: str, manifest: pd.DataFrame) -> dict[str, pd.D
         site_results[f"raw_n_tg_{contrast_name}"] = tg_r
 
     kl_track = KINASE_TRACKS[track]["kl_track"]
-    mea_stoich, shift_stoich, wins_stoich, subs_stoich = kinase_enrich._run_mea(
+    mea_stoich, shift_stoich, wins_stoich, subs_stoich = _call_mea(
         stoich["motif"],
         results_by_contrast,
         "stoich_lfc",
@@ -604,7 +642,7 @@ def fit_track(tissue: str, track: str, manifest: pd.DataFrame) -> dict[str, pd.D
         gene_symbols=stoich["gene_symbol"].values,
         track=kl_track,
     )
-    mea_raw, shift_raw, wins_raw, subs_raw = kinase_enrich._run_mea(
+    mea_raw, shift_raw, wins_raw, subs_raw = _call_mea(
         stoich["motif"],
         results_by_contrast,
         "raw_lfc",
@@ -750,6 +788,25 @@ def run_mea() -> None:
                 df.to_csv(OUTPUT_DIR / f"{prefix}_{name}.csv", index=False)
 
 
+def run_mea_via_runner(scratch_dir: str) -> None:
+    """Run bulk MEA through the Phase-3 shared runner to scratch_dir.
+
+    Opt-in entry point.  Does NOT overwrite canonical outputs under OUTPUT_DIR.
+    Invoke via:
+        pixi run python alz/ingest/fivexfad.py --runner-scratch-dir <DIR>
+    or via the adapter directly:
+        from alz.core.fivexfad_bulk_mea_adapter import run_via_runner
+        run_via_runner(scratch_dir, manifest)
+    """
+    from alz.core.fivexfad_bulk_mea_adapter import run_via_runner
+    _ensure_output_dir()
+    manifest_path = OUTPUT_DIR / "sample_manifest.csv"
+    if not manifest_path.exists():
+        run_ingest()
+    manifest = pd.read_csv(manifest_path)
+    run_via_runner(scratch_dir=scratch_dir, manifest=manifest)
+
+
 def print_summary() -> None:
     manifest = build_sample_manifest()
     index = discover_reports()
@@ -789,8 +846,12 @@ def main() -> None:
     parser.add_argument("--run", action="store_true", help="Run ingest and MEA")
     parser.add_argument("--export-bulk", action="store_true",
                         help="Write per-tissue linear per-group bulk for Incytr deconvolution")
+    parser.add_argument("--runner-scratch-dir", metavar="DIR",
+                        help="Run bulk MEA through the Phase-3 shared runner; "
+                             "writes to DIR (never to canonical OUTPUT_DIR)")
     args = parser.parse_args()
-    if not any([args.summary, args.ingest, args.mea, args.run, args.export_bulk]):
+    if not any([args.summary, args.ingest, args.mea, args.run, args.export_bulk,
+                args.runner_scratch_dir]):
         args.summary = True
     if args.summary:
         print_summary()
@@ -800,6 +861,8 @@ def main() -> None:
         run_mea()
     if args.export_bulk:
         run_export_bulk()
+    if args.runner_scratch_dir:
+        run_mea_via_runner(args.runner_scratch_dir)
 
 
 if __name__ == "__main__":

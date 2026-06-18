@@ -51,6 +51,12 @@ from alz.ingest.mukesh import (
     HUMAN_KINASE_DIR,
     SAMPLE_MAPPING_CSV,
 )
+from alz.core.mea_outputs import (
+    KIND_SPEC as _SHARED_KIND_SPEC,
+    build_nes_fdr_matrices,
+    build_recurrence_summary,
+    mea_output_path,
+)
 
 PERDONOR_DIR = os.path.join(HUMAN_KINASE_DIR, "perdonor")
 
@@ -107,6 +113,67 @@ _KIND_SPEC = {
 }
 
 
+def _write_donor_aggregates(
+    mea_df: pd.DataFrame,
+    ad_ids: list[str],
+    ctrl_ids: list[str],
+    infix: str,
+    suffix: str,
+    out_dir: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Write wide NES/FDR matrices and AD + CTRL recurrence tables.
+
+    Single copy of the aggregate-writing logic; called from both the canonical
+    ``_run_track_kind`` path and the scratch ``regenerate_aggregates_to_scratch``
+    path so that production and harness share identical code.
+
+    Returns ``(nes_wide, fdr_wide)`` so callers can report shapes without
+    re-pivoting.
+    """
+    donor_order = ad_ids + ctrl_ids
+    nes_wide, fdr_wide = build_nes_fdr_matrices(
+        mea_df,
+        entity_col_name="donor",
+        contrast_suffix="_vs_CTRLmean",
+        entity_order=donor_order,
+    )
+    nes_wide.to_csv(mea_output_path(out_dir, "kinase_donor_nes", infix, suffix))
+    fdr_wide.to_csv(mea_output_path(out_dir, "kinase_donor_fdr", infix, suffix))
+
+    # AD recurrence — primary, feeds SEA-AD agreement.
+    rec = build_recurrence_summary(
+        nes_wide, fdr_wide,
+        subset_ids=ad_ids,
+        axis_noun="donors",
+        fdr_thresh=config.MEA_FDR_THRESH,
+    )
+    rec_path = mea_output_path(out_dir, "recurrence", infix, suffix)
+    rec.to_csv(rec_path, index=False)
+    print(
+        f"  recurrence written: {rec_path}  "
+        f"(>=1 donor sig: {(rec['n_donors_sig'] >= 1).sum()}; "
+        f">=ceil(N/2) donors sig: "
+        f"{(rec['n_donors_sig'] >= np.ceil(len(ad_ids) / 2)).sum()})"
+    )
+
+    # CTRL recurrence — sibling table; never feeds SEA-AD agreement. Used by
+    # the viewer to surface controls that look case-like after LOO.
+    rec_ctrl = build_recurrence_summary(
+        nes_wide, fdr_wide,
+        subset_ids=ctrl_ids,
+        axis_noun="donors",
+        fdr_thresh=config.MEA_FDR_THRESH,
+    )
+    rec_ctrl_path = mea_output_path(out_dir, "recurrence_ctrl", infix, suffix)
+    rec_ctrl.to_csv(rec_ctrl_path, index=False)
+    print(
+        f"  ctrl recurrence written: {rec_ctrl_path}  "
+        f"(>=1 ctrl sig: {(rec_ctrl['n_donors_sig'] >= 1).sum() if len(rec_ctrl) else 0})"
+    )
+
+    return nes_wide, fdr_wide
+
+
 def _run_track_kind(track: str, kind: str, mapping: pd.DataFrame) -> None:
     spec = _KIND_SPEC[kind]
     print(f"\n=== Per-donor MEA: track={track} kind={kind} ===")
@@ -158,69 +225,87 @@ def _run_track_kind(track: str, kind: str, mapping: pd.DataFrame) -> None:
         print("  WARNING: empty MEA result; skipping aggregation")
         return
 
-    # Strip the "_vs_CTRLmean" suffix for cleaner column labels.
-    mea_df = mea_df.copy()
-    mea_df["donor"] = mea_df["contrast"].str.replace("_vs_CTRLmean", "", regex=False)
-
-    nes_wide = mea_df.pivot_table(
-        index="kinase", columns="donor", values="NES", aggfunc="first"
-    )
-    fdr_wide = mea_df.pivot_table(
-        index="kinase", columns="donor", values="FDR", aggfunc="first"
-    )
-    # Keep AD first, then CTRL — column order matters for downstream wide
-    # loaders that key off the first N columns being case donors.
-    donor_order = ad_ids + ctrl_ids
-    nes_wide = nes_wide.reindex(columns=donor_order)
-    fdr_wide = fdr_wide.reindex(columns=donor_order)
-    nes_wide.to_csv(os.path.join(PERDONOR_DIR, f"kinase_donor_nes{infix}{suffix}.csv"))
-    fdr_wide.to_csv(os.path.join(PERDONOR_DIR, f"kinase_donor_fdr{infix}{suffix}.csv"))
-
-    def _recurrence(donor_ids: list[str]) -> pd.DataFrame:
-        if not donor_ids:
-            return pd.DataFrame(columns=[
-                "kinase", "n_donors_sig", "n_donors_up", "n_donors_down",
-                "n_donors_tested", "median_nes", "median_nes_sig_only",
-            ])
-        nes_sub = nes_wide.reindex(columns=donor_ids)
-        fdr_sub = fdr_wide.reindex(columns=donor_ids)
-        sig = fdr_sub < config.MEA_FDR_THRESH
-        up = sig & (nes_sub > 0)
-        dn = sig & (nes_sub < 0)
-        return pd.DataFrame({
-            "kinase": fdr_sub.index,
-            "n_donors_sig": sig.sum(axis=1).values,
-            "n_donors_up": up.sum(axis=1).values,
-            "n_donors_down": dn.sum(axis=1).values,
-            "n_donors_tested": fdr_sub.notna().sum(axis=1).values,
-            "median_nes": nes_sub.median(axis=1, skipna=True).values,
-            "median_nes_sig_only": nes_sub.where(sig).median(axis=1, skipna=True).values,
-        }).sort_values(["n_donors_sig", "n_donors_tested"], ascending=[False, False])
-
-    # AD recurrence — primary, feeds SEA-AD agreement.
-    rec = _recurrence(ad_ids)
-    rec_path = os.path.join(PERDONOR_DIR, f"recurrence{infix}{suffix}.csv")
-    rec.to_csv(rec_path, index=False)
-    print(
-        f"  recurrence written: {rec_path}  "
-        f"(>=1 donor sig: {(rec['n_donors_sig'] >= 1).sum()}; "
-        f">=ceil(N/2) donors sig: "
-        f"{(rec['n_donors_sig'] >= np.ceil(len(ad_ids) / 2)).sum()})"
-    )
-    # CTRL recurrence — sibling table; never feeds SEA-AD agreement. Used by
-    # the viewer to surface controls that look case-like after LOO.
-    rec_ctrl = _recurrence(ctrl_ids)
-    rec_ctrl_path = os.path.join(PERDONOR_DIR, f"recurrence_ctrl{infix}{suffix}.csv")
-    rec_ctrl.to_csv(rec_ctrl_path, index=False)
-    print(
-        f"  ctrl recurrence written: {rec_ctrl_path}  "
-        f"(>=1 ctrl sig: {(rec_ctrl['n_donors_sig'] >= 1).sum() if len(rec_ctrl) else 0})"
-    )
+    _write_donor_aggregates(mea_df, ad_ids, ctrl_ids, infix, suffix, PERDONOR_DIR)
 
 
 def _run_track(track: str, mapping: pd.DataFrame) -> None:
     _run_track_kind(track, "stoich", mapping)
     _run_track_kind(track, "raw", mapping)
+
+
+# ---------------------------------------------------------------------------
+# Opt-in scratch regeneration (Phase 2 refactor proof harness)
+# ---------------------------------------------------------------------------
+
+def regenerate_aggregates_to_scratch(
+    scratch_dir: str, track: str, kind: str
+) -> None:
+    """Recompute wide + recurrence tables from the on-disk canonical long table.
+
+    Does NOT run MEA. Reads ``mea_perdonor{infix}{suffix}.csv`` from
+    PERDONOR_DIR and calls ``_write_donor_aggregates`` (which internally uses
+    ``alz.core.mea_outputs``) to regenerate the kinase×donor NES/FDR matrices
+    and both recurrence tables, writing them into ``scratch_dir``.
+
+    Audit passthrough tables (shift/wins/substrate) are NOT regenerated here;
+    they are trivial ``to_csv`` calls and the substrate file is ~100 MB.
+    """
+    suffix = config.PHOSPHO_TRACKS[track]["output_suffix"]
+    infix = _SHARED_KIND_SPEC[kind]["infix"]
+
+    long_path = os.path.join(PERDONOR_DIR, f"mea_perdonor{infix}{suffix}.csv")
+    if not os.path.exists(long_path):
+        print(f"  [mukesh scratch/{track}/{kind}] long table absent: {long_path}; skip")
+        return
+
+    print(f"\n=== Scratch regen: mukesh track={track} kind={kind} ===")
+    mea_df = pd.read_csv(long_path)
+    print(f"  read {long_path}  rows={len(mea_df)}")
+
+    if mea_df.empty:
+        print("  WARNING: empty long table; nothing to regenerate")
+        return
+
+    # Recover AD/CTRL donor order from sample_mapping (same small file as
+    # the canonical run; restricts to donors actually present in the long
+    # table so the scratch reindexing mirrors canonical behaviour).
+    mapping = pd.read_csv(SAMPLE_MAPPING_CSV)
+    ad_ids, ctrl_ids = _split_samples(mapping)
+    contrasts_present = set(mea_df["contrast"].unique())
+    ad_ids   = [s for s in ad_ids   if f"{s}_vs_CTRLmean" in contrasts_present]
+    ctrl_ids = [s for s in ctrl_ids if f"{s}_vs_CTRLmean" in contrasts_present]
+
+    os.makedirs(scratch_dir, exist_ok=True)
+    nes_wide, _ = _write_donor_aggregates(mea_df, ad_ids, ctrl_ids, infix, suffix, scratch_dir)
+    print(f"  scratch wide: {nes_wide.shape}  wrote to {scratch_dir}/")
+
+
+def _run_via_runner(scratch_dir: str, tracks: list[str]) -> int:
+    """Opt-in Phase-3 runner path.  Drives all (track, kind) units through
+    MeaRunner + MukeshMeaAdapter into ``scratch_dir``.
+
+    The inline ``_run_track_kind`` canonical block is NOT called here; both
+    orchestration paths coexist during the Phase-3 migration window.
+    """
+    from alz.core.mea_runner import MeaRunner
+    from alz.core.mukesh_mea_adapter import MukeshMeaAdapter
+    from alz.bulk_mea import enrich as kinase_enrich
+
+    if not os.path.exists(SAMPLE_MAPPING_CSV):
+        print(f"ERROR: missing {SAMPLE_MAPPING_CSV}; run ingest_mukesh.py --reshape first")
+        return 2
+    mapping = pd.read_csv(SAMPLE_MAPPING_CSV)
+
+    adapter = MukeshMeaAdapter(
+        scratch_dir=scratch_dir,
+        mapping=mapping,
+        tracks=tracks,
+    )
+    runner = MeaRunner(kinase_enrich)
+    results = runner.run_all(adapter)
+    print(f"\nRunner finished: {len(results)} unit(s) completed, "
+          f"{len(runner.skips)} skip(s).")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -231,7 +316,44 @@ def main(argv: list[str] | None = None) -> int:
         default="both",
         help="phospho track to run (default: both).",
     )
+    parser.add_argument(
+        "--scratch-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "If set, regenerate wide + recurrence tables from canonical long "
+            "tables into DIR (proof harness — does NOT re-run MEA). "
+            "Combine with --track to restrict to one track; both kinds "
+            "(stoich + raw) are always attempted."
+        ),
+    )
+    parser.add_argument(
+        "--runner-scratch-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Phase-3 opt-in: drive all (track, kind) units through the shared "
+            "MeaRunner + MukeshMeaAdapter into DIR.  Does NOT touch the "
+            "canonical PERDONOR_DIR.  Use --track to restrict to one track."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if args.runner_scratch_dir is not None:
+        # Phase-3 runner-driven path: scratch only, canonical block untouched.
+        tracks = ["st", "py"] if args.track == "both" else [args.track]
+        return _run_via_runner(args.runner_scratch_dir, tracks)
+
+    if args.scratch_dir is not None:
+        # Scratch-regen mode: no MEA, just recompute aggregates from disk.
+        if not os.path.exists(SAMPLE_MAPPING_CSV):
+            print(f"ERROR: missing {SAMPLE_MAPPING_CSV}; run ingest_mukesh.py --reshape first")
+            return 2
+        tracks = ["st", "py"] if args.track == "both" else [args.track]
+        for t in tracks:
+            for k in ("stoich", "raw"):
+                regenerate_aggregates_to_scratch(args.scratch_dir, t, k)
+        return 0
 
     if not os.path.exists(SAMPLE_MAPPING_CSV):
         print(f"ERROR: missing {SAMPLE_MAPPING_CSV}; run ingest_mukesh.py --reshape first")

@@ -54,6 +54,12 @@ import pandas as pd
 from alz.shared import config
 from alz.bulk_mea import enrich as kinase_enrich
 from alz.ingest.tcells import KINASE_DIR, INGEST_DIR, META_COLS
+from alz.core.mea_outputs import (
+    KIND_SPEC as _SHARED_KIND_SPEC,
+    build_nes_fdr_matrices,
+    build_recurrence_summary,
+    mea_output_path,
+)
 
 # Tracks to attempt per donor. "st" = Ser/Thr (IMAC), "py" = Tyr (pY).
 TRACKS = ["st", "py"]
@@ -109,6 +115,51 @@ def _build_timepoint_deltas(
 def _n_motif(matrix: pd.DataFrame) -> int:
     m = matrix["motif"]
     return int((m.notna() & (m.astype(str) != "")).sum())
+
+
+def _write_timepoint_aggregates(
+    mea_df: pd.DataFrame,
+    infix: str,
+    suffix: str,
+    out_dir: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Write wide NES/FDR matrices and recurrence table for one (donor, track, kind).
+
+    Derives ``tp_order`` (numeric-day sort) internally from the contrast labels
+    present in ``mea_df``.  Single copy of the aggregate-writing logic; called
+    from both the canonical ``_run_track_kind`` path and the scratch
+    ``regenerate_aggregates_to_scratch`` path so that production and harness
+    share identical code.
+
+    Returns ``(nes_wide, fdr_wide)`` so callers can report shapes without
+    re-pivoting.
+    """
+    tp_order = sorted(
+        [c.replace("_vs_d2", "") for c in mea_df["contrast"].unique()],
+        key=lambda s: int(s.rsplit("_d", 1)[-1]),
+    )
+    nes_wide, fdr_wide = build_nes_fdr_matrices(
+        mea_df,
+        entity_col_name="timepoint",
+        contrast_suffix="_vs_d2",
+        entity_order=tp_order,
+    )
+    nes_wide.to_csv(mea_output_path(out_dir, "kinase_timepoint_nes", infix, suffix))
+    fdr_wide.to_csv(mea_output_path(out_dir, "kinase_timepoint_fdr", infix, suffix))
+
+    rec = build_recurrence_summary(
+        nes_wide, fdr_wide,
+        subset_ids=tp_order,
+        axis_noun="timepoints",
+        fdr_thresh=config.MEA_FDR_THRESH,
+    )
+    rec_path = mea_output_path(out_dir, "recurrence", infix, suffix)
+    rec.to_csv(rec_path, index=False)
+    print(f"  recurrence: {os.path.relpath(rec_path, config.REPO_ROOT)}  "
+          f"(>=1 timepoint sig: {(rec['n_timepoints_sig'] >= 1).sum()}; "
+          f">=ceil(N/2): {(rec['n_timepoints_sig'] >= np.ceil(len(tp_order) / 2)).sum()})")
+
+    return nes_wide, fdr_wide
 
 
 def _run_track_kind(donor: str, track: str, kind: str, skips: list[dict]) -> bool:
@@ -172,38 +223,7 @@ def _run_track_kind(donor: str, track: str, kind: str, skips: list[dict]) -> boo
               f"MEA_MIN_SITES={config.MEA_MIN_SITES}); no aggregation")
         return True
 
-    # Order timepoints by day number, not lexically (d2 < d11, not d11 < d2).
-    mea_df = mea_df.copy()
-    mea_df["timepoint"] = mea_df["contrast"].str.replace("_vs_d2", "", regex=False)
-    tp_order = sorted(
-        mea_df["timepoint"].unique(),
-        key=lambda s: int(s.rsplit("_d", 1)[-1]),
-    )
-
-    nes_wide = mea_df.pivot_table(index="kinase", columns="timepoint",
-                                  values="NES", aggfunc="first").reindex(columns=tp_order)
-    fdr_wide = mea_df.pivot_table(index="kinase", columns="timepoint",
-                                  values="FDR", aggfunc="first").reindex(columns=tp_order)
-    nes_wide.to_csv(os.path.join(out_dir, f"kinase_timepoint_nes{infix}{suffix}.csv"))
-    fdr_wide.to_csv(os.path.join(out_dir, f"kinase_timepoint_fdr{infix}{suffix}.csv"))
-
-    sig = fdr_wide < config.MEA_FDR_THRESH
-    up = sig & (nes_wide > 0)
-    dn = sig & (nes_wide < 0)
-    rec = pd.DataFrame({
-        "kinase": fdr_wide.index,
-        "n_timepoints_sig": sig.sum(axis=1).values,
-        "n_timepoints_up": up.sum(axis=1).values,
-        "n_timepoints_down": dn.sum(axis=1).values,
-        "n_timepoints_tested": fdr_wide.notna().sum(axis=1).values,
-        "median_nes": nes_wide.median(axis=1, skipna=True).values,
-        "median_nes_sig_only": nes_wide.where(sig).median(axis=1, skipna=True).values,
-    }).sort_values(["n_timepoints_sig", "n_timepoints_tested"], ascending=[False, False])
-    rec_path = os.path.join(out_dir, f"recurrence{infix}{suffix}.csv")
-    rec.to_csv(rec_path, index=False)
-    print(f"  recurrence: {os.path.relpath(rec_path, config.REPO_ROOT)}  "
-          f"(>=1 timepoint sig: {(rec['n_timepoints_sig'] >= 1).sum()}; "
-          f">=ceil(N/2): {(rec['n_timepoints_sig'] >= np.ceil(len(tp_order) / 2)).sum()})")
+    _write_timepoint_aggregates(mea_df, infix, out_dir=out_dir, suffix=suffix)
     return True
 
 
@@ -226,13 +246,118 @@ def _run_donor(donor: str) -> dict:
     return manifest
 
 
+# ---------------------------------------------------------------------------
+# Opt-in scratch regeneration (Phase 2 refactor proof harness)
+# ---------------------------------------------------------------------------
+
+def regenerate_aggregates_to_scratch(
+    donor: str, scratch_dir: str, track: str, kind: str
+) -> None:
+    """Recompute wide + recurrence tables from the on-disk canonical long table.
+
+    Does NOT run MEA. Reads ``mea_timecourse{infix}{suffix}.csv`` from the
+    donor's canonical mea dir and calls ``_write_timepoint_aggregates`` (which
+    internally uses ``alz.core.mea_outputs``) to regenerate the
+    kinase×timepoint NES/FDR matrices and recurrence table, writing them into
+    ``scratch_dir``.
+
+    Audit passthrough tables (shift/wins/substrate) are NOT regenerated here.
+    """
+    suffix = config.PHOSPHO_TRACKS[track]["output_suffix"]
+    infix = _SHARED_KIND_SPEC[kind]["infix"]
+
+    long_path = os.path.join(_mea_dir(donor), f"mea_timecourse{infix}{suffix}.csv")
+    if not os.path.exists(long_path):
+        print(f"  [tcells scratch/{donor}/{track}/{kind}] long table absent: {long_path}; skip")
+        return
+
+    print(f"\n=== Scratch regen: tcells {donor} track={track} kind={kind} ===")
+    mea_df = pd.read_csv(long_path)
+    print(f"  read {long_path}  rows={len(mea_df)}")
+
+    if mea_df.empty:
+        print("  WARNING: empty long table; nothing to regenerate")
+        return
+
+    os.makedirs(scratch_dir, exist_ok=True)
+    nes_wide, _ = _write_timepoint_aggregates(mea_df, infix, suffix=suffix, out_dir=scratch_dir)
+    print(f"  scratch wide: {nes_wide.shape}  wrote to {scratch_dir}/")
+
+
+# ---------------------------------------------------------------------------
+# Opt-in runner entry (Phase 3 refactor scratch path)
+# ---------------------------------------------------------------------------
+
+def _run_via_runner(scratch_dir: str, donors: list[str], tracks: list[str]) -> None:
+    """Run T-cell MEA through the shared Phase-3 runner to a scratch directory.
+
+    NEVER writes to the canonical KINASE_DIR tree.  Coexists with the inline
+    `_run_donor` canonical path during the Phase-3 migration window.
+    """
+    from alz.bulk_mea import enrich as kinase_enrich
+    from alz.core.mea_runner import MeaRunner
+    from alz.core.tcells_mea_adapter import TcellsMeaAdapter
+
+    adapter = TcellsMeaAdapter(
+        scratch_dir=scratch_dir,
+        donors=donors,
+        tracks=tracks,
+    )
+    runner = MeaRunner(kinase_enrich)
+    results = runner.run_all(adapter)
+    print(f"\n[runner] done: {len(results)} unit(s) ran; "
+          f"{len(runner.skips)} skip(s)")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--donor", choices=["donor1", "donor2", "both"], default="both",
         help="donor to run (default: both).",
     )
+    parser.add_argument(
+        "--scratch-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "If set, regenerate wide + recurrence tables from canonical long "
+            "tables into DIR (proof harness — does NOT re-run MEA). "
+            "Combine with --donor to restrict to one donor; both tracks and "
+            "both kinds are always attempted."
+        ),
+    )
+    parser.add_argument(
+        "--runner-scratch-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "If set, run T-cell MEA through the Phase-3 shared runner and write "
+            "outputs to DIR (scratch only — never overwrites canonical outputs). "
+            "Combine with --donor and --track to restrict scope."
+        ),
+    )
+    parser.add_argument(
+        "--track", choices=["st", "py", "both"], default="both",
+        help="track to run in runner mode (default: both). Ignored outside runner mode.",
+    )
     args = parser.parse_args(argv)
+
+    if args.runner_scratch_dir is not None:
+        # Runner-scratch mode: MEA through the Phase-3 shared runner.
+        donors = ["donor1", "donor2"] if args.donor == "both" else [args.donor]
+        tracks = ["st", "py"] if args.track == "both" else [args.track]
+        _run_via_runner(args.runner_scratch_dir, donors, tracks)
+        return 0
+
+    if args.scratch_dir is not None:
+        # Scratch-regen mode: no MEA, just recompute aggregates from disk.
+        donors = ["donor1", "donor2"] if args.donor == "both" else [args.donor]
+        for d in donors:
+            for t in TRACKS:
+                for k in _KIND_SPEC:
+                    regenerate_aggregates_to_scratch(d, args.scratch_dir, t, k)
+        return 0
+
     donors = ["donor1", "donor2"] if args.donor == "both" else [args.donor]
     for d in donors:
         if not os.path.isdir(os.path.join(KINASE_DIR, d)):

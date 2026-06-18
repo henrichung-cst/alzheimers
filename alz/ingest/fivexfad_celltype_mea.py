@@ -15,6 +15,7 @@ import re
 import sys
 import argparse
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -204,6 +205,7 @@ def _fit_one_celltype(
     raw: pd.DataFrame,
     weights: pd.DataFrame,
     meta: pd.DataFrame,
+    mea_caller: Callable | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
     meta_cols = ["site_id", "gene_symbol", "motif", "site_position", "residue_type"]
     sample_cols = [c for c in raw.columns if c not in meta_cols and c in set(weights.index)]
@@ -284,7 +286,8 @@ def _fit_one_celltype(
         }))
     site_ols = pd.concat(site_rows, ignore_index=True)
 
-    mea_df, shift_df, wins_df, subs_df = kinase_enrich._run_mea(
+    _call_mea = mea_caller if mea_caller is not None else kinase_enrich._run_mea
+    mea_df, shift_df, wins_df, subs_df = _call_mea(
         motif_series=raw["motif"],
         results_by_contrast=mea_input,
         lfc_key="lfc",
@@ -316,8 +319,10 @@ def run(
     track_filter: set[str] | None = None,
     celltype_filter: set[str] | None = None,
     max_celltypes: int | None = None,
+    out_dir: Path = OUT_DIR,
+    mea_caller: Callable | None = None,
 ) -> None:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     pb, gene_map, counts = _load_pseudobulk()
     all_mea: list[pd.DataFrame] = []
     all_site: list[pd.DataFrame] = []
@@ -348,7 +353,7 @@ def run(
             for cell_type, weights in selected:
                 print(f"  cell_type={cell_type}", flush=True)
                 mea, site, shift, wins, subs, cell_audit = _fit_one_celltype(
-                    tissue, track, cell_type, raw, weights, meta
+                    tissue, track, cell_type, raw, weights, meta, mea_caller=mea_caller
                 )
                 audit[f"{tissue}|{track}|{cell_type}"] = cell_audit
                 if not mea.empty:
@@ -368,8 +373,8 @@ def run(
     }
     for name, df in outputs.items():
         if not df.empty:
-            df.to_parquet(OUT_DIR / name, index=False)
-            print(f"[5xfad-celltype-mea] wrote {OUT_DIR / name} rows={len(df):,}", flush=True)
+            df.to_parquet(out_dir / name, index=False)
+            print(f"[5xfad-celltype-mea] wrote {out_dir / name} rows={len(df):,}", flush=True)
     csv_outputs = {
         "fivexfad_celltype_mea_global_shift.csv": pd.concat(all_shift, ignore_index=True) if all_shift else pd.DataFrame(),
         "fivexfad_celltype_winsorized_sites.csv": pd.concat(all_wins, ignore_index=True) if all_wins else pd.DataFrame(),
@@ -378,8 +383,8 @@ def run(
     }
     for name, df in csv_outputs.items():
         if not df.empty:
-            df.to_csv(OUT_DIR / name, index=False)
-            print(f"[5xfad-celltype-mea] wrote {OUT_DIR / name} rows={len(df):,}", flush=True)
+            df.to_csv(out_dir / name, index=False)
+            print(f"[5xfad-celltype-mea] wrote {out_dir / name} rows={len(df):,}", flush=True)
     audit_payload = config.provenance_stamp(
         cohort="5xFAD",
         analysis="celltype_decomposition_mea",
@@ -388,11 +393,37 @@ def run(
         n_skipped=sum(1 for v in audit.values() if v.get("status") == "skipped"),
         per_group=audit,
     )
-    (OUT_DIR / "fivexfad_celltype_mea_audit.json").write_text(
+    (out_dir / "fivexfad_celltype_mea_audit.json").write_text(
         json.dumps(audit_payload, indent=2) + "\n",
         encoding="utf-8",
     )
-    print(f"[5xfad-celltype-mea] wrote {OUT_DIR / 'fivexfad_celltype_mea_audit.json'}", flush=True)
+    print(f"[5xfad-celltype-mea] wrote {out_dir / 'fivexfad_celltype_mea_audit.json'}", flush=True)
+
+
+def run_mea_via_runner(
+    scratch_dir: str | Path,
+    tissue_filter: set[str] | None = None,
+    track_filter: set[str] | None = None,
+    celltype_filter: set[str] | None = None,
+    max_celltypes: int | None = None,
+) -> None:
+    """Run per-cell-type MEA through the Phase-3 shared runner, writing all output to scratch_dir.
+
+    Opt-in entry point.  Does NOT overwrite canonical outputs under OUT_DIR.
+    Invoke via:
+        pixi run python alz/ingest/fivexfad_celltype_mea.py --runner-scratch-dir <DIR>
+    or via the adapter directly:
+        from alz.core.fivexfad_celltype_mea_adapter import run_via_runner
+        run_via_runner(scratch_dir, ...)
+    """
+    from alz.core.fivexfad_celltype_mea_adapter import run_via_runner
+    run_via_runner(
+        scratch_dir=scratch_dir,
+        tissue_filter=tissue_filter,
+        track_filter=track_filter,
+        celltype_filter=celltype_filter,
+        max_celltypes=max_celltypes,
+    )
 
 
 if __name__ == "__main__":
@@ -401,10 +432,22 @@ if __name__ == "__main__":
     parser.add_argument("--track", action="append", choices=sorted(TRACKS))
     parser.add_argument("--cell-type", action="append", dest="cell_type")
     parser.add_argument("--max-celltypes", type=int)
+    parser.add_argument("--runner-scratch-dir", metavar="DIR",
+                        help="Run per-cell-type MEA through the Phase-3 shared runner; "
+                             "writes to DIR (never to canonical OUT_DIR)")
     args = parser.parse_args()
-    run(
-        tissue_filter=set(args.tissue) if args.tissue else None,
-        track_filter=set(args.track) if args.track else None,
-        celltype_filter=set(args.cell_type) if args.cell_type else None,
-        max_celltypes=args.max_celltypes,
-    )
+    if args.runner_scratch_dir:
+        run_mea_via_runner(
+            scratch_dir=args.runner_scratch_dir,
+            tissue_filter=set(args.tissue) if args.tissue else None,
+            track_filter=set(args.track) if args.track else None,
+            celltype_filter=set(args.cell_type) if args.cell_type else None,
+            max_celltypes=args.max_celltypes,
+        )
+    else:
+        run(
+            tissue_filter=set(args.tissue) if args.tissue else None,
+            track_filter=set(args.track) if args.track else None,
+            celltype_filter=set(args.cell_type) if args.cell_type else None,
+            max_celltypes=args.max_celltypes,
+        )
