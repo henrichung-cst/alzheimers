@@ -22,7 +22,7 @@ Scope (hard constraints, do not re-litigate — see the cohort memory):
     hidden.
 
 Inputs (under outputs/reports/kinase_attribution_tcells/donor{1,2}/, written by
-``alz/cohorts/tcells/ingest.py --reshape``):
+``python -m alz.cohorts.tcells.ingest --reshape``):
   stoichiometry_matrix{,_pY}.csv     — stoichiometry track
   raw_phospho_normalized{,_pY}.csv   — raw phospho track
   ../data_ingest_tcells/donor{n}/sample_mapping.csv
@@ -35,6 +35,7 @@ Outputs (under outputs/reports/kinase_attribution_tcells/donor{n}/mea/):
   mea_global_shift{,_raw}{suffix}.csv    — per-timepoint median-centering log
   winsorized_sites{,_raw}{suffix}.csv    — per-timepoint winsorized site log
   mea_substrate_sets{,_raw}{suffix}.csv  — per (timepoint, kinase) substrate motif set
+  mechanism_attribution{suffix}.csv       — paired stoich/raw mechanism calls
   mea_manifest.json                      — what ran vs was skipped and why
 """
 
@@ -44,7 +45,7 @@ import os
 import sys
 from pathlib import Path
 
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
@@ -54,6 +55,7 @@ import pandas as pd
 from alz.shared import config
 from alz.bulk_mea import enrich as kinase_enrich
 from alz.cohorts.tcells.ingest import KINASE_DIR, INGEST_DIR, META_COLS
+from alz.core.mechanism_attribution import classify_mechanisms
 from alz.core.mea_outputs import (
     KIND_SPEC as _SHARED_KIND_SPEC,
     build_nes_fdr_matrices,
@@ -162,6 +164,95 @@ def _write_timepoint_aggregates(
     return nes_wide, fdr_wide
 
 
+def _write_mechanism_attribution(
+    donor: str, track: str, out_dir: str
+) -> dict[str, str | int] | None:
+    """Write paired stoich/raw mechanism attribution for one donor+track."""
+    suffix = config.PHOSPHO_TRACKS[track]["output_suffix"]
+    stoich_path = os.path.join(out_dir, f"mea_timecourse{suffix}.csv")
+    raw_path = os.path.join(out_dir, f"mea_timecourse_raw{suffix}.csv")
+
+    if not os.path.exists(stoich_path):
+        print(f"  mechanism attribution skipped: missing {stoich_path}")
+        return {"track": track, "status": "skipped", "reason": "stoich_missing"}
+    if not os.path.exists(raw_path):
+        print(f"  mechanism attribution skipped: missing {raw_path}")
+        return {"track": track, "status": "skipped", "reason": "raw_missing"}
+
+    stoich_df = pd.read_csv(stoich_path)
+    raw_df = pd.read_csv(raw_path)
+
+    constants = {
+        "cohort": "tcells",
+        "donor": donor,
+        "track": track,
+    }
+    for frame in (stoich_df, raw_df):
+        for name, value in constants.items():
+            frame[name] = value
+        if "timepoint" not in frame.columns:
+            if "contrast" not in frame.columns:
+                bad = Path(stoich_path).name if frame is stoich_df else Path(raw_path).name
+                print(
+                    "  mechanism attribution skipped: missing timepoint context in "
+                    f"{bad}"
+                )
+                return {
+                    "track": track,
+                    "status": "skipped",
+                    "reason": "timepoint_context_missing",
+                }
+            frame["timepoint"] = frame["contrast"].astype(str).str.replace(
+                r"_vs_d2$", "", regex=True
+            )
+
+    key_cols = ["cohort", "donor", "track", "timepoint", "kinase"]
+    stoich_pairs = set(
+        tuple(row)
+        for row in stoich_df[key_cols].drop_duplicates().itertuples(index=False, name=None)
+    )
+    raw_pairs = set(
+        tuple(row)
+        for row in raw_df[key_cols].drop_duplicates().itertuples(index=False, name=None)
+    )
+    if not (stoich_pairs & raw_pairs):
+        print(
+            f"  mechanism attribution skipped: no paired stoich/raw rows for donor={donor} "
+            f"track={track}"
+        )
+        return {"track": track, "status": "skipped", "reason": "no_paired_rows"}
+
+    attributed = classify_mechanisms(
+        stoich_df,
+        raw_df,
+        context_cols=["cohort", "donor", "track", "timepoint"],
+    )
+    if attributed.empty:
+        print(
+            f"  mechanism attribution skipped: no evaluable rows for donor={donor} "
+            f"track={track}"
+        )
+        return {
+            "track": track,
+            "status": "skipped",
+            "reason": "no_evaluable_pairs",
+            "rows": int(len(attributed)),
+        }
+
+    out_path = os.path.join(out_dir, f"mechanism_attribution{suffix}.csv")
+    attributed.to_csv(out_path, index=False)
+    print(
+        f"  mechanism attribution written: {os.path.relpath(out_path, config.REPO_ROOT)}  "
+        f"rows={len(attributed)}"
+    )
+    return {
+        "track": track,
+        "status": "written",
+        "path": os.path.relpath(out_path, config.REPO_ROOT),
+        "rows": int(len(attributed)),
+    }
+
+
 def _run_track_kind(donor: str, track: str, kind: str, skips: list[dict]) -> bool:
     """Run one (donor, track, kind) MEA. Returns True if MEA actually ran."""
     spec = _KIND_SPEC[kind]
@@ -231,13 +322,34 @@ def _run_donor(donor: str) -> dict:
     print(f"\n########## {donor} ##########")
     skips: list[dict] = []
     ran: list[str] = []
+    mechanism_attribution: list[dict[str, str | int]] = []
     for track in TRACKS:
+        ran_kinds: set[str] = set()
         for kind in _KIND_SPEC:
             if _run_track_kind(donor, track, kind, skips):
                 ran.append(f"{track}/{kind}")
-    manifest = {"donor": donor, "mea_ran": ran, "mea_skipped": skips,
-                "mea_fdr_thresh": config.MEA_FDR_THRESH,
-                "mea_min_sites": config.MEA_MIN_SITES}
+                ran_kinds.add(kind)
+        if {"stoich", "raw"}.issubset(ran_kinds):
+            mechanism = _write_mechanism_attribution(donor, track, _mea_dir(donor))
+            if mechanism is not None:
+                mechanism_attribution.append(mechanism)
+        else:
+            mechanism_attribution.append(
+                {
+                    "track": track,
+                    "status": "skipped",
+                    "reason": "current_stoich_raw_run_incomplete",
+                }
+            )
+
+    manifest = {
+        "donor": donor,
+        "mea_ran": ran,
+        "mea_skipped": skips,
+        "mea_fdr_thresh": config.MEA_FDR_THRESH,
+        "mea_min_sites": config.MEA_MIN_SITES,
+        "mechanism_attribution": mechanism_attribution,
+    }
     out_dir = _mea_dir(donor)
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "mea_manifest.json"), "w") as fh:

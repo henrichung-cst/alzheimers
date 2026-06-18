@@ -16,9 +16,11 @@ Inputs:
 Outputs (under outputs/reports/kinase_attribution/):
   mea_raw_phospho{,_pY}.csv      — per-track raw-phospho MEA results
   mechanism_annotation.csv       — kinase × contrast classification
+  mechanism_attribution.csv      — standardized mechanism attribution (cohort/track-aware)
   unified_attribution.csv        — gets a 'mechanism_annotation' column merged in
 """
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -31,6 +33,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from alz.shared import config
+from alz.core.mechanism_attribution import classify_mechanisms
 from alz.bulk_mea.enrich import (
     CONTRAST_COEFS,
     _filter_samples,
@@ -39,6 +42,15 @@ from alz.bulk_mea.enrich import (
 )
 
 OUTPUT_DIR = config.KINASE_ATTRIBUTION_OUTPUT_DIR
+
+
+_MECHANISM_COHORT = "song"
+_MECHANISM_LEGACY_CALL_MAP = {
+    "both": "both",
+    "activity_driven": "activity_driven",
+    "abundance_driven": "abundance_driven",
+    "discordant": "both",
+}
 
 
 def _ensure_output_dir():
@@ -72,34 +84,52 @@ def _run_track_raw_mea(track_cfg, raw_df, mapping):
     return mea_raw
 
 
-def _classify_mechanisms(mea_raw, mea_stoich):
-    """Per-(kinase, contrast) classification: activity / abundance / both / ns."""
+def _ensure_track_column(df, track_name):
+    """Return a copy with a populated track column."""
+    out = df.copy()
+    if "track" not in out.columns:
+        out["track"] = track_name
+    else:
+        out["track"] = out["track"].fillna(track_name)
+    return out
+
+
+def _legacy_mechanism_annotation(classification_df):
+    """Convert standardized classification output to legacy Song annotation rows."""
+    if classification_df.empty:
+        return pd.DataFrame(columns=["kinase", "contrast", "stoich_FDR", "raw_FDR", "mechanism"])
+
+    mech = classification_df.copy()
+    mech["legacy_mechanism"] = mech["mechanism_call"].map(_MECHANISM_LEGACY_CALL_MAP)
+    mech = mech[mech["legacy_mechanism"].notna()].copy()
+    if mech.empty:
+        return pd.DataFrame(columns=["kinase", "contrast", "stoich_FDR", "raw_FDR", "mechanism"])
+
+    mech = mech.sort_values(by=["cohort", "kinase", "contrast", "track"])
     rows = []
-    for contrast_name in CONTRAST_COEFS:
-        stoich_c = mea_stoich[mea_stoich["contrast"] == contrast_name]
-        raw_c = mea_raw[mea_raw["contrast"] == contrast_name]
-        stoich_sig = set(stoich_c[stoich_c["FDR"] < config.MEA_FDR_THRESH]["kinase"])
-        raw_sig = set(raw_c[raw_c["FDR"] < config.MEA_FDR_THRESH]["kinase"])
+    for (kinase, contrast), grp in mech.groupby(["kinase", "contrast"], dropna=False):
+        has_both = (grp["legacy_mechanism"] == "both").any()
+        has_activity = (grp["legacy_mechanism"] == "activity_driven").any()
+        has_abundance = (grp["legacy_mechanism"] == "abundance_driven").any()
 
-        for kinase in sorted(stoich_sig | raw_sig):
-            in_stoich = kinase in stoich_sig
-            in_raw = kinase in raw_sig
-            if in_stoich and in_raw:
-                mechanism = "both"
-            elif in_stoich:
-                mechanism = "activity_driven"
-            else:
-                mechanism = "abundance_driven"
+        if has_both or (has_activity and has_abundance):
+            mechanism = "both"
+        elif has_activity:
+            mechanism = "activity_driven"
+        elif has_abundance:
+            mechanism = "abundance_driven"
+        else:
+            continue
 
-            s_fdr = stoich_c[stoich_c["kinase"] == kinase]["FDR"].values
-            r_fdr = raw_c[raw_c["kinase"] == kinase]["FDR"].values
-            rows.append({
-                "kinase": kinase,
-                "contrast": contrast_name,
-                "stoich_FDR": float(s_fdr[0]) if len(s_fdr) > 0 else np.nan,
-                "raw_FDR": float(r_fdr[0]) if len(r_fdr) > 0 else np.nan,
-                "mechanism": mechanism,
-            })
+        rep = grp.iloc[0]
+        rows.append({
+            "kinase": kinase,
+            "contrast": contrast,
+            "stoich_FDR": pd.to_numeric(rep["stoich_FDR"], errors="coerce"),
+            "raw_FDR": pd.to_numeric(rep["raw_FDR"], errors="coerce"),
+            "mechanism": mechanism,
+        })
+
     return pd.DataFrame(rows)
 
 
@@ -134,23 +164,45 @@ def step_mechanism_annotation():
         if mea_raw is None:
             print(f"  [{track_cfg['name']}] raw normalized file empty; skip.")
             continue
+
         mea_raw_path = config.track_output("mea_raw_phospho.csv", track_cfg)
         mea_raw.to_csv(mea_raw_path, index=False)
         print(f"  Saved {mea_raw_path} ({len(mea_raw)} rows)")
-        raw_mea_by_track[track_cfg["name"]] = mea_raw
+        raw_for_attribution = _ensure_track_column(mea_raw, track_cfg["name"])
+        raw_for_attribution["cohort"] = _MECHANISM_COHORT
+        raw_mea_by_track[track_cfg["name"]] = raw_for_attribution
 
     if not raw_mea_by_track:
         print("\n  No raw-phospho tracks were processed; skipping mechanism table.")
         return
 
     mea_raw = pd.concat(list(raw_mea_by_track.values()), ignore_index=True)
-    stoich_paths = [config.track_output("mea_stoichiometry.csv", t) for t in tracks]
-    stoich_paths = [p for p in stoich_paths if os.path.exists(p)]
-    if not stoich_paths:
-        raise FileNotFoundError("No mea_stoichiometry*.csv found. Run --enrich first.")
-    mea_stoich = pd.concat([pd.read_csv(p) for p in stoich_paths], ignore_index=True)
+    stoich_dfs = []
+    for track_cfg in tracks:
+        stoich_path = config.track_output("mea_stoichiometry.csv", track_cfg)
+        if not os.path.exists(stoich_path):
+            continue
+        stoich_df = pd.read_csv(stoich_path)
+        stoich_df = _ensure_track_column(stoich_df, track_cfg["name"])
+        stoich_df["cohort"] = _MECHANISM_COHORT
+        stoich_dfs.append(stoich_df)
 
-    annotation_df = _classify_mechanisms(mea_raw, mea_stoich)
+    if not stoich_dfs:
+        raise FileNotFoundError("No mea_stoichiometry*.csv found. Run --enrich first.")
+
+    mea_stoich = pd.concat(stoich_dfs, ignore_index=True)
+
+    annotation_standard = classify_mechanisms(
+        mea_stoich,
+        mea_raw,
+        context_cols=["cohort", "track", "contrast"],
+        fdr_thresh=config.MEA_FDR_THRESH,
+    )
+    std_path = os.path.join(OUTPUT_DIR, "mechanism_attribution.csv")
+    annotation_standard.to_csv(std_path, index=False)
+    print(f"  Saved {std_path} ({len(annotation_standard)} rows)")
+
+    annotation_df = _legacy_mechanism_annotation(annotation_standard)
     ann_path = os.path.join(OUTPUT_DIR, "mechanism_annotation.csv")
     annotation_df.to_csv(ann_path, index=False)
     print(f"\n  Saved {ann_path} ({len(annotation_df)} rows)")
@@ -170,8 +222,10 @@ def step_mechanism_annotation():
     print("\n  Mechanism annotation complete.")
 
 
-def main():
+def main(argv: list[str] | None = None):
     """Run mechanism annotation directly (no Kedro)."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.parse_args(argv)
     step_mechanism_annotation()
 
 

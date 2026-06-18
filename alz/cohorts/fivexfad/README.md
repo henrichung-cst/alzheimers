@@ -6,8 +6,17 @@ Cohort namespace for the 5xFAD mouse AD cohort.
 
 | Module | Moved from | CLI entry | Notes |
 |--------|------------|-----------|-------|
-| `ingest.py` | `alz/ingest/fivexfad.py` | `python alz/cohorts/fivexfad/ingest.py --ingest` | Manifest build, reshape, bulk MEA (TG vs WT contrasts across cortex and hippocampus); bulk linear export for Incytr decomposition inputs. |
+| `ingest.py` | `alz/ingest/fivexfad.py` | `python -m alz.cohorts.fivexfad.ingest --ingest` | Manifest build, reshape, bulk MEA (TG vs WT contrasts across cortex and hippocampus); bulk linear export for Incytr decomposition inputs. |
 | `celltype_mea.py` | `alz/ingest/fivexfad_celltype_mea.py` | `pixi run 5xfad-celltype-mea` | Per-(tissue, track, cell-type) MEA using deconvoluted pseudobulk inputs from the snRNA decomposition step. |
+
+### Mechanism Attribution Output
+
+Running `python -m alz.cohorts.fivexfad.ingest --mea` now adds an additive paired
+mechanism output for each 5xFAD track (`st`, `py`) and tissue:
+
+- `{prefix}_mechanism_attribution.csv` where `prefix = <tissue>_<track>`
+- uses `{prefix}_mea_stoichiometry.csv` and `{prefix}_mea_raw_phospho.csv`
+- writes context columns `cohort`, `tissue`, `track`, `contrast` before classification
 
 ## Modules remaining in alz/ingest/
 

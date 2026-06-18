@@ -13,7 +13,7 @@ the viewer cross-check whether a per-donor stoichiometry signal is
 abundance-driven vs activity-driven.
 
 Inputs (under outputs/reports/kinase_attribution_human/, written by
-``alz/cohorts/mukesh/ingest.py --reshape``):
+``python -m alz.cohorts.mukesh.ingest --reshape``):
   stoichiometry_matrix{,_pY}.csv     — stoichiometry track per residue class
   raw_phospho_normalized{,_pY}.csv   — raw phospho track per residue class
   ../data_ingest_human/sample_mapping.csv
@@ -37,7 +37,7 @@ import os
 import sys
 from pathlib import Path
 
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
@@ -46,6 +46,7 @@ import pandas as pd
 
 from alz.shared import config
 from alz.bulk_mea import enrich as kinase_enrich
+from alz.core.mechanism_attribution import classify_mechanisms
 from alz.cohorts.mukesh.ingest import (
     HUMAN_DATA_INGEST_DIR,
     HUMAN_KINASE_DIR,
@@ -61,6 +62,47 @@ from alz.core.mea_outputs import (
 PERDONOR_DIR = os.path.join(HUMAN_KINASE_DIR, "perdonor")
 
 
+def _write_mechanism_attribution(track: str, out_dir: str = PERDONOR_DIR) -> None:
+    """Write paired stoich/raw mechanism attribution for one track."""
+    suffix = config.PHOSPHO_TRACKS[track]["output_suffix"]
+    stoich_path = os.path.join(out_dir, f"mea_perdonor{suffix}.csv")
+    raw_path = os.path.join(out_dir, f"mea_perdonor_raw{suffix}.csv")
+    if not os.path.exists(stoich_path):
+        print(f"  mechanism attribution for track={track}: missing {stoich_path}; skip")
+        return
+    if not os.path.exists(raw_path):
+        print(f"  mechanism attribution for track={track}: missing {raw_path}; skip")
+        return
+
+    stoich_df = pd.read_csv(stoich_path)
+    raw_df = pd.read_csv(raw_path)
+
+    constants = {"cohort": "mukesh", "track": track}
+    for frame in (stoich_df, raw_df):
+        for name, value in constants.items():
+            frame[name] = value
+        if "donor" not in frame.columns:
+            if "contrast" not in frame.columns:
+                print(
+                    "  mechanism attribution requires donor context; "
+                    f"{Path(stoich_path).name if frame is stoich_df else Path(raw_path).name} missing both donor and contrast; skip"
+                )
+                return
+            frame["donor"] = frame["contrast"].str.replace(
+                r"_vs_CTRLmean$", "", regex=True
+            )
+
+    attributed = classify_mechanisms(
+        stoich_df,
+        raw_df,
+        context_cols=["cohort", "track", "donor"],
+    )
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"mechanism_attribution{suffix}.csv")
+    attributed.to_csv(out_path, index=False)
+    print(f"  mechanism attribution written: {out_path}  rows={len(attributed)}")
+
+
 def _load_track_matrix(track: str, kind: str = "stoich") -> pd.DataFrame | None:
     """Load the per-track matrix; ``kind`` selects stoichiometry vs raw phospho."""
     suffix = config.PHOSPHO_TRACKS[track]["output_suffix"]
@@ -69,7 +111,9 @@ def _load_track_matrix(track: str, kind: str = "stoich") -> pd.DataFrame | None:
     if not os.path.exists(path):
         if kind == "raw":
             return None
-        raise FileNotFoundError(f"missing {path}; run ingest_mukesh.py --reshape")
+        raise FileNotFoundError(
+            f"missing {path}; run python -m alz.cohorts.mukesh.ingest --reshape"
+        )
     return pd.read_csv(path)
 
 
@@ -174,13 +218,13 @@ def _write_donor_aggregates(
     return nes_wide, fdr_wide
 
 
-def _run_track_kind(track: str, kind: str, mapping: pd.DataFrame) -> None:
+def _run_track_kind(track: str, kind: str, mapping: pd.DataFrame) -> bool:
     spec = _KIND_SPEC[kind]
     print(f"\n=== Per-donor MEA: track={track} kind={kind} ===")
     matrix = _load_track_matrix(track, spec["matrix_kind"])
     if matrix is None:
         print(f"  [{track}/{kind}] input matrix missing; skip.")
-        return
+        return False
     ad_ids, ctrl_ids = _split_samples(mapping)
     # Keep only samples present in the matrix.
     ad_ids = [s for s in ad_ids if s in matrix.columns]
@@ -223,14 +267,22 @@ def _run_track_kind(track: str, kind: str, mapping: pd.DataFrame) -> None:
 
     if mea_df.empty:
         print("  WARNING: empty MEA result; skipping aggregation")
-        return
+        return True
 
     _write_donor_aggregates(mea_df, ad_ids, ctrl_ids, infix, suffix, PERDONOR_DIR)
+    return True
 
 
 def _run_track(track: str, mapping: pd.DataFrame) -> None:
-    _run_track_kind(track, "stoich", mapping)
-    _run_track_kind(track, "raw", mapping)
+    stoich_ran = _run_track_kind(track, "stoich", mapping)
+    raw_ran = _run_track_kind(track, "raw", mapping)
+    if stoich_ran and raw_ran:
+        _write_mechanism_attribution(track, PERDONOR_DIR)
+    else:
+        print(
+            f"  mechanism attribution for track={track}: "
+            "current stoich/raw run incomplete; skip"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +344,10 @@ def _run_via_runner(scratch_dir: str, tracks: list[str]) -> int:
     from alz.bulk_mea import enrich as kinase_enrich
 
     if not os.path.exists(SAMPLE_MAPPING_CSV):
-        print(f"ERROR: missing {SAMPLE_MAPPING_CSV}; run ingest_mukesh.py --reshape first")
+        print(
+            f"ERROR: missing {SAMPLE_MAPPING_CSV}; "
+            "run python -m alz.cohorts.mukesh.ingest --reshape first"
+        )
         return 2
     mapping = pd.read_csv(SAMPLE_MAPPING_CSV)
 
@@ -347,7 +402,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.scratch_dir is not None:
         # Scratch-regen mode: no MEA, just recompute aggregates from disk.
         if not os.path.exists(SAMPLE_MAPPING_CSV):
-            print(f"ERROR: missing {SAMPLE_MAPPING_CSV}; run ingest_mukesh.py --reshape first")
+            print(
+                f"ERROR: missing {SAMPLE_MAPPING_CSV}; "
+                "run python -m alz.cohorts.mukesh.ingest --reshape first"
+            )
             return 2
         tracks = ["st", "py"] if args.track == "both" else [args.track]
         for t in tracks:
@@ -356,7 +414,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if not os.path.exists(SAMPLE_MAPPING_CSV):
-        print(f"ERROR: missing {SAMPLE_MAPPING_CSV}; run ingest_mukesh.py --reshape first")
+        print(
+            f"ERROR: missing {SAMPLE_MAPPING_CSV}; "
+            "run python -m alz.cohorts.mukesh.ingest --reshape first"
+        )
         return 2
     mapping = pd.read_csv(SAMPLE_MAPPING_CSV)
 

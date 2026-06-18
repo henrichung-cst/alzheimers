@@ -21,11 +21,12 @@ from typing import Callable, Iterable
 import numpy as np
 import pandas as pd
 
-_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from alz.bulk_mea import enrich as kinase_enrich
+from alz.core.mechanism_attribution import classify_mechanisms
 from alz.shared import config
 
 DATASET_DIR = Path(config.REPO_ROOT) / "data" / "datasets" / "5xFAD"
@@ -769,6 +770,60 @@ def run_ingest() -> None:
     )
 
 
+def _write_mechanism_attribution(
+    prefix: str,
+    tissue: str,
+    track: str,
+    results: dict[str, pd.DataFrame] | None = None,
+) -> None:
+    """Write paired stoich/raw mechanism attribution for one (tissue, track)."""
+    stoich_path = OUTPUT_DIR / f"{prefix}_mea_stoichiometry.csv"
+    raw_path = OUTPUT_DIR / f"{prefix}_mea_raw_phospho.csv"
+
+    stoich_df = results.get("mea_stoichiometry") if results else None
+    raw_df = results.get("mea_raw_phospho") if results else None
+
+    if stoich_df is None and stoich_path.exists():
+        stoich_df = pd.read_csv(stoich_path)
+    if raw_df is None and raw_path.exists():
+        raw_df = pd.read_csv(raw_path)
+
+    if stoich_df is None:
+        print(
+            f"  mechanism attribution for {prefix}: missing {stoich_path.name}; "
+            "skip paired mechanism output"
+        )
+        return
+    if raw_df is None:
+        print(
+            f"  mechanism attribution for {prefix}: missing {raw_path.name}; "
+            "skip paired mechanism output"
+        )
+        return
+    if stoich_df.empty or raw_df.empty:
+        print(
+            f"  mechanism attribution for {prefix}: empty MEA input; "
+            "skip paired mechanism output"
+        )
+        return
+
+    constants = {"cohort": "fivexfad", "tissue": tissue, "track": track}
+    stoich_df = stoich_df.copy()
+    raw_df = raw_df.copy()
+    for name, value in constants.items():
+        stoich_df[name] = value
+        raw_df[name] = value
+
+    attributed = classify_mechanisms(
+        stoich_df,
+        raw_df,
+        context_cols=["cohort", "tissue", "track", "contrast"],
+    )
+    out_path = OUTPUT_DIR / f"{prefix}_mechanism_attribution.csv"
+    attributed.to_csv(out_path, index=False)
+    print(f"  mechanism attribution written: {out_path}  rows={len(attributed)}")
+
+
 def run_mea() -> None:
     _ensure_output_dir()
     manifest_path = OUTPUT_DIR / "sample_manifest.csv"
@@ -786,6 +841,7 @@ def run_mea() -> None:
             results = fit_track(tissue, track, manifest)
             for name, df in results.items():
                 df.to_csv(OUTPUT_DIR / f"{prefix}_{name}.csv", index=False)
+            _write_mechanism_attribution(prefix, tissue=tissue, track=track, results=results)
 
 
 def run_mea_via_runner(scratch_dir: str) -> None:
@@ -793,7 +849,7 @@ def run_mea_via_runner(scratch_dir: str) -> None:
 
     Opt-in entry point.  Does NOT overwrite canonical outputs under OUTPUT_DIR.
     Invoke via:
-        pixi run python alz/cohorts/fivexfad/ingest.py --runner-scratch-dir <DIR>
+        pixi run python -m alz.cohorts.fivexfad.ingest --runner-scratch-dir <DIR>
     or via the adapter directly:
         from alz.core.fivexfad_bulk_mea_adapter import run_via_runner
         run_via_runner(scratch_dir, manifest)
