@@ -243,3 +243,75 @@ the two import statements (critical check: zero stray orchestrator edits).
 ### Status
 5D fully closed (wave-1 dedup + 5D-2 index-format lift). Next: 5E fivexfad
 (resolves the R2 song-MEA seam), then 5F song + composer cutover.
+
+---
+
+## Packet 5E — fivexfad adapter
+
+Extract the 5xFAD supporting-cohort payload construction from the unified
+monolith into `alz/viewer/cohorts/fivexfad.py`, mirroring the 5C mukesh adapter.
+
+**R2 correction (the "song-MEA seam" is a non-seam).** The 5B design assumed
+"5xFAD attribution confidence derives from **song's** bulk MEA → the adapter must
+take song MEA as an explicit argument; the composer orders song-before-fivexfad."
+Reading the actual code overturns this:
+- `_assign_fivexfad_song_aligned_confidence(attribution_rows, rows)` —
+  `build_unified_viewer.py:2410` — the second arg is `rows`, the **5xFAD cohort's
+  OWN bulk MEA** (built from `FIVEXFAD_KINASE_DIR` at L2334–2377), not song's.
+  "Song-aligned" names the shared *semantics/convention* (significant-bulk +
+  direction-support gate), not a shared *data* dependency.
+- The slice's ONLY cross-cohort input is `data.celltype_evidence` (a shared
+  reference table on `UnifiedData`), consumed by `_build_fivexfad_attribution_rows`
+  (L1186) — the same `UnifiedData` every slice already receives, NOT a song-MEA
+  argument.
+
+So `build_supporting_5xfad_slice(data)` is self-contained given `data`; there is
+no song→fivexfad ordering constraint and no extra argument. R2 closes as a
+documentation error, not a real seam. The adapter signature is just
+`build_fivexfad_viewer_slice(data) -> CohortViewerSlice | None`, exactly parallel
+to mukesh.
+
+**Move set (pure relocation, fully contiguous):** every def from
+`_subs_fraction_counts` (L1036) through `build_supporting_5xfad_slice` (L2291,
+ends L2462) plus `_age_from_contrast_label` (L2465) — all are `_f5_*` /
+`_*fivexfad*` / the slice builder; grep confirms zero song/mukesh callers of the
+generically-named ones (`_f5_records`, `_subs_fraction_counts`, `_age_from_contrast_label`).
+First non-fivexfad def before is `_build_kinases_slice` (L981); first after is
+`_build_celltypes_slice` (L2470). No interleaving → byte-identical relocation.
+
+**Constants:** `FIVEXFAD_KINASE_DIR` is ALSO referenced by the shared
+`_audit_specs()` composer (L179–182), so it moves to the leaf
+`alz/viewer/paths.py` (SSOT) and is imported by both the monolith and the
+adapter. The other 8 fivexfad-only constants are defined locally in the adapter
+(mirroring how mukesh defines `HUMAN_PERDONOR_DIR` locally).
+
+**Cycle avoidance:** `UnifiedData` is defined in the monolith (L846); the monolith
+imports the adapter → the adapter must not import the monolith at runtime. It only
+uses `UnifiedData` as a type annotation and duck-typed `.celltype_evidence` access,
+so `from __future__ import annotations` + a `TYPE_CHECKING`-guarded import suffices.
+
+**Wiring:** `build_payload` and `refresh_supporting_5xfad_payload` consume the
+`CohortViewerSlice` (`.owned_sections["supporting_5xfad"]`, `.capabilities`,
+`.kinase_names`) exactly as build_payload consumes the mukesh slice; the capability
+merge stays inline (composer cutover is 5F). `audit_entries` stays unused — the two
+5xFAD audit specs remain in the shared `_audit_specs()` composer (5C precedent).
+
+**Parity:** fivexfad inputs are present on disk → real old-vs-new gate. (1) per-symbol
+byte-identity of moved bodies vs HEAD (relocation proof ⇒ output identity by
+construction); (2) live `build_supporting_5xfad_slice(data)` old-vs-new deep dict
+compare (numpy.isclose floats) + shard-tree identity; (3) scope containment (diff =
+monolith + new adapter + paths.py only). Independent verifier (audit-pipeline).
+
+### Status
+5E CLOSED. Implementer relocated the block (`build_unified_viewer.py` −1460/+13,
+`paths.py` +6, new `alz/viewer/cohorts/fivexfad.py`). Independent verifier
+(audit-pipeline, ≠ implementer) PASS on all 6 checks: all 30 moved function bodies
++ 10 constants byte-identical to HEAD; `FIVEXFAD_KINASE_DIR` RHS identical;
+`DECOMP_FDR_AGREEMENT` from `alz.bulk_mea.confidence` (not the monolith — the one
+dependency I had not pre-traced, caught by the implementer); `kinase_names`
+set-equivalent to HEAD's row-derived motif union; no runtime monolith import
+(TYPE_CHECKING only); live smoke returns `CohortViewerSlice(cohort_id='fivexfad')`
+with 6,224 rows and all 15 top-level keys; scope contained. **R2 retired as a
+documentation error — fivexfad is self-contained given `data`; no song-MEA
+argument, no composer ordering constraint.** Next: 5F song + composer cutover →
+Phase 5 boundary gate (hard human stop; final phase).

@@ -49,6 +49,12 @@ INCYTR_PAIR_MODE_OUTPUTS_DIR = os.path.join(
     config.REPO_ROOT, "outputs", "reports", "incytr_pair_mode"
 )
 
+# 5xFAD supporting-cohort kinase attribution inputs (also referenced by the
+# shared audit-manifest composer in build_unified_viewer._audit_specs).
+FIVEXFAD_KINASE_DIR = os.path.join(
+    config.REPO_ROOT, "outputs", "reports", "kinase_attribution_5xfad"
+)
+
 # ---------------------------------------------------------------------------
 # Audit / measurement-trace (kinase-side)
 # ---------------------------------------------------------------------------
