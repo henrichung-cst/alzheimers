@@ -86,6 +86,7 @@ TMT_REF_CHANNEL = "126"  # Ref_Pool TMT channel ID present in every plex
 MEA_MIN_SITES = 100             # min ranked sites per contrast to attempt MEA
 MEA_PERMUTATION_NUM = 1000      # GSEApy prerank permutations
 MEA_SEED = 112123               # GSEApy default seed
+MEA_THREADS = int(os.environ.get("ALZ_MEA_THREADS", "8"))  # GSEApy prerank threads
 MEA_WINSORIZE_PERCENTILE = 1.0  # winsorize site LFCs at this percentile before MEA
 
 OUTLIER_ZSCORE_THRESH = 3.0     # within-group z-score threshold for outlier exclusion

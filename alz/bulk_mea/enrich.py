@@ -17,6 +17,7 @@ Outputs (under outputs/reports/kinase_attribution/, track-suffixed):
 
 import os
 import sys
+import hashlib
 from pathlib import Path
 
 # Bootstrap project root onto sys.path so direct invocation
@@ -44,6 +45,9 @@ DATA_INGEST_DIR = config.DATA_INGEST_OUTPUT_DIR
 # CONTRAST_COEFS so existing import sites (e.g. decomposition/enrich_celltype)
 # keep working.
 CONTRAST_COEFS = config.CONTRAST_COEFS
+
+_PERCENTILE_CACHE_MAX_ENTRIES = int(os.environ.get("ALZ_MEA_PERCENTILE_CACHE_MAX", "2"))
+_percentile_cache: dict[tuple[str, str, str], pd.DataFrame] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +207,39 @@ def _winsorize_lfc(lfc_array, pct=None):
     return clipped, outlier_mask, lower, upper
 
 
+def _motif_cache_key(motifs: pd.Series, *, kin_type: str) -> tuple[str, str, str]:
+    """Build a deterministic key for kinase-library percentiles by motif universe."""
+    values = motifs.astype(str).tolist()
+    payload = "\n".join(values).encode()
+    return (
+        kin_type,
+        config.KL_METHOD,
+        hashlib.sha256(payload).hexdigest(),
+    )
+
+
+def _get_cached_percentiles(key: tuple[str, str, str]) -> pd.DataFrame | None:
+    cached = _percentile_cache.get(key)
+    if cached is None:
+        return None
+    # Move to the end to keep the tiny dict acting as an LRU cache.
+    _percentile_cache.pop(key)
+    _percentile_cache[key] = cached
+    return cached
+
+
+def _store_cached_percentiles(
+    key: tuple[str, str, str],
+    percentiles: pd.DataFrame,
+) -> None:
+    if _PERCENTILE_CACHE_MAX_ENTRIES <= 0:
+        return
+    _percentile_cache[key] = percentiles.copy()
+    while len(_percentile_cache) > _PERCENTILE_CACHE_MAX_ENTRIES:
+        oldest = next(iter(_percentile_cache))
+        _percentile_cache.pop(oldest)
+
+
 def _run_mea(motif_series, results_by_contrast, lfc_key,
              site_ids=None, gene_symbols=None, track="st"):
     """Run MEA (GSEA-based) kinase enrichment across contrasts.
@@ -271,13 +308,37 @@ def _run_mea(motif_series, results_by_contrast, lfc_key,
             rank_col="log2_fold_change",
             seq_col="motif",
         )
+        percentile_cache_key = _motif_cache_key(
+            enrich_df["motif"],
+            kin_type=track_cfg["kin_type"],
+        )
+        cached_percentiles = _get_cached_percentiles(percentile_cache_key)
+        if cached_percentiles is not None and config.KL_METHOD in {
+            "percentile",
+            "percentile_rank",
+        }:
+            rpd.submit_percentiles(
+                kin_type=track_cfg["kin_type"],
+                percentiles=cached_percentiles,
+                suppress_messages=True,
+            )
         result = rpd.mea(
             kin_type=track_cfg["kin_type"],
             kl_method=config.KL_METHOD,
             kl_thresh=track_cfg["kl_thresh"],
             permutation_num=config.MEA_PERMUTATION_NUM,
             seed=config.MEA_SEED,
+            threads=config.MEA_THREADS,
         )
+        if cached_percentiles is None and config.KL_METHOD in {
+            "percentile",
+            "percentile_rank",
+        }:
+            pct_attr = f"{track_cfg['kin_type']}_percentiles"
+            _store_cached_percentiles(
+                percentile_cache_key,
+                getattr(rpd.dp_data_pps, pct_attr),
+            )
         er = result.enrichment_results.copy()
         er.index.name = "kinase"
         er = er.reset_index()
