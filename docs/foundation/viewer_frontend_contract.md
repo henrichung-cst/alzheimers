@@ -141,6 +141,17 @@ inputs:
 - T-cell-specific copy warning that per-animal SigProb p-values are unreliable and `|PDS|` is the
   primary Incytr gate.
 
+Projected state MEA, when present, is supporting evidence for the donor-scoped
+bulk kinase MEA. Frontend copy must call it "projected state MEA" or
+"state-projected MEA" and must not call it direct cell-state
+phosphoproteomics. If `payload.projected_state_mea` is absent for the active
+donor, the viewer should behave exactly as it does for current payloads.
+
+Mechanism attribution labels are categorical annotations on paired
+stoichiometry-vs-raw MEA evidence. Frontend rendering may show
+`mechanism_call`, `sign_relation`, NES, and FDR evidence, but must not introduce
+or display a numeric mechanism score.
+
 ### Shared Incytr Pathways Controls
 
 The Incytr Pathways tab is shared between the unified and T-cell viewers through

@@ -51,10 +51,64 @@ payload.agreement_index
 payload.subclass_breakdown
 payload.human
 payload.supporting_5xfad
+payload.projected_state_mea
+payload.mechanism_attribution
 ```
 
 Unavailable domain blocks should be omitted or represented as empty context slices, but capability
 flags must make the absence explicit.
+
+## Optional MEA Support Blocks
+
+### Projected State MEA
+
+T-cell projected state MEA is an optional supporting-evidence block. It must not
+be described as direct cell-state phosphoproteomics: the values come from
+state-projected substrate estimates and should be read as a localization view of
+the bulk MEA convention. Bulk T-cell MEA remains the primary kinase activity
+surface.
+
+When present, projected state MEA should be context-aware:
+
+```json
+{
+  "projected_state_mea": {
+    "schema_version": 1,
+    "by_context": {
+      "donor1": {
+        "tracks": ["st"],
+        "states": ["CD8Tex"],
+        "timepoints": ["d13"],
+        "rows": [],
+        "mechanism_attribution": []
+      }
+    }
+  }
+}
+```
+
+The compact `rows` records may include `kinase`, `track`, `state`,
+`timepoint`, `contrast`, `kind`, `NES`, and `FDR`. Mechanism attribution rows
+must use categorical `mechanism_call` and raw evidence columns only; no
+mechanism score is part of the viewer contract. If projected-state files are
+absent or were skipped by the runner, builders should omit the context block and
+set `projected_state_mea` capabilities to false.
+
+### Mechanism Attribution
+
+Cross-cohort mechanism attribution is an optional categorical comparison between
+paired stoichiometry MEA and raw-phospho MEA. Viewer payloads may expose these
+rows under the cohort block that owns the MEA surface, for example
+`payload.human.mechanism_attribution`,
+`payload.supporting_5xfad.mechanism_attribution`, or top-level
+`payload.mechanism_attribution` for the Song context.
+
+Required viewer-facing fields are the same evidence fields defined in
+`docs/foundation/mechanism_attribution_contract.md`: context keys, `kinase`,
+`stoich_NES`, `stoich_FDR`, `raw_NES`, `raw_FDR`, boolean significance flags,
+`sign_relation`, `mechanism_call`, and `skip_reason`. Builders should omit the
+block when files are absent. Frontend labels must stay categorical and must not
+turn internal gate values into displayed analysis scores.
 
 ## Meta Contract
 

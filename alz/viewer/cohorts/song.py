@@ -68,6 +68,21 @@ RECEIVER_TO_TISSUE = {r: t for t, rs in TISSUE_CATEGORIES.items() for r in rs}
 
 _BUILD_CACHE_SCHEMA_VERSION = 1
 _VIEWER_BUILD_CACHE_DIR = os.path.join(UNIFIED_VIEWER_DIR, ".build_cache")
+_SONG_MECHANISM_COLUMNS = [
+    "cohort",
+    "track",
+    "contrast",
+    "kinase",
+    "stoich_NES",
+    "stoich_FDR",
+    "raw_NES",
+    "raw_FDR",
+    "stoich_significant",
+    "raw_significant",
+    "sign_relation",
+    "mechanism_call",
+    "skip_reason",
+]
 
 
 def _sha256_file(path: str) -> str:
@@ -1770,6 +1785,27 @@ def _build_attribution_index(data: "UnifiedData", kid: dict, contrast_to_id: dic
     return attribution_index
 
 
+def _build_mechanism_attribution_index() -> dict | None:
+    path = os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "mechanism_attribution.csv")
+    if not os.path.exists(path):
+        return None
+    df = pd.read_csv(path)
+    if df.empty or "mechanism_call" not in df.columns or "mechanism_score" in df.columns:
+        return None
+    rows = df[[c for c in _SONG_MECHANISM_COLUMNS if c in df.columns]].to_dict(orient="records")
+    if not rows:
+        return None
+    return {
+        "schema_version": 1,
+        "by_context": {
+            "song_ad": {
+                "rows": rows,
+                "source_files": [os.path.relpath(path, UNIFIED_VIEWER_DIR)],
+            }
+        },
+    }
+
+
 def _build_decomposition_index(data: "UnifiedData", kid: dict, contrast_to_id: dict) -> dict:
     decomp = data.decomposition
     decomp = decomp[decomp["kinase"].isin(kid)
@@ -1816,6 +1852,7 @@ def build_song_viewer_slice(data: "UnifiedData") -> SongBuild:
 
     kinase_celltype_evidence = _build_kinase_celltype_evidence(data, kid)
     attribution_index = _build_attribution_index(data, kid, contrast_to_id)
+    mechanism_attribution = _build_mechanism_attribution_index()
     decomposition_index = _build_decomposition_index(data, kid, contrast_to_id)
 
     agreement_index = _build_agreement_index(
@@ -1837,6 +1874,8 @@ def build_song_viewer_slice(data: "UnifiedData") -> SongBuild:
             "agreement_index": agreement_index,
             "subclass_breakdown": subclass_breakdown,
             "incytr_pathways": _as_single_context_block(incytr_pathways_block, context_id),
+            **({"mechanism_attribution": mechanism_attribution}
+               if mechanism_attribution is not None else {}),
         },
         edge_slice_ref=(
             EdgeSliceContribution("decomp_ols", {

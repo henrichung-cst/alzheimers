@@ -360,6 +360,168 @@ def _load_tcell_attribution(donor: str) -> "pd.DataFrame | None":
     return df if len(df) else None
 
 
+def _projected_state_candidate_dirs(donor: str) -> list[str]:
+    """Potential output dirs for optional projected-state MEA.
+
+    The state MEA CLI writes wherever ``--runner-scratch-dir`` points. The
+    canonical viewer location, when a producer run is intentionally promoted,
+    is ``<donor>/state_mea``. A few audit runs use nested donor/track folders;
+    supporting those keeps the loader harmlessly permissive without making the
+    viewer depend on them.
+    """
+    base = os.path.join(KINASE_ATTRIBUTION_TCELLS_DIR, donor)
+    candidates = [
+        os.path.join(base, "state_mea"),
+        os.path.join(base, "state_mea", "st"),
+        os.path.join(base, "state_mea", "py"),
+    ]
+    return [p for p in candidates if os.path.isdir(p)]
+
+
+def _read_projected_state_rows(path: str, *, kind: str) -> list[dict]:
+    if not os.path.exists(path):
+        return []
+    df = pd.read_csv(path)
+    if df.empty:
+        return []
+    keep = [
+        "kinase",
+        "track",
+        "state",
+        "timepoint",
+        "contrast",
+        "NES",
+        "FDR",
+        "ES",
+        "p-value",
+        "Subs fraction",
+    ]
+    for col in ("kinase", "track", "state", "timepoint", "contrast", "NES", "FDR"):
+        if col not in df.columns:
+            return []
+    rows = []
+    for record in df[[c for c in keep if c in df.columns]].to_dict(orient="records"):
+        record["kind"] = kind
+        rows.append(record)
+    return rows
+
+
+def _read_projected_state_manifest(path: str) -> list[dict]:
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path) as fh:
+            records = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(records, list):
+        return []
+    keep = [
+        "donor",
+        "state",
+        "track",
+        "kind",
+        "baseline_day",
+        "days_available",
+        "days_run",
+        "n_cells_by_day",
+        "n_sites",
+        "n_motif_sites",
+        "skip_reason",
+    ]
+    return [
+        {k: row.get(k) for k in keep if k in row}
+        for row in records
+        if isinstance(row, dict)
+    ]
+
+
+def _read_projected_state_mechanism(path: str) -> list[dict]:
+    if not os.path.exists(path):
+        return []
+    df = pd.read_csv(path)
+    if df.empty:
+        return []
+    keep = [
+        "cohort",
+        "donor",
+        "track",
+        "state",
+        "timepoint",
+        "contrast",
+        "projection",
+        "kinase",
+        "stoich_NES",
+        "stoich_FDR",
+        "raw_NES",
+        "raw_FDR",
+        "stoich_significant",
+        "raw_significant",
+        "sign_relation",
+        "mechanism_call",
+        "skip_reason",
+    ]
+    if "mechanism_score" in df.columns or "mechanism_call" not in df.columns:
+        return []
+    return df[[c for c in keep if c in df.columns]].to_dict(orient="records")
+
+
+def _load_projected_state_mea_payload() -> dict | None:
+    """Optional compact projected-state MEA block for the T-cell viewer.
+
+    Returns None when promoted projected-state files are absent. That is the
+    expected state until a real run succeeds in an environment with
+    kinase_library installed.
+    """
+    by_context: dict[str, dict] = {}
+    for donor in DONORS:
+        donor_rows: list[dict] = []
+        donor_manifest: list[dict] = []
+        donor_mechanism: list[dict] = []
+        source_files: list[str] = []
+
+        for out_dir in _projected_state_candidate_dirs(donor):
+            for filename, kind in (
+                ("mea_projected_state.csv", "stoich"),
+                ("mea_projected_state_raw.csv", "raw"),
+            ):
+                path = os.path.join(out_dir, filename)
+                rows = _read_projected_state_rows(path, kind=kind)
+                if rows:
+                    donor_rows.extend(rows)
+                    source_files.append(os.path.relpath(path, UNIFIED_VIEWER_DIR))
+
+            manifest_path = os.path.join(out_dir, "projected_state_mea_manifest.json")
+            manifest = _read_projected_state_manifest(manifest_path)
+            if manifest:
+                donor_manifest.extend(manifest)
+                source_files.append(os.path.relpath(manifest_path, UNIFIED_VIEWER_DIR))
+
+            mechanism_path = os.path.join(out_dir, "mechanism_attribution_projected_state.csv")
+            mechanism = _read_projected_state_mechanism(mechanism_path)
+            if mechanism:
+                donor_mechanism.extend(mechanism)
+                source_files.append(os.path.relpath(mechanism_path, UNIFIED_VIEWER_DIR))
+
+        if not (donor_rows or donor_manifest or donor_mechanism):
+            continue
+
+        by_context[donor] = {
+            "tracks": sorted({str(r.get("track")) for r in donor_rows if r.get("track")}),
+            "states": sorted({str(r.get("state")) for r in donor_rows if r.get("state")}),
+            "timepoints": sorted({str(r.get("timepoint")) for r in donor_rows if r.get("timepoint")}),
+            "rows": donor_rows,
+            "manifest": donor_manifest,
+            "mechanism_attribution": donor_mechanism,
+            "source_files": sorted(set(source_files)),
+            "interpretation": "projected_state_mea",
+        }
+
+    if not by_context:
+        return None
+    return {"schema_version": 1, "by_context": by_context}
+
+
 def _load_kinase_to_gene_map() -> dict[str, str]:
     """Kinase Library abbreviation -> gene symbol, with identity fallback."""
     try:
@@ -2142,6 +2304,18 @@ def build_tcell_payload() -> dict:
     print(f"  {total_omics} omics shard(s) total across {len(DONORS)} donors",
           flush=True)
 
+    projected_state_mea = _load_projected_state_mea_payload()
+    projected_state_contexts = set(
+        (projected_state_mea or {}).get("by_context", {}).keys()
+    )
+    if projected_state_mea is not None:
+        n_rows = sum(
+            len(block.get("rows", []))
+            for block in projected_state_mea.get("by_context", {}).values()
+        )
+        print(f"[build_tcell_payload] projected state MEA rows: {n_rows}",
+              flush=True)
+
     family_map: dict[str, str] = {}
     union_kinases: list[str] = []
     seen: set[str] = set()
@@ -2198,6 +2372,7 @@ def build_tcell_payload() -> dict:
             "omics_trace": len(
                 omics_trace_meta.get("by_context", {}).get(donor, {}).get("clusters", [])
             ) > 0,
+            "projected_state_mea": donor in projected_state_contexts,
         }
         notes = []
         if not capabilities["kinases"]:
@@ -2248,6 +2423,8 @@ def build_tcell_payload() -> dict:
             "audit_tables": True,
             "transcript_trace": any(c["capabilities"]["transcript_trace"] for c in contexts),
             "omics_trace": any(c["capabilities"]["omics_trace"] for c in contexts),
+            "projected_state_mea": any(
+                c["capabilities"].get("projected_state_mea") for c in contexts),
         },
         "donors": list(DONORS),
         "donors_with_mea": list(DONOR_WITH_MEA),
@@ -2282,6 +2459,8 @@ def build_tcell_payload() -> dict:
     }
     if attribution_index is not None:
         payload["attribution_index"] = attribution_index
+    if projected_state_mea is not None:
+        payload["projected_state_mea"] = projected_state_mea
     return _sanitize(payload)
 
 

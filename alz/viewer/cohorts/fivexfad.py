@@ -44,6 +44,22 @@ FIVEXFAD_RUNNING_DISPLAY_POINTS = 450
 
 _F5_CONF_RANK = {"very_high": 4, "high": 3, "moderate": 2, "low": 1, "none": 0}
 _F5_MIN_CELLS_PER_CONTRAST = 3
+_F5_MECHANISM_COLUMNS = [
+    "cohort",
+    "tissue",
+    "track",
+    "contrast",
+    "kinase",
+    "stoich_NES",
+    "stoich_FDR",
+    "raw_NES",
+    "raw_FDR",
+    "stoich_significant",
+    "raw_significant",
+    "sign_relation",
+    "mechanism_call",
+    "skip_reason",
+]
 
 
 def _subs_fraction_counts(value: Any) -> tuple[int | None, int | None]:
@@ -81,6 +97,20 @@ def _f5_records(df: pd.DataFrame, cols: list[str] | None = None) -> list[dict]:
         {str(k): _f5_json_value(v) for k, v in row.items()}
         for row in df.to_dict(orient="records")
     ]
+
+
+def _load_fivexfad_mechanism_attribution() -> list[dict]:
+    rows: list[dict] = []
+    for tissue in ("cortex", "hippocampus"):
+        for track in ("st", "py"):
+            path = os.path.join(FIVEXFAD_KINASE_DIR, f"{tissue}_{track}_mechanism_attribution.csv")
+            if not os.path.exists(path):
+                continue
+            df = pd.read_csv(path)
+            if df.empty or "mechanism_call" not in df.columns or "mechanism_score" in df.columns:
+                continue
+            rows.extend(_f5_records(df, _F5_MECHANISM_COLUMNS))
+    return rows
 
 
 def _f5_shard_name(key: str) -> str:
@@ -1428,6 +1458,7 @@ def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None
     celltype_agreement_index = _build_fivexfad_celltype_agreement_index(rows, celltype_mea_rows)
     celltype_mea_shards = _write_fivexfad_celltype_mea_shards(celltype_mea_rows)
     celltype_ols_shards = _write_fivexfad_celltype_ols_shards(celltype_mea_rows)
+    mechanism_attribution = _load_fivexfad_mechanism_attribution()
     for extra in ("fivexfad_snrna_attribution.csv", "fivexfad_snrna_cell_counts.csv"):
         extra_path = os.path.join(FIVEXFAD_KINASE_DIR, extra)
         if os.path.exists(extra_path):
@@ -1449,7 +1480,7 @@ def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None
             source_files.append(os.path.relpath(extra_path, UNIFIED_VIEWER_DIR))
 
     print(f"  supporting_5xfad: {len(rows):,} MEA rows", flush=True)
-    return {
+    payload = {
         "schema_version": 1,
         "cohort": "5xFAD",
         "role": "supporting_ad_cohort",
@@ -1469,6 +1500,9 @@ def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None
         "celltype_ols_shards": celltype_ols_shards,
         "source_files": sorted(set(source_files)),
     }
+    if mechanism_attribution:
+        payload["mechanism_attribution"] = mechanism_attribution
+    return payload
 
 
 def _age_from_contrast_label(contrast: str) -> int | None:

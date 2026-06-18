@@ -26,6 +26,22 @@ HUMAN_PERDONOR_DIR = os.path.join(
     "kinase_attribution_human", "perdonor",
 )
 HUMAN_TRACK_SUFFIXES = [("", "ST"), ("_pY", "Y")]
+_MECHANISM_COLUMNS = [
+    "cohort",
+    "donor",
+    "track",
+    "contrast",
+    "kinase",
+    "stoich_NES",
+    "stoich_FDR",
+    "raw_NES",
+    "raw_FDR",
+    "stoich_significant",
+    "raw_significant",
+    "sign_relation",
+    "mechanism_call",
+    "skip_reason",
+]
 
 
 def _write_human_perdonor_substrate_slices(
@@ -136,6 +152,19 @@ def _human_track_load(suffix: str, residue: str) -> dict | None:
         "raw_mea": raw_mea, "raw_nes": raw_nes, "raw_fdr": raw_fdr,
         "subs": subs,
     }
+
+
+def _load_human_mechanism_attribution() -> list[dict]:
+    rows: list[dict] = []
+    for suffix, _residue in HUMAN_TRACK_SUFFIXES:
+        path = os.path.join(HUMAN_PERDONOR_DIR, f"mechanism_attribution{suffix}.csv")
+        if not os.path.exists(path):
+            continue
+        df = pd.read_csv(path)
+        if df.empty or "mechanism_call" not in df.columns or "mechanism_score" in df.columns:
+            continue
+        rows.extend(df[[c for c in _MECHANISM_COLUMNS if c in df.columns]].to_dict(orient="records"))
+    return rows
 
 
 def build_human_slice() -> tuple[dict, dict] | tuple[None, None]:
@@ -504,6 +533,9 @@ def build_human_slice() -> tuple[dict, dict] | tuple[None, None]:
     }
     if celltype_specificity is not None:
         human_slice["celltype_specificity"] = celltype_specificity
+    mechanism_attribution = _load_human_mechanism_attribution()
+    if mechanism_attribution:
+        human_slice["mechanism_attribution"] = mechanism_attribution
     return human_slice, human_perdonor_substrate_slice_index
 
 
