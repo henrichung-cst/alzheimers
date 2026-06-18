@@ -22,6 +22,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--local-src", type=Path, default=DEFAULT_LOCAL_SRC)
     parser.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS_DIR)
+    parser.add_argument(
+        "--workload",
+        choices=["projected-state", "tcells-timecourse"],
+        default="projected-state",
+    )
     parser.add_argument("--donor", choices=["donor1", "donor2"], default="donor1")
     parser.add_argument("--track", choices=["st", "py"], default="st")
     parser.add_argument("--state", default="CD8Naive")
@@ -56,6 +61,8 @@ def _run_source(
         str(out_dir),
         "--summary-json",
         str(summary_path),
+        "--workload",
+        args.workload,
         "--donor",
         args.donor,
         "--track",
@@ -135,6 +142,7 @@ def main(argv: list[str] | None = None) -> None:
     result = {
         "run_root": str(run_root),
         "workload": {
+            "name": args.workload,
             "donor": args.donor,
             "track": args.track,
             "state": args.state,

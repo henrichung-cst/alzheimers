@@ -35,6 +35,14 @@ The command runs projected-state MEA twice in isolated subprocesses:
 
 It fails nonzero if generated CSV/JSON outputs are not byte-identical.
 
+Use `--workload tcells-timecourse` to run the non-projected T-cell timecourse
+MEA path through the shared runner into scratch outputs:
+
+```bash
+.pixi/envs/default/bin/python bench/kinase_library/compare_public_local.py \
+  --workload tcells-timecourse --donor donor1 --track py
+```
+
 ## Profiling
 
 Profile the local source only after the parity check passes:
@@ -119,6 +127,7 @@ generated CSV/JSON files:
 | global default phosphoproteome reuse | 36.94s | 34.46s | exact |
 | plus vectorized substrate-set builder | 38.58s | 35.08s | exact |
 | plus vectorized builder, tyrosine `CD8Naive` | 1.68s | 0.92s | exact |
+| non-projected T-cell timecourse pY | 5.82s | 3.02s | exact |
 
 The combined local-source profile used:
 
@@ -140,8 +149,9 @@ Top cumulative frames after both local-source changes:
 | compiled `gseapy.gse.prerank_rs` | 21.46s |
 | `kinase_library.objects.phosphoproteomics.PhosphoProteomics.percentile` | 6.18s |
 
-This is promising but not yet a production dependency change. Before promoting
-it, run a non-projected cohort MEA parity workload as well.
+This is promising but not yet a production dependency change. The next
+promotion decision is whether to maintain a patched local package or upstream
+the small changes to `kinase-library`.
 
 ## Rules for Optimization Attempts
 

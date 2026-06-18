@@ -31,6 +31,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--local-src", type=Path, default=DEFAULT_LOCAL_SRC)
     parser.add_argument("--out-dir", type=Path)
     parser.add_argument("--summary-json", type=Path)
+    parser.add_argument(
+        "--workload",
+        choices=["projected-state", "tcells-timecourse"],
+        default="projected-state",
+    )
     parser.add_argument("--donor", choices=["donor1", "donor2"], default="donor1")
     parser.add_argument("--track", choices=["st", "py"], default="st")
     parser.add_argument("--state", default="CD8Naive")
@@ -71,18 +76,29 @@ def _fingerprint_outputs(out_dir: Path) -> list[dict[str, object]]:
 
 
 def _run_case(args: argparse.Namespace, out_dir: Path) -> tuple[float, str | None]:
-    from alz.cohorts.tcells import state_mea
-
     profile_text = None
     start = time.perf_counter()
 
     def run() -> None:
-        state_mea.run_projected_state_mea(
-            args.donor,
-            args.track,
-            out_dir,
-            states=[args.state],
-        )
+        if args.workload == "projected-state":
+            from alz.cohorts.tcells import state_mea
+
+            state_mea.run_projected_state_mea(
+                args.donor,
+                args.track,
+                out_dir,
+                states=[args.state],
+            )
+        elif args.workload == "tcells-timecourse":
+            from alz.cohorts.tcells.mea import _run_via_runner
+
+            _run_via_runner(
+                scratch_dir=str(out_dir),
+                donors=[args.donor],
+                tracks=[args.track],
+            )
+        else:
+            raise ValueError(f"unknown workload: {args.workload}")
 
     if args.profile:
         profiler = cProfile.Profile()
@@ -131,6 +147,7 @@ def main(argv: list[str] | None = None) -> None:
         "source": args.source,
         "kinase_library_file": str(Path(kinase_library.__file__).resolve()),
         "kinase_library_version": getattr(kinase_library, "__version__", "unknown"),
+        "workload": args.workload,
         "donor": args.donor,
         "track": args.track,
         "state": args.state,
