@@ -153,6 +153,56 @@ This is promising but not yet a production dependency change. The next
 promotion decision is whether to maintain a patched local package or upstream
 the small changes to `kinase-library`.
 
+## GSEA Backend Investigation
+
+The installed environment uses `gseapy==1.1.13`. Its `prerank_rs` backend is a
+compiled Rust extension (`gseapy/gse.cpython-311-x86_64-linux-gnu.so`), not
+Python. The matching source distribution shows:
+
+- `prerank_rs()` is implemented in Rust and uses Rayon for parallelism.
+- `RAYON_NUM_THREADS` is set from the `threads` argument.
+- The prerank implementation builds gene permutations once, then for each gene
+  set materializes permutation-specific tag vectors before calculating
+  enrichment scores.
+
+Thread scaling on the optimized local `kinase-library` source, projected-state
+`donor1/ST/CD8Naive` workload:
+
+| `ALZ_MEA_THREADS` | elapsed |
+| ---: | ---: |
+| 1 | 323.79s |
+| 2 | 182.53s |
+| 4 | 120.80s |
+| 8 | 41.26s |
+| 16 | 36.46s |
+
+The host reports 16 CPUs, so 16 threads is a reasonable single-process ceiling
+for this machine. The improvement from 8 to 16 is smaller than the improvement
+from 4 to 8, so parallelizing multiple MEA units and increasing per-unit
+threads at the same time risks oversubscription.
+
+Potential backend directions:
+
+1. **Keep exact `gseapy.prerank_rs`, improve scheduling.** Run independent MEA
+   units in parallel only when `ALZ_MEA_THREADS` is reduced per process so total
+   Rayon threads stay near physical CPU count.
+2. **Patch the Rust backend.** Preserve `prerank_rs` semantics but avoid
+   materializing full tag vectors for every permutation/gene-set pair. Compute
+   ES directly from permutation indices and hit positions, or reuse compact
+   boolean/bitset representations.
+3. **Evaluate newer GSEApy.** GSEApy `v1.2.1` release notes mention speed
+   improvements and an fgsea multilevel algorithm in the Rust backend, but
+   `kinase-library==1.7.0` pins `gseapy~=1.1.8`, so testing this requires a
+   controlled dependency override and full parity checks.
+4. **Evaluate approximate/alternative engines.** `blitzgsea` and R `fgsea` are
+   promising fast preranked GSEA implementations, but they change p-value
+   estimation semantics. They should be treated as exploratory or sensitivity
+   engines unless they pass strict row/value parity checks.
+
+A C++ rewrite is possible but not the first choice: the current bottleneck is
+already native Rust. The more direct path is either a Rust patch to GSEApy or a
+careful GSEApy version experiment.
+
 ## Rules for Optimization Attempts
 
 - Keep local-source edits inside `bench/kinase_library/local_src` until parity
