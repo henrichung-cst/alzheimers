@@ -443,3 +443,36 @@ output-equality of all 3 wrapped functions vs HEAD inline** (`kinase_celltype_ev
 `np.isclose` floats); inline blocks fully excised (no dup/shim); full build exit 0
 reproducing 108,531/53,181, 13 edge keys, caps + ctx_caps all True; no cycle; scope =
 the 2 files. Next: 5F-3 composer cutover (the last sub-wave).
+
+### 5F-3 status — CLOSED
+`build_payload`'s inline assembly retired for `compose_viewer_slices`. Three
+`compose.py` reconciliations: (1) `merge_edge_slice_ref` base-default-override (a
+base key may be overridden by exactly one slice; two slices on one key still raise) —
+lets the always-present `present_human_perdonor_kinase_ids: []` base default be
+overridden by the mukesh slice through the composer, no post-step; (2) per-context
+capability flips stay inline in `build_payload` (composer doesn't touch
+`meta.contexts`); top-level cap flips DELETED (the composer's `merge_capabilities`
+ORs slice caps onto the base). (3) stale R2 docstring in `compose.py` corrected.
+`build_payload` collapses to: build the 3 slices + meta, then one
+`compose_viewer_slices(slices, meta=, audit_manifest_base=build_audit_manifest(),
+edge_slice_ref_base=<shell>, kinase_motifs_builder=_build_kinase_motifs)`.
+Independent verifier (audit-pipeline, ≠ implementer) PASS on all 5 checks —
+**decisive: single-process deep-equality of the OLD hand-assembly vs the NEW composer
+output on live data = ZERO structural differences** (attr 108,531, decomp 53,181,
+present_hp 389); `merge_edge_slice_ref` override + collision unit OK; full build 14
+keys / all caps / complete meta field set; inline `payload={...}` + conditional
+patches + motif block + top-level flips all removed (anti-shim clean); R2 docstring
+fixed; no cycle; scope = the 2 files.
+
+### Phase 5 CLOSED
+All waves committed on `refactor/cohort-namespaces`: 5A inventory · 5B slice schema ·
+5C mukesh adapter (`198de20`) · 5D-1/5D-2 dedup + index lift (`364630a`/`47e187e`) ·
+5E fivexfad adapter (`e829c82`) · 5F-1 song relocation (`4f98248`) · 5F-2 song slice
+assembly (`b68a370`) · 5F-3 composer cutover. The 5,410-line monolith is decomposed:
+per-cohort payload construction lives in `alz/viewer/cohorts/{song,mukesh,fivexfad}.py`
+emitting `CohortViewerSlice` objects; `build_payload` builds the 3 slices + the song
+`meta` scaffolding and composes them via `alz/viewer/shared/compose.py`. Zero output
+drift across every wave (each verified by an independent audit-pipeline agent ≠ the
+implementer). `_run_mea`, the incytr writer's sce4 invariants, and the decomp-OLS
+parity were preserved by construction (verbatim relocations) and never re-derived.
+Phase 5 is the final phase — no Phase 6.

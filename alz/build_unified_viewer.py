@@ -77,6 +77,7 @@ except ImportError:
 
 from alz.viewer.cohorts.mukesh import build_mukesh_viewer_slice  # noqa: E402
 from alz.viewer.cohorts.fivexfad import build_fivexfad_viewer_slice  # noqa: E402
+from alz.viewer.shared.compose import compose_viewer_slices  # noqa: E402
 from alz.viewer.cohorts.song import (  # noqa: E402
     SongBuild,
     _as_single_context_block,
@@ -1012,50 +1013,34 @@ def build_payload(data: UnifiedData) -> dict:
 
     mukesh_slice = build_mukesh_viewer_slice()
     if mukesh_slice is not None:
-        meta["capabilities"]["human_reference"] = True
         meta["contexts"][0]["capabilities"]["human_reference"] = True
         _human_block = mukesh_slice.owned_sections["human"]
         print(f"  human slice: {len(_human_block['kinases']['id']):,} kinase rows "
               f"× {len(_human_block['donors'])} donors", flush=True)
     fivexfad_slice = build_fivexfad_viewer_slice(data)
     if fivexfad_slice is not None:
-        meta["capabilities"]["supporting_5xfad"] = True
         meta["contexts"][0]["capabilities"]["supporting_5xfad"] = True
 
-    motif_names = set(sb.slice.kinase_names)
+    slices = [sb.slice]
     if mukesh_slice is not None:
-        motif_names.update(mukesh_slice.kinase_names)
+        slices.append(mukesh_slice)
     if fivexfad_slice is not None:
-        motif_names.update(fivexfad_slice.kinase_names)
-    kinase_motifs = _build_kinase_motifs(sorted(motif_names))
+        slices.append(fivexfad_slice)
 
-    payload = {
-        "kinases": sb.slice.owned_sections["kinases"],
-        "kinase_motifs": kinase_motifs,
-        "celltypes": sb.slice.owned_sections["celltypes"],
-        "kinase_celltype_evidence": sb.slice.owned_sections["kinase_celltype_evidence"],
-        "attribution_index": sb.slice.owned_sections["attribution_index"],
-        "decomposition_index": sb.slice.owned_sections["decomposition_index"],
-        "agreement_index": sb.slice.owned_sections["agreement_index"],
-        "subclass_breakdown": sb.slice.owned_sections["subclass_breakdown"],
-        "audit_tables": build_audit_manifest(),
-        "edge_slice_ref": {
-            "schema_version": SCHEMA_VERSION,
-            **sb.slice.edge_slice_ref_entries(),
-            "human_perdonor_url": "edge_slices/human_perdonor/",
-            "human_perdonor_index": "edge_slices/human_perdonor/index.json",
-            "present_human_perdonor_kinase_ids": [],
-        },
-        "incytr_pathways": sb.slice.owned_sections["incytr_pathways"],
-        "meta": meta,
+    edge_slice_ref_base = {
+        "schema_version": SCHEMA_VERSION,
+        "human_perdonor_url": "edge_slices/human_perdonor/",
+        "human_perdonor_index": "edge_slices/human_perdonor/index.json",
+        "present_human_perdonor_kinase_ids": [],
     }
-    if mukesh_slice is not None:
-        payload["edge_slice_ref"]["present_human_perdonor_kinase_ids"] = (
-            mukesh_slice.edge_slice_ref_entries()["present_human_perdonor_kinase_ids"]
-        )
-        payload["human"] = mukesh_slice.owned_sections["human"]
-    if fivexfad_slice is not None:
-        payload["supporting_5xfad"] = fivexfad_slice.owned_sections["supporting_5xfad"]
+
+    payload = compose_viewer_slices(
+        slices,
+        meta=meta,
+        audit_manifest_base=build_audit_manifest(),
+        edge_slice_ref_base=edge_slice_ref_base,
+        kinase_motifs_builder=_build_kinase_motifs,
+    )
     return _sanitize(payload)
 
 

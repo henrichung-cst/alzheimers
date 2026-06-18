@@ -11,13 +11,13 @@ Phase 5B defines and unit-exercises this reducer; it is NOT yet called from
 it and verifies payload parity; 5D/5E add tcell/fivexfad; 5F folds song and
 retires the inline ``build_payload`` assembly.
 
-Cross-cohort note (R2 in the 5A inventory): the fivexfad ``supporting_5xfad``
-block derives attribution confidence from song's bulk MEA. That alignment is an
-input to the *fivexfad adapter* (it receives the song MEA reference as an
-explicit argument), NOT a step inside this composer — the composer only places
-and merges already-built sections. The composer's only ordering obligation is to
-build the song slice before the fivexfad slice so the song MEA is available to
-pass along; this module does not reach across cohorts itself.
+Cross-cohort note (R2 retired in wave 5E): the composer reaches across no
+cohort and imposes no inter-cohort ordering constraint. Each adapter receives
+only ``data: UnifiedData`` (the shared data object every cohort reads) and
+builds its slice independently. The fivexfad adapter consumes its OWN bulk MEA
+rows from ``UnifiedData``; there is no song→fivexfad data seam. The composer's
+role is solely to place owned sections and merge shared-key contributions from
+already-built slices.
 """
 
 from __future__ import annotations
@@ -88,17 +88,24 @@ def merge_edge_slice_ref(
     base_ref: dict[str, Any], slices: Iterable[CohortViewerSlice]
 ) -> dict[str, Any]:
     """Aggregate every cohort's lazy-shard pointers into a copy of ``base_ref``
-    (R8). Keys are the exact payload key names. A key declared by two cohorts is
-    a collision, raised rather than silently overwritten."""
+    (R8). Keys are the exact payload key names.
+
+    ``base_ref`` supplies defaults (e.g. ``present_human_perdonor_kinase_ids: []``
+    for the mouse-only case). A cohort slice may override a base-provided key
+    (e.g. mukesh overrides the empty default with its real list). Two different
+    slices contributing the same key is a collision, raised rather than silently
+    overwriting."""
     merged = dict(base_ref)
+    seen_from_slice: dict[str, str] = {}  # key -> cohort_id that contributed it
     for sl in slices:
         for key, value in sl.edge_slice_ref_entries().items():
-            if key in merged:
+            if key in seen_from_slice:
                 raise ValueError(
                     f"edge_slice_ref key {key!r} contributed by more than one "
-                    f"cohort (latest: {sl.cohort_id!r})"
+                    f"cohort ({seen_from_slice[key]!r} and {sl.cohort_id!r})"
                 )
             merged[key] = value
+            seen_from_slice[key] = sl.cohort_id
     return merged
 
 
