@@ -22,6 +22,7 @@ IMPORTANT: this module is read-only — it does NOT modify any canonical output.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
 from pathlib import Path
@@ -79,6 +80,68 @@ REPORT_DIR = PROJECT_ROOT / "outputs/reports/refactor_audit/phase_1"
 # NOTE: "Subs fraction" is GSEApy's "n_leading/n_total" fractional string (e.g. "136/715")
 # — it is NOT a float-coercible column. ES/NES/p-value/FDR are the numeric columns.
 MEA_NUMERIC_COLS = ["ES", "NES", "p-value", "FDR"]
+MECHANISM_REQUIRED_COLS = [
+    "cohort",
+    "track",
+    "kinase",
+    "stoich_NES",
+    "stoich_FDR",
+    "raw_NES",
+    "raw_FDR",
+    "stoich_significant",
+    "raw_significant",
+    "sign_relation",
+    "mechanism_call",
+    "skip_reason",
+]
+MECHANISM_FORBIDDEN_COLS = ["mechanism_score"]
+MECHANISM_ALLOWED_CALLS = {
+    "both",
+    "activity_driven",
+    "abundance_driven",
+    "discordant",
+    "not_significant",
+    "not_evaluable",
+}
+MECHANISM_ALLOWED_SIGN_RELATIONS = {
+    "same",
+    "opposite",
+    "stoich_only",
+    "raw_only",
+    "none",
+    "not_evaluable",
+}
+MECHANISM_NUMERIC_COLS = ["stoich_NES", "stoich_FDR", "raw_NES", "raw_FDR"]
+PROJECTED_STATE_MEA_REQUIRED_MANIFEST_COLUMNS = [
+    "donor",
+    "state",
+    "track",
+    "kind",
+    "baseline_day",
+    "days_available",
+    "days_run",
+    "n_cells_by_day",
+    "n_sites",
+    "n_motif_sites",
+    "input_files",
+    "skip_reason",
+]
+PROJECTED_STATE_MEA_LONG_REQUIRED_COLUMNS = [
+    "state",
+    "timepoint",
+    "kinase",
+    "NES",
+    "FDR",
+    "donor",
+    "track",
+    "kind",
+]
+PROJECTED_STATE_MEA_AGGREGATE_FILES = [
+    "kinase_state_timepoint_nes.csv",
+    "kinase_state_timepoint_fdr.csv",
+    "kinase_state_timepoint_nes_raw.csv",
+    "kinase_state_timepoint_fdr_raw.csv",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +298,297 @@ def _check_sample_columns_non_empty(
                    "No sample columns found beyond prefix columns.")
 
 
+def _csv_has_data_rows(rel_path: str) -> bool | None:
+    """Return whether a CSV has at least one post-header data row."""
+    p = PROJECT_ROOT / rel_path
+    if not p.exists():
+        return None
+    try:
+        with open(p, newline="", encoding="utf-8", errors="replace") as f:
+            reader = csv.reader(f)
+            if next(reader, None) is None:
+                return False
+            for row in reader:
+                if any(cell.strip() for cell in row):
+                    return True
+            return False
+    except Exception:
+        return None
+
+
+def _check_optional_file_exists(
+    report: ValidationReport,
+    rel_path: str,
+    check_name: str = "file_exists",
+    *,
+    present_message: str = "Optional file present.",
+    missing_message: str = "Optional mechanism output file absent.",
+) -> bool:
+    """Emit PASS/ SKIP for optional files."""
+    if file_exists(rel_path):
+        report.add(rel_path, check_name, "PASS", present_message)
+        return True
+    report.add(rel_path, check_name, "SKIP", missing_message)
+    return False
+
+
+def _check_allowed_values_in_column(
+    report: ValidationReport,
+    rel_path: str,
+    column: str,
+    allowed_values: set[str],
+    *,
+    check_name: str,
+) -> None:
+    """Validate that each non-empty value in a column is in an allowed set."""
+    try:
+        p = PROJECT_ROOT / rel_path
+        with open(p, newline="", encoding="utf-8", errors="replace") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames or column not in reader.fieldnames:
+                report.add(
+                    rel_path, check_name, "FAIL",
+                    f"{column} column missing; cannot validate values.",
+                )
+                return
+
+            bad: set[str] = set()
+            for row in reader:
+                value = row.get(column)
+                if value is None:
+                    bad.add("<missing>")
+                    continue
+                normalized = str(value).strip()
+                if normalized == "":
+                    bad.add("<empty>")
+                elif normalized not in allowed_values:
+                    bad.add(normalized)
+            if bad:
+                report.add(
+                    rel_path, check_name, "FAIL",
+                    f"{column} has invalid values: {sorted(bad)}",
+                )
+            else:
+                report.add(
+                    rel_path, check_name, "PASS",
+                    f"All {column} values in allowed vocabulary.",
+                )
+    except Exception:
+        report.add(
+            rel_path, check_name, "FAIL",
+            f"Could not read {column} for vocabulary validation.",
+        )
+
+
+def _validate_mechanism_attribution_file(
+    report: ValidationReport,
+    rel_path: str,
+    required_context_columns: list[str],
+    *,
+    check_prefix: str = "mechanism_attribution",
+) -> bool:
+    """Validate optional mechanism attribution outputs (additive, never required)."""
+    if not _check_optional_file_exists(report, rel_path, check_name=f"{check_prefix}_file_exists"):
+        return False
+
+    required_cols = list(dict.fromkeys(required_context_columns + MECHANISM_REQUIRED_COLS))
+    header = csv_header(rel_path)
+    required_ok = check_required_columns(
+        report, rel_path, required=required_cols, actual=header,
+        check_name="required_columns",
+    )
+    if not required_ok or header is None:
+        return False
+
+    check_numeric_columns(
+        report, rel_path, numeric_columns=MECHANISM_NUMERIC_COLS,
+        check_name="numeric_coercibility",
+    )
+
+    forbidden = [col for col in MECHANISM_FORBIDDEN_COLS if col in header]
+    if forbidden:
+        report.add(
+            rel_path,
+            "forbidden_columns",
+            "FAIL",
+            f"Forbidden mechanism attribution columns present: {forbidden}",
+        )
+    else:
+        report.add(
+            rel_path,
+            "forbidden_columns",
+            "PASS",
+            "No forbidden mechanism score columns present.",
+        )
+
+    _check_allowed_values_in_column(
+        report,
+        rel_path,
+        "mechanism_call",
+        MECHANISM_ALLOWED_CALLS,
+        check_name="allowed_mechanism_call",
+    )
+    _check_allowed_values_in_column(
+        report,
+        rel_path,
+        "sign_relation",
+        MECHANISM_ALLOWED_SIGN_RELATIONS,
+        check_name="allowed_sign_relation",
+    )
+    return True
+
+
+def _validate_projected_state_mea_directory(
+    report: ValidationReport,
+    rel_dir: str,
+) -> None:
+    """Validate optional T-cell projected-state MEA outputs under a donor directory."""
+    if not file_exists(rel_dir):
+        report.add(
+            rel_dir,
+            "projected_state_mea_directory",
+            "SKIP",
+            "Optional projected-state MEA directory not found.",
+        )
+        return
+
+    report.add(
+        rel_dir,
+        "projected_state_mea_directory",
+        "PASS",
+        "Projected-state MEA directory present.",
+    )
+
+    # Manifest (optional)
+    rel_manifest = f"{rel_dir}/projected_state_mea_manifest.json"
+    manifest_present = _check_optional_file_exists(
+        report,
+        rel_manifest,
+        check_name="projected_state_mea_manifest_exists",
+        present_message="Optional projected-state MEA manifest present.",
+        missing_message="Optional projected-state MEA manifest absent.",
+    )
+    if manifest_present:
+        data = json_load_safe(rel_manifest)
+        if data is None:
+            report.add(
+                rel_manifest,
+                "projected_state_mea_manifest_valid_json",
+                "FAIL",
+                "Could not parse projected_state_mea_manifest.json.",
+            )
+        elif not isinstance(data, dict):
+            report.add(
+                rel_manifest,
+                "projected_state_mea_manifest_valid_json",
+                "FAIL",
+                "projected_state_mea_manifest.json is not a JSON object.",
+            )
+        else:
+            check_required_columns(
+                report,
+                rel_manifest,
+                required=PROJECTED_STATE_MEA_REQUIRED_MANIFEST_COLUMNS,
+                actual=list(data.keys()),
+                check_name="projected_state_mea_manifest_required_columns",
+            )
+
+    # Long tables
+    for fname in ("mea_projected_state.csv", "mea_projected_state_raw.csv"):
+        rel = f"{rel_dir}/{fname}"
+        long_present = _check_optional_file_exists(
+            report,
+            rel,
+            check_name="projected_state_mea_long_file_exists",
+            present_message="Optional projected-state MEA long file present.",
+            missing_message="Optional projected-state MEA long file absent.",
+        )
+        if not long_present:
+            continue
+        header = csv_header(rel)
+        check_required_columns(
+            report, rel,
+            required=PROJECTED_STATE_MEA_LONG_REQUIRED_COLUMNS,
+            actual=header,
+            check_name="projected_state_mea_long_required_columns",
+        )
+
+    # Optional aggregate tables
+    aggregate_present = False
+    for fname in PROJECTED_STATE_MEA_AGGREGATE_FILES:
+        rel = f"{rel_dir}/{fname}"
+        if _check_optional_file_exists(
+            report,
+            rel,
+            check_name="projected_state_mea_aggregate_file_exists",
+            present_message="Optional projected-state aggregate file present.",
+            missing_message="Optional projected-state aggregate file absent.",
+        ):
+            aggregate_present = True
+            header = csv_header(rel)
+            required_ok = check_required_columns(
+                report,
+                rel,
+                required=["kinase"],
+                actual=header,
+                check_name="projected_state_mea_aggregate_required_columns",
+            )
+            if not required_ok or header is None:
+                continue
+            has_rows = _csv_has_data_rows(rel)
+            if has_rows is None:
+                report.add(
+                    rel,
+                    "projected_state_mea_aggregate_state_timepoint_columns",
+                    "FAIL",
+                    "Could not determine aggregate table data rows.",
+                )
+            elif has_rows:
+                extra_columns = [col for col in header if col != "kinase"]
+                if extra_columns:
+                    report.add(
+                        rel,
+                        "projected_state_mea_aggregate_state_timepoint_columns",
+                        "PASS",
+                        "Aggregate table has kinase plus state/timepoint columns.",
+                    )
+                else:
+                    report.add(
+                        rel,
+                        "projected_state_mea_aggregate_state_timepoint_columns",
+                        "FAIL",
+                        "Aggregate table has no state/timepoint columns beyond kinase.",
+                    )
+            else:
+                report.add(
+                    rel,
+                    "projected_state_mea_aggregate_state_timepoint_columns",
+                    "PASS",
+                    "Aggregate table present but contains no data rows.",
+                )
+    if aggregate_present:
+        rel_recurrence = f"{rel_dir}/recurrence_projected_state_deferred.txt"
+        check_file_exists(
+            report,
+            rel_recurrence,
+            check_name="projected_state_mea_recurrence_deferred_note_exists",
+        )
+
+    # Mechanism attribution (optional)
+    rel_mech = f"{rel_dir}/mechanism_attribution_projected_state.csv"
+    _validate_mechanism_attribution_file(
+        report,
+        rel_mech,
+        required_context_columns=[
+            "cohort",
+            "donor",
+            "track",
+            "state",
+            "timepoint",
+            "kinase",
+        ],
+        check_prefix="tcells_projected_state_mechanism_attribution",
+    )
 # ---------------------------------------------------------------------------
 # Song validator
 # ---------------------------------------------------------------------------
@@ -338,6 +692,19 @@ def validate_song(report: ValidationReport) -> None:
             key_cols=["kinase", "contrast", "cell_type"],
             skip_dup_check_reason=None,
         )
+
+    # ---- optional mechanism attribution ----
+    for fname, suffix in [
+        ("mechanism_attribution.csv", ""),
+        ("mechanism_attribution_pY.csv", "_pY"),
+    ]:
+        rel = f"{root}/{fname}"
+        if _validate_mechanism_attribution_file(
+            report, rel,
+            required_context_columns=["cohort", "track", "contrast", "kinase"],
+            check_prefix="song_mechanism_attribution",
+        ):
+            _check_track_suffix_convention(report, rel, suffix)
 
     # ---- normalized matrices ----
     for fname, schema, suffix in [
@@ -553,6 +920,19 @@ def validate_mukesh(report: ValidationReport) -> None:
         )
         _check_track_suffix_convention(report, rel, suffix)
 
+    # ---- optional mechanism attribution (per-donor) ----
+    for fname, suffix in [
+        ("mechanism_attribution.csv", ""),
+        ("mechanism_attribution_pY.csv", "_pY"),
+    ]:
+        rel = f"{perdonor}/{fname}"
+        if _validate_mechanism_attribution_file(
+            report, rel,
+            required_context_columns=["cohort", "track", "donor", "kinase"],
+            check_prefix="mukesh_mechanism_attribution",
+        ):
+            _check_track_suffix_convention(report, rel, suffix)
+
 
 # ---------------------------------------------------------------------------
 # T-cells validator
@@ -562,8 +942,10 @@ def validate_tcells(report: ValidationReport) -> None:
     root = "outputs/reports/kinase_attribution_tcells"
     d1 = f"{root}/donor1"
     d1_mea = f"{d1}/mea"
+    d1_state_mea = f"{d1}/state_mea"
     d2 = f"{root}/donor2"
     d2_mea = f"{d2}/mea"
+    d2_state_mea = f"{d2}/state_mea"
 
     # ---- donor1 normalized ----
     for fname, schema, suffix in [
@@ -658,6 +1040,19 @@ def validate_tcells(report: ValidationReport) -> None:
             ),
         )
         _check_track_suffix_convention(report, rel, suffix)
+
+    # ---- donor1 optional mechanism attribution ----
+    for fname, suffix in [
+        ("mechanism_attribution.csv", ""),
+        ("mechanism_attribution_pY.csv", "_pY"),
+    ]:
+        rel = f"{d1_mea}/{fname}"
+        if _validate_mechanism_attribution_file(
+            report, rel,
+            required_context_columns=["cohort", "donor", "track", "timepoint", "kinase"],
+            check_prefix="tcells_donor1_mechanism_attribution",
+        ):
+            _check_track_suffix_convention(report, rel, suffix)
 
     # ---- donor1 NES/FDR matrices ----
     for fname, suffix in [
@@ -831,6 +1226,22 @@ def validate_tcells(report: ValidationReport) -> None:
                 report.add(rel_d2_manifest, "donor2_mea_ran_empty", "PASS",
                            "donor2 mea_ran is empty (correct — no MEA ran).")
 
+    # ---- donor2 optional mechanism attribution ----
+    for fname, suffix in [
+        ("mechanism_attribution.csv", ""),
+        ("mechanism_attribution_pY.csv", "_pY"),
+    ]:
+        rel = f"{d2_mea}/{fname}"
+        if _validate_mechanism_attribution_file(
+            report, rel,
+            required_context_columns=["cohort", "donor", "track", "timepoint", "kinase"],
+            check_prefix="tcells_donor2_mechanism_attribution",
+        ):
+            _check_track_suffix_convention(report, rel, suffix)
+
+    _validate_projected_state_mea_directory(report, d1_state_mea)
+    _validate_projected_state_mea_directory(report, d2_state_mea)
+
 
 # ---------------------------------------------------------------------------
 # 5xFAD validator
@@ -937,6 +1348,17 @@ def validate_fivexfad(report: ValidationReport) -> None:
             _check_fivexfad_track_fname_convention(
                 report, rel_ols, region, track_fname
             )
+
+            # optional mechanism attribution
+            rel_mech = f"{prefix}_mechanism_attribution.csv"
+            if _validate_mechanism_attribution_file(
+                report, rel_mech,
+                required_context_columns=["cohort", "tissue", "track", "contrast", "kinase"],
+                check_prefix="fivexfad_mechanism_attribution",
+            ):
+                _check_fivexfad_track_fname_convention(
+                    report, rel_mech, region, track_fname
+                )
 
             # contrast QC
             rel_qc = f"{prefix}_contrast_qc.csv"
