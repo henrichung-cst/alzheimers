@@ -423,3 +423,23 @@ functions exercised together); TYPE_CHECKING-only monolith import; `__file__` on
 in the 3 `_input_signature` cache keys (one-time identical-shard rebuild, not
 drift); scope contained. sce4/decomp parity preserved by construction — not
 re-verified. Next: 5F-2.
+
+### 5F-2 status — CLOSED
+**Boundary decision:** `meta`-building STAYS in `build_payload`. `build_audit_manifest`
+(the `audit_tables` base) calls `ensure_measurement_trace_sources` + the trace
+functions feed `meta` too — that infra is shared, so moving `meta` into `song.py`
+would force an import cycle. Clean split: `song.py` owns sections + writers;
+`build_payload` builds `meta` (the composer's `meta=` input) from song-provided
+scalars. The 3 inline blocks (`kinase_celltype_evidence`, `attribution_index`,
+`decomposition_index`) were wrapped verbatim into `_build_*` functions in `song.py`;
+`build_song_viewer_slice(data) -> SongBuild` assembles the `CohortViewerSlice` (8
+owned sections + 3 edge-shard families + kinase_names) and returns the capability
+scalars (`incytr_present`, `decomp_ols_slice_count`, `song_concordance_present_genes`).
+`build_payload` −193 lines, now sources sections from `sb.slice.owned_sections` and
+`edge_slice_ref` from `sb.slice.edge_slice_ref_entries()`. Independent verifier
+(audit-pipeline, ≠ implementer) PASS on all 6 checks — decisive: **direct dict
+output-equality of all 3 wrapped functions vs HEAD inline** (`kinase_celltype_evidence`,
+`attribution_index` 108,531, `decomposition_index` 53,181 — all IDENTICAL,
+`np.isclose` floats); inline blocks fully excised (no dup/shim); full build exit 0
+reproducing 108,531/53,181, 13 edge keys, caps + ctx_caps all True; no cycle; scope =
+the 2 files. Next: 5F-3 composer cutover (the last sub-wave).

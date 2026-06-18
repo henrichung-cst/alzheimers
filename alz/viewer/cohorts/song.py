@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import sys
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -36,6 +37,7 @@ from alz.viewer.shared.incytr_index import (
     _idx_label_bits,
     _idx_traj_bits,
 )
+from alz.viewer.shared.cohort_slice import CohortViewerSlice, EdgeSliceContribution
 from alz.viewer.shared.payload_helpers import (
     _INCYTR_FC_NODES,
     _build_incytr_gene_node_index,
@@ -1641,6 +1643,228 @@ def _write_incytr_pair_pathways() -> dict | None:
         payload_block,
     )
     return payload_block
+
+def _build_kinase_celltype_evidence(data: "UnifiedData", kid: dict) -> dict:
+    ev = data.celltype_evidence[
+        data.celltype_evidence["kinase"].isin(kid)
+    ].copy()
+    ev["kinase_id"] = ev["kinase"].map(kid).astype("uint16")
+    for _col, _default in [
+        ("song_specificity", float("nan")),
+        ("song_tau", float("nan")),
+        ("song_top_cluster", ""),
+        ("confidence_tier", "none"),
+        ("confidence_basis", ""),
+        ("song_direction_support", False),
+        ("song_location_tier", "none"),
+        ("wmb_crosscheck_tier", "none"),
+        ("human_location_tier", "none"),
+        ("decomp_agrees_bulk", False),
+        ("seaad_location_score", float("nan")),
+        ("hbca_location_score", float("nan")),
+        ("human_location_score", float("nan")),
+        ("decomp_nes", float("nan")),
+        ("decomp_fdr", float("nan")),
+    ]:
+        if _col not in ev.columns:
+            ev[_col] = _default
+    return {
+        "kinase_id":  ev["kinase_id"].tolist(),
+        "cell_type":  ev["cell_type"].tolist(),
+        "confidence_tier": ev["confidence_tier"].astype(str).tolist(),
+        "confidence_basis": ev["confidence_basis"].fillna("").astype(str).tolist(),
+        "song_direction_support": [bool(v) for v in ev["song_direction_support"].fillna(False)],
+        "song_location_tier": ev["song_location_tier"].fillna("none").astype(str).tolist(),
+        "wmb_crosscheck_tier": ev["wmb_crosscheck_tier"].fillna("none").astype(str).tolist(),
+        "human_location_tier": ev["human_location_tier"].fillna("none").astype(str).tolist(),
+        "decomp_agrees_bulk": [bool(v) for v in ev["decomp_agrees_bulk"].fillna(False)],
+        "song_specificity": ev["song_specificity"].astype(float).round(3).tolist(),
+        "song_tau":   ev["song_tau"].astype(float).round(3).tolist(),
+        "song_top_cluster": ev["song_top_cluster"].fillna("").astype(str).tolist(),
+        "wmb_fold":   ev["wmb_fold_over_uniform"].astype(float).round(3).tolist(),
+        "sea_ad_lfc": ev["sea_ad_lfc"].astype(float).round(3).tolist(),
+        "song_lfc":   ev["song_lfc"].astype(float).round(3).tolist(),
+        "seaad_location_score": ev["seaad_location_score"].astype(float).round(3).tolist(),
+        "hbca_location_score": ev["hbca_location_score"].astype(float).round(3).tolist(),
+        "human_location_score": ev["human_location_score"].astype(float).round(3).tolist(),
+        "decomp_nes": ev["decomp_nes"].astype(float).round(3).tolist(),
+        "decomp_fdr": ev["decomp_fdr"].astype(float).round(3).tolist(),
+        "wmb_tier":   ev["wmb_tier"].astype(str).tolist(),
+        "concordance_direction": ev["concordance_direction"].fillna("").astype(str).tolist(),
+    }
+
+
+def _build_attribution_index(data: "UnifiedData", kid: dict, contrast_to_id: dict) -> dict:
+    # Use full table if available, fall back to high+moderate subset.
+    ua_src = data.unified_attribution_full if len(data.unified_attribution_full) > 0 \
+        else data.unified_attribution
+    ua = ua_src[ua_src["kinase"].isin(kid)
+                & ua_src["contrast"].isin(contrast_to_id)].copy()
+    # Ensure expected columns exist if building from the attributed subset.
+    for _col, _default in [
+        ("confidence_tier", "none"),
+        ("confidence_basis", ""),
+        ("song_direction_support", False),
+        ("song_location_tier", "none"),
+        ("wmb_crosscheck_tier", "none"),
+        ("human_location_tier", "none"),
+        ("decomp_agrees_bulk", False),
+        ("wmb_specificity", float("nan")),
+        ("wmb_mean_log2_expression", float("nan")),
+        ("wmb_fraction_cells_expressing", float("nan")),
+        ("wmb_binary_expressed", False),
+        ("sea_ad_lfc", float("nan")),
+        ("seaad_location_score", float("nan")),
+        ("hbca_location_score", float("nan")),
+        ("human_location_score", float("nan")),
+        ("decomp_nes", float("nan")),
+        ("decomp_fdr", float("nan")),
+        ("song_lfc", float("nan")),
+        ("song_pval", float("nan")),
+        ("song_fdr", float("nan")),
+        ("song_specificity", float("nan")),
+        ("song_tau", float("nan")),
+        ("song_top_share", float("nan")),
+        ("song_top_cluster", ""),
+        ("concordance_source", ""),
+        ("NES", float("nan")),
+        ("FDR", float("nan")),
+    ]:
+        if _col not in ua.columns:
+            ua[_col] = _default
+    attribution_index = {
+        "kinase_id":   ua["kinase"].map(kid).astype("uint16").tolist(),
+        "contrast_id": ua["contrast"].map(contrast_to_id).astype("uint8").tolist(),
+        "cell_type":   ua["cell_type"].astype(str).tolist(),
+        "confidence_tier": ua["confidence_tier"].astype(str).tolist(),
+        "confidence_basis": ua["confidence_basis"].fillna("").astype(str).tolist(),
+        "song_direction_support": [bool(v) for v in ua["song_direction_support"].fillna(False)],
+        "song_location_tier": ua["song_location_tier"].fillna("none").astype(str).tolist(),
+        "wmb_crosscheck_tier": ua["wmb_crosscheck_tier"].fillna("none").astype(str).tolist(),
+        "human_location_tier": ua["human_location_tier"].fillna("none").astype(str).tolist(),
+        "decomp_agrees_bulk": [bool(v) for v in ua["decomp_agrees_bulk"].fillna(False)],
+        "wmb_specificity": ua["wmb_specificity"].astype(float).round(4).tolist(),
+        "wmb_mean_log2_expression": ua["wmb_mean_log2_expression"].astype(float).round(3).tolist(),
+        "wmb_fraction_cells_expressing": ua["wmb_fraction_cells_expressing"].astype(float).round(3).tolist(),
+        "wmb_binary_expressed": [bool(v) for v in ua["wmb_binary_expressed"].fillna(False)],
+        "song_specificity": ua["song_specificity"].astype(float).round(4).tolist(),
+        "song_tau": ua["song_tau"].astype(float).round(4).tolist(),
+        "song_top_share": ua["song_top_share"].astype(float).round(4).tolist(),
+        "song_top_cluster": ua["song_top_cluster"].fillna("").astype(str).tolist(),
+        "sea_ad_lfc": ua["sea_ad_lfc"].astype(float).round(4).tolist(),
+        "seaad_location_score": ua["seaad_location_score"].astype(float).round(4).tolist(),
+        "hbca_location_score": ua["hbca_location_score"].astype(float).round(4).tolist(),
+        "human_location_score": ua["human_location_score"].astype(float).round(4).tolist(),
+        "decomp_nes": ua["decomp_nes"].astype(float).round(4).tolist(),
+        "decomp_fdr": ua["decomp_fdr"].astype(float).round(4).tolist(),
+        "song_lfc": ua["song_lfc"].astype(float).round(4).tolist(),
+        "song_pval": ua["song_pval"].astype(float).round(4).tolist(),
+        "song_fdr": ua["song_fdr"].astype(float).round(4).tolist(),
+        "concordance_source": ua["concordance_source"].fillna("").astype(str).tolist(),
+        "nes": ua["NES"].astype(float).round(4).tolist(),
+        "fdr": ua["FDR"].astype(float).round(4).tolist(),
+    }
+    print(f"  attribution_index: {len(ua):,} rows "
+          f"({ua['confidence_tier'].value_counts().to_dict()})",
+          flush=True)
+    return attribution_index
+
+
+def _build_decomposition_index(data: "UnifiedData", kid: dict, contrast_to_id: dict) -> dict:
+    decomp = data.decomposition
+    decomp = decomp[decomp["kinase"].isin(kid)
+                    & decomp["contrast"].isin(contrast_to_id)].copy()
+    decomposition_index = {
+        "kinase_id":   decomp["kinase"].map(kid).astype("uint16").tolist(),
+        "contrast_id": decomp["contrast"].map(contrast_to_id).astype("uint8").tolist(),
+        "cell_type":   decomp["wmb_class"].astype(str).tolist(),
+        "decomp_nes":  decomp["NES"].astype(float).round(4).tolist(),
+        "decomp_fdr":  decomp["FDR"].astype(float).round(4).tolist(),
+    }
+    print(f"  decomposition_index: {len(decomp):,} rows", flush=True)
+    return decomposition_index
+
+
+@dataclass(frozen=True)
+class SongBuild:
+    slice: CohortViewerSlice
+    incytr_present: bool
+    decomp_ols_slice_count: int
+    song_concordance_present_genes: list
+
+
+def build_song_viewer_slice(data: "UnifiedData") -> SongBuild:
+    """Build the song (mouse AD) cohort slice + the meta-capability scalars
+    build_payload needs. Reproduces build_payload's inline song-construction
+    exactly; meta-building stays in build_payload."""
+    kinases_slice = _build_kinases_slice(data)
+    celltypes_slice = _build_celltypes_slice(data)
+
+    contrasts = data.edge_metadata["contrasts"]
+
+    kid = {k: i for i, k in enumerate(data.edge_metadata["kinases"])}
+    contrast_to_id = {c: i for i, c in enumerate(contrasts)}
+
+    decomp_ols_slice_index = _write_decomp_ols_slices(kid, contrast_to_id)
+
+    _kinase_genes = set(data.kinase_activity["gene_symbol"].dropna().astype(str))
+    _kinase_genes |= set(data.edge_metadata["kinases"])
+    song_concordance_slice_index = _write_song_concordance_slices(_kinase_genes)
+
+    incytr_pathways_block = _write_incytr_pair_pathways()
+    context_id = "song_ad"
+
+    kinase_celltype_evidence = _build_kinase_celltype_evidence(data, kid)
+    attribution_index = _build_attribution_index(data, kid, contrast_to_id)
+    decomposition_index = _build_decomposition_index(data, kid, contrast_to_id)
+
+    agreement_index = _build_agreement_index(
+        data.mea_stoichiometry, data.decomposition,
+        kid, contrast_to_id, config.MEA_FDR_THRESH,
+    )
+
+    subclass_breakdown = _build_subclass_breakdown(kid)
+
+    slice_ = CohortViewerSlice(
+        cohort_id="song",
+        context_ids=("song_ad",),
+        owned_sections={
+            "kinases": _as_single_context_block(kinases_slice, context_id),
+            "celltypes": _as_single_context_block(celltypes_slice, context_id),
+            "kinase_celltype_evidence": kinase_celltype_evidence,
+            "attribution_index": attribution_index,
+            "decomposition_index": decomposition_index,
+            "agreement_index": agreement_index,
+            "subclass_breakdown": subclass_breakdown,
+            "incytr_pathways": _as_single_context_block(incytr_pathways_block, context_id),
+        },
+        edge_slice_ref=(
+            EdgeSliceContribution("decomp_ols", {
+                "decomp_ols_url": "edge_slices/decomp_ols/",
+                "decomp_ols_index": "edge_slices/decomp_ols/index.json",
+                "n_decomp_ols_slices": decomp_ols_slice_index.get("slice_count", 0),
+                "present_decomp_ols_kinase_ids": decomp_ols_slice_index.get("present_kinase_ids", []),
+            }),
+            EdgeSliceContribution("incytr_pathways", {
+                "incytr_pathways_url": "edge_slices/incytr_pathways/",
+                "incytr_pathways_index": "edge_slices/incytr_pathways/index.json",
+            }),
+            EdgeSliceContribution("song_concordance", {
+                "song_concordance_url": "edge_slices/song_concordance/",
+                "song_concordance_index": "edge_slices/song_concordance/index.json",
+                "present_song_concordance_genes": song_concordance_slice_index.get("present_genes", []),
+            }),
+        ),
+        kinase_names=tuple(kinases_slice.get("name", [])),
+        provenance={"cohort": "song_ad"},
+    )
+    return SongBuild(
+        slice=slice_,
+        incytr_present=incytr_pathways_block is not None,
+        decomp_ols_slice_count=decomp_ols_slice_index.get("slice_count", 0),
+        song_concordance_present_genes=song_concordance_slice_index.get("present_genes", []),
+    )
+
 
 def _read_empty_deg_celltypes() -> list[str]:
     """Read the list of cell types with no DEGs from the upstream MANIFEST.
