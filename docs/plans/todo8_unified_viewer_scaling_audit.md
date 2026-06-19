@@ -1,7 +1,7 @@
 # Unified Viewer Scaling Audit
 
 **Date:** 2026-06-19 (refreshed; original 2026-06-18)
-**Status:** ALL P-ITEMS IMPLEMENTED — P1, P2, P4, P7 done/verified; P3, P5, P6, P8 implemented 2026-06-19 (automated validation passing; full `pixi run viewer` + `pixi run tcell-viewer` rebuild + browser pass pending)
+**Status:** ALL P-ITEMS IMPLEMENTED — P1, P2, P4, P7 done/verified; P3, P5, P6, P8 implemented 2026-06-19. Full `pixi run viewer` + `pixi run tcell-viewer` rebuild done 2026-06-19 (11G cap, both exit 0): unified payload **53.38 MB raw / 5.63 MB gzip** (P5 sidecar confirmed; pathway round-trip verifier passed), tcell payload **11.17 MB raw / 1.50 MB gzip** emitted as sidecar (P8 confirmed). Remaining gate: browser click-through pass.
 
 ---
 
@@ -478,4 +478,4 @@ Before shipping any P-item, verify all of the following:
 | + 5xFAD at 8 timepoints (no P1/P2) | ~210 MB | ~21 MB (parse pain) |
 | + 5xFAD at 8 timepoints (with P1/P2) | ~80 MB | ~8.0 MB (acceptable) |
 
-The conclusion is that **P1+P2 together are the highest-leverage changes**, directly addressing the 5xFAD data's dominant share of the payload (43 MB → ~1.4 MB net after both are sharded). P5 (now done) handles the Incytr gene_node_index growth pressure that compounds with each new Incytr context. P3, P6, P8 (now done) are incremental polish and memory hygiene. All eight P-items are implemented as of 2026-06-19; the post-P5 raw/gzip payload figures in the table above will be re-measured on the next full `pixi run viewer` rebuild (P5 removes a further ~15 MB raw / ~1.4 MB gzip from the inline payload). The one item explicitly left open is capping the persistent 5xFAD per-kinase indexes (§2.10) — out of P6's scope.
+The conclusion is that **P1+P2 together are the highest-leverage changes**, directly addressing the 5xFAD data's dominant share of the payload (43 MB → ~1.4 MB net after both are sharded). P5 (now done) handles the Incytr gene_node_index growth pressure that compounds with each new Incytr context. P3, P6, P8 (now done) are incremental polish and memory hygiene. All eight P-items are implemented as of 2026-06-19. The full `pixi run viewer` rebuild on 2026-06-19 measured the post-P5 payload at **53.38 MB raw / 5.63 MB gzip** — down from 69.0 MB / 8.49 MB after P1+P2 (P5's gene_node_index sidecar removed ~15.6 MB raw / ~2.9 MB gzip, beating the projection because the index is highly repetitive and compresses well). The tcell viewer rebuilt to 11.17 MB raw / 1.50 MB gzip in P8 sidecar mode. The one item explicitly left open is capping the persistent 5xFAD per-kinase indexes (§2.10) — out of P6's scope.
