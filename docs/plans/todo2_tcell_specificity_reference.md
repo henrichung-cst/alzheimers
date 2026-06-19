@@ -45,6 +45,33 @@ to a native 10x h5 by a streaming, bounded-memory helper before R reads it.
 §4–§10 below stand as written, except: `cell_type` vocabulary = ProjecTILs states +
 pooled `other_*`/`T_NK_other`; the crosswalk is identity for T cells.
 
+### Scientific-comparability guardrails (user concern, 2026-06-19)
+
+The hybrid mixes a marker step (non-T lineages) with ProjecTILs (T states). This is
+acceptable and on par with the existing references — **WMB and SEA-AD also use
+provider cluster/marker annotations, not the cohort's MEA method; a reference is an
+external yardstick, not a pipeline replica** — and ProjecTILs *already contains* a
+marker gate (scGate, via `filter.cells=TRUE`), so the T-cell classifier is identical to
+`tcells_projectils_map.R`. Two genuine risks are bounded by guardrails:
+
+- **Guardrail 1 — marker pre-filter must not withhold a true T cell.** `label_clusters`
+  emits `t_nk_score` per cluster and flags non-T/NK clusters carrying T/NK signal
+  (`tnk_leak_risk`, score>0.5). Measured: 4 clusters / 6,874 cells (0.77%; likely
+  T-doublets). These are **added to the ProjecTILs candidate set** (189,500 total) so
+  scGate arbitrates — a rejected leak cell keeps its marker lineage; a true T cell is
+  rescued into a state. The leak direction is itself reassuring for the audit headline:
+  it could only cause false *expression* in non-T buckets, never false *absence* in T.
+  `--run` reports the scGate acceptance rate (gate agreement).
+
+- **Guardrail 2 — `specificity_score` at consistent resolution.** Splitting T into 14
+  states while non-T lineages stay monolithic would fragment a T-kinase's share and bias
+  the score against T cells. Specificity is therefore computed over **coarse groups**
+  (all T states collapsed to one cell-weighted `T_NK` group); every T-state row carries
+  its group's share (`spec_group` column records the grouping). `fraction_cells_expressing`
+  and `binary_expressed` — which drive the audit — stay at native 14-state resolution and
+  are resolution-free (within-cell-type). Verified: equal T/Myeloid expression → 0.5/0.5,
+  not fragmented.
+
 ---
 
 ## 1. How WMB and SEA-AD/HBCA are ingested and surfaced

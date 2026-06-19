@@ -83,6 +83,16 @@ LINEAGE_MARKERS: Dict[str, list] = {
 # Margin below which a cluster's argmax lineage is flagged ambiguous.
 AMBIGUOUS_MARGIN = 0.30
 
+# Coarse non-T lineages (everything ProjecTILs cannot classify). Any cell_type
+# NOT in this set is a ProjecTILs T state (or T_NK_other) and collapses to the
+# single "T_NK" group for the specificity-share denominator (guardrail 2).
+_COARSE_NON_T = {"B_plasma", "Myeloid", "Epithelial", "Endothelial",
+                 "Fibroblast", "Mast", "unlabeled"}
+
+
+def _spec_group(cell_type: str) -> str:
+    return cell_type if cell_type in _COARSE_NON_T else "T_NK"
+
 
 # ---------------------------------------------------------------------------
 # Tarball member extraction (graphclust + diffexp)
@@ -149,21 +159,37 @@ def label_clusters() -> pd.DataFrame:
         "cluster": assign.index,
         "lineage": assign.values,
         "margin": margin.reindex(assign.index).values,
+        # Guardrail 1: T/NK marker z-score per cluster. A non-T/NK cluster with
+        # a high t_nk_score is a candidate T-cell leak (false negative — a true
+        # T cell my pre-filter would withhold from ProjecTILs). scGate inside
+        # filter.cells=TRUE is the real gate, so this only flags what to inspect.
+        "t_nk_score": S["T_NK"].reindex(assign.index).round(3).values,
         "n_cells": counts.reindex(assign.index).fillna(0).astype(int).values,
     })
     out["ambiguous"] = out["margin"] < AMBIGUOUS_MARGIN
+    # A non-T/NK cluster whose T/NK score is positive AND ranks 2nd is a leak risk.
+    out["tnk_leak_risk"] = (out["lineage"] != "T_NK") & (out["t_nk_score"] > 0.5)
     out = out.sort_values("n_cells", ascending=False).reset_index(drop=True)
     out.to_csv(config.NSCLC_CLUSTER_LABELS_FILE, index=False)
     print(f"  Wrote {len(out)} cluster labels -> {config.NSCLC_CLUSTER_LABELS_FILE}")
 
-    # Per-barcode coarse label (cluster -> lineage join)
+    # Per-barcode coarse label (cluster -> lineage join). projectils_candidate
+    # marks cells sent to ProjecTILs: the T/NK compartment PLUS leak-risk
+    # clusters (guardrail 1 — let scGate inside filter.cells arbitrate rather
+    # than my marker pre-filter withholding a possible T cell).
     cluster_to_lineage = dict(zip(out["cluster"], out["lineage"]))
+    cluster_to_leak = dict(zip(out["cluster"], out["tnk_leak_risk"]))
     cells = gc.rename(columns={"Barcode": "barcode", "Cluster": "cluster_num"})
     cells["cluster"] = "Cluster " + cells["cluster_num"].astype(str)
     cells["coarse_lineage"] = cells["cluster"].map(cluster_to_lineage)
-    cells[["barcode", "cluster_num", "coarse_lineage"]].to_csv(
-        config.NSCLC_CELL_LABELS_FILE, index=False)
-    print(f"  Wrote {len(cells):,} per-barcode labels -> {config.NSCLC_CELL_LABELS_FILE}")
+    cells["projectils_candidate"] = (
+        (cells["coarse_lineage"] == "T_NK")
+        | cells["cluster"].map(cluster_to_leak).fillna(False))
+    cells[["barcode", "cluster_num", "coarse_lineage",
+           "projectils_candidate"]].to_csv(config.NSCLC_CELL_LABELS_FILE, index=False)
+    print(f"  Wrote {len(cells):,} per-barcode labels "
+          f"({int(cells['projectils_candidate'].sum()):,} ProjecTILs candidates) "
+          f"-> {config.NSCLC_CELL_LABELS_FILE}")
 
     # Summary
     agg = out.groupby("lineage")["n_cells"].agg(["sum", "count"]).sort_values(
@@ -175,6 +201,18 @@ def label_clusters() -> pd.DataFrame:
     print(f"  T/NK cells (-> ProjecTILs): {agg.loc['T_NK','sum']:,}")
     print(f"  Ambiguous clusters (margin<{AMBIGUOUS_MARGIN}): {n_amb} "
           f"({out.loc[out.ambiguous,'n_cells'].sum():,} cells)")
+    # Guardrail 1: report any non-T/NK cluster carrying T-cell signal.
+    leaks = out[out["tnk_leak_risk"]]
+    if len(leaks):
+        print(f"  [guardrail] {len(leaks)} non-T/NK cluster(s) with T/NK score>0.5 "
+              f"({int(leaks['n_cells'].sum()):,} cells) — potential T-cell leak, "
+              f"inspect before trusting 'absent' audit calls:")
+        for _, r in leaks.iterrows():
+            print(f"      {r['cluster']:<12} labeled {r['lineage']:<11} "
+                  f"t_nk_score={r['t_nk_score']:.2f}  n={int(r['n_cells']):,}")
+    else:
+        print("  [guardrail] no non-T/NK cluster carries appreciable T/NK signal "
+              "(clean lineage separation).")
     return out
 
 
@@ -192,18 +230,27 @@ def _final_cell_labels() -> pd.Series:
     cells = pd.read_csv(config.NSCLC_CELL_LABELS_FILE)
     label = cells.set_index("barcode")["coarse_lineage"].copy()
 
+    # True T/NK-coarse cells fall back to T_NK_other when ungated. Leak-risk
+    # cells (candidate but coarse_lineage != T_NK) keep their marker lineage if
+    # scGate rejects them — only a ProjecTILs state overwrites them.
     tnk_mask = label == "T_NK"
     label[tnk_mask] = "T_NK_other"
+    n_tnk = int(tnk_mask.sum())
 
     if os.path.exists(config.NSCLC_PROJECTILS_PREDICTIONS_FILE):
         pred = pd.read_csv(config.NSCLC_PROJECTILS_PREDICTIONS_FILE)
         pred = pred[pred["functional.cluster"].notna()]
         proj = pred.set_index("barcode")["functional.cluster"]
-        # only overwrite T/NK barcodes (ProjecTILs only ran on those)
+        # ProjecTILs ran on all candidates; a gated state overwrites any label.
         common = label.index.intersection(proj.index)
-        common = common[label.loc[common] == "T_NK_other"]
         label.loc[common] = proj.loc[common].values
-        print(f"  ProjecTILs refined {len(common):,} T/NK cells into "
+        accept = 100.0 * len(common) / max(n_tnk, 1)
+        # Guardrail 1a: scGate (inside filter.cells) is the authoritative T gate.
+        # High acceptance => my marker pre-filter agrees with ProjecTILs' own
+        # gate. Low acceptance => the pre-filter swept in many non-T cells
+        # (over-inclusive) OR ProjecTILs rejects this tissue's TILs.
+        print(f"  [guardrail] ProjecTILs/scGate accepted {len(common):,}/{n_tnk:,} "
+              f"({accept:.1f}%) of marker-defined T/NK cells -> "
               f"{proj.loc[common].nunique()} states; "
               f"{int((label=='T_NK_other').sum()):,} remain T_NK_other (ungated).")
     else:
@@ -311,17 +358,28 @@ def compute_expression() -> pd.DataFrame:
             })
     df = pd.DataFrame(rows)
 
-    # specificity = share of total mean log2 expr across cell types (per gene)
-    df["specificity_score"] = 0.0
-    for gene, gdf in df.groupby("gene_symbol"):
-        tot = gdf["mean_log2_expression"].sum()
-        if tot > 0:
-            df.loc[gdf.index, "specificity_score"] = (
-                gdf["mean_log2_expression"] / tot).round(6)
+    # Guardrail 2: specificity at CONSISTENT resolution. The 14 ProjecTILs T
+    # states would otherwise each carry a fragmented share, biasing the score
+    # against T-cell kinases vs. monolithic non-T lineages. Collapse all T
+    # states (+ T_NK_other) into one "T_NK" group, compute the share over
+    # coarse groups with a CELL-WEIGHTED group mean, and assign every member
+    # cell_type its group's share. fraction_cells_expressing / binary_expressed
+    # stay at native 14-state resolution (within-cell-type, resolution-free).
+    df["spec_group"] = df["cell_type"].map(_spec_group)
+    # cell-weighted group mean per (gene, group): Σ(mean·n) / Σ(n)
+    df["_wexpr"] = df["mean_log2_expression"] * df["n_cells"]
+    grp = df.groupby(["gene_symbol", "spec_group"]).agg(
+        wexpr=("_wexpr", "sum"), ncell=("n_cells", "sum")).reset_index()
+    grp["group_mean"] = grp["wexpr"] / grp["ncell"].clip(lower=1)
+    gtot = grp.groupby("gene_symbol")["group_mean"].transform("sum")
+    grp["group_spec"] = np.where(gtot > 0, (grp["group_mean"] / gtot).round(6), 0.0)
+    spec_lookup = grp.set_index(["gene_symbol", "spec_group"])["group_spec"]
+    df["specificity_score"] = df.set_index(["gene_symbol", "spec_group"]).index.map(
+        spec_lookup).astype(float)
 
-    df = df[["kinase_id", "gene_symbol", "cell_type", "mean_log2_expression",
-             "fraction_cells_expressing", "binary_expressed",
-             "specificity_score", "n_cells", "probe_covered"]]
+    df = df[["kinase_id", "gene_symbol", "cell_type", "spec_group",
+             "mean_log2_expression", "fraction_cells_expressing",
+             "binary_expressed", "specificity_score", "n_cells", "probe_covered"]]
     df.to_csv(config.NSCLC_KINASE_EXPRESSION_FILE, index=False)
     print(f"\n  Wrote {len(df):,} rows -> {config.NSCLC_KINASE_EXPRESSION_FILE}")
 

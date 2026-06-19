@@ -41,8 +41,10 @@ def main() -> None:
             f"`pixi run nsclc-label` first.")
 
     cells = pd.read_csv(config.NSCLC_CELL_LABELS_FILE)
-    tnk = set(cells.loc[cells["coarse_lineage"] == "T_NK", "barcode"])
-    print(f"  T/NK barcodes to export: {len(tnk):,}")
+    # ProjecTILs candidates = T/NK compartment + leak-risk clusters (guardrail 1;
+    # scGate inside filter.cells arbitrates, so over-inclusion is safe).
+    tnk = set(cells.loc[cells["projectils_candidate"], "barcode"])
+    print(f"  ProjecTILs-candidate barcodes to export: {len(tnk):,}")
 
     src = h5py.File(config.NSCLC_10X_H5_FILE, "r")
     m = src["matrix"]
