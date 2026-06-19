@@ -69,6 +69,12 @@ snrna = "python alz/reference/snrna_integration.py --run"
 bubbles = "python alz/plot_attribution_bubbles.py"
 viewer = "python alz/build_unified_viewer.py"
 tcell-within-cohort = "python alz/cross_reference/tcell_within_cohort.py donor1"
+# TODO #2: 10x NSCLC cell-type specificity reference for the T-cell cohort.
+nsclc-ingest = "bash alz/runners/supporting/ingest_nsclc_10x.sh"
+nsclc-label = "python alz/reference/nsclc_expression.py --label-clusters"
+nsclc-projectils = "bash alz/runners/supporting/run_nsclc_projectils.sh"
+nsclc-expression = "python alz/reference/nsclc_expression.py --run"
+nsclc-audit = "python alz/reference/nsclc_expression.py --audit"
 tcell-viewer = { cmd = "python alz/build_tcell_viewer.py", depends-on = ["tcell-within-cohort"] }
 install-incytr = "R CMD INSTALL --no-multiarch ../incytr"
 verify-incytr-sce4 = "bash alz/incytr_pair/verify_incytr_sce4.sh"

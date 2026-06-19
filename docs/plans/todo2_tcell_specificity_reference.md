@@ -4,6 +4,49 @@
 
 ---
 
+## REVISION 2026-06-19 — implementation reality vs. §3 assumption
+
+Confirmed download manifest (dataset slug `16plex_900k_32_NSCLC_multiplex`, Cell Ranger
+multi 7.1.0). Fetched to `data/external/nsclc_10x/`:
+`sample_feature_bc_matrix.h5` (1.7 GB, 18,082 genes × 897,733 cells, **HGNC `name` symbols
+present** → §10 Ensembl risk retired), `analysis.tar.gz` (239 MB), `count_summary.json`,
+`aggregation.csv`. Ingest script: `alz/runners/supporting/ingest_nsclc_10x.sh`.
+
+**Complication (raised, not glossed):** §3 assumed "the 10x Flex output includes cell-type
+labels from their standard annotation pipeline." **It does not.** Cell Ranger `multi` ships
+only *unsupervised* clusters — graphclust (86 clusters) + kmeans 2–10 + per-cluster diffexp.
+There is no `cell_type_annotations.csv`. Cell types must be **derived** from on-disk artifacts
+(diffexp marker tables + the installed ProjecTILs refs); no collaborator contact, no extra
+download.
+
+**Approved approach (user, 2026-06-19) — hybrid:**
+1. **Coarse cluster labeling** (cheap, no matrix load): score each of the 86 graphclust
+   clusters against canonical lineage marker sets using the shipped diffexp `Mean Counts`
+   (per-gene z across clusters), assign argmax lineage. Measured TME partition:
+   Epithelial 207,889 · **T/NK 182,626** · Fibroblast 156,388 · B/plasma 118,552 ·
+   Myeloid 115,273 · Endothelial 97,843 · Mast 19,162 (Σ = 897,733). Low-margin
+   (ambiguous) clusters are flagged, not silently asserted.
+2. **ProjecTILs refinement of the 182,626 T/NK cells** using the same machinery as
+   `alz/ingest/tcells_projectils_map.R` (CD8 + CD4 human refs, `filter.cells=TRUE`,
+   `plan(sequential)`). T cells land natively in the cohort's 14-state ProjecTILs
+   vocabulary → reference vocabulary == cohort vocabulary, so the §3 hand-curated
+   `nsclc_celltype_to_projectils.csv` reduces to identity for T cells. NK / non-gated
+   T/NK cells fall to a pooled `T_NK_other` bucket. Non-T/NK clusters keep their coarse
+   lineage label (pooled `other_*`).
+3. **Expression accumulation streams the 10x CSC h5 directly** (h5py, indptr-bounded
+   cell-chunks — NOT anndata, NOT full-load; matrix is 1.3 B nnz ≈ 10 GB dense-equivalent),
+   scatter-adding per (gene, final-label). Mirrors `wmb_expression.py` metrics.
+
+**Memory/compute:** the ProjecTILs projection on 182 K cells is the one heavy step — run
+as a `systemd-run --scope -p MemoryMax` capped, logged script (house pattern from
+`run_hbca_download.sh`), not an uncapped in-session process. The T/NK subset is exported
+to a native 10x h5 by a streaming, bounded-memory helper before R reads it.
+
+§4–§10 below stand as written, except: `cell_type` vocabulary = ProjecTILs states +
+pooled `other_*`/`T_NK_other`; the crosswalk is identity for T cells.
+
+---
+
 ## 1. How WMB and SEA-AD/HBCA are ingested and surfaced
 
 ### WMB (mouse Song cohort)

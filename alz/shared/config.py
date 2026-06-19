@@ -531,6 +531,32 @@ WMB_REGIONAL_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_regi
 WMB_PROTEOME_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_proteome_expression.csv")
 PROTEOME_GENE_LIST_FILE = os.path.join(DATA_INGEST_OUTPUT_DIR, "total_proteome_genes.txt")
 
+# --- TODO #2: 10x NSCLC reference (T-cell cohort cell-type specificity) ------
+# Public 10x Flex dataset "Aggregate of 900k human NSCLC + normal-adjacent
+# cells" (Cell Ranger multi 7.1.0, slug 16plex_900k_32_NSCLC_multiplex).
+# Cell types are derived (no labels ship): coarse graphclust marker labeling +
+# ProjecTILs refinement of the T/NK compartment. See nsclc_expression.py.
+NSCLC_10X_CACHE_DIR = os.path.join(EXTERNAL_DATA_DIR, "nsclc_10x")
+NSCLC_10X_H5_FILE = os.path.join(NSCLC_10X_CACHE_DIR, "sample_feature_bc_matrix.h5")
+NSCLC_10X_ANALYSIS_TGZ = os.path.join(NSCLC_10X_CACHE_DIR, "analysis.tar.gz")
+NSCLC_10X_GRAPHCLUST_FILE = os.path.join(
+    NSCLC_10X_CACHE_DIR, "analysis", "clustering",
+    "gene_expression_graphclust", "clusters.csv")
+NSCLC_10X_DIFFEXP_FILE = os.path.join(
+    NSCLC_10X_CACHE_DIR, "analysis", "diffexp",
+    "gene_expression_graphclust", "differential_expression.csv")
+# T/NK subset exported for ProjecTILs (native 10x h5; streamed, bounded memory).
+NSCLC_10X_TNK_SUBSET_H5 = os.path.join(NSCLC_10X_CACHE_DIR, "tnk_subset_feature_bc_matrix.h5")
+NSCLC_PROJECTILS_PREDICTIONS_FILE = os.path.join(
+    NSCLC_10X_CACHE_DIR, "projectils_predictions.csv")
+# Derived per-cell label tables.
+NSCLC_CLUSTER_LABELS_FILE = os.path.join(NSCLC_10X_CACHE_DIR, "nsclc_cluster_labels.csv")
+NSCLC_CELL_LABELS_FILE = os.path.join(NSCLC_10X_CACHE_DIR, "nsclc_cell_labels.csv")
+# Outputs.
+NSCLC_REFERENCE_OUTPUT_DIR = os.path.join("outputs", "reports", "nsclc_reference")
+NSCLC_KINASE_EXPRESSION_FILE = os.path.join(NSCLC_REFERENCE_OUTPUT_DIR, "nsclc_kinase_expression.csv")
+NSCLC_KINASE_AUDIT_FILE = os.path.join(NSCLC_REFERENCE_OUTPUT_DIR, "nsclc_kinase_audit.csv")
+
 SONG_H5AD_FILE = os.path.join(SONG_TRANSCRIPTOMICS_DIR, "170_gex_celltypes_00.h5ad")
 
 SNRNA_INTEGRATION_OUTPUT_DIR = os.path.join("outputs", "reports", "snrna_integration")
