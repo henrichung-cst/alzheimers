@@ -171,9 +171,18 @@ LOG="$LOG_DIR/pair_run.log"
 
     # Canonical significance floor (uncapped; no p_adj/FDR arm):
     # (SigProb_TG > 0.1 OR SigProb_WT > 0.1) AND |PDS| >= 0.2
-    echo "=== $(date -Is) [$tissue] significance filter ==="
-    pixi run python alz/incytr_pair/filter_significant_paths.py --dir "$OUT_DIR"
-    ls -lh "$OUT_DIR/"
+    # SKIP_FILTER=yes defers this final gate to an external orchestrator. The
+    # phospho-only product is DERIVED from the unfiltered --ptm superset
+    # (derive_phospho_from_ptm.py), and the phospho PDS differs from the PTM PDS,
+    # so the gate must run AFTER derive, on each superset — not inline here, which
+    # would destroy the unfiltered rows the derive reads. Standalone runs filter.
+    if [[ "${SKIP_FILTER:-no}" == "yes" ]]; then
+      echo "=== $(date -Is) [$tissue] significance filter DEFERRED (SKIP_FILTER=yes) ==="
+    else
+      echo "=== $(date -Is) [$tissue] significance filter ==="
+      pixi run python alz/incytr_pair/filter_significant_paths.py --dir "$OUT_DIR"
+      ls -lh "$OUT_DIR/"
+    fi
   done
   echo
   if (( ${#failed[@]} > 0 )); then
