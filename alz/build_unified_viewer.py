@@ -76,7 +76,10 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 from alz.viewer.cohorts.mukesh import build_mukesh_viewer_slice  # noqa: E402
-from alz.viewer.cohorts.fivexfad import build_fivexfad_viewer_slice  # noqa: E402
+from alz.viewer.cohorts.fivexfad import (  # noqa: E402
+    build_5xfad_incytr_blocks,
+    build_fivexfad_viewer_slice,
+)
 from alz.viewer.shared.compose import compose_viewer_slices  # noqa: E402
 from alz.viewer.cohorts.song import (  # noqa: E402
     SongBuild,
@@ -1021,6 +1024,58 @@ def build_payload(data: UnifiedData) -> dict:
     if fivexfad_slice is not None:
         meta["contexts"][0]["capabilities"]["supporting_5xfad"] = True
 
+    # 5xFAD incytr: build per-tissue blocks; merge into incytr_pathways.by_context
+    # AFTER composition, since Song already owns the incytr_pathways owned section.
+    fivexfad_incytr_blocks = build_5xfad_incytr_blocks()
+    _5xfad_incytr_context_meta = {
+        "fivexfad_cortex": {
+            "id": "fivexfad_cortex",
+            "label": "5xFAD Cortex",
+            "cohort": "fivexfad",
+            "axis_kind": "timepoint",
+            "contrasts": ["TG_3mo", "TG_6mo", "TG_9mo", "TG_12mo"],
+            "contrast_axis": {
+                "primary": "timepoint",
+                "groups": ["TG"],
+                "timepoints": ["3mo", "6mo", "9mo", "12mo"],
+                "baseline": "WT",
+            },
+            "capabilities": {
+                "kinases": False, "celltypes": False, "incytr": True,
+                "decomp_ols": False, "song_concordance": False,
+                "human_reference": False, "supporting_5xfad": False,
+                "subclass_breakdown": False, "audit_tables": False,
+                "transcript_trace": False, "omics_trace": False,
+            },
+            "notes": [],
+        },
+        "fivexfad_hippocampus": {
+            "id": "fivexfad_hippocampus",
+            "label": "5xFAD Hippocampus",
+            "cohort": "fivexfad",
+            "axis_kind": "timepoint",
+            "contrasts": ["TG_3mo", "TG_6mo", "TG_9mo", "TG_12mo"],
+            "contrast_axis": {
+                "primary": "timepoint",
+                "groups": ["TG"],
+                "timepoints": ["3mo", "6mo", "9mo", "12mo"],
+                "baseline": "WT",
+            },
+            "capabilities": {
+                "kinases": False, "celltypes": False, "incytr": True,
+                "decomp_ols": False, "song_concordance": False,
+                "human_reference": False, "supporting_5xfad": False,
+                "subclass_breakdown": False, "audit_tables": False,
+                "transcript_trace": False, "omics_trace": False,
+            },
+            "notes": [],
+        },
+    }
+    for ctx_id, block in fivexfad_incytr_blocks.items():
+        ctx_meta = _5xfad_incytr_context_meta[ctx_id].copy()
+        ctx_meta["celltypes"] = block.get("celltypes", [])
+        meta["contexts"].append(ctx_meta)
+
     slices = [sb.slice]
     if mukesh_slice is not None:
         slices.append(mukesh_slice)
@@ -1041,6 +1096,16 @@ def build_payload(data: UnifiedData) -> dict:
         edge_slice_ref_base=edge_slice_ref_base,
         kinase_motifs_builder=_build_kinase_motifs,
     )
+
+    # Merge 5xFAD incytr blocks into incytr_pathways.by_context (Song already
+    # owns this section; post-composition merge avoids the owned-section collision).
+    if fivexfad_incytr_blocks:
+        ip = payload.setdefault("incytr_pathways", {})
+        by_ctx = ip.setdefault("by_context", {})
+        by_ctx.update(fivexfad_incytr_blocks)
+        if payload.get("meta", {}).get("capabilities", {}).get("incytr") is False:
+            payload["meta"]["capabilities"]["incytr"] = True
+
     return _sanitize(payload)
 
 

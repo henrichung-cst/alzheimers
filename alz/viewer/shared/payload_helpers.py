@@ -162,7 +162,8 @@ def _build_incytr_gene_node_index(con) -> dict:
 
 
 def _write_gene_node_index_shard(gene_node_index: dict, out_dir: str,
-                                 filename: str) -> str:
+                                 filename: str,
+                                 url_prefix: str = "edge_slices/incytr_pathways/") -> str:
     """Write the compact gene→node-pair index as a gzipped sidecar; return its
     viewer-relative URL.
 
@@ -179,7 +180,7 @@ def _write_gene_node_index_shard(gene_node_index: dict, out_dir: str,
     with gzip.open(tmp_path, "wb", compresslevel=6) as f:
         f.write(raw)
     os.replace(tmp_path, out_path)
-    return f"edge_slices/incytr_pathways/{filename}"
+    return f"{url_prefix}{filename}"
 
 
 def _build_kinase_motifs(kinase_names: list[str]) -> dict[str, dict]:

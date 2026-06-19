@@ -11,15 +11,41 @@ import uuid
 from functools import cmp_to_key
 from typing import TYPE_CHECKING, Any
 
+import glob
+import gzip
+import sys
+
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from alz.bulk_mea.confidence import DECOMP_FDR_AGREEMENT
 from alz.shared import config
-from alz.viewer.paths import FIVEXFAD_KINASE_DIR, UNIFIED_VIEWER_DIR
+from alz.viewer.paths import (
+    EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_CORTEX_DIR,
+    EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_HIPPO_DIR,
+    FIVEXFAD_KINASE_DIR,
+    SCHEMA_VERSION,
+    UNIFIED_VIEWER_DIR,
+)
 from alz.viewer.shared.cohort_slice import CohortViewerSlice
-from alz.viewer.shared.payload_helpers import _sanitize
+from alz.viewer.shared.incytr_index import (
+    _INCYTR_LABEL_COLS,
+    _INCYTR_LABEL_NODES,
+    _INCYTR_LABEL_VOCAB,
+    _INCYTR_SCORE_COLS,
+    _SIGN_VEC_LABELS,
+    _idx_label_bits,
+    _idx_traj_bits,
+)
+from alz.viewer.shared.payload_helpers import (
+    _INCYTR_FC_NODES,
+    _build_incytr_gene_node_index,
+    _configure_duckdb_tempdir,
+    _sanitize,
+    _write_gene_node_index_shard,
+)
 
 if TYPE_CHECKING:
     from alz.build_unified_viewer import UnifiedData
@@ -1541,6 +1567,710 @@ def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None
     if mechanism_attribution:
         payload["mechanism_attribution"] = mechanism_attribution
     return payload
+
+
+# ---------------------------------------------------------------------------
+# 5xFAD incytr pair-mode constants
+# ---------------------------------------------------------------------------
+_5XFAD_INCYTR_CONTRASTS = ("TG_3mo", "TG_6mo", "TG_9mo", "TG_12mo")
+_5XFAD_TRAJ_TIMEPOINTS = ("3mo", "6mo", "9mo", "12mo")
+_5XFAD_INCYTR_FC_METRICS = ("sclog2FC", "pr_log2FC", "ps_log2FC", "py_log2FC")
+_5XFAD_INCYTR_FC_COLS = tuple(
+    f"{node}_{metric}" for node in _INCYTR_FC_NODES for metric in _5XFAD_INCYTR_FC_METRICS
+)
+_5XFAD_INCYTR_LABEL_SRC = tuple(f"{n}.label" for n in _INCYTR_LABEL_NODES)
+_5XFAD_INCYTR_PATHWAY_PVALUES = (0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
+_5XFAD_INCYTR_PATHWAY_ABS_PDS = (0.0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
+_5XFAD_INCYTR_INDEX_FILENAME = "incytr_index.bin.gz"
+_5XFAD_INCYTR_GENE_NODE_INDEX_FILENAME = "gene_node_index.json.gz"
+
+_5XFAD_TISSUE_TO_EDGE_DIR = {
+    "cortex": EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_CORTEX_DIR,
+    "hippocampus": EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_HIPPO_DIR,
+}
+_5XFAD_TISSUE_TO_CONTEXT_ID = {
+    "cortex": "fivexfad_cortex",
+    "hippocampus": "fivexfad_hippocampus",
+}
+_5XFAD_TISSUE_TO_URL_PREFIX = {
+    "cortex": "edge_slices/incytr_pathways_fivexfad_cortex/",
+    "hippocampus": "edge_slices/incytr_pathways_fivexfad_hippocampus/",
+}
+
+
+def _5xfad_incytr_sanitize(name: str) -> str:
+    return name.replace("/", "-").replace(" ", "_")
+
+
+def _5xfad_pair_mode_contrast_from_filename(fname: str) -> str | None:
+    """`TG_3mo_WT_3mo_incytr_output.parquet` → `TG_3mo`."""
+    m = re.match(r"(TG)_(\d+)mo_WT_\d+mo_incytr_output\.parquet$", fname)
+    if not m:
+        return None
+    return f"TG_{m.group(2)}mo"
+
+
+def _5xfad_annotate_trajectory_columns(
+    df: "pd.DataFrame",
+    source_label: str = "pair_mode",
+) -> "tuple[pd.DataFrame, dict, dict]":
+    """Trajectory annotation for 5xFAD: 4 timepoints (3/6/9/12mo), disease=TG."""
+    df = df.copy()
+    df["_path_str"] = (
+        df["sender"].astype(str) + "||"
+        + df["receiver"].astype(str) + "||"
+        + df["Path"].astype(str)
+    )
+    split = df["contrast"].str.split("_", n=1, expand=True)
+    df["_disease"] = split[0].fillna("")
+    df["_timepoint"] = split[1].fillna("")
+
+    if df.empty:
+        df["traj_labels"] = ""
+        df["sign_vec"] = ""
+        return df, {}, {}
+
+    pds_col = df["PDS"].astype(float)
+    sign_ser = pd.Series("", index=df.index, dtype="str")
+    sign_ser.loc[pds_col > 0] = "u"
+    sign_ser.loc[pds_col < 0] = "d"
+    df["_sign"] = sign_ser
+    df["_pds"] = pds_col
+
+    valid_tp = set(_5XFAD_TRAJ_TIMEPOINTS)
+    valid_dis = {"TG"}
+    pivot_mask = (
+        df["_disease"].isin(valid_dis)
+        & df["_timepoint"].isin(valid_tp)
+        & df["_sign"].isin(["u", "d"])
+    )
+    sub = df.loc[pivot_mask, ["_path_str", "_disease", "_timepoint", "_sign", "_pds"]]
+
+    if sub.empty:
+        print(f"  trajectory ({source_label}): no canonical contrasts; skipping",
+              flush=True)
+        df["traj_labels"] = ""
+        df["sign_vec"] = ""
+        return df, {}, {}
+
+    sign_pivot = sub.pivot_table(
+        index=["_path_str", "_disease"],
+        columns="_timepoint",
+        values="_sign",
+        aggfunc="first",
+    )
+    pds_pivot = sub.pivot_table(
+        index=["_path_str", "_disease"],
+        columns="_timepoint",
+        values="_pds",
+        aggfunc="first",
+    )
+    for tp in _5XFAD_TRAJ_TIMEPOINTS:
+        if tp not in sign_pivot.columns: sign_pivot[tp] = pd.NA
+        if tp not in pds_pivot.columns:  pds_pivot[tp] = pd.NA
+    sign_pivot = sign_pivot[list(_5XFAD_TRAJ_TIMEPOINTS)]
+    pds_pivot = pds_pivot[list(_5XFAD_TRAJ_TIMEPOINTS)]
+    complete_mask = sign_pivot.notna().all(axis=1) & pds_pivot.notna().all(axis=1)
+    sign_pivot = sign_pivot.loc[complete_mask]
+    pds_pivot = pds_pivot.loc[complete_mask]
+
+    if sign_pivot.empty:
+        df["traj_labels"] = ""
+        df["sign_vec"] = ""
+        return df, {}, {}
+
+    s3, s6, s9, s12 = (sign_pivot[tp] for tp in _5XFAD_TRAJ_TIMEPOINTS)
+    v3, v6, v9, v12 = (pds_pivot[tp] for tp in _5XFAD_TRAJ_TIMEPOINTS)
+    out = pd.DataFrame(index=sign_pivot.index)
+    out["sign_vec"] = s3 + s6 + s9 + s12
+    out["always_up"] = (s3 == "u") & (s6 == "u") & (s9 == "u") & (s12 == "u")
+    out["always_down"] = (s3 == "d") & (s6 == "d") & (s9 == "d") & (s12 == "d")
+    out["monotonic_up"] = (v3 < v6) & (v6 < v9) & (v9 < v12)
+    out["monotonic_down"] = (v3 > v6) & (v6 > v9) & (v9 > v12)
+    out["mixed"] = ~(out["always_up"] | out["always_down"])
+
+    def _join_labels(row):
+        names = []
+        if row["always_up"]:      names.append("always-up")
+        if row["always_down"]:    names.append("always-down")
+        if row["monotonic_up"]:   names.append("monotonic-up")
+        if row["monotonic_down"]: names.append("monotonic-down")
+        if row["mixed"]:          names.append("mixed")
+        return ";".join(names)
+
+    out["traj_labels"] = out.apply(_join_labels, axis=1)
+
+    traj_map = out[["sign_vec", "traj_labels"]].reset_index()
+    df = df.merge(traj_map, on=["_path_str", "_disease"], how="left")
+    df["traj_labels"] = df["traj_labels"].fillna("")
+    df["sign_vec"] = df["sign_vec"].fillna("")
+
+    sig_pivot = out.reset_index()[["_path_str", "_disease"]]
+    recur_index: dict = {}
+    if len(sig_pivot):
+        recur_series = sig_pivot.groupby("_path_str", sort=False)["_disease"].agg(list)
+        recur_index = {str(pid): dis for pid, dis in recur_series.items()}
+
+    traj_summary: dict = {lbl: int(out[lbl.replace("-", "_")].sum())
+                          for lbl in _SIGN_VEC_LABELS}
+
+    n_paths = len(out.index.get_level_values("_path_str").unique())
+    print(f"  trajectory ({source_label}): {n_paths:,} unique paths annotated; "
+          f"{len(recur_index):,} recur in ≥1 disease; "
+          f"label dist = {dict(sorted(traj_summary.items()))}", flush=True)
+
+    df.drop(columns=["_path_str", "_disease", "_timepoint", "_sign", "_pds"],
+            inplace=True, errors="ignore")
+    return df, recur_index, traj_summary
+
+
+def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
+    """Shard the 5xFAD pair-mode Incytr output for one tissue.
+
+    Reads `outputs/reports/incytr_pair_mode_5xfad/{tissue}/wide/*.parquet`
+    and emits one parquet per (sender, receiver) pair under a tissue-specific
+    edge_slices subdirectory. Returns the block for `incytr_pathways.by_context`
+    or None when the input dir is absent.
+    """
+    if tissue not in _5XFAD_TISSUE_TO_EDGE_DIR:
+        raise ValueError(f"unknown 5xFAD tissue: {tissue!r}")
+
+    out_dir = _5XFAD_TISSUE_TO_EDGE_DIR[tissue]
+    url_prefix = _5XFAD_TISSUE_TO_URL_PREFIX[tissue]
+
+    input_dir = os.path.join(
+        config.REPO_ROOT, "outputs", "reports",
+        "incytr_pair_mode_5xfad", tissue, "wide",
+    )
+    if not os.path.isdir(input_dir):
+        print(f"  (warn) 5xFAD incytr input dir not found: {input_dir}; "
+              f"skipping {tissue}", flush=True)
+        return None
+
+    parquet_files = sorted(glob.glob(os.path.join(input_dir, "*_incytr_output.parquet")))
+    if not parquet_files:
+        print(f"  (warn) no 5xFAD pair-mode parquets in {input_dir}; "
+              f"skipping {tissue}", flush=True)
+        return None
+
+    file_to_contrast: list[tuple[str, str]] = []
+    for fpath in parquet_files:
+        contrast = _5xfad_pair_mode_contrast_from_filename(os.path.basename(fpath))
+        if contrast is not None:
+            file_to_contrast.append((fpath, contrast))
+    if not file_to_contrast:
+        print(f"  (warn) no parseable 5xFAD parquets in {input_dir}; "
+              f"skipping {tissue}", flush=True)
+        return None
+
+    present_contrasts = [c for c in _5XFAD_INCYTR_CONTRASTS
+                         if c in {c2 for _, c2 in file_to_contrast}]
+    contrast_to_idx = {c: i for i, c in enumerate(present_contrasts)}
+    print(f"  5xfad incytr ({tissue}): {len(file_to_contrast)} parquet(s); "
+          f"contrasts = {present_contrasts}", flush=True)
+
+    import duckdb
+
+    con = duckdb.connect()
+    con.execute("PRAGMA threads=8; PRAGMA memory_limit='12GB';")
+    _configure_duckdb_tempdir(con)
+
+    sample_schema = pq.read_schema(file_to_contrast[0][0])
+    src_cols = {f.name for f in sample_schema}
+    dir_flag_cols = [c for c in ("pr_up", "pr_down", "ps_up", "ps_down",
+                                  "py_up", "py_down")
+                     if c in src_cols]
+    extra_path_cols = [c for c in ("log2FC",) if c in src_cols]
+    if not dir_flag_cols:
+        print(f"    (warn) no direction-flag columns in {tissue}; "
+              f"downstream UI badges will be empty", flush=True)
+
+    selects = []
+    has_pvalue = False
+    for fpath, contrast in file_to_contrast:
+        sch = pq.read_schema(fpath)
+        names = {f.name for f in sch}
+        pcol_disease = None
+        for n in names:
+            if n.startswith("p_value_") and not n.endswith("_WTyp"):
+                pcol_disease = n
+                has_pvalue = True
+                break
+        if pcol_disease is None:
+            print(f"    (warn) no disease-arm p_value col in "
+                  f"{os.path.basename(fpath)}; using NULL", flush=True)
+            pcol_clause = "CAST(NULL AS DOUBLE)"
+        else:
+            pcol_clause = f'CAST("{pcol_disease}" AS DOUBLE)'
+
+        sik_disease = next(
+            (n for n in names if n.startswith("SiK_score_") and not n.endswith("_WTyp")),
+            None,
+        )
+        if sik_disease is None:
+            sik_clause = "CAST(NULL AS DOUBLE) AS SiK_score"
+        else:
+            sik_clause = f'CAST("{sik_disease}" AS DOUBLE) AS SiK_score'
+
+        dir_clauses = ",\n          ".join(
+            f"CAST({c} AS DOUBLE) AS {c}" for c in dir_flag_cols
+        )
+        path_clauses = ",\n          ".join(
+            f"CAST({c} AS DOUBLE) AS {c}" for c in extra_path_cols
+        )
+        generic_scores = [c for c in _INCYTR_SCORE_COLS if c != "SiK_score"]
+        score_clauses = ",\n          ".join(
+            f"CAST({c} AS DOUBLE) AS {c}" for c in generic_scores if c in names
+        )
+        missing_scores = [c for c in generic_scores if c not in names]
+        missing_score_clauses = ",\n          ".join(
+            f"CAST(NULL AS DOUBLE) AS {c}" for c in missing_scores
+        )
+        fc_clauses = ",\n          ".join(
+            (f'CAST("{c}" AS DOUBLE) AS "{c}"' if c in names
+             else f'CAST(NULL AS DOUBLE) AS "{c}"')
+            for c in _5XFAD_INCYTR_FC_COLS
+        )
+        label_clauses = ",\n          ".join(
+            (f'CAST("{src}" AS VARCHAR) AS "{dst}"' if src in names
+             else f'CAST(NULL AS VARCHAR) AS "{dst}"')
+            for src, dst in zip(_5XFAD_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS)
+        )
+        clauses = [score_clauses, missing_score_clauses, sik_clause,
+                   dir_clauses, path_clauses, fc_clauses, label_clauses]
+        extra_select = ",\n          ".join(c for c in clauses if c)
+
+        where_clause = (
+            f"WHERE {pcol_clause} IS NULL OR {pcol_clause} <= 0.75"
+            if pcol_disease is not None else ""
+        )
+        selects.append(f"""
+        SELECT
+          "Sender.group"   AS sender,
+          "Receiver.group" AS receiver,
+          Path, Ligand, Receptor, EM, Target,
+          '{contrast}'      AS contrast,
+          {pcol_clause}     AS pvalue,
+          CAST(PDS AS DOUBLE) AS PDS,
+          {extra_select}
+        FROM read_parquet('{fpath}')
+        {where_clause}
+        """)
+
+    union_sql = "\nUNION ALL\n".join(selects)
+    con.execute(f"CREATE VIEW src AS {union_sql}")
+    n_src = con.execute("SELECT COUNT(*) FROM src").fetchone()[0]
+    print(f"  5xfad incytr ({tissue}): loaded {n_src:,} rows across "
+          f"{len(file_to_contrast)} contrast(s)", flush=True)
+
+    senders_canonical = sorted({r[0] for r in con.execute(
+        "SELECT DISTINCT sender FROM src").fetchall()})
+    receivers_canonical = sorted({r[0] for r in con.execute(
+        "SELECT DISTINCT receiver FROM src").fetchall()})
+    sender_to_idx = {s: i for i, s in enumerate(senders_canonical)}
+    receiver_to_idx = {r: i for i, r in enumerate(receivers_canonical)}
+    n_s, n_r, n_c = len(senders_canonical), len(receivers_canonical), len(present_contrasts)
+    print(f"    senders={n_s}, receivers={n_r}, contrasts={n_c} "
+          f"(pair count={n_s * n_r})", flush=True)
+
+    n_thr = len(_5XFAD_INCYTR_PATHWAY_PVALUES)
+    n_ap = len(_5XFAD_INCYTR_PATHWAY_ABS_PDS)
+    pval_filter = (lambda tp: f"pvalue < {tp}") if has_pvalue else (lambda tp: "TRUE")
+    pval_where = "WHERE pvalue IS NOT NULL" if has_pvalue else ""
+    hm_thr_clauses_list = []
+    for ip, tp in enumerate(_5XFAD_INCYTR_PATHWAY_PVALUES):
+        for iap, tap in enumerate(_5XFAD_INCYTR_PATHWAY_ABS_PDS):
+            hm_thr_clauses_list.append(
+                f"COUNT(*) FILTER (WHERE {pval_filter(tp)} "
+                f"AND COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
+            )
+    hm_thr_clauses = ", ".join(hm_thr_clauses_list)
+    hm_rows = con.execute(f"""
+        SELECT sender, receiver, contrast, {hm_thr_clauses}
+        FROM src {pval_where}
+        GROUP BY sender, receiver, contrast
+    """).fetchall()
+    grid = np.zeros((n_s, n_r, n_c, n_thr, n_ap), dtype=np.uint32)
+    for row in hm_rows:
+        s_raw, r_raw, c = row[0], row[1], row[2]
+        if s_raw not in sender_to_idx or r_raw not in receiver_to_idx: continue
+        if c not in contrast_to_idx: continue
+        s_i, r_i, c_i = sender_to_idx[s_raw], receiver_to_idx[r_raw], contrast_to_idx[c]
+        offset = 3
+        for ip in range(n_thr):
+            for iap in range(n_ap):
+                grid[s_i, r_i, c_i, ip, iap] = int(row[offset])
+                offset += 1
+    totals = np.zeros((n_thr, n_ap), dtype=np.uint64)
+    for ip in range(n_thr):
+        for iap in range(n_ap):
+            totals[ip, iap] = int(grid[:, :, :, ip, iap].sum())
+    heatmap_counts = {
+        "thresholds": list(_5XFAD_INCYTR_PATHWAY_PVALUES),
+        "abs_pds_thresholds": list(_5XFAD_INCYTR_PATHWAY_ABS_PDS),
+        "shape": [n_s, n_r, n_c, n_thr, n_ap],
+        "counts": grid.flatten().tolist(),
+        "total_by_threshold": totals.tolist(),
+    }
+    hm_signed_rows = con.execute(f"""
+        SELECT sender, receiver, contrast,
+               CASE WHEN PDS > 0 THEN 2
+                    WHEN PDS < 0 THEN 0
+                    ELSE 1 END AS s,
+               {hm_thr_clauses}
+        FROM src {pval_where}
+        GROUP BY sender, receiver, contrast, s
+    """).fetchall()
+    signed_grid = np.zeros((n_s, n_r, n_c, 3, n_thr, n_ap), dtype=np.uint32)
+    for row in hm_signed_rows:
+        s_raw, r_raw, c, sign_i = row[0], row[1], row[2], int(row[3])
+        if s_raw not in sender_to_idx or r_raw not in receiver_to_idx: continue
+        if c not in contrast_to_idx: continue
+        s_i, r_i, c_i = sender_to_idx[s_raw], receiver_to_idx[r_raw], contrast_to_idx[c]
+        offset = 4
+        for ip in range(n_thr):
+            for iap in range(n_ap):
+                signed_grid[s_i, r_i, c_i, sign_i, ip, iap] = int(row[offset])
+                offset += 1
+    signed_totals = np.zeros((3, n_thr, n_ap), dtype=np.uint64)
+    for sign_i in range(3):
+        for ip in range(n_thr):
+            for iap in range(n_ap):
+                signed_totals[sign_i, ip, iap] = int(
+                    signed_grid[:, :, :, sign_i, ip, iap].sum()
+                )
+    heatmap_counts_signed = {
+        "thresholds": list(_5XFAD_INCYTR_PATHWAY_PVALUES),
+        "abs_pds_thresholds": list(_5XFAD_INCYTR_PATHWAY_ABS_PDS),
+        "shape": [n_s, n_r, n_c, 3, n_thr, n_ap],
+        "counts": signed_grid.flatten().tolist(),
+        "total_by_sign_threshold": signed_totals.tolist(),
+        "sign_source": "PDS",
+    }
+
+    def _build_pathway_counts(where_extra: str = "") -> dict:
+        thr_clauses = []
+        for ip, tp in enumerate(_5XFAD_INCYTR_PATHWAY_PVALUES):
+            for iap, tap in enumerate(_5XFAD_INCYTR_PATHWAY_ABS_PDS):
+                thr_clauses.append(
+                    f"COUNT(*) FILTER (WHERE {pval_filter(tp)} "
+                    f"AND COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
+                )
+        where_parts = []
+        if has_pvalue: where_parts.append("pvalue IS NOT NULL")
+        if where_extra: where_parts.append(where_extra)
+        where_clause = "WHERE " + " AND ".join(where_parts) if where_parts else ""
+        pathway_rows = con.execute(f"""
+            SELECT contrast,
+                   CASE WHEN PDS > 0 THEN 2
+                        WHEN PDS < 0 THEN 0
+                        ELSE 1 END AS s,
+                   {", ".join(thr_clauses)}
+            FROM src {where_clause}
+            GROUP BY contrast, s
+        """).fetchall()
+        pathway_arr = np.zeros((n_c, 3, n_thr, n_ap), dtype=np.uint32)
+        for row in pathway_rows:
+            contrast, s_idx = row[0], int(row[1])
+            if contrast not in contrast_to_idx: continue
+            c_idx = contrast_to_idx[contrast]
+            for ip in range(n_thr):
+                for iap in range(n_ap):
+                    pathway_arr[c_idx, s_idx, ip, iap] = int(row[2 + ip * n_ap + iap])
+        return {
+            "thresholds": list(_5XFAD_INCYTR_PATHWAY_PVALUES),
+            "abs_pds_thresholds": list(_5XFAD_INCYTR_PATHWAY_ABS_PDS),
+            "contrasts": list(present_contrasts),
+            "counts": pathway_arr.flatten().tolist(),
+            "shape": [n_c, 3, n_thr, n_ap],
+            "sign_source": "PDS",
+        }
+
+    pathway_counts = _build_pathway_counts()
+
+    src_cols_view = set(
+        con.execute("DESCRIBE SELECT * FROM src LIMIT 0").fetchdf()["column_name"]
+    )
+
+    INCYTR_INDEX_COLUMNS = (
+        [("PDS", "f4"), ("pvalue", "f4")]
+        + [(sc, "u2") for sc in _INCYTR_SCORE_COLS]
+        + [("ligandId", "u2"), ("receptorId", "u2"),
+           ("emId", "u2"), ("targetId", "u2")]
+        + [("senderId", "u1"), ("receiverId", "u1"), ("contrastId", "u1"),
+           ("labelBits", "u1"), ("trajBits", "u1")]
+    )
+    idx_gene_to_id: dict[str, int] = {}
+    idx_gene_vocab: list[str] = []
+    idx_chunks: list[dict] = []
+
+    def _idx_gene_ids(series) -> np.ndarray:
+        cat = series.astype(str)
+        for g in cat.unique():
+            if g not in idx_gene_to_id:
+                idx_gene_to_id[g] = len(idx_gene_vocab)
+                idx_gene_vocab.append(g)
+        return cat.map(idx_gene_to_id).to_numpy(dtype="<u2")
+
+    def _accumulate_index(s_name: str, r_name: str, frame) -> None:
+        n = len(frame)
+        if n == 0: return
+        chunk = {
+            "senderId":   np.full(n, sender_to_idx[s_name], dtype="<u1"),
+            "receiverId": np.full(n, receiver_to_idx[r_name], dtype="<u1"),
+            "contrastId": frame["contrast"].map(contrast_to_idx).to_numpy(dtype="<u1"),
+            "ligandId":   _idx_gene_ids(frame["Ligand"]),
+            "receptorId": _idx_gene_ids(frame["Receptor"]),
+            "emId":       _idx_gene_ids(frame["EM"]),
+            "targetId":   _idx_gene_ids(frame["Target"]),
+            "labelBits":  _idx_label_bits(frame),
+            "trajBits":   _idx_traj_bits(frame["traj_labels"]),
+            "PDS":        frame["PDS"].to_numpy(dtype="<f4"),
+            "pvalue":     frame["pvalue"].to_numpy(dtype="<f4"),
+        }
+        for sc in _INCYTR_SCORE_COLS:
+            chunk[sc] = (frame[sc].to_numpy(dtype="float16").view("<u2")
+                         if sc in frame.columns else np.zeros(n, dtype="<u2"))
+        idx_chunks.append(chunk)
+
+    gene_node_index = _build_incytr_gene_node_index(con)
+    print(
+        f"    gene_node_index ({tissue}): {len(gene_node_index['gene_id']):,} "
+        f"gene-role-pair entries; {len(gene_node_index['genes']):,} genes",
+        flush=True,
+    )
+
+    shutil.rmtree(out_dir, ignore_errors=True)
+    os.makedirs(out_dir, exist_ok=True)
+
+    fc_select = [
+        f'"{c}"' if c in src_cols_view else f'CAST(NULL AS DOUBLE) AS "{c}"'
+        for c in _5XFAD_INCYTR_FC_COLS
+    ]
+    label_select = [
+        f'"{dst}"' if dst in src_cols_view else f'CAST(NULL AS VARCHAR) AS "{dst}"'
+        for dst in _INCYTR_LABEL_COLS
+    ]
+    shard_select_cols = (
+        ["Ligand", "Receptor", "EM", "Target", "contrast", "pvalue", "PDS"]
+        + list(_INCYTR_SCORE_COLS)
+        + dir_flag_cols
+        + extra_path_cols
+        + list(_5XFAD_INCYTR_FC_COLS)
+        + list(_INCYTR_LABEL_COLS)
+    )
+    float_cols = (
+        ["pvalue", "PDS"]
+        + list(_INCYTR_SCORE_COLS)
+        + dir_flag_cols
+        + extra_path_cols
+        + list(_5XFAD_INCYTR_FC_COLS)
+    )
+    float32_cols = [c for c in float_cols if c in ("pvalue", "PDS", "log2FC")]
+    float16_cols = [c for c in float_cols if c not in float32_cols]
+
+    present_pairs: list[list[str]] = []
+    pair_row_counts: dict[str, int] = {}
+    total_rows = 0
+    max_shard_bytes = 0
+    max_shard_name = ""
+    recur_index: dict = {}
+    traj_summary: dict = {}
+
+    def _flush(key: tuple[str, str], frames: list[pd.DataFrame]) -> None:
+        nonlocal total_rows, max_shard_bytes, max_shard_name
+        if not frames: return
+        sub = pd.concat(frames, ignore_index=True, copy=False)
+        for col in _INCYTR_LABEL_COLS:
+            if col in sub.columns:
+                sub[col] = pd.Categorical(sub[col], categories=_INCYTR_LABEL_VOCAB)
+        s_key, r_key = key
+        sub["sender"] = s_key
+        sub["receiver"] = r_key
+        sub["Path"] = (sub["Ligand"].astype(str) + "|"
+                       + sub["Receptor"].astype(str) + "|"
+                       + sub["EM"].astype(str) + "|"
+                       + sub["Target"].astype(str))
+        sub, pair_recur, pair_traj = _5xfad_annotate_trajectory_columns(
+            sub, source_label=f"pair_mode/{tissue}",
+        )
+        recur_index.update(pair_recur)
+        for label, count in pair_traj.items():
+            traj_summary[label] = traj_summary.get(label, 0) + int(count)
+        _accumulate_index(s_key, r_key, sub)
+        sub = sub.drop(columns=["sender", "receiver", "Path"])
+        for col in float32_cols:
+            if col in sub.columns: sub[col] = sub[col].astype("float32")
+        for col in float16_cols:
+            if col in sub.columns: sub[col] = sub[col].astype("float16")
+        path_sort_cols = [c for c in ("Ligand", "Receptor", "EM", "Target", "contrast")
+                          if c in sub.columns]
+        if path_sort_cols:
+            sub = sub.sort_values(path_sort_cols, kind="stable",
+                                  na_position="last").reset_index(drop=True)
+        s, r = key
+        fname = f"{_5xfad_incytr_sanitize(s)}__{_5xfad_incytr_sanitize(r)}.parquet"
+        path = os.path.join(out_dir, fname)
+        present_floats = [c for c in float_cols if c in sub.columns]
+        bss_cols = {c: "BYTE_STREAM_SPLIT" for c in present_floats}
+        dict_cols = [c for c in sub.columns if c not in bss_cols]
+        pq.write_table(
+            pa.Table.from_pandas(sub, preserve_index=False),
+            path, compression="zstd",
+            column_encoding=bss_cols if bss_cols else None,
+            use_dictionary=dict_cols if bss_cols else True,
+        )
+        present_pairs.append([s, r])
+        pair_row_counts[fname] = len(sub)
+        total_rows += len(sub)
+        sz = os.path.getsize(path)
+        if sz > max_shard_bytes:
+            max_shard_bytes = sz
+            max_shard_name = fname
+
+    stream_cols = ["receiver"] + shard_select_cols
+    for s in senders_canonical:
+        reader = con.execute(
+            f"""SELECT {', '.join(stream_cols)}
+                FROM src
+                WHERE sender = ?
+                ORDER BY receiver""",
+            [s],
+        ).fetch_record_batch(1_000_000)
+        cur_receiver: str | None = None
+        buf: list[pd.DataFrame] = []
+        for batch in reader:
+            bdf = batch.to_pandas()
+            receivers = bdf["receiver"].to_numpy()
+            starts = [0]
+            for i in range(1, len(receivers)):
+                if receivers[i] != receivers[i - 1]:
+                    starts.append(i)
+            starts.append(len(receivers))
+            for j in range(len(starts) - 1):
+                a, b = starts[j], starts[j + 1]
+                r = receivers[a]
+                seg = bdf.iloc[a:b].drop(columns=["receiver"])
+                if cur_receiver is None:
+                    cur_receiver = r
+                elif r != cur_receiver:
+                    _flush((s, cur_receiver), buf)
+                    buf = []
+                    cur_receiver = r
+                buf.append(seg)
+        if buf and cur_receiver is not None:
+            _flush((s, cur_receiver), buf)
+    con.close()
+
+    index = {
+        "schema_version": SCHEMA_VERSION,
+        "filename_template": "{sender}__{receiver}.parquet",
+        "sanitize_rule": "replace('/', '-'); replace(' ', '_')",
+        "present": sorted(present_pairs),
+        "n_total_rows": total_rows,
+        "pair_row_counts": pair_row_counts,
+        "base_url": url_prefix,
+    }
+    with open(os.path.join(out_dir, "index.json"), "w") as f:
+        json.dump(index, f)
+
+    total_bytes = sum(
+        os.path.getsize(os.path.join(out_dir, fn))
+        for fn in os.listdir(out_dir) if fn.endswith(".parquet")
+    )
+    print(f"  5xfad incytr ({tissue}): wrote {len(present_pairs)} shards "
+          f"({total_rows:,} rows; {total_bytes/1e6:.1f} MB total; "
+          f"max {max_shard_bytes/1e6:.2f} MB → {max_shard_name})", flush=True)
+
+    assert sys.byteorder == "little", "global index assumes little-endian"
+    global_index = None
+    if idx_chunks:
+        cols = {name: np.concatenate([c[name] for c in idx_chunks])
+                for name, _dt in INCYTR_INDEX_COLUMNS}
+        idx_chunks.clear()
+        n_idx = int(len(cols["PDS"]))
+        perm = np.argsort(-np.abs(cols["PDS"]), kind="stable")
+        buf_bytes = bytearray()
+        columns_manifest = []
+        for name, dt in INCYTR_INDEX_COLUMNS:
+            arr = np.ascontiguousarray(cols[name][perm], dtype=np.dtype("<" + dt[0] + dt[1]))
+            columns_manifest.append({"name": name, "type": dt, "bytes": int(arr.nbytes)})
+            buf_bytes += arr.tobytes()
+        del cols
+        raw_bin = bytes(buf_bytes)
+        gz_bin = gzip.compress(raw_bin, compresslevel=6)
+        with open(os.path.join(out_dir, _5XFAD_INCYTR_INDEX_FILENAME), "wb") as f:
+            f.write(gz_bin)
+        global_index = {
+            "url": f"{url_prefix}{_5XFAD_INCYTR_INDEX_FILENAME}",
+            "nrows": n_idx,
+            "rank_by": "abs(PDS)",
+            "byteorder": "little",
+            "sender_vocab": senders_canonical,
+            "receiver_vocab": receivers_canonical,
+            "contrast_vocab": list(present_contrasts),
+            "gene_vocab": idx_gene_vocab,
+            "traj_label_vocab": list(_SIGN_VEC_LABELS),
+            "label_states": ["", *_INCYTR_LABEL_VOCAB],
+            "label_nodes": list(_INCYTR_LABEL_NODES),
+            "score_columns": list(_INCYTR_SCORE_COLS),
+            "columns": columns_manifest,
+            "raw_bytes": len(raw_bin),
+            "gzip_bytes": len(gz_bin),
+        }
+        print(f"  5xfad incytr global_index ({tissue}): {n_idx:,} rows × "
+              f"{len(columns_manifest)} cols, {len(idx_gene_vocab):,} genes; "
+              f"{len(raw_bin)/1e6:.1f} MB raw → {len(gz_bin)/1e6:.1f} MB gz",
+              flush=True)
+
+    celltypes = sorted(set(senders_canonical) | set(receivers_canonical))
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "version": 3,
+        "source": f"pair_mode (5xfad/{tissue}/wide)",
+        "source_mode": "pair_mode",
+        "contrasts": list(present_contrasts),
+        "senders": senders_canonical,
+        "receivers": receivers_canonical,
+        "celltypes": celltypes,
+        "empty_deg_celltypes": [],
+        "celltype_qc": None,
+        "low_signal_celltypes": [],
+        "heatmap_counts": heatmap_counts,
+        "heatmap_counts_signed": heatmap_counts_signed,
+        "pathway_counts": pathway_counts,
+        "pathway_counts_low_signal_excluded": None,
+        "slice_index": index,
+        "score_columns": list(_INCYTR_SCORE_COLS),
+        "label_columns": list(_INCYTR_LABEL_COLS),
+        "label_nodes": list(_INCYTR_LABEL_NODES),
+        "label_vocab": list(_INCYTR_LABEL_VOCAB),
+        "direction_flag_columns": list(dir_flag_cols),
+        "path_metric_columns": list(extra_path_cols),
+        "global_index": global_index,
+        "gene_node_index_shard": _write_gene_node_index_shard(
+            gene_node_index, out_dir,
+            _5XFAD_INCYTR_GENE_NODE_INDEX_FILENAME,
+            url_prefix=url_prefix,
+        ),
+        "trajectory_summary": traj_summary,
+    }
+
+
+def build_5xfad_incytr_blocks() -> dict[str, dict]:
+    """Build pair-mode incytr blocks for both 5xFAD tissues.
+
+    Returns a dict mapping context_id → payload block, containing only the
+    tissues where data is present.  Callers merge results into
+    ``PAYLOAD.incytr_pathways.by_context``.
+    """
+    blocks = {}
+    for tissue in ("cortex", "hippocampus"):
+        context_id = _5XFAD_TISSUE_TO_CONTEXT_ID[tissue]
+        block = _write_5xfad_incytr_pair_pathways(tissue)
+        if block is not None:
+            blocks[context_id] = block
+    return blocks
 
 
 def _age_from_contrast_label(contrast: str) -> int | None:

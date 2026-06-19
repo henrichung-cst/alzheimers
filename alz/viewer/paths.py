@@ -38,6 +38,13 @@ EDGE_SLICES_SONG_CONCORDANCE_DIR = os.path.join(
 EDGE_SLICES_INCYTR_PATHWAYS_DIR = os.path.join(
     UNIFIED_VIEWER_DIR, "edge_slices", "incytr_pathways"
 )
+# 5xFAD incytr shards — separate dirs per tissue so Song's rmtree never clobbers them.
+EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_CORTEX_DIR = os.path.join(
+    UNIFIED_VIEWER_DIR, "edge_slices", "incytr_pathways_fivexfad_cortex"
+)
+EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_HIPPO_DIR = os.path.join(
+    UNIFIED_VIEWER_DIR, "edge_slices", "incytr_pathways_fivexfad_hippocampus"
+)
 
 # Per-kinase shards for the human Audit drawer's leading-edge + substrate-motif
 # fields. These two columns dominated PAYLOAD.human.perdonor_index (~50 MB);

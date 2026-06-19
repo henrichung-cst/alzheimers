@@ -163,7 +163,8 @@ const SliceCache = (function(){
       const v = iCache.get(lkey); _lruTouch(iCache, lkey, v); return v;
     }
     if (iInflight.has(lkey)) return iInflight.get(lkey);
-    const base = ESR.incytr_pathways_url || "edge_slices/incytr_pathways/";
+    const ctxIdx = context ? ViewerPayload.incytrSliceIndex(context) : null;
+    const base = (ctxIdx && ctxIdx.base_url) || ESR.incytr_pathways_url || "edge_slices/incytr_pathways/";
     const fname = ViewerPayload.incytrShardFilename(sender, receiver, context);
     const url = `${base}${fname}`;
     const p = _fetchParquet(url).then(rows => {
