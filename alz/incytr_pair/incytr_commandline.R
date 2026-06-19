@@ -189,16 +189,28 @@ slice_omics <- function(df, gene_col, condition, suffix) {
   out$gene_symbol <- df[[gene_col]]
   out %>% group_by(gene_symbol) %>% summarise_all(mean, na.rm = TRUE)
 }
+# When slice_omics finds no matching condition columns the result is a 1-col
+# (gene_symbol-only) frame — a non-NULL empty table that Incytr cannot handle.
+# Coerce to NULL so the layer is silently skipped, identical to a file that was
+# never loaded. This fires when an optional PTM assay was not collected for a
+# given timepoint (e.g. hippocampus ACK is 6mo/12mo only).
+null_if_empty <- function(x, label) {
+  if (!is.null(x) && ncol(x) <= 1L) {
+    cat(sprintf("[pair-driver] %s: no condition columns found — treating as absent\n", label))
+    return(NULL)
+  }
+  x
+}
 pr_1  <- slice_omics(pr, PR_GENE_COL, condition1, "pr")
 pr_2  <- slice_omics(pr, PR_GENE_COL, condition2, "pr")
 ps_1  <- if ("ps"  %in% CHANNELS) slice_omics(ps,  PS_GENE_COL,  condition1, "ps")  else NULL
 ps_2  <- if ("ps"  %in% CHANNELS) slice_omics(ps,  PS_GENE_COL,  condition2, "ps")  else NULL
 py_1  <- if ("py"  %in% CHANNELS) slice_omics(py,  PY_GENE_COL,  condition1, "py")  else NULL
 py_2  <- if ("py"  %in% CHANNELS) slice_omics(py,  PY_GENE_COL,  condition2, "py")  else NULL
-ack_1 <- if (!is.null(ack)) slice_omics(ack, ACK_GENE_COL, condition1, "Ack") else NULL
-ack_2 <- if (!is.null(ack)) slice_omics(ack, ACK_GENE_COL, condition2, "Ack") else NULL
-kgg_1 <- if (!is.null(kgg)) slice_omics(kgg, KGG_GENE_COL, condition1, "KGG") else NULL
-kgg_2 <- if (!is.null(kgg)) slice_omics(kgg, KGG_GENE_COL, condition2, "KGG") else NULL
+ack_1 <- null_if_empty(if (!is.null(ack)) slice_omics(ack, ACK_GENE_COL, condition1, "Ack") else NULL, paste0("Ack/", condition1))
+ack_2 <- null_if_empty(if (!is.null(ack)) slice_omics(ack, ACK_GENE_COL, condition2, "Ack") else NULL, paste0("Ack/", condition2))
+kgg_1 <- null_if_empty(if (!is.null(kgg)) slice_omics(kgg, KGG_GENE_COL, condition1, "KGG") else NULL, paste0("KGG/", condition1))
+kgg_2 <- null_if_empty(if (!is.null(kgg)) slice_omics(kgg, KGG_GENE_COL, condition2, "KGG") else NULL, paste0("KGG/", condition2))
 
 # sce4 reproduction (driver-side override #2): floor pr values < 1 to 1.
 # pr_yuyu carries ~1e-5 deconvolution residuals where sce4-era values were
