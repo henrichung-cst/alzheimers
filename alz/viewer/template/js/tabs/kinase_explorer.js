@@ -840,6 +840,14 @@ function renderKinaseExplorer() {
       confBadge = `<span class="badge lo" title="No HIGH or MODERATE attribution ${tipScope}.">low</span>`;
     }
 
+    // Stamp export-friendly computed values onto the row for csvSerialize.
+    r._exportScopedSig = scopedSig;
+    r._exportPeakAbsNes = peakAbsNes;
+    r._exportSongTopShare = r.song ? r.song.topShare : null;
+    r._exportSongTopCell = r.song ? r.song.topCluster : null;
+    r._exportWmbMaxTier = _kineMaxWmbTierScoped(r.id, colFilter);
+    r._exportConf = hit ? hit.tier : "low";
+
     const residueBadge = r.residue_type === "Y"
       ? ' <span class="track-badge track-y" title="Tyrosine kinase (pY track)">pY</span>'
       : "";
@@ -857,14 +865,22 @@ function renderKinaseExplorer() {
       `<td class="attr-num">${scopedSig}<span class="muted" style="font-size:10px;"> / ${sigDenom}</span></td>` +
       `<td>${_renderCellTypesCell(r, colFilter)}</td>` +
       `<td style="text-align:center;">${_keSongBadge(r.song)}</td>` +
-      `<td style="text-align:center;">${_wmbTierBadge(_kineMaxWmbTierScoped(r.id, colFilter))}</td>` +
+      `<td style="text-align:center;">${_wmbTierBadge(r._exportWmbMaxTier)}</td>` +
       `<td>${confBadge}</td>` +
       `</tr>`
     );
   }
+  _keVisible = visible.slice();
   tbody.innerHTML = parts.join("");
   const countEl = document.getElementById("ke-count");
   if (countEl) countEl.textContent = `${visible.length} / ${_keRows.length} kinases`;
+}
+
+function exportKinaseCsv() {
+  const stamp = new Date().toISOString().slice(0, 10);
+  const headers = ["Kinase","Gene","Family","Residue","n_sig","peak_NES","song_topShare","song_topCell","wmb_max_tier","conf"];
+  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportPeakAbsNes","_exportSongTopShare","_exportSongTopCell","_exportWmbMaxTier","_exportConf"];
+  csvDownload(csvSerialize(headers, keys, _keVisible), `kinase_${stamp}.csv`);
 }
 
 function _updateRowSelection(tableSel, rowCls, dataAttr, value) {

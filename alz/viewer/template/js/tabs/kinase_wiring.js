@@ -119,6 +119,9 @@ function wireKinaseTable() {
       renderKinaseExplorer();
     });
   }
+
+  const exportBtn = document.getElementById("ke-export");
+  if (exportBtn) exportBtn.addEventListener("click", exportKinaseCsv);
 }
 
 // Re-pushes the persisted KinaseFilter state into all the toolbar inputs.

@@ -59,6 +59,8 @@ function _khCountUpDown(nesVec, fdrVec, mode, fdrThresh) {
   return [u, d];
 }
 
+let _khVisible = [];
+
 const _KH_AUDIT_TABS = [
   {id: "trace",       label: "Measurement Trace"},
   {id: "prep",        label: "MEA Preparation"},
@@ -375,11 +377,19 @@ function renderKinaseHuman() {
   const tbody = document.querySelector("#kh-table tbody");
   if (!tbody) return;
   const selKid = Store.state.selection.kinaseHuman;
+  const hasSpec = _khHasCelltypeSpec();
+  // Stamp attribution summary onto each row for the export function.
+  for (const r of rows) {
+    const attrSummary = hasSpec ? _khAttributionSummary(r) : null;
+    r._exportAttrConf = attrSummary ? attrSummary.conf : null;
+    r._exportAttrMaxTierRank = attrSummary ? attrSummary.maxTierRank : null;
+    r._exportAttrCount = attrSummary ? attrSummary.count : null;
+  }
+  _khVisible = rows.slice();
   const html = rows.map(r => {
     const sigCls = r.id === selKid ? " kh-row-selected" : "";
     const mNES = r.median_nes_sig_only;
     const mStr = (mNES == null || !isFinite(mNES)) ? "—" : mNES.toFixed(2);
-    const hasSpec = _khHasCelltypeSpec();
     const attrSummary = hasSpec ? _khAttributionSummary(r) : null;
     return `<tr data-khid="${r.id}" class="${sigCls}" tabindex="0">`
       + `<td>${_escapeHtml(r.name)}</td>`
@@ -1489,6 +1499,13 @@ function _khPopulateCelltypeFilter() {
   sel.value = _KHState.celltype || "";
 }
 
+function exportKinaseHumanCsv() {
+  const stamp = new Date().toISOString().slice(0, 10);
+  const headers = ["Kinase","Gene","Family","Residue","median_NES_sig","n_donors_sig","n_up","n_down","n_ctrl_sig","conf","location_tier","n_cell_types"];
+  const keys    = ["name","gene_symbol","family","residue_type","median_nes_sig_only","n_donors_sig","n_donors_up","n_donors_down","n_ctrl_sig","_exportAttrConf","_exportAttrMaxTierRank","_exportAttrCount"];
+  csvDownload(csvSerialize(headers, keys, _khVisible), `kinase_human_${stamp}.csv`);
+}
+
 function wireKinaseHuman() {
   if (!_KH_HAS) return;
   _khBuildDonorChips();
@@ -1578,6 +1595,9 @@ function wireKinaseHuman() {
     document.querySelectorAll(".kh-donor-chip").forEach(b => b.classList.remove("active"));
     renderKinaseHuman();
   });
+  const exportBtn = document.getElementById("kh-export");
+  if (exportBtn) exportBtn.addEventListener("click", exportKinaseHumanCsv);
+
   // Column-header sort.
   document.querySelectorAll("#kh-table thead th[data-col]").forEach(th => {
     th.addEventListener("click", () => {

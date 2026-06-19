@@ -803,6 +803,7 @@ Object.defineProperty(window, "_keFilters", {
 });
 
 let _keRows = null;
+let _keVisible = [];
 let _keSigFdr = null;
 let _kinaseIdxById = null;
 let _evidenceByKinase = null;

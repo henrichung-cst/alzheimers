@@ -45,6 +45,8 @@ const _F5State = {
   auditAge: null,
 };
 
+let _f5Visible = [];
+
 function _f5Block() {
   return (PAYLOAD && PAYLOAD.supporting_5xfad) || null;
 }
@@ -694,6 +696,13 @@ function _f5SyncControls() {
   });
 }
 
+function exportFiveXFADCsv() {
+  const stamp = new Date().toISOString().slice(0, 10);
+  const headers = ["Kinase","Gene","Family","Tissue","Residue","n_sig","peak_NES","5xFAD_snrna","WMB_tier","Conf"];
+  const keys    = ["kinase","gene_symbol","family","tissue","residue_type","sigCount","peakAbsNes","_exportF5Snrna","_exportWmbTier","_exportConf"];
+  csvDownload(csvSerialize(headers, keys, _f5Visible), `fivexfad_kinase_${stamp}.csv`);
+}
+
 function wireFiveXFADKinase() {
   if (_F5Wired) return;
   _F5Wired = true;
@@ -727,6 +736,10 @@ function wireFiveXFADKinase() {
     _f5SetSelectedKey(null);
     renderFiveXFADKinase();
   });
+
+  const exportBtn = document.getElementById("f5-export");
+  if (exportBtn) exportBtn.addEventListener("click", exportFiveXFADCsv);
+
   const table = document.getElementById("f5-table");
   if (table) {
     table.querySelectorAll("thead th[data-col]").forEach(th => {
@@ -770,6 +783,14 @@ function renderFiveXFADKinase() {
   _f5PopulateControls();
   _f5SyncControls();
   const rows = _f5FilteredRows();
+  // Stamp export-friendly computed values onto each row.
+  for (const r of rows) {
+    const bestAttr = _f5BestAttr(r);
+    r._exportF5Snrna = bestAttr ? _f5Num(bestAttr.fivexfad_specificity) : null;
+    r._exportWmbTier = Math.max(0, ..._f5ScopedAttrRows(r).map(_f5WmbTier));
+    r._exportConf = bestAttr ? (bestAttr.confidence_tier || null) : null;
+  }
+  _f5Visible = rows.slice();
   const selectedKey = _f5SelectedKey();
   if (selectedKey && !rows.some(r => r.key === selectedKey)) {
     _F5State.auditAge = null;

@@ -1506,12 +1506,6 @@ function _ipHexAlpha(hex, alpha) {
   return `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},${alpha})`;
 }
 
-function _ipCsvEscape(v) {
-  if (v == null || (typeof v === "number" && !isFinite(v))) return "";
-  const s = String(v);
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
 function _ipCsvColumns(rows) {
   const scoreCols = _ipScoreCols();
   const cols = [
@@ -1526,7 +1520,7 @@ function _ipCsvColumns(rows) {
   return cols;
 }
 
-function _ipRowsToCsv(rows) {
+function _ipDownloadCsv(rows, filename) {
   const normalized = rows.map(r => {
     const out = Object.assign({}, r);
     if (out.sender == null) out.sender = out._sender || "";
@@ -1536,23 +1530,8 @@ function _ipRowsToCsv(rows) {
     return out;
   });
   const cols = _ipCsvColumns(normalized);
-  const lines = [cols.map(_ipCsvEscape).join(",")];
-  for (const r of normalized) {
-    lines.push(cols.map(c => _ipCsvEscape(r[c])).join(","));
-  }
-  return lines.join("\n") + "\n";
-}
-
-function _ipDownloadCsv(rows, filename) {
-  const blob = new Blob([_ipRowsToCsv(rows)], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+  // Column names equal data keys for the Incytr pathway schema.
+  csvDownload(csvSerialize(cols, cols, normalized), filename);
 }
 
 async function _ipExportCurrentView() {

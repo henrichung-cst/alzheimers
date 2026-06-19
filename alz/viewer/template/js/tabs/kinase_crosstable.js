@@ -37,6 +37,7 @@ let _KX_CLUSTERS = null;
 let _KX_AD_DONORS = [];
 let _KX_CTRL_DONORS = [];
 let _KX_INITIALIZED = false;
+let _kxVisible = [];
 
 // Song location specificity (the favored mouse signal), shown as fold over the
 // even-split baseline (1/31 ≈ 0.032, meta.song_uniform) — the same vocabulary as
@@ -1315,6 +1316,14 @@ function _kxRenderTable() {
   // live against the active FDR threshold.
   const shown = rows.filter(r => _kxStatePassesComparison(r, s.compareScope || "three_way", s.compareState || ""));
   _kxSortRows(shown, s);
+  // Stamp resolved spec onto each row for export, then store the visible set.
+  for (const r of shown) {
+    const sp = _kxResolveSpec(r, s.cluster);
+    r._exportSongFold = (sp.song && sp.song.topShare != null) ? sp.song.topShare / _KX_SONG_UNIFORM : null;
+    r._exportWmb = sp.wmb;
+    r._exportSeaad = sp.seaad;
+  }
+  _kxVisible = shown.slice();
   const bodyParts = shown.map(r => _kxBuildRow(r, s, fdrGate));
   wrap.innerHTML = `<div class="ke-table-wrap" style="overflow:auto;max-height:75vh;"><table class="data-table" id="kx-table">${head}<tbody>${bodyParts.join("")}</tbody></table></div>`;
 
@@ -1567,6 +1576,16 @@ function wireKinaseCrosstable() {
     _kxSyncControls();
     _kxRenderTable();
   });
+
+  const exportBtn = document.getElementById("kx-export");
+  if (exportBtn) exportBtn.addEventListener("click", exportCrosstableCsv);
+}
+
+function exportCrosstableCsv() {
+  const stamp = new Date().toISOString().slice(0, 10);
+  const headers = ["Kinase","Gene","Residue","Family","Mouse_med_NES","Human_med_NES","5xFAD_med_NES","Crossplay","Song_fold","WMB_tier","SEAAD_log2"];
+  const keys    = ["name","gene","residue","family","_mNes","_hNes","_f5Nes","_agreeCategory","_exportSongFold","_exportWmb","_exportSeaad"];
+  csvDownload(csvSerialize(headers, keys, _kxVisible), `crosstable_${stamp}.csv`);
 }
 
 function renderKinaseCrosstable() {
