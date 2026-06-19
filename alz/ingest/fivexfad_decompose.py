@@ -8,13 +8,18 @@ the AD `export_decomposition_for_pair.py`). Applies the provenance deconvolution
 per (cell_type, condition), with min/10000 zero-imputation on the share. The
 scRNA share and size factors come from `alz/ingest/fivexfad_scrna_extract.R`
 (`aggexp_data.csv` + `cell_counts.csv`); the linear per-group bulk comes from
-`alz/cohorts/fivexfad/ingest.py --export-bulk` (`{pr,ps,py}_bulk_linear.csv`).
+`alz/cohorts/fivexfad/ingest.py --export-bulk` (`{pr,ps,py,ack,kgg}_bulk_linear.csv`).
 Both are pre-computed per tissue; this module never touches the raw RDS.
 
-Channels (all three present both tissues):
-    pr (gene-keyed)   — total proteome → pr_deconvoluted.csv
-    ps (site-keyed)   — IMAC/ST       → ps_deconvoluted.csv
-    py (site-keyed)   — pY            → py_deconvoluted.csv
+Channels (pr/ps/py always present both tissues; ack/kgg 5xFAD-only):
+    pr (gene-keyed)   — total proteome  → pr_deconvoluted.csv
+    ps (site-keyed)   — IMAC/ST         → ps_deconvoluted.csv
+    py (site-keyed)   — pY              → py_deconvoluted.csv
+    ack (site-keyed)  — acetylation     → ack_deconvoluted.csv  (if bulk present)
+    kgg (site-keyed)  — ubiquitination  → kgg_deconvoluted.csv  (if bulk present)
+
+Self-gating: if a bulk_linear.csv is absent for ack or kgg (e.g. hippocampus AcK
+Mo6-12 report missing 3mo), the channel is skipped gracefully with a printed note.
 
 Output wide schema: row keys + columns `<condition>_<cell_type>` (condition =
 `<geno>_<age>`, e.g. "TG_3mo"; cell_type = a 31-spine label). The Incytr driver's
@@ -47,12 +52,28 @@ if _PROJECT_ROOT not in sys.path:
 
 from alz.cohorts.fivexfad.ingest import INCYTR_INPUT_DIR, TISSUES
 
-KEY_COLS = {"pr": ["gene_symbol"], "ps": ["site_id", "gene_symbol", "motif"],
-            "py": ["site_id", "gene_symbol", "motif"]}
-BULK_FILE = {"pr": "pr_bulk_linear.csv", "ps": "ps_bulk_linear.csv",
-             "py": "py_bulk_linear.csv"}
-OUT_FILE = {"pr": "pr_deconvoluted.csv", "ps": "ps_deconvoluted.csv",
-            "py": "py_deconvoluted.csv"}
+_SITE_KEYS = ["site_id", "gene_symbol", "motif"]
+KEY_COLS = {
+    "pr":  ["gene_symbol"],
+    "ps":  _SITE_KEYS,
+    "py":  _SITE_KEYS,
+    "ack": _SITE_KEYS,
+    "kgg": _SITE_KEYS,
+}
+BULK_FILE = {
+    "pr":  "pr_bulk_linear.csv",
+    "ps":  "ps_bulk_linear.csv",
+    "py":  "py_bulk_linear.csv",
+    "ack": "ack_bulk_linear.csv",
+    "kgg": "kgg_bulk_linear.csv",
+}
+OUT_FILE = {
+    "pr":  "pr_deconvoluted.csv",
+    "ps":  "ps_deconvoluted.csv",
+    "py":  "py_deconvoluted.csv",
+    "ack": "ack_deconvoluted.csv",
+    "kgg": "kgg_deconvoluted.csv",
+}
 
 
 def _load_aggexp(tissue: str) -> tuple[pd.DataFrame, list[tuple[str, str]], float]:
@@ -191,7 +212,7 @@ def _decompose_tissue(tissue: str) -> dict:
             "mass_identity": mass["per_condition"],
         }
 
-    for channel in ("pr", "ps", "py"):
+    for channel in ("pr", "ps", "py", "ack", "kgg"):
         _run(channel)
 
     summary["generated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

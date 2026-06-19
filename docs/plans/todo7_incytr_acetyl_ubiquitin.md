@@ -1,7 +1,7 @@
 # Plan: Extend Incytr to Acetylation and Ubiquitination
 
 **Date:** 2026-06-18  
-**Status:** Implementation plan — do not modify production code yet
+**Status:** IMPLEMENTED — code authored in worktree (branch: main); verify after box frees.
 
 ---
 
@@ -216,83 +216,103 @@ drop_pat <- paste0(
 
 The `Ack_score`/`KGG_score` evaluation columns should be **kept** (they are in `num_pat` already).
 
-### 3.4 Deconvolution preprocessing for 5xFAD Ack/KGG
+### 3.4 Deconvolution preprocessing for 5xFAD Ack/KGG — IMPLEMENTED
 
-The current deconvolution approach differs by cohort:
+**`alz/cohorts/fivexfad/ingest.py` — `run_export_bulk()` extension:**
 
-- **Song:** Provenance deconvolution via `export_decomposition_for_pair.py` — frozen aggexp-based. Ack/KGG tracks do not exist for Song so no new deconvolution needed.
-- **5xFAD:** The 5xFAD ingest (`alz/cohorts/fivexfad/ingest.py`) already has the infrastructure to build track matrices from Spectronaut reports (the `build_track_matrices()` / `_read_log2_quantity_matrix()` pipeline). The `run_export_bulk()` function currently only exports `pr`, `ps` (IMAC/ST), and `py` tracks. To add Ack/KGG:
-  - Add `"ack"` and `"kgg"` to `KINASE_TRACKS` in `ingest.py` with appropriate `residue_type` (Lys = `"K"` for both)  
-  - Or, more conservatively, add a `run_export_ptm_bulk()` function that reads the AcK/KGG reports via the existing `_read_log2_quantity_matrix` → `_linear_group_bulk` pattern and writes `ack_bulk_linear.csv` / `kgg_bulk_linear.csv`  
-  - The deconvolution step (share × bulk, same as `pr`/`ps`/`py`) needs to be run to produce `ack_deconvoluted.csv` / `kgg_deconvoluted.csv` with the same wide schema expected by `slice_omics`
+A new helper `_read_ptm_bulk_linear(tissue, assay, manifest, group_map)` reads the
+AcK/KGG Spectronaut TSVs directly (not via `KINASE_TRACKS` — those are only for
+kinase MEA, which AcK/KGG do not feed). It reuses `_quantity_columns`,
+`_median_center_log2`, `_linear_group_bulk`, `_site_id`, `_extract_gene`, and
+`_motif` from the same file. No residue-type filter is applied — each report is
+already single-PTM-type from Spectronaut.
 
-  **Note:** The site-level AcK/KGG residue type filter in `build_track_matrices()` currently filters by `PTM.SiteAA` membership in the kinase `residue_type` set. For AcK/KGG the site key is also Lys (`K`), so the `residue_type = "K"` filter is correct for both. However, AcK and KGG are separate PTMs on the same residue — no conflation needed since they come from separate Spectronaut reports.
+`run_export_bulk()` now loops over `("ack", "ack_bulk_linear.csv")` and
+`("kgg", "kgg_bulk_linear.csv")` after the existing `pr`/`ps`/`py` block,
+calling `_read_ptm_bulk_linear` per tissue and writing the bulk CSVs. Self-gating:
+returns None (with a printed note) when the report is absent. Existing pr/ps/py
+outputs are untouched.
 
-- **T-cells:** No Ack/KGG data. No new deconvolution.
+**`alz/ingest/fivexfad_decompose.py` — channel extension:**
 
-### 3.5 Deconvolution for 5xFAD AcK/KGG
+`KEY_COLS`, `BULK_FILE`, and `OUT_FILE` dicts now include `"ack"` and `"kgg"` entries
+with site-level keys `["site_id", "gene_symbol", "motif"]` — the same as `ps`/`py`.
+The `_run()` inner function is PTM-agnostic (operates on bulk file + key cols),
+so no new logic is needed. The channel loop is extended to
+`("pr", "ps", "py", "ack", "kgg")`. Self-gating via the existing
+`if not os.path.exists(bulk_path): skip` path.
 
-The 5xFAD Incytr inputs are built by `alz/ingest/fivexfad_decompose.py` (or the equivalent script). **AcK/KGG are NOT in `KINASE_TRACKS`** today so no per-group bulk is exported and no deconvolution runs. The needed additions to `ingest.py` (or a sibling script):
-
-1. Read the AcK/KGG Spectronaut TSVs via `_read_log2_quantity_matrix`  
-2. Compute `_linear_group_bulk(raw_log2, key_cols, group_map)` for each — produces `ack_bulk_linear.csv`, `kgg_bulk_linear.csv`  
-3. Run the deconvolution (same `P_c = (N_total/N_c) × bulk × share` formula as `pr`/`ps`/`py`) to produce `ack_deconvoluted.csv`, `kgg_deconvoluted.csv`
-
-The deconvolution infrastructure is in `alz/ingest/fivexfad_decompose.py` (or the 5xFAD analog). This is the primary new implementation work beyond the driver.
-
-**Note on 5xFAD AcK hippocampus:** The AcK hippocampus report is labeled `Mo6-12` — 3-month samples may be absent. The deconvolution will naturally produce NaN for 3mo groups in this track; `slice_omics` will silently collapse them to `NA`, and `Integr_multiomics` will produce `NA` FC values for the affected gene×cluster cells. This is acceptable — the Incytr scorer treats NA FC as 0 in `score_omics_layer`.
+**Note on 5xFAD AcK hippocampus (3mo):** The AcK hippocampus report is labeled
+`Mo6-12` — 3-month samples will be absent from `ack_bulk_linear.csv` for
+hippocampus. The deconvolution's `_deconvolve` function uses only conditions
+present in both bulk and scRNA (`shared = set(bulk_conditions) & set(shares)`),
+so 3mo groups that are in scRNA but not in the AcK bulk are silently skipped
+(listed in `bulk_conditions_skipped_no_scrna`). The resulting `ack_deconvoluted.csv`
+will have no `TG_3mo_*` or `WT_3mo_*` columns for hippocampus AcK.
+`slice_omics` produces an all-NA slice for those conditions; `Integr_multiomics`
+treats NA FC as 0 in `score_omics_layer` — acceptable.
 
 ---
 
-## 4. Output Isolation — Not Overwriting Phospho Results
+## 4. Output Isolation — Not Overwriting Phospho Results — IMPLEMENTED
 
 ### 4.1 Naming scheme
 
-New runs producing Ack/KGG results use a **PTM-type suffix in the output directory**, not in the filename:
+The runner uses **distinct output subdirectories** to prevent the PTM-extended
+results from ever overwriting the phospho-only results:
 
 ```
-# Existing phospho outputs (never touched):
-outputs/reports/incytr_pair_mode/wide/          ← Song phospho (pr+ps+py)
-outputs/reports/incytr_pair_mode_tcells/        ← T-cell phospho
-
-# New acetyl/ubiquitin outputs (5xFAD only, both tissues):
+# Phospho-only (canonical; never touched by --ptm):
 outputs/reports/incytr_pair_mode_5xfad/cortex/wide/
 outputs/reports/incytr_pair_mode_5xfad/hippocampus/wide/
+
+# PTM-extended (Ack + KGG additive; written only by --ptm):
+outputs/reports/incytr_pair_mode_5xfad/cortex/wide_ptm/
+outputs/reports/incytr_pair_mode_5xfad/hippocampus/wide_ptm/
 ```
 
-Within each output directory, the per-contrast filename schema is unchanged:
+Per-contrast filename schema is unchanged in both:
 ```
 <condition1>_<condition2>_incytr_output.parquet
 ```
 
-`OUTPUT_DIR_OVERRIDE` env var (already supported by `incytr_commandline.R`) handles this without any driver changes.
+The `--smoke` flag respects the same separation:
+`wide_smoke/` (default) vs `wide_ptm_smoke/` (--ptm --smoke).
 
-### 4.2 Shell runner
+**Anti-shim note:** phospho-only (`wide/`) and phospho+PTM (`wide_ptm/`) are two
+coexisting data products the user explicitly wants kept separate. They are NOT an
+old/new toggle — the phospho result is the canonical AD-parity product; the PTM
+result is an additive 5xFAD-specific extension. Both are permanent. This is a
+legitimate anti-shim exemption (§ "genuine external compatibility" — the two
+products have different scientific interpretations and different consumers).
 
-A new `run_pair_mode_5xfad.sh` script (already exists in skeleton form) invokes the driver with:
+Song and T-cell Incytr output directories (`incytr_pair_mode/wide/` and
+`incytr_pair_mode_tcells/`) are completely unaffected.
 
-```bash
-INPUTS_DIR_OVERRIDE="data/derived/5xfad_incytr_inputs/${tissue}"
-OUTPUT_DIR_OVERRIDE="outputs/reports/incytr_pair_mode_5xfad/${tissue}/wide"
-CHANNELS="pr,ps,py,Ack,KGG"
-ACK_FILE="ack_deconvoluted.csv"
-KGG_FILE="kgg_deconvoluted.csv"
-ACK_GENE_COL="gene_symbol"
-KGG_GENE_COL="gene_symbol"
-SPECIES="mouse"
-USE_KLDATA="TRUE"
-# SCE4_GENEUSE_DIR is not set — 5xFAD derives its own gene.use
-```
+### 4.2 Shell runner — IMPLEMENTED
 
-The 5xFAD contrasts are TG vs WT at each age, per tissue. Contrast naming follows the existing `TG_vs_WT_<age>mo` convention or a simplified form like `TG_3mo` / `WT_3mo` — to be confirmed against how the 5xFAD Seurat object encodes `condition`.
+`alz/incytr_pair/run_pair_mode_5xfad.sh` now accepts two flags:
+
+- **(no flag):** `CHANNELS=pr,ps,py`, output `…/<tissue>/wide/`.  
+  **Behavior is byte-identical to pre-extension.** Phospho preflight does NOT
+  require ack/kgg files, so the running #6 job is unaffected.
+
+- **`--ptm`:** `CHANNELS=pr,ps,py,Ack,KGG`, sets `ACK_FILE/KGG_FILE/ACK_GENE_COL/KGG_GENE_COL`
+  env vars, output `…/<tissue>/wide_ptm/`. Preflight checks ack/kgg deconvoluted
+  CSVs only in this mode.
+
+Modes can be combined: `--ptm --smoke cortex` runs a 2-pair, nboot=2 smoke
+into `wide_ptm_smoke/`.
 
 ### 4.3 Derived input directories
 
 No changes to Song or T-cell derived input directories:
 - `data/derived/incytr_inputs/` — Song only (pr/ps/py, unchanged)
 - `data/derived/tcells_incytr_inputs/` — T-cells only (unchanged)
-- `data/derived/5xfad_incytr_inputs/cortex/` — gains `ack_deconvoluted.csv`, `kgg_deconvoluted.csv`
-- `data/derived/5xfad_incytr_inputs/hippocampus/` — same
+- `data/derived/5xfad_incytr_inputs/cortex/` — gains `ack_bulk_linear.csv`,
+  `kgg_bulk_linear.csv`, `ack_deconvoluted.csv`, `kgg_deconvoluted.csv`
+- `data/derived/5xfad_incytr_inputs/hippocampus/` — same (hippocampus AcK
+  bulk/deconvoluted will have no 3mo columns — documented in §3.4)
 
 ### 4.4 No viewer changes for phospho
 
@@ -339,31 +359,41 @@ Before shipping:
 
 ---
 
-## 7. Touch Points Summary
+## 7. Touch Points Summary — IMPLEMENTED
 
 ### Driver (`alz/incytr_pair/incytr_commandline.R`)
 
 | Location | Change |
 |---|---|
-| `stopifnot(all(CHANNELS %in% c("pr", "py", "ps")))` | Extend to `c("pr", "py", "ps", "Ack", "KGG")` |
-| Env-param block after `PS_GENE_COL` | Add `ACK_FILE`, `KGG_FILE`, `ACK_GENE_COL`, `KGG_GENE_COL` |
-| After `ps <- ...` | Add `ack <- ...` and `kgg <- ...` with `nzchar(ACK_FILE)` guard |
-| After `ps_1/ps_2 <- slice_omics(...)` | Add `ack_1/ack_2` and `kgg_1/kgg_2` via same `slice_omics` |
-| `multiomics_args` list | Add `Ack.*` and `KGG.*` keys |
-| `drop_pat` | Add `Ack` and `KGG` to the per-node aFC drop pattern |
+| `stopifnot(all(CHANNELS %in% c("pr", "py", "ps")))` | Extended to `c("pr", "py", "ps", "Ack", "KGG")` |
+| Env-param block after `PS_GENE_COL` | Added `ACK_FILE`, `KGG_FILE`, `ACK_GENE_COL`, `KGG_GENE_COL` (all default to `""` / `"gene_symbol"`) |
+| After `ps <- ...` | Added `ack <- ...` and `kgg <- ...` with `nzchar(ACK_FILE)` / `nzchar(KGG_FILE)` guard |
+| After `ps_1/ps_2 <- slice_omics(...)` | Added `ack_1/ack_2` and `kgg_1/kgg_2` via same `slice_omics` |
+| `multiomics_args` list | Added `Ack.data_condition1/2`, `Ack.correction`, `Ack.q`, and KGG equivalents |
+| `drop_pat` | Added `Ack` and `KGG` to the per-node aFC drop pattern |
 
-### 5xFAD ingest (`alz/cohorts/fivexfad/ingest.py` or a sibling)
+### 5xFAD ingest (`alz/cohorts/fivexfad/ingest.py`)
 
 | Location | Change |
 |---|---|
-| `run_export_bulk()` (or new `run_export_ack_kgg_bulk()`) | Add AcK/KGG bulk export for each tissue |
-| Deconvolution step | Run `P_c = share × bulk` for Ack/KGG, write `ack_deconvoluted.csv`/`kgg_deconvoluted.csv` |
+| New `_read_ptm_bulk_linear(tissue, assay, manifest, group_map)` | Reads AcK/KGG Spectronaut TSVs, applies median-center log2 + linear-group-bulk, returns DataFrame or None |
+| `run_export_bulk()` — end of per-tissue loop | Added loop over `("ack", "ack_bulk_linear.csv")`, `("kgg", "kgg_bulk_linear.csv")` calling `_read_ptm_bulk_linear` |
+
+### 5xFAD decompose (`alz/ingest/fivexfad_decompose.py`)
+
+| Location | Change |
+|---|---|
+| `KEY_COLS`, `BULK_FILE`, `OUT_FILE` dicts | Added `"ack"` and `"kgg"` entries (site-keyed) |
+| `_decompose_tissue()` channel loop | Extended `("pr", "ps", "py")` to `("pr", "ps", "py", "ack", "kgg")` |
 
 ### 5xFAD runner (`alz/incytr_pair/run_pair_mode_5xfad.sh`)
 
 | Location | Change |
 |---|---|
-| env-var block | Add `CHANNELS=pr,ps,py,Ack,KGG`, `ACK_FILE=ack_deconvoluted.csv`, `KGG_FILE=kgg_deconvoluted.csv`, `OUTPUT_DIR_OVERRIDE` pointing to tissue-specific dir |
+| New `--ptm` flag | Sets `CHANNELS_ENV=pr,ps,py,Ack,KGG`, `WIDE_SUBDIR=wide_ptm`, `SMOKE_SUBDIR=wide_ptm_smoke` |
+| `run_one()` | Assembles `ptm_env` array with `ACK_FILE/KGG_FILE/ACK_GENE_COL/KGG_GENE_COL`; empty in phospho-only mode |
+| `preflight()` | Checks `ack_deconvoluted.csv` / `kgg_deconvoluted.csv` only when `$PTM == "yes"` |
+| Default mode | Unchanged: `CHANNELS=pr,ps,py`, output `wide/`, no ack/kgg in preflight |
 
 ### Incytr package (`~/Projects/work/incytr/R/`)
 
@@ -372,6 +402,44 @@ Before shipping:
 ### Song and T-cell runners
 
 **No changes.** The extension is additive via env params; existing runners do not set `ACK_FILE`/`KGG_FILE`, so Ack/KGG channels stay inactive.
+
+---
+
+## VERIFY LATER (needs the box — DO NOT RUN NOW)
+
+The box is running a 13–19h Incytr job consuming most of RAM. Run these after it finishes:
+
+**(a) Phospho byte-identity gate (highest priority):**
+```bash
+pixi run verify-incytr-sce4
+```
+Must still pass: 599/600 Micro→Cholin recall, max |Δ sclog2FC| = 0 on R/T.
+Expected: PASS — the new code is additive; when `CHANNELS=pr,ps,py` and
+`ACK_FILE/KGG_FILE` are unset (empty), `ack=NULL`, `kgg=NULL`, and
+`Integr_multiomics` skips those slots silently. No existing code path is modified.
+
+**(b) Build 5xFAD AcK/KGG deconvoluted CSVs:**
+```bash
+# Step 1: produce ack_bulk_linear.csv / kgg_bulk_linear.csv
+pixi run python -m alz.cohorts.fivexfad.ingest --export-bulk
+
+# Step 2: deconvolve into ack_deconvoluted.csv / kgg_deconvoluted.csv
+pixi run python alz/ingest/fivexfad_decompose.py
+
+# Sanity: check mass-identity max |rel err| printed for each channel/tissue.
+# ack/kgg should be ≲ 0.01 (same expectation as ps/py).
+```
+
+**(c) PTM smoke run (5xFAD cortex, 1 pair, nboot=2):**
+```bash
+bash alz/incytr_pair/run_pair_mode_5xfad.sh --ptm --smoke cortex
+```
+Confirm:
+- Output lands in `outputs/reports/incytr_pair_mode_5xfad/cortex/wide_ptm_smoke/`
+- `wide/` is NOT modified
+- Output parquet has columns `Ack_score`, `KGG_score`, `Ligand_Ack_log2FC`,
+  `Ligand_KGG_log2FC` that are numeric (not all-NA)
+- `Ligand_Ack_aFC` and `Ligand_KGG_aFC` are ABSENT (dropped by `drop_pat`)
 
 ---
 

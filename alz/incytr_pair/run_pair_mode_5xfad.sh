@@ -7,9 +7,11 @@
 #
 # Reuses alz/incytr_pair/incytr_commandline.R with env-parameterized inputs:
 #   INPUTS_DIR_OVERRIDE  → per-tissue data/derived/5xfad_incytr_inputs/<tissue>
-#   OUTPUT_DIR_OVERRIDE  → per-tissue outputs/reports/incytr_pair_mode_5xfad/<tissue>
-#   CHANNELS             → "pr,ps,py" (total + IMAC/ST + pY, both tissues)
+#   OUTPUT_DIR_OVERRIDE  → per-tissue outputs/reports/incytr_pair_mode_5xfad/<tissue>/wide
+#                          or …/<tissue>/wide_ptm  (--ptm mode, never overwrites wide/)
+#   CHANNELS             → "pr,ps,py"           (default) or "pr,ps,py,Ack,KGG" (--ptm)
 #   PR/PS/PY_FILE        → <track>_deconvoluted.csv ; gene key column = gene_symbol
+#   ACK_FILE/KGG_FILE    → ack_deconvoluted.csv / kgg_deconvoluted.csv  (--ptm only)
 #   USE_KLDATA=TRUE      → mouse kldata.csv symlinked per tissue to the Song
 #                          kinase library (data/datasets/song/kinase/kldata_pspy.csv)
 #   SPECIES=mouse
@@ -17,8 +19,22 @@
 #                          live as DEG ∪ prG (the t-cell path).
 #
 # Modes:
-#   --smoke <tissue>   one age (3mo) at NBOOT=2 → scratch dir wide_smoke/
-#   default            all contrasts at NBOOT=100, resumable, filter applied
+#   (no flag)            all contrasts, CHANNELS=pr,ps,py, NBOOT=100,
+#                        resumable, significance filter applied.
+#                        Output: …/<tissue>/wide/      (canonical phospho results)
+#
+#   --ptm                all contrasts, CHANNELS=pr,ps,py,Ack,KGG, NBOOT=100,
+#                        resumable, significance filter applied.
+#                        Output: …/<tissue>/wide_ptm/  (PTM-extended results;
+#                        NEVER writes to wide/ — the two are independent products)
+#
+#   --smoke [tissue]     one age (3mo) at NBOOT=2, current mode's channels,
+#                        output → wide_smoke/ or wide_ptm_smoke/
+#
+# Anti-shim note: phospho-only (wide/) and phospho+PTM (wide_ptm/) are two
+# coexisting data products the user explicitly wants kept separate. They are NOT
+# an old/new toggle — the phospho result is the canonical AD-parity product;
+# the PTM result is an additive 5xFAD-specific extension. Both are permanent.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -30,13 +46,26 @@ AGES=(3 6 9 12)
 TISSUES=(cortex hippocampus)
 
 MODE="full"
+PTM="no"
 SMOKE_TISSUE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --ptm)   PTM="yes";                                          shift 1 ;;
     --smoke) MODE="smoke"; SMOKE_TISSUE="${2:-cortex}"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
+
+# Resolve channel set and output subdirectory from mode flags.
+if [[ "$PTM" == "yes" ]]; then
+  CHANNELS_ENV="pr,ps,py,Ack,KGG"
+  WIDE_SUBDIR="wide_ptm"
+  SMOKE_SUBDIR="wide_ptm_smoke"
+else
+  CHANNELS_ENV="pr,ps,py"
+  WIDE_SUBDIR="wide"
+  SMOKE_SUBDIR="wide_smoke"
+fi
 
 LOG_DIR="outputs/reports/incytr_pair_mode_5xfad"
 mkdir -p "$LOG_DIR"
@@ -57,10 +86,13 @@ preflight() {
                "$indir/kldata.csv"
                "$indir/pr_deconvoluted.csv" "$indir/ps_deconvoluted.csv"
                "$indir/py_deconvoluted.csv" )
+  if [[ "$PTM" == "yes" ]]; then
+    need+=( "$indir/ack_deconvoluted.csv" "$indir/kgg_deconvoluted.csv" )
+  fi
   for f in "${need[@]}"; do
     test -e "$f" || { echo "missing: $f"; return 1; }
   done
-  echo "[$tissue] preflight OK"
+  echo "[$tissue] preflight OK (mode: ${PTM:+ptm}${PTM:-phospho-only})"
 }
 
 run_one() {
@@ -74,25 +106,38 @@ run_one() {
     echo "[$tissue $c1 vs $c2] resume (parquet exists)"
     return 0
   fi
-  echo "=== $(date -Is) [$tissue] $c1 vs $c2 (nboot=$nboot) ==="
+  echo "=== $(date -Is) [$tissue] $c1 vs $c2 (nboot=$nboot channels=$CHANNELS_ENV) ==="
   local status_file="$out_subdir/.status_${c1}_${c2}.txt"
   echo "started $(date -Is)" > "$status_file"
 
-  INPUTS_DIR_OVERRIDE="$indir" \
-  OUTPUT_DIR_OVERRIDE="$out_subdir" \
-  CHANNELS="pr,ps,py" \
-  PR_FILE="pr_deconvoluted.csv" \
-  PS_FILE="ps_deconvoluted.csv" \
-  PY_FILE="py_deconvoluted.csv" \
-  PR_GENE_COL="gene_symbol" \
-  PS_GENE_COL="gene_symbol" \
-  PY_GENE_COL="gene_symbol" \
-  USE_KLDATA="TRUE" \
-  SPECIES="mouse" \
-  NBOOT="$nboot" \
-  NPAIR_WORKERS="${NPAIR_WORKERS:-1}" \
-  N_CHUNK_MULT="${N_CHUNK_MULT:-8}" \
-  NPERM_WORKERS="${NPERM_WORKERS:-1}" \
+  # Core phospho env vars are always set.
+  local ptm_env=()
+  if [[ "$PTM" == "yes" ]]; then
+    ptm_env=(
+      "ACK_FILE=ack_deconvoluted.csv"
+      "KGG_FILE=kgg_deconvoluted.csv"
+      "ACK_GENE_COL=gene_symbol"
+      "KGG_GENE_COL=gene_symbol"
+    )
+  fi
+
+  env \
+    INPUTS_DIR_OVERRIDE="$indir" \
+    OUTPUT_DIR_OVERRIDE="$out_subdir" \
+    CHANNELS="$CHANNELS_ENV" \
+    PR_FILE="pr_deconvoluted.csv" \
+    PS_FILE="ps_deconvoluted.csv" \
+    PY_FILE="py_deconvoluted.csv" \
+    PR_GENE_COL="gene_symbol" \
+    PS_GENE_COL="gene_symbol" \
+    PY_GENE_COL="gene_symbol" \
+    USE_KLDATA="TRUE" \
+    SPECIES="mouse" \
+    NBOOT="$nboot" \
+    NPAIR_WORKERS="${NPAIR_WORKERS:-1}" \
+    N_CHUNK_MULT="${N_CHUNK_MULT:-8}" \
+    NPERM_WORKERS="${NPERM_WORKERS:-1}" \
+    "${ptm_env[@]}" \
     pixi run Rscript "$DRIVER" "$c1" "$c2" \
     || { echo "FAIL $(date -Is)" > "$status_file"; echo "  FAIL: [$tissue] $c1 vs $c2 (continuing)"; return 1; }
   echo "done $(date -Is)" > "$status_file"
@@ -101,14 +146,14 @@ run_one() {
 if [[ "$MODE" == "smoke" ]]; then
   tissue="$SMOKE_TISSUE"
   LOG="$LOG_DIR/pair_run_smoke_${tissue}.log"
-  SMOKE_DIR="$LOG_DIR/${tissue}/wide_smoke"
-  mkdir -p "$SMOKE_DIR"
+  SMOKE_OUT="$LOG_DIR/${tissue}/${SMOKE_SUBDIR}"
+  mkdir -p "$SMOKE_OUT"
   {
-    echo "=== Smoke run: $tissue, nboot=2, TG_3mo vs WT_3mo ==="
+    echo "=== Smoke run: $tissue, nboot=2, TG_3mo vs WT_3mo channels=$CHANNELS_ENV ==="
     preflight "$tissue"
-    run_one "$tissue" 3 "$SMOKE_DIR" 2 || true
-    echo "=== $(date -Is) Smoke done. Output: $SMOKE_DIR/ ==="
-    ls -lh "$SMOKE_DIR/"
+    run_one "$tissue" 3 "$SMOKE_OUT" 2 || true
+    echo "=== $(date -Is) Smoke done. Output: $SMOKE_OUT/ ==="
+    ls -lh "$SMOKE_OUT/"
   } 2>&1 | tee "$LOG"
   exit 0
 fi
@@ -118,7 +163,7 @@ LOG="$LOG_DIR/pair_run.log"
   failed=()
   for tissue in "${TISSUES[@]}"; do
     preflight "$tissue" || { failed+=("$tissue:preflight"); continue; }
-    OUT_DIR="$LOG_DIR/${tissue}/wide"
+    OUT_DIR="$LOG_DIR/${tissue}/${WIDE_SUBDIR}"
     for age in "${AGES[@]}"; do
       run_one "$tissue" "$age" "$OUT_DIR" 100 \
         || failed+=("${tissue}:TG_${age}mo_vs_WT_${age}mo")
@@ -135,5 +180,5 @@ LOG="$LOG_DIR/pair_run.log"
     echo "FAILED: ${failed[*]}"
     exit 1
   fi
-  echo "All 5xFAD contrasts succeeded."
+  echo "All 5xFAD contrasts succeeded (channels=$CHANNELS_ENV)."
 } 2>&1 | tee "$LOG"

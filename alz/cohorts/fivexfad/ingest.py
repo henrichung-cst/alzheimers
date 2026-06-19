@@ -718,10 +718,68 @@ def _linear_group_bulk(
     return out
 
 
+def _read_ptm_bulk_linear(
+    tissue: str, assay: str, manifest: pd.DataFrame, group_map: dict[str, str]
+) -> pd.DataFrame | None:
+    """Read a PTM Spectronaut report for `assay` and collapse to linear per-group
+    bulk. Returns None (with a warning) if the report file is missing — the
+    5xFAD hippocampus AcK report covers Mo6-12 only so callers must tolerate None.
+
+    Keyed by (site_id, gene_symbol, motif) matching the ps/py convention.
+    No residue-type filter is applied: AcK and KGG reports are already
+    single-PTM-type reports from Spectronaut, so every row is the correct
+    modification type."""
+    site_keys = ["site_id", "gene_symbol", "motif"]
+    try:
+        spec = next(s for s in REPORT_SPECS if s.tissue == tissue and s.assay == assay)
+    except StopIteration:
+        print(f"  [export-bulk] no ReportSpec for {tissue}/{assay} — skip")
+        return None
+    if not spec.path.exists():
+        print(f"  [export-bulk] {tissue}/{assay} report missing ({spec.path.name}) — skip")
+        return None
+    df = pd.read_csv(spec.path, sep="\t")
+    qcols = _quantity_columns(df.columns, assay)
+    rows = manifest[
+        (manifest["tissue"] == tissue)
+        & (manifest["assay"] == assay)
+        & (manifest["analysis_action"] == "primary")
+    ].copy()
+    rows = rows[rows["raw_run"].isin(qcols)]
+    if rows.empty:
+        print(f"  [export-bulk] {tissue}/{assay}: no primary sample columns — skip")
+        return None
+    raw_cols = rows["raw_run"].tolist()
+    quant = df[[qcols[r] for r in raw_cols]].apply(pd.to_numeric, errors="coerce")
+    quant.columns = raw_cols
+    quant = quant.mask(quant <= 0)
+    with np.errstate(divide="ignore"):
+        log2q = np.log2(quant)
+    log2q = pd.DataFrame(log2q, columns=raw_cols, index=df.index)
+    norm, _ = _median_center_log2(log2q)
+    sample_ids = dict(zip(rows["raw_run"], rows["biological_sample_id"]))
+    norm = norm.rename(columns=sample_ids)
+    norm = norm.T.groupby(level=0, sort=False).mean().T
+    # Build key columns using the same helpers as build_track_matrices.
+    site_ids = _make_unique(df.apply(_site_id, axis=1))
+    meta = pd.DataFrame({
+        "site_id": site_ids,
+        "gene_symbol": df.apply(_extract_gene, axis=1),
+        "motif": df.apply(_motif, axis=1),
+    })
+    raw_out = pd.concat([meta, norm], axis=1)
+    keep = meta["gene_symbol"].astype(bool)
+    raw_out = raw_out.loc[keep].reset_index(drop=True)
+    bulk = _linear_group_bulk(raw_out, site_keys, group_map)
+    return bulk
+
+
 def run_export_bulk() -> None:
     """Write per-tissue LINEAR per-group bulk for the Incytr pair-mode
     deconvolution: pr (total proteome, gene-keyed) + ps (IMAC/ST) + py (pY),
-    both site-keyed. Consumed by alz/ingest/fivexfad_decompose.py."""
+    both site-keyed. Also writes ack (acetylation) and kgg (ubiquitination) when
+    the corresponding Spectronaut reports are present. Consumed by
+    alz/ingest/fivexfad_decompose.py."""
     _ensure_output_dir()
     manifest_path = OUTPUT_DIR / "sample_manifest.csv"
     manifest = (
@@ -742,6 +800,18 @@ def run_export_bulk() -> None:
             raw = build_track_matrices(tissue, track, manifest)["raw_phospho_normalized"]
             bulk = _linear_group_bulk(raw, site_keys, group_map)
             bulk.to_csv(outdir / out_name, index=False)
+
+        # Acetylation (AcK) and ubiquitination (KGG) — 5xFAD-only PTM tracks.
+        # These are not in KINASE_TRACKS (no kinase MEA) but are valid Incytr
+        # omics layers. Self-gating: returns None and prints a warning when the
+        # report is absent (hippocampus AcK covers Mo6-12 only; 3mo samples may
+        # be missing from that tissue's AcK deconvolution).
+        for assay, out_name in (("ack", "ack_bulk_linear.csv"), ("kgg", "kgg_bulk_linear.csv")):
+            bulk = _read_ptm_bulk_linear(tissue, assay, manifest, group_map)
+            if bulk is not None:
+                bulk.to_csv(outdir / out_name, index=False)
+                print(f"  [export-bulk] {tissue}/{assay}: {len(bulk)} rows -> {out_name}")
+
         groups = sorted(set(group_map.values()))
         print(f"[5xfad-export-bulk] {tissue}: pr={len(pr_bulk)} genes, "
               f"{len(groups)} groups {groups} -> {outdir}")

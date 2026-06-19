@@ -145,7 +145,7 @@ if (!is.null(Data.input@meta.data$Group)) {
 # `gene_symbol` key). Defaults reproduce the mouse path byte-exactly.
 CHANNELS    <- strsplit(Sys.getenv("CHANNELS", unset = "pr,py,ps"), ",", fixed = TRUE)[[1]]
 CHANNELS    <- trimws(CHANNELS[nzchar(CHANNELS)])
-stopifnot(all(CHANNELS %in% c("pr", "py", "ps")))
+stopifnot(all(CHANNELS %in% c("pr", "py", "ps", "Ack", "KGG")))
 stopifnot("pr" %in% CHANNELS)  # pr drives prG receiver gene-set — required
 PR_FILE     <- Sys.getenv("PR_FILE", unset = "pr_yuyu_deconvoluted.csv")
 PY_FILE     <- Sys.getenv("PY_FILE", unset = "py_yuyu_deconvoluted.csv")
@@ -153,12 +153,27 @@ PS_FILE     <- Sys.getenv("PS_FILE", unset = "ps_yuyu_deconvoluted.csv")
 PR_GENE_COL <- Sys.getenv("PR_GENE_COL", unset = "Gene Symbol")
 PY_GENE_COL <- Sys.getenv("PY_GENE_COL", unset = "gene_symbol")
 PS_GENE_COL <- Sys.getenv("PS_GENE_COL", unset = "gene_symbol")
+# Ack (acetylation) and KGG (ubiquitination) are optional PTM channels. They are
+# 5xFAD-specific: Song and T-cells have no AcK/KGG data. When ACK_FILE/KGG_FILE
+# are unset (empty string, the default), the channels are inactive and the driver
+# is byte-identical to a phospho-only run. The Incytr package already has Ack_FC
+# and KGG_FC slots and scores them end-to-end — no package changes required.
+# Do NOT apply floor_pr to Ack/KGG: the floor is a pr-specific sce4 parity
+# constant for deconvolution residuals in the total proteome.
+ACK_FILE    <- Sys.getenv("ACK_FILE",    unset = "")
+KGG_FILE    <- Sys.getenv("KGG_FILE",    unset = "")
+ACK_GENE_COL <- Sys.getenv("ACK_GENE_COL", unset = "gene_symbol")
+KGG_GENE_COL <- Sys.getenv("KGG_GENE_COL", unset = "gene_symbol")
 cat(sprintf("[pair-driver] channels=[%s]  pr_file=%s  pr_gene_col=%s\n",
             paste(CHANNELS, collapse = ","), PR_FILE, PR_GENE_COL))
 
-pr <- read_csv(file.path(INPUTS_DIR, PR_FILE))
-py <- if ("py" %in% CHANNELS) read_csv(file.path(INPUTS_DIR, PY_FILE)) else NULL
-ps <- if ("ps" %in% CHANNELS) read_csv(file.path(INPUTS_DIR, PS_FILE)) else NULL
+pr  <- read_csv(file.path(INPUTS_DIR, PR_FILE))
+py  <- if ("py"  %in% CHANNELS) read_csv(file.path(INPUTS_DIR, PY_FILE))  else NULL
+ps  <- if ("ps"  %in% CHANNELS) read_csv(file.path(INPUTS_DIR, PS_FILE))  else NULL
+ack <- if ("Ack" %in% CHANNELS && nzchar(ACK_FILE))
+         read_csv(file.path(INPUTS_DIR, ACK_FILE)) else NULL
+kgg <- if ("KGG" %in% CHANNELS && nzchar(KGG_FILE))
+         read_csv(file.path(INPUTS_DIR, KGG_FILE)) else NULL
 
 # Slice pr/ps/py into condition1 / condition2 wide-by-cluster tables.
 # Each table is one row per gene_symbol, one column per cluster, suffixed
@@ -174,12 +189,16 @@ slice_omics <- function(df, gene_col, condition, suffix) {
   out$gene_symbol <- df[[gene_col]]
   out %>% group_by(gene_symbol) %>% summarise_all(mean, na.rm = TRUE)
 }
-pr_1 <- slice_omics(pr, PR_GENE_COL, condition1, "pr")
-pr_2 <- slice_omics(pr, PR_GENE_COL, condition2, "pr")
-ps_1 <- if ("ps" %in% CHANNELS) slice_omics(ps, PS_GENE_COL, condition1, "ps") else NULL
-ps_2 <- if ("ps" %in% CHANNELS) slice_omics(ps, PS_GENE_COL, condition2, "ps") else NULL
-py_1 <- if ("py" %in% CHANNELS) slice_omics(py, PY_GENE_COL, condition1, "py") else NULL
-py_2 <- if ("py" %in% CHANNELS) slice_omics(py, PY_GENE_COL, condition2, "py") else NULL
+pr_1  <- slice_omics(pr, PR_GENE_COL, condition1, "pr")
+pr_2  <- slice_omics(pr, PR_GENE_COL, condition2, "pr")
+ps_1  <- if ("ps"  %in% CHANNELS) slice_omics(ps,  PS_GENE_COL,  condition1, "ps")  else NULL
+ps_2  <- if ("ps"  %in% CHANNELS) slice_omics(ps,  PS_GENE_COL,  condition2, "ps")  else NULL
+py_1  <- if ("py"  %in% CHANNELS) slice_omics(py,  PY_GENE_COL,  condition1, "py")  else NULL
+py_2  <- if ("py"  %in% CHANNELS) slice_omics(py,  PY_GENE_COL,  condition2, "py")  else NULL
+ack_1 <- if (!is.null(ack)) slice_omics(ack, ACK_GENE_COL, condition1, "Ack") else NULL
+ack_2 <- if (!is.null(ack)) slice_omics(ack, ACK_GENE_COL, condition2, "Ack") else NULL
+kgg_1 <- if (!is.null(kgg)) slice_omics(kgg, KGG_GENE_COL, condition1, "KGG") else NULL
+kgg_2 <- if (!is.null(kgg)) slice_omics(kgg, KGG_GENE_COL, condition2, "KGG") else NULL
 
 # sce4 reproduction (driver-side override #2): floor pr values < 1 to 1.
 # pr_yuyu carries ~1e-5 deconvolution residuals where sce4-era values were
@@ -459,10 +478,15 @@ if (nzchar(pair_subset_env)) {
 }
 
 multiomics_args <- list(
-  pr.data_condition1 = pr_1, pr.data_condition2 = pr_2, pr.correction = 0.001, pr.q = NULL,
-  ps.data_condition1 = ps_1, ps.data_condition2 = ps_2, ps.correction = 0.001, ps.q = NULL,
-  py.data_condition1 = py_1, py.data_condition2 = py_2, py.correction = 0.001, py.q = NULL
+  pr.data_condition1  = pr_1,  pr.data_condition2  = pr_2,  pr.correction  = 0.001, pr.q  = NULL,
+  ps.data_condition1  = ps_1,  ps.data_condition2  = ps_2,  ps.correction  = 0.001, ps.q  = NULL,
+  py.data_condition1  = py_1,  py.data_condition2  = py_2,  py.correction  = 0.001, py.q  = NULL,
+  Ack.data_condition1 = ack_1, Ack.data_condition2 = ack_2, Ack.correction = 0.001, Ack.q = NULL,
+  KGG.data_condition1 = kgg_1, KGG.data_condition2 = kgg_2, KGG.correction = 0.001, KGG.q = NULL
 )
+# When ack_1/ack_2 or kgg_1/kgg_2 are NULL (the default when ACK_FILE/KGG_FILE
+# are unset), Integr_multiomics skips those layers silently — the same pattern
+# used for ps/py on donor2 T-cells. The phospho-only path is byte-identical.
 
 # Condition->barcodes split must be captured before rm(Data.input) below.
 cond_cells <- lapply(c(condition1, condition2), function(cc) {
@@ -476,7 +500,7 @@ names(cond_cells) <- c(condition1, condition2)
 # =====================================================================
 # Drop the redundant per-(node, omics) `_aFC` raw fold mirrors and the SiK
 # sub-score breakdowns; the viewer keeps `<Node>_<omics>_log2FC` instead.
-drop_pat <- "^(Ligand|Receptor|EM|Target)_(pr|ps|py)_aFC$|^SiK_(R|EM|T)_of_(EM|T|R)(_EI_.*)?$"
+drop_pat <- "^(Ligand|Receptor|EM|Target)_(pr|ps|py|Ack|KGG)_aFC$|^SiK_(R|EM|T)_of_(EM|T|R)(_EI_.*)?$"
 num_pat  <- "^(SigProb|p_value|SiK|log2FC|aFC|PDS|TPDS|PPDS|PhPDS|Ack_score|KGG_score|Rme1_score|multimodel_score|pr_|ps_|py_)"
 
 # Shards persist across runs so an interrupted contrast resumes per-pair: a
