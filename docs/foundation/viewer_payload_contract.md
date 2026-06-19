@@ -349,6 +349,22 @@ payloads use donor-scoped index files such as
 `edge_slices/incytr_pathways/donor1__incytr_index.bin.gz`; the manifest URL is context-local and
 must be read rather than constructed.
 
+Context-specific Incytr blocks also carry `gene_node_index_shard`, a viewer-relative URL to a
+gzipped sidecar holding the compact gene→(role, sender, receiver) summary used by pair-mode gene
+search:
+
+```json
+{ "gene_node_index_shard": "edge_slices/incytr_pathways/gene_node_index.json.gz" }
+```
+
+The sidecar's JSON is the gene-node index (`genes`, `roles`, `senders`, `receivers`, and the
+parallel `gene_id`/`role_id`/`sender_id`/`receiver_id`/`n_rows`/`best_*` arrays). It was moved out
+of the inline payload (audit P5 — ~15 MB per context) because it is only consumed when the Incytr
+Pathways tab runs a gene search. The viewer fetches and gunzips it once on first gene-search
+interaction (`_ipEnsureGeneIndex` in `incytr_pathways.js`, mirroring `global_index`), showing a brief
+loading state and re-rendering when it resolves. T-cell payloads use donor-scoped sidecars such as
+`edge_slices/incytr_pathways/donor1__gene_node_index.json.gz`; read the URL, do not construct it.
+
 Song/AD Incytr payloads may also include sparse-cell QC metadata used for interpretation-only
 sensitivity views:
 
@@ -398,8 +414,8 @@ The first-load block must stay compact:
     "filters": {"tissue": ["cortex", "hippocampus"], "age_months": [3, 6, 9, 12]},
     "rows": [],
     "celltype_agreement_index": [],
-    "celltype_attribution_summary_index": [],
-    "celltype_mea_plot_index": [],
+    "celltype_attribution_summary_shard": "edge_slices/fivexfad_attribution_summary.json.gz",
+    "celltype_mea_plot_index_shard": "edge_slices/fivexfad_celltype_mea_index.json.gz",
     "detail_shards": {"AKT1": "edge_slices/fivexfad_detail/AKT1.json.gz"},
     "celltype_mea_shards": {"AKT1": "edge_slices/fivexfad_celltype_mea/AKT1.json"},
     "celltype_attribution_shards": {"AKT1": "edge_slices/fivexfad_attribution/AKT1.json"},
@@ -418,16 +434,29 @@ shard index has the same per-kinase shape as the Song/Mukesh lazy sidecars.
 
 `celltype_agreement_index` contains compact categorical bulk-vs-decomposition
 agreement calls and raw evidence counts per kinase, tissue, track, and age. It
-replaces any embedded `celltype_mea_index`. `celltype_mea_plot_index` contains
-only the compact raw fields needed for decomp bars and no-fetch fallback views:
-kinase, tissue, track, cell type, age, NES, FDR, and substrate counts. Full
-per-cell-type MEA rows are loaded from `celltype_mea_shards` only when detail
-views need fields outside that compact plot index.
+replaces any embedded `celltype_mea_index`.
 
-`celltype_attribution_summary_index` contains the compact attribution evidence
-needed for main-table filtering and badges. Full attribution rows, including
-long evidence-basis strings and cell/sample counts for drawers, are loaded from
-`celltype_attribution_shards` only when the Attribution detail tab is opened.
+`celltype_mea_plot_index_shard` and `celltype_attribution_summary_shard` are
+viewer-relative URLs to whole-list gzipped index sidecars under `edge_slices/`,
+**not** inline arrays. They were moved out of the first-load block (audit P1/P2)
+because both are iterated in full at first 5xFAD/Crosstable render rather than
+accessed per-kinase — inlining them cost ~40 MB of upfront `JSON.parse` for data
+no other tab needs. `_f5EnsureShardData()` fetches both once (promise-cached) on
+first 5xFAD or Crosstable render and populates the same in-memory indexes; the
+tab shows a brief loading state and re-renders when they resolve. Each sidecar is
+`{"schema_version": 1, "rows": [...]}`.
+
+- `celltype_mea_plot_index_shard` → rows with the compact fields for decomp bars
+  and no-fetch fallback views: kinase, tissue, track, cell type, age, NES, FDR,
+  and substrate counts. Full per-cell-type MEA rows still load from
+  `celltype_mea_shards` only when detail views need fields outside that index.
+- `celltype_attribution_summary_shard` → the compact attribution evidence needed
+  for main-table filtering and badges. Full attribution rows (long evidence-basis
+  strings, cell/sample counts for drawers) still load from
+  `celltype_attribution_shards` only when the Attribution detail tab is opened.
+
+A build with no 5xFAD attribution inputs omits both `*_shard` keys; the JS treats
+a missing path as an empty index.
 
 ## Verification
 

@@ -28,6 +28,24 @@ const _F5AttrLoadedKinases = new Set();
 const _F5CelltypeMeaCache = new Map();
 const _F5CelltypeMeaLoadedKinases = new Set();
 const _F5CelltypeOlsCache = new Map();
+// Audit P6: bound the per-kinase attribution / cell-type-MEA fetch-promise caches
+// with the same LRU policy SliceCache uses. Safe because _f5AttributionReady /
+// _f5CelltypeMeaReady gate on the *LoadedKinases sets (not the cache), and the
+// render path only ever targets the one selected kinase — so an evicted entry is
+// never re-fetched + re-indexed. Eviction drops the resolved-payload wrapper only;
+// the indexed rows live in _F5AttrByKinase / _F5CelltypeMeaRowsByAgeKey.
+const _F5_CACHE_MAX = 32;
+function _f5CacheSet(cache, key, value) {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > _F5_CACHE_MAX) cache.delete(cache.keys().next().value);
+}
+// celltype_attribution_summary_index (P2) and celltype_mea_plot_index (P1) are no
+// longer inlined in the payload — they are fetched once from gzipped index sidecars
+// on first 5xFAD/Crosstable render. _F5ShardDataReady gates the synchronous render path.
+let _F5ShardDataPromise = null;
+let _F5ShardDataReady = false;
+let _F5AttrSummaryRaw = [];
 
 const _F5State = {
   search: "",
@@ -445,17 +463,12 @@ function _f5EnsureIndexes() {
     _F5QcByKey.set(_f5QcKey(q.tissue, q.track, q.age_months), q);
   }
 
-  for (const r of (block.celltype_attribution_summary_index || [])) {
-    const key = _f5AttributionSummaryKey(r.kinase, r.tissue, r.age_months);
-    if (Array.isArray(r.celltypes)) r.celltypes.sort(_f5CmpAttr);
-    _F5AttrSummaryByGroupAgeKey.set(key, r);
-  }
-
   for (const r of (block.celltype_agreement_index || [])) {
     const key = _f5CelltypeAgreementKey(r.kinase, r.tissue, r.track, r.age_months);
     _F5CelltypeAgreementByKey.set(key, r);
   }
-  _f5IndexCelltypeMeaRows(block.celltype_mea_plot_index || []);
+  // _F5AttrSummaryByGroupAgeKey (P2) and _F5CelltypeMeaRowsByAgeKey (P1) are filled by
+  // _f5EnsureShardData() once the index sidecars load; leave them as empty Maps here.
 
   const byKey = new Map();
   for (const row of (block.rows || [])) {
@@ -508,6 +521,51 @@ function _f5IndexCelltypeMeaRows(rows) {
       rec
     );
   }
+}
+
+function _f5IndexAttributionSummaryRows(rows) {
+  _f5EnsureIndexes();
+  _F5AttrSummaryRaw = rows || [];
+  for (const r of (rows || [])) {
+    const key = _f5AttributionSummaryKey(r.kinase, r.tissue, r.age_months);
+    if (Array.isArray(r.celltypes)) r.celltypes.sort(_f5CmpAttr);
+    _F5AttrSummaryByGroupAgeKey.set(key, r);
+  }
+}
+
+// Raw celltype_attribution_summary_index rows, loaded from the sidecar. Exposed for the
+// Crosstable, which builds its own 5xFAD attribution index from the same list.
+function _f5AttributionSummaryRows() {
+  return _F5AttrSummaryRaw || [];
+}
+
+// Fetch the two 5xFAD index sidecars once (P1 celltype_mea_plot_index, P2
+// celltype_attribution_summary_index) and populate the in-memory indexes. Idempotent:
+// the cached promise dedupes concurrent first renders.
+function _f5EnsureShardData() {
+  if (_F5ShardDataPromise) return _F5ShardDataPromise;
+  _f5EnsureIndexes();
+  const block = _f5Block();
+  if (!block) {
+    _F5ShardDataReady = true;
+    _F5ShardDataPromise = Promise.resolve();
+    return _F5ShardDataPromise;
+  }
+  const tasks = [];
+  const attrPath = block.celltype_attribution_summary_shard || "";
+  if (attrPath) {
+    tasks.push(_f5FetchJson(attrPath)
+      .then(p => _f5IndexAttributionSummaryRows((p && p.rows) || []))
+      .catch(err => { console.warn("5xFAD attribution summary shard fetch failed", attrPath, err); }));
+  }
+  const meaPath = block.celltype_mea_plot_index_shard || "";
+  if (meaPath) {
+    tasks.push(_f5FetchJson(meaPath)
+      .then(p => _f5IndexCelltypeMeaRows((p && p.rows) || []))
+      .catch(err => { console.warn("5xFAD cell-type MEA index shard fetch failed", meaPath, err); }));
+  }
+  _F5ShardDataPromise = Promise.all(tasks).then(() => { _F5ShardDataReady = true; });
+  return _F5ShardDataPromise;
 }
 
 function _f5AgeScope() {
@@ -668,7 +726,7 @@ function _f5PopulateControls() {
   _f5SetOptions("f5-filter-tissue", filters.tissue || []);
   const ageVals = (filters.age_months || _F5_AGES).map(v => String(v));
   _f5SetOptions("f5-filter-age", ageVals, {3: "3mo", 6: "6mo", 9: "9mo", 12: "12mo"});
-  const celltypes = Array.from(new Set((block.celltype_attribution_summary_index || [])
+  const celltypes = Array.from(new Set(_f5AttributionSummaryRows()
     .flatMap(r => Array.isArray(r.celltypes) ? r.celltypes : [])
     .map(r => r.cell_type).filter(Boolean))).sort();
   _f5SetOptions("f5-filter-celltype", celltypes);
@@ -778,6 +836,14 @@ function renderFiveXFADKinase() {
     const count = document.getElementById("f5-count");
     if (count) count.textContent = "5xFAD payload unavailable";
     if (detail) detail.innerHTML = '<div class="muted">5xFAD payload data are not available in this viewer build.</div>';
+    return;
+  }
+  if (!_F5ShardDataReady) {
+    const count = document.getElementById("f5-count");
+    if (count) count.textContent = "Loading 5xFAD data…";
+    const detail = document.getElementById("f5-detail");
+    if (detail) detail.innerHTML = '<div class="muted" style="padding:1em">Loading 5xFAD index shards…</div>';
+    _f5EnsureShardData().then(() => renderFiveXFADKinase());
     return;
   }
   _f5PopulateControls();
@@ -1311,7 +1377,9 @@ function _f5LoadAttribution(group) {
     if (kinase) _F5AttrLoadedKinases.add(kinase);
     return Promise.resolve(null);
   }
-  if (_F5AttrCache.has(path)) return _F5AttrCache.get(path);
+  if (_F5AttrCache.has(path)) {
+    const v = _F5AttrCache.get(path); _f5CacheSet(_F5AttrCache, path, v); return v;
+  }
   const p = _f5FetchJson(path).then(payload => {
     _f5IndexAttributionRows((payload && payload.rows) || []);
     _F5AttrLoadedKinases.add(kinase);
@@ -1321,7 +1389,7 @@ function _f5LoadAttribution(group) {
     _F5AttrLoadedKinases.add(kinase);
     return null;
   });
-  _F5AttrCache.set(path, p);
+  _f5CacheSet(_F5AttrCache, path, p);
   return p;
 }
 
@@ -1343,7 +1411,9 @@ function _f5LoadCelltypeMea(group) {
     if (kinase) _F5CelltypeMeaLoadedKinases.add(kinase);
     return Promise.resolve(null);
   }
-  if (_F5CelltypeMeaCache.has(path)) return _F5CelltypeMeaCache.get(path);
+  if (_F5CelltypeMeaCache.has(path)) {
+    const v = _F5CelltypeMeaCache.get(path); _f5CacheSet(_F5CelltypeMeaCache, path, v); return v;
+  }
   const p = _f5FetchJson(path).then(payload => {
     _f5IndexCelltypeMeaRows((payload && payload.rows) || []);
     _F5CelltypeMeaLoadedKinases.add(kinase);
@@ -1353,7 +1423,7 @@ function _f5LoadCelltypeMea(group) {
     _F5CelltypeMeaLoadedKinases.add(kinase);
     return null;
   });
-  _F5CelltypeMeaCache.set(path, p);
+  _f5CacheSet(_F5CelltypeMeaCache, path, p);
   return p;
 }
 

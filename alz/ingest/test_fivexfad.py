@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 import alz.build_unified_viewer as viewer
+from alz.viewer.cohorts import fivexfad as f5viewer
 from alz.cohorts.fivexfad import ingest as fivexfad
 from alz.cohorts.fivexfad import celltype_mea as fivexfad_celltype_mea
 
@@ -148,6 +149,7 @@ class FiveXFADTests(unittest.TestCase):
             celltype_mea_shard_dir = Path(tmp) / "viewer" / "fivexfad_celltype_mea"
             celltype_ols_dir = Path(tmp) / "viewer" / "fivexfad_celltype_ols"
             attribution_dir = Path(tmp) / "viewer" / "fivexfad_attribution"
+            index_dir = Path(tmp) / "viewer" / "edge_slices"
             pd.DataFrame(
                 {
                     "tissue": ["cortex"],
@@ -275,32 +277,38 @@ class FiveXFADTests(unittest.TestCase):
                 }
             ).to_csv(out / "sample_manifest.csv", index=False)
 
-            old_dir = viewer.FIVEXFAD_KINASE_DIR
-            old_detail_dir = viewer.FIVEXFAD_DETAIL_DIR
-            old_celltype_dir = viewer.FIVEXFAD_CELLTYPE_DIR
-            old_celltype_mea_dir = viewer.FIVEXFAD_CELLTYPE_MEA_DIR
-            old_celltype_ols_dir = viewer.FIVEXFAD_CELLTYPE_OLS_DIR
-            old_attribution_dir = viewer.FIVEXFAD_ATTRIBUTION_DIR
-            old_mapping_cache = viewer.config.MAPPING_CACHE_FILE
+            old_dir = f5viewer.FIVEXFAD_KINASE_DIR
+            old_detail_dir = f5viewer.FIVEXFAD_DETAIL_DIR
+            old_celltype_dir = f5viewer.FIVEXFAD_CELLTYPE_DIR
+            old_celltype_mea_dir = f5viewer.FIVEXFAD_CELLTYPE_MEA_DIR
+            old_celltype_ols_dir = f5viewer.FIVEXFAD_CELLTYPE_OLS_DIR
+            old_attribution_dir = f5viewer.FIVEXFAD_ATTRIBUTION_DIR
+            old_index_dir = f5viewer.FIVEXFAD_INDEX_DIR
+            old_mapping_cache = f5viewer.config.MAPPING_CACHE_FILE
             mapping_cache = tmp_path / "kinase_to_gene_mapping.csv"
             pd.DataFrame(
                 {"kinase_abbreviation": ["AKT1"], "gene_symbol": ["AKT1_MAPPED"]}
             ).to_csv(mapping_cache, index=False)
-            viewer.FIVEXFAD_KINASE_DIR = str(out)
-            viewer.FIVEXFAD_DETAIL_DIR = str(detail_dir)
-            viewer.FIVEXFAD_CELLTYPE_DIR = str(celltype_dir)
-            viewer.FIVEXFAD_CELLTYPE_MEA_DIR = str(celltype_mea_shard_dir)
-            viewer.FIVEXFAD_CELLTYPE_OLS_DIR = str(celltype_ols_dir)
-            viewer.FIVEXFAD_ATTRIBUTION_DIR = str(attribution_dir)
-            viewer.config.MAPPING_CACHE_FILE = str(mapping_cache)
+            f5viewer.FIVEXFAD_KINASE_DIR = str(out)
+            f5viewer.FIVEXFAD_DETAIL_DIR = str(detail_dir)
+            f5viewer.FIVEXFAD_CELLTYPE_DIR = str(celltype_dir)
+            f5viewer.FIVEXFAD_CELLTYPE_MEA_DIR = str(celltype_mea_shard_dir)
+            f5viewer.FIVEXFAD_CELLTYPE_OLS_DIR = str(celltype_ols_dir)
+            f5viewer.FIVEXFAD_ATTRIBUTION_DIR = str(attribution_dir)
+            f5viewer.FIVEXFAD_INDEX_DIR = str(index_dir)
+            f5viewer.config.MAPPING_CACHE_FILE = str(mapping_cache)
             try:
-                payload = viewer.build_supporting_5xfad_slice()
+                payload = f5viewer.build_supporting_5xfad_slice()
                 shard = next(detail_dir.glob("AKT1.json.gz"), None)
                 mea_shard = next(celltype_mea_shard_dir.glob("AKT1.json"), None)
                 attr_shard = next(attribution_dir.glob("AKT1.json"), None)
+                attr_summary_shard = index_dir / "fivexfad_attribution_summary.json.gz"
+                mea_index_shard = index_dir / "fivexfad_celltype_mea_index.json.gz"
                 self.assertIsNotNone(shard)
                 self.assertIsNotNone(mea_shard)
                 self.assertIsNotNone(attr_shard)
+                self.assertTrue(attr_summary_shard.exists())
+                self.assertTrue(mea_index_shard.exists())
                 assert shard is not None
                 assert mea_shard is not None
                 assert attr_shard is not None
@@ -309,19 +317,24 @@ class FiveXFADTests(unittest.TestCase):
                 detail = detail_bundle["details"]["AKT1|cortex|IMAC|stoichiometry"]
                 mea_detail = json.loads(mea_shard.read_text())
                 attr_detail = json.loads(attr_shard.read_text())
+                with gzip.open(attr_summary_shard, "rt", encoding="utf-8") as f:
+                    attr_summary_rows = json.load(f)["rows"]
+                with gzip.open(mea_index_shard, "rt", encoding="utf-8") as f:
+                    mea_index_rows = json.load(f)["rows"]
                 trace_age = detail["measurement_trace"][0]["age_months"]
                 trace_genotype = detail["measurement_trace"][0]["genotype"]
                 trace_kl = detail["measurement_trace"][0]["kl_percentile"]
                 trace_site_label = detail["measurement_trace"][0]["site_label"]
                 stats_site_label = detail["site_stats"][0]["site_label"]
             finally:
-                viewer.FIVEXFAD_KINASE_DIR = old_dir
-                viewer.FIVEXFAD_DETAIL_DIR = old_detail_dir
-                viewer.FIVEXFAD_CELLTYPE_DIR = old_celltype_dir
-                viewer.FIVEXFAD_CELLTYPE_MEA_DIR = old_celltype_mea_dir
-                viewer.FIVEXFAD_CELLTYPE_OLS_DIR = old_celltype_ols_dir
-                viewer.FIVEXFAD_ATTRIBUTION_DIR = old_attribution_dir
-                viewer.config.MAPPING_CACHE_FILE = old_mapping_cache
+                f5viewer.FIVEXFAD_KINASE_DIR = old_dir
+                f5viewer.FIVEXFAD_DETAIL_DIR = old_detail_dir
+                f5viewer.FIVEXFAD_CELLTYPE_DIR = old_celltype_dir
+                f5viewer.FIVEXFAD_CELLTYPE_MEA_DIR = old_celltype_mea_dir
+                f5viewer.FIVEXFAD_CELLTYPE_OLS_DIR = old_celltype_ols_dir
+                f5viewer.FIVEXFAD_ATTRIBUTION_DIR = old_attribution_dir
+                f5viewer.FIVEXFAD_INDEX_DIR = old_index_dir
+                f5viewer.config.MAPPING_CACHE_FILE = old_mapping_cache
 
         self.assertIsNotNone(payload)
         assert payload is not None
@@ -339,18 +352,21 @@ class FiveXFADTests(unittest.TestCase):
         self.assertIn("detail_shards", payload)
         self.assertIn("celltype_agreement_index", payload)
         self.assertIn("celltype_mea_shards", payload)
-        self.assertIn("celltype_mea_plot_index", payload)
-        self.assertIn("celltype_attribution_summary_index", payload)
+        self.assertIn("celltype_mea_plot_index_shard", payload)
+        self.assertIn("celltype_attribution_summary_shard", payload)
         self.assertIn("celltype_attribution_shards", payload)
+        # The large indexes (P1/P2) are now fetched-on-demand sidecars, not inlined.
+        self.assertNotIn("celltype_mea_plot_index", payload)
+        self.assertNotIn("celltype_attribution_summary_index", payload)
         self.assertNotIn("celltype_mea_index", payload)
         self.assertNotIn("attribution_rows", payload)
-        self.assertEqual(payload["celltype_attribution_summary_index"][0]["top_cell_type"], "Astrocytes")
-        self.assertEqual(payload["celltype_attribution_summary_index"][0]["high_moderate_celltype_count"], 1)
-        self.assertEqual(payload["celltype_attribution_summary_index"][0]["celltypes"][0]["cell_type"], "Astrocytes")
-        self.assertEqual(payload["celltype_attribution_summary_index"][0]["celltypes"][1]["cell_type"], "Microglia")
-        self.assertNotIn("confidence_basis", payload["celltype_attribution_summary_index"][0]["celltypes"][0])
-        self.assertEqual(payload["celltype_mea_plot_index"][0]["cell_type"], "Astrocytes")
-        self.assertNotIn("ES", payload["celltype_mea_plot_index"][0])
+        self.assertEqual(attr_summary_rows[0]["top_cell_type"], "Astrocytes")
+        self.assertEqual(attr_summary_rows[0]["high_moderate_celltype_count"], 1)
+        self.assertEqual(attr_summary_rows[0]["celltypes"][0]["cell_type"], "Astrocytes")
+        self.assertEqual(attr_summary_rows[0]["celltypes"][1]["cell_type"], "Microglia")
+        self.assertNotIn("confidence_basis", attr_summary_rows[0]["celltypes"][0])
+        self.assertEqual(mea_index_rows[0]["cell_type"], "Astrocytes")
+        self.assertNotIn("ES", mea_index_rows[0])
         self.assertEqual(attr_detail["rows"][0]["confidence_tier"], "very_high")
         self.assertEqual(attr_detail["rows"][0]["confidence_basis"], "5xFAD snRNA high + decomp agreement")
         self.assertTrue(attr_detail["rows"][0]["decomp_agrees_bulk"])
@@ -437,9 +453,10 @@ class FiveXFADTests(unittest.TestCase):
         self.assertNotIn("celltype_mea_index", tab_js)
         self.assertIn("celltype_agreement_index", tab_js)
         self.assertIn("celltype_mea_shards", tab_js)
-        self.assertIn("celltype_mea_plot_index", tab_js)
-        self.assertIn("celltype_attribution_summary_index", tab_js)
+        self.assertIn("celltype_mea_plot_index_shard", tab_js)
+        self.assertIn("celltype_attribution_summary_shard", tab_js)
         self.assertIn("celltype_attribution_shards", tab_js)
+        self.assertIn("function _f5EnsureShardData", tab_js)
         self.assertIn("function _f5LoadAttribution", tab_js)
         self.assertIn("No native 5xFAD snRNA attribution row is available", tab_js)
         self.assertIn("_decomp_only", tab_js)
@@ -471,7 +488,7 @@ class FiveXFADTests(unittest.TestCase):
     def test_fivexfad_snrna_specificity_is_tissue_scoped(self) -> None:
         root = Path(__file__).resolve().parents[2]
         script = (root / "alz/ingest/build_5xfad_snrna_attribution.R").read_text()
-        viewer_py = (root / "alz/build_unified_viewer.py").read_text()
+        viewer_py = (root / "alz/viewer/cohorts/fivexfad.py").read_text()
         tab_js = (root / "alz/viewer/template/js/tabs/kinase_fivexfad.js").read_text()
 
         self.assertIn("for (tissue in c(\"cortex\", \"hippocampus\"))", script)

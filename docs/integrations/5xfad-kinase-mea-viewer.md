@@ -115,13 +115,16 @@ tissue-pooled location tier. The same local cell-count gate is applied to
 packaged per-cell-type decomposition MEA rows, so sparse cell-type rows do not
 drive agreement calls, decomp bars, or `very_high` promotion.
 
-For first-load performance, the initial payload now carries only
-`celltype_attribution_summary_index`: compact per-kinase/tissue/age attribution
-summaries for table filters and badges. Full attribution rows, including long
-confidence-basis strings and snRNA sample/cell counts for detail drawers, are
-written as per-kinase JSON sidecars under
-`outputs/reports/unified_viewer/edge_slices/fivexfad_attribution/` and loaded
-only when the Attribution detail tab is opened.
+For first-load performance, the compact per-kinase/tissue/age attribution
+summaries (table filters and badges) are written to a single whole-list gzipped
+sidecar, `edge_slices/fivexfad_attribution_summary.json.gz`, referenced from the
+payload as `celltype_attribution_summary_shard` (audit P2). The viewer fetches it
+once on first 5xFAD/Crosstable render via `_f5EnsureShardData()` rather than
+parsing it inline at startup. Full attribution rows, including long
+confidence-basis strings and snRNA sample/cell counts for detail drawers, remain
+in per-kinase JSON sidecars under
+`outputs/reports/unified_viewer/edge_slices/fivexfad_attribution/`, loaded only
+when the Attribution detail tab is opened.
 
 ## Per-Cell-Type Decomposition MEA
 
@@ -158,9 +161,12 @@ decomposition-agreement FDR gate used by the Song attribution model.
 For first-load performance, full per-cell-type MEA rows are not embedded in the
 payload. The initial block carries `celltype_agreement_index`, a compact
 categorical bulk-vs-decomposition agreement index with raw NES/FDR and count
-evidence, plus `celltype_mea_plot_index`, a compact decomp-bar index containing
-only kinase, tissue, track, cell type, age, NES, FDR, and substrate counts. Full
-per-kinase decomposition rows are written under
+evidence. The compact decomp-bar index (kinase, tissue, track, cell type, age,
+NES, FDR, substrate counts) is written to a single whole-list gzipped sidecar,
+`edge_slices/fivexfad_celltype_mea_index.json.gz`, referenced as
+`celltype_mea_plot_index_shard` (audit P1) and fetched once on first
+5xFAD/Crosstable render via `_f5EnsureShardData()` rather than parsed inline at
+startup. Full per-kinase decomposition rows are written under
 `outputs/reports/unified_viewer/edge_slices/fivexfad_celltype_mea/` and fetched
 only for detail fields outside that compact index. Large bulk `leading_substrates`
 strings remain in compressed `fivexfad_detail` sidecars rather than

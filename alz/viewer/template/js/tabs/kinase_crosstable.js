@@ -37,6 +37,7 @@ let _KX_CLUSTERS = null;
 let _KX_AD_DONORS = [];
 let _KX_CTRL_DONORS = [];
 let _KX_INITIALIZED = false;
+let _KX_F5_ATTR_READY = false;     // 5xFAD attribution-summary sidecar (P2) loaded + indexed
 let _kxVisible = [];
 
 // Song location specificity (the favored mouse signal), shown as fold over the
@@ -283,9 +284,9 @@ function _kxBuildIndexes() {
   }
 
   _KX_F5_BY_KEY = new Map();
-  _KX_F5_ATTR_BY_KEY = new Map();
   _KX_F5_AGREE_BY_KEY = new Map();
-  _KX_F5_CELLTYPES = [];
+  // _KX_F5_ATTR_BY_KEY / _KX_F5_CELLTYPES are built by _kxBuildF5AttrIndex() once the
+  // 5xFAD attribution-summary sidecar (P2) loads — see _kxEnsureF5AttrData().
   const F5 = PAYLOAD.supporting_5xfad;
   if (F5) {
     for (const row of (F5.rows || [])) {
@@ -310,36 +311,6 @@ function _kxBuildIndexes() {
       }
       rec.rows.set(Number(row.age_months), row);
     }
-    const celltypes = new Set();
-    for (const row of (F5.celltype_attribution_summary_index || [])) {
-      const tissue = row.tissue || "";
-      if (!_KX_F5_TISSUES.includes(tissue)) continue;
-      const key = _kxF5AttrKey(row.kinase, tissue);
-      let rec = _KX_F5_ATTR_BY_KEY.get(key);
-      if (!rec) {
-        rec = {
-          kinase: row.kinase || "",
-          tissue,
-          celltypes: [],
-          best_confidence_tier: "none",
-          top_fivexfad_fold_over_uniform: null,
-        };
-        _KX_F5_ATTR_BY_KEY.set(key, rec);
-      }
-      if (_kxConfRank(row.best_confidence_tier) > _kxConfRank(rec.best_confidence_tier)) {
-        rec.best_confidence_tier = row.best_confidence_tier || "none";
-      }
-      const topFold = _kxF5Num(row.top_fivexfad_fold_over_uniform);
-      if (topFold != null && (rec.top_fivexfad_fold_over_uniform == null || topFold > rec.top_fivexfad_fold_over_uniform)) {
-        rec.top_fivexfad_fold_over_uniform = topFold;
-      }
-      for (const ct of (row.celltypes || [])) {
-        if (!ct.cell_type) continue;
-        celltypes.add(ct.cell_type);
-        rec.celltypes.push({...ct, age_months: row.age_months});
-      }
-    }
-    _KX_F5_CELLTYPES = Array.from(celltypes).sort();
     for (const row of (F5.celltype_agreement_index || [])) {
       const tissue = row.tissue || "";
       if (!_KX_F5_TISSUES.includes(tissue)) continue;
@@ -387,6 +358,64 @@ function _kxBuildIndexes() {
 
   // Default pivot is "" = Any cell type (peak specificity across clusters).
   _KX_INITIALIZED = true;
+}
+
+// Build the 5xFAD attribution-summary index from the loaded sidecar rows (P2). The raw
+// list lives in kinase_fivexfad.js (_f5AttributionSummaryRows); kept identical to the
+// former inline build that ran inside _kxBuildIndexes.
+function _kxBuildF5AttrIndex() {
+  _KX_F5_ATTR_BY_KEY = new Map();
+  const celltypes = new Set();
+  const rows = (typeof _f5AttributionSummaryRows === "function") ? _f5AttributionSummaryRows() : [];
+  for (const row of (rows || [])) {
+    const tissue = row.tissue || "";
+    if (!_KX_F5_TISSUES.includes(tissue)) continue;
+    const key = _kxF5AttrKey(row.kinase, tissue);
+    let rec = _KX_F5_ATTR_BY_KEY.get(key);
+    if (!rec) {
+      rec = {
+        kinase: row.kinase || "",
+        tissue,
+        celltypes: [],
+        best_confidence_tier: "none",
+        top_fivexfad_fold_over_uniform: null,
+      };
+      _KX_F5_ATTR_BY_KEY.set(key, rec);
+    }
+    if (_kxConfRank(row.best_confidence_tier) > _kxConfRank(rec.best_confidence_tier)) {
+      rec.best_confidence_tier = row.best_confidence_tier || "none";
+    }
+    const topFold = _kxF5Num(row.top_fivexfad_fold_over_uniform);
+    if (topFold != null && (rec.top_fivexfad_fold_over_uniform == null || topFold > rec.top_fivexfad_fold_over_uniform)) {
+      rec.top_fivexfad_fold_over_uniform = topFold;
+    }
+    for (const ct of (row.celltypes || [])) {
+      if (!ct.cell_type) continue;
+      celltypes.add(ct.cell_type);
+      rec.celltypes.push({...ct, age_months: row.age_months});
+    }
+  }
+  _KX_F5_CELLTYPES = Array.from(celltypes).sort();
+}
+
+// Ensure the 5xFAD attribution-summary sidecar is loaded, then build its index. On first
+// call it kicks the (shared, promise-cached) fetch and re-renders when it resolves; the
+// table renders immediately with mouse+human columns and the 5xFAD columns fill in on the
+// follow-up render. Idempotent once ready.
+function _kxEnsureF5AttrData() {
+  if (_KX_F5_ATTR_READY) return;
+  const block = (typeof _f5Block === "function") ? _f5Block() : null;
+  if (!block || !block.celltype_attribution_summary_shard || typeof _f5EnsureShardData !== "function") {
+    _kxBuildF5AttrIndex();
+    _KX_F5_ATTR_READY = true;
+    return;
+  }
+  _f5EnsureShardData().then(() => {
+    _kxBuildF5AttrIndex();
+    _KX_F5_ATTR_READY = true;
+    _kxSyncControls();
+    _kxRenderTable();
+  });
 }
 
 // ---------- specificity tier badges ----------
@@ -1301,6 +1330,7 @@ function _kxFilteredRows(s) {
 
 function _kxRenderTable() {
   _kxBuildIndexes();
+  _kxEnsureF5AttrData();
   const s = _kxState();
   const fdrGate = (Store.state.filters && Store.state.filters.fdr) || 0.25;
   const wrap = document.getElementById("kx-table-wrap");
@@ -1530,7 +1560,9 @@ function _kxSyncControls() {
 }
 
 function wireKinaseCrosstable() {
-  _kxBuildIndexes();
+  // Index build is deferred to first render (_kxRenderTable / renderKinaseCrosstable both
+  // call _kxBuildIndexes, guarded by _KX_INITIALIZED). Wiring only attaches DOM listeners,
+  // mirroring the lazy 5xFAD tab — keeps ~170k row iterations off the boot path (audit P3).
   const clSel = document.getElementById("kx-cluster");
   if (clSel) clSel.addEventListener("change", () => { _kxState().cluster = clSel.value; _kxRenderTable(); });
   const tSel = document.getElementById("kx-track");
@@ -1590,6 +1622,7 @@ function exportCrosstableCsv() {
 
 function renderKinaseCrosstable() {
   _kxBuildIndexes();
+  _kxEnsureF5AttrData();
   _kxSyncControls();
   _kxRenderTable();
 }

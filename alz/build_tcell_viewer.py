@@ -43,7 +43,7 @@ if _REPO_ROOT not in sys.path:
 sys.path.insert(0, HERE)
 
 from alz.shared import config  # noqa: E402
-from alz.viewer.shared.payload_helpers import (_sanitize, _configure_duckdb_tempdir, _json_clean_value, _INCYTR_FC_NODES, _build_incytr_gene_node_index, _build_kinase_motifs)  # noqa: E402
+from alz.viewer.shared.payload_helpers import (_sanitize, _configure_duckdb_tempdir, _json_clean_value, _INCYTR_FC_NODES, _build_incytr_gene_node_index, _build_kinase_motifs, _write_gene_node_index_shard)  # noqa: E402
 from alz.viewer.shared.incytr_index import (_INCYTR_LABEL_NODES, _INCYTR_LABEL_COLS, _INCYTR_LABEL_VOCAB, _INCYTR_SCORE_COLS, _idx_label_bits)  # noqa: E402
 
 from tcell_viewer.paths import (  # noqa: E402
@@ -1396,7 +1396,10 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         "path_metric_columns": list(extra_path_cols),
         "top_instances": top_instances,
         "global_index": global_index,
-        "gene_node_index": gene_node_index,
+        "gene_node_index_shard": _write_gene_node_index_shard(
+            gene_node_index, EDGE_SLICES_INCYTR_PATHWAYS_DIR,
+            f"{donor}__gene_node_index.json.gz",
+        ),
         "slice_index": {
             "schema_version": SCHEMA_VERSION,
             "filename_template": "{context}__{sender}__{receiver}.parquet",
@@ -2507,10 +2510,18 @@ def _render_template() -> str:
     )
 
 
-def write_html(payload: dict, json_str: str | None = None) -> dict:
+def write_html(payload: dict, json_str: str | None = None, *,
+               inline_payload: bool = False) -> dict:
     os.makedirs(UNIFIED_VIEWER_DIR, exist_ok=True)
-    if json_str is None:
+    # Audit P8: default hosted mode keeps index.html small and loads
+    # tcell_viewer.payload.json.gz via client-side DecompressionStream (mirrors
+    # the unified viewer). --inline-payload preserves the air-gapped single-file
+    # mode by baking the JSON into the payload-data script tag.
+    if inline_payload and json_str is None:
+        if payload is None:
+            raise ValueError("payload or json_str is required for inline HTML")
         json_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    payload_text = json_str if inline_payload else "null"
     html = _render_template()
     palette = payload.get("meta", {}).get("timepoint_color_map", {})
     d13 = palette.get("d13", TIMEPOINT_COLOR_MAP["d13"])
@@ -2526,7 +2537,7 @@ def write_html(payload: dict, json_str: str | None = None) -> dict:
         ("__APP_COLOR__", d17),
         ("__TAU_COLOR__", d13),
         ("__APTT_COLOR__", d20),
-        ("__PAYLOAD_SENTINEL__", json_str),
+        ("__PAYLOAD_SENTINEL__", payload_text),
     ):
         html = html.replace(sentinel, value)
     raw = html.encode("utf-8")
@@ -2633,6 +2644,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--payload", action="store_true", help="Write JSON payload")
     ap.add_argument("--html", action="store_true", help="Write tcell_viewer HTML (requires payload)")
     ap.add_argument("--validate", action="store_true", help="Write payload validation report")
+    ap.add_argument("--inline-payload", action="store_true",
+                    help="Bake the payload into index.html (air-gapped single-file mode); "
+                         "default emits a small index.html + .json.gz sidecar")
     args = ap.parse_args(argv)
 
     if not any([args.summary, args.payload, args.html, args.validate]):
@@ -2670,7 +2684,7 @@ def main(argv: list[str] | None = None) -> int:
             with open(PAYLOAD_JSON) as f:
                 json_str = f.read()
             payload = json.loads(json_str)
-        info = write_html(payload, json_str=json_str)
+        info = write_html(payload, json_str=json_str, inline_payload=args.inline_payload)
         print(f"  html {info['html_bytes']/1e6:.2f} MB -> {info['output']}")
 
     if args.validate:

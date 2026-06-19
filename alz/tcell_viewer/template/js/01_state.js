@@ -28,7 +28,7 @@ async function _loadPayload() {
   let gzErr = null;
   if (text === null) {
     try {
-      const resp = await fetch("unified_viewer.payload.json.gz");
+      const resp = await fetch("tcell_viewer.payload.json.gz");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const blob = await resp.blob();
       const stream = blob.stream().pipeThrough(new DecompressionStream("gzip"));
@@ -38,7 +38,7 @@ async function _loadPayload() {
     }
   }
   if (text === null) {
-    const resp2 = await fetch("unified_viewer.payload.json");
+    const resp2 = await fetch("tcell_viewer.payload.json");
     if (!resp2.ok) {
       throw new Error(
         `payload fetch failed (gzip: ${gzErr && gzErr.message ? gzErr.message : gzErr}; `

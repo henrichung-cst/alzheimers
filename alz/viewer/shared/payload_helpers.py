@@ -1,7 +1,10 @@
 """Payload helpers shared by the unified and t-cell viewer builders (dedup of drifted copies, phase 5D)."""
 from __future__ import annotations
 
+import gzip
+import json
 import os
+import uuid
 from typing import Any
 
 import numpy as np
@@ -156,6 +159,27 @@ def _build_incytr_gene_node_index(con) -> dict:
         "best_pds": [_json_clean_value(v, 4) for v in df["best_pds"]],
         "best_pvalue": [_json_clean_value(v, 6) for v in df["best_pvalue"]],
     }
+
+
+def _write_gene_node_index_shard(gene_node_index: dict, out_dir: str,
+                                 filename: str) -> str:
+    """Write the compact gene→node-pair index as a gzipped sidecar; return its
+    viewer-relative URL.
+
+    Audit P5: this ~15 MB-class structure is only consumed by pair-mode gene
+    search in the Incytr Pathways tab, so it is fetched on demand rather than
+    inlined in the payload and parsed at startup. Mirrors the `global_index`
+    sidecar convention (same `edge_slices/incytr_pathways/` dir, atomic swap).
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, filename)
+    tmp_path = f"{out_path}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    raw = json.dumps(gene_node_index, ensure_ascii=False,
+                     separators=(",", ":")).encode("utf-8")
+    with gzip.open(tmp_path, "wb", compresslevel=6) as f:
+        f.write(raw)
+    os.replace(tmp_path, out_path)
+    return f"edge_slices/incytr_pathways/{filename}"
 
 
 def _build_kinase_motifs(kinase_names: list[str]) -> dict[str, dict]:

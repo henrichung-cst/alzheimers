@@ -31,7 +31,7 @@ Per-item plans:
 | 5 | #7 Incytr AcK/KGG | M | none | derive 5xFAD AcK/KGG CSVs | ~20-line driver param | only 5xFAD has data |
 | 6 | #2 T-cell NSCLC ref | L | 10x public DL | yes (~900K cells) | new viewer ref table | Flex panel ≠ all kinases |
 | 7 | #4 Kinase network | L | **PhosphoSitePlus gated DL** | no | standalone viz (no payload) | Regulatory_sites.gz absent |
-| 8 | #8 Viewer scaling audit | XL | none | no | **the contract itself** | audit-first, approval-gated |
+| 8 | #8 Viewer scaling audit | XL | none | no | **the contract itself** | audit-first, approval-gated. **All P-items implemented 2026-06-19** — P1+P2 verified (payload 105→69 MB raw, 10.1→8.49 MB gzip); P3 (crosstable lazy), P5 (gene_node_index sidecar), P6 (5xFAD cache LRU; index uncapped — see §2.10), P8 (T-cell sidecar mode). Full `pixi run viewer`/`tcell-viewer` rebuild + browser pass pending |
 
 ---
 

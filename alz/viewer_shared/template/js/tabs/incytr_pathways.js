@@ -126,6 +126,7 @@ const _ipRuntime = {
   pathLabels:     null,         // Map<pathStr, Map<disease, Set<label>>> — for trend filter
   geneIndexBlock: null,
   geneIndexMap:   null,         // upper-case gene symbol -> [gene ids]
+  geneIndex:      null,         // { url, data, error, promise } — lazy gene_node_index sidecar (audit P5)
   page:           0,            // 0-indexed current page (post-filter, post-sort)
   indexLoading:   false,        // top-mode global filter-index fetch in flight
   indexError:     null,         // top-mode global filter-index load error
@@ -436,8 +437,40 @@ function _ipGeneSearchTerms(text) {
     .map(s => s.toUpperCase()))];
 }
 
+// Audit P5: gene_node_index is a ~15 MB sidecar fetched on demand (pair-mode gene
+// search only), not inlined in the payload. _ipResolveGeneIndex returns the loaded
+// dict (or null until _ipEnsureGeneIndex resolves); the renderer gates on it.
+function _ipResolveGeneIndex(block) {
+  const url = block && block.gene_node_index_shard;
+  if (!url) return null;
+  const gi = _ipRuntime.geneIndex;
+  return (gi && gi.url === url && gi.data) ? gi.data : null;
+}
+
+function _ipEnsureGeneIndex(block) {
+  const url = block && block.gene_node_index_shard;
+  if (!url) return Promise.resolve(null);
+  let gi = _ipRuntime.geneIndex;
+  if (gi && gi.url === url) {
+    if (gi.data) return Promise.resolve(gi.data);
+    if (gi.promise) return gi.promise;
+  }
+  gi = _ipRuntime.geneIndex = { url, data: null, error: null, promise: null };
+  // Mirror incytr_global_index.js: fetch blob -> DecompressionStream -> JSON.
+  gi.promise = (async () => {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`gene index fetch ${url} -> ${resp.status}`);
+    const blob = await resp.blob();
+    const stream = blob.stream().pipeThrough(new DecompressionStream("gzip"));
+    gi.data = JSON.parse(await new Response(stream).text());
+    return gi.data;
+  })();
+  gi.promise.catch(e => { gi.error = String(e && e.message ? e.message : e); });
+  return gi.promise;
+}
+
 function _ipGeneIndexMap(block) {
-  const idx = block && block.gene_node_index;
+  const idx = _ipResolveGeneIndex(block);
   if (!idx || !Array.isArray(idx.genes) || !Array.isArray(idx.gene_id))
     return null;
   if (_ipRuntime.geneIndexBlock === block && _ipRuntime.geneIndexMap)
@@ -455,7 +488,7 @@ function _ipGeneIndexMap(block) {
 }
 
 function _ipGeneIndexMatches(block, pairs) {
-  const idx = block && block.gene_node_index;
+  const idx = _ipResolveGeneIndex(block);
   const terms = _ipGeneSearchTerms(IncytrFilter.get("searchText"));
   if (!idx || !terms.length) return null;
   if (Object.keys(_ipScoreMinAbs()).length) return null;
@@ -521,6 +554,26 @@ function _ipRenderGeneIndexSearch(block, pairs) {
   const countEl = document.getElementById("ip-count");
   const wrap = document.getElementById("ip-table-wrap");
   if (!countEl || !wrap) return false;
+  // Audit P5: the gene_node_index is fetched on demand. If the user is running a
+  // gene search but the sidecar isn't mapped yet, show a loading state, kick off
+  // the one-time fetch, and re-render when it resolves.
+  const terms = _ipGeneSearchTerms(IncytrFilter.get("searchText"));
+  const wantsGeneSearch = !!(block && block.gene_node_index_shard)
+    && terms.length > 0
+    && Object.keys(_ipScoreMinAbs()).length === 0;
+  if (wantsGeneSearch && !_ipResolveGeneIndex(block)) {
+    const gi = _ipRuntime.geneIndex;
+    if (gi && gi.url === block.gene_node_index_shard && gi.error) {
+      countEl.textContent = "Gene index load failed.";
+      wrap.innerHTML = `<div class="muted" style="padding:16px;">${_escapeHtml(gi.error)}</div>`;
+      return true;
+    }
+    countEl.textContent = `Loading gene index for ${terms.join(", ")}…`;
+    wrap.innerHTML = '<div class="muted" style="padding:16px;">'
+      + 'Fetching the cross-pair gene index (one-time download)…</div>';
+    _ipEnsureGeneIndex(block).then(() => _ipRenderTable(), () => _ipRenderTable());
+    return true;
+  }
   const res = _ipGeneIndexMatches(block, pairs);
   if (!res) return false;
   const termsText = res.terms.join(", ");

@@ -38,6 +38,9 @@ FIVEXFAD_CELLTYPE_MEA_DIR = os.path.join(
 FIVEXFAD_ATTRIBUTION_DIR = os.path.join(
     UNIFIED_VIEWER_DIR, "edge_slices", "fivexfad_attribution"
 )
+# Whole-list index sidecars (P1/P2) live directly under edge_slices/, not in a per-kinase
+# subdir, since they are fetched and iterated in full on first render.
+FIVEXFAD_INDEX_DIR = os.path.join(UNIFIED_VIEWER_DIR, "edge_slices")
 FIVEXFAD_DETAIL_SITES_PER_CONTRAST = 12
 FIVEXFAD_DETAIL_MAX_SITES = 40
 FIVEXFAD_RUNNING_DISPLAY_POINTS = 450
@@ -799,6 +802,31 @@ def _write_fivexfad_celltype_mea_shards(rows: list[dict]) -> dict[str, str]:
     return shard_index
 
 
+def _write_fivexfad_index_shard(rows: list[dict], filename: str, label: str) -> str | None:
+    """Write a whole 5xFAD index list to one gzipped sidecar; return its viewer-relative URL.
+
+    These indexes are iterated in full at first 5xFAD/Crosstable render rather than
+    accessed per-kinase, so a single fetched-on-demand file keeps them out of the
+    upfront payload parse without forcing a per-kinase fan-out. Returns None when there
+    are no rows (the JS treats a missing path as an empty index)."""
+    if not rows:
+        return None
+    os.makedirs(FIVEXFAD_INDEX_DIR, exist_ok=True)
+    out_path = os.path.join(FIVEXFAD_INDEX_DIR, filename)
+    tmp_path = f"{out_path}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    raw = json.dumps(
+        _sanitize({"schema_version": 1, "rows": rows}),
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    with gzip.open(tmp_path, "wb", compresslevel=6) as f:
+        f.write(raw)
+    os.replace(tmp_path, out_path)
+    rel = os.path.relpath(out_path, UNIFIED_VIEWER_DIR)
+    print(f"  {label}: {len(rows):,} rows -> {rel}", flush=True)
+    return rel
+
+
 def _write_fivexfad_celltype_ols_shards(rows: list[dict]) -> dict[str, str]:
     """Write per-kinase 5xFAD cell-type substrate-site OLS sidecars."""
     site_path = os.path.join(FIVEXFAD_CELLTYPE_DIR, "fivexfad_celltype_site_level_ols.parquet")
@@ -1453,8 +1481,18 @@ def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None
         celltype_mea_rows,
     )
     celltype_attribution_summary_index = _build_fivexfad_attribution_summary_index(attribution_rows)
+    celltype_attribution_summary_shard = _write_fivexfad_index_shard(
+        celltype_attribution_summary_index,
+        "fivexfad_attribution_summary.json.gz",
+        "supporting_5xfad_attribution_summary",
+    )
     celltype_attribution_shards = _write_fivexfad_attribution_shards(attribution_rows)
     celltype_mea_plot_index = _build_fivexfad_celltype_mea_plot_index(celltype_mea_rows)
+    celltype_mea_plot_index_shard = _write_fivexfad_index_shard(
+        celltype_mea_plot_index,
+        "fivexfad_celltype_mea_index.json.gz",
+        "supporting_5xfad_celltype_mea_index",
+    )
     celltype_agreement_index = _build_fivexfad_celltype_agreement_index(rows, celltype_mea_rows)
     celltype_mea_shards = _write_fivexfad_celltype_mea_shards(celltype_mea_rows)
     celltype_ols_shards = _write_fivexfad_celltype_ols_shards(celltype_mea_rows)
@@ -1489,10 +1527,10 @@ def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None
             "age_months": [3, 6, 9, 12],
         },
         "rows": rows_payload,
-        "celltype_attribution_summary_index": celltype_attribution_summary_index,
+        "celltype_attribution_summary_shard": celltype_attribution_summary_shard,
         "celltype_attribution_shards": celltype_attribution_shards,
         "celltype_agreement_index": celltype_agreement_index,
-        "celltype_mea_plot_index": celltype_mea_plot_index,
+        "celltype_mea_plot_index_shard": celltype_mea_plot_index_shard,
         "celltype_mea_shards": celltype_mea_shards,
         "contrast_qc": qc_rows,
         "sample_counts": sample_counts,

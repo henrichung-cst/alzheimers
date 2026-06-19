@@ -43,6 +43,7 @@ from alz.viewer.shared.payload_helpers import (
     _build_incytr_gene_node_index,
     _configure_duckdb_tempdir,
     _sanitize,
+    _write_gene_node_index_shard,
 )
 
 if TYPE_CHECKING:
@@ -825,6 +826,8 @@ _INCYTR_PATHWAY_ABS_PDS = (0.0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
 # complete universe, making the per-page cap a true render budget. Format +
 # rationale: docs/foundation/viewer_payload_contract.md.
 _INCYTR_INDEX_FILENAME = "incytr_index.bin.gz"
+# Audit P5: gene→node-pair index, sidecar (pair-mode gene search only, lazy fetch).
+_INCYTR_GENE_NODE_INDEX_FILENAME = "gene_node_index.json.gz"
 
 _INCYTR_LOW_SIGNAL_MEDIAN_N_THRESHOLD = 3
 
@@ -1646,7 +1649,10 @@ def _write_incytr_pair_pathways() -> dict | None:
         "direction_flag_columns": list(dir_flag_cols),
         "path_metric_columns": list(extra_path_cols),
         "global_index": global_index,
-        "gene_node_index": gene_node_index,
+        "gene_node_index_shard": _write_gene_node_index_shard(
+            gene_node_index, EDGE_SLICES_INCYTR_PATHWAYS_DIR,
+            _INCYTR_GENE_NODE_INDEX_FILENAME,
+        ),
         # CR-04: traj_labels/sign_vec live in shard rows; summary inline.
         "trajectory_summary": traj_summary,
     }
@@ -1654,7 +1660,8 @@ def _write_incytr_pair_pathways() -> dict | None:
         "incytr_pathways",
         signature,
         EDGE_SLICES_INCYTR_PATHWAYS_DIR,
-        ["index.json", _INCYTR_INDEX_FILENAME, *sorted(pair_row_counts)],
+        ["index.json", _INCYTR_INDEX_FILENAME,
+         _INCYTR_GENE_NODE_INDEX_FILENAME, *sorted(pair_row_counts)],
         payload_block,
     )
     return payload_block
