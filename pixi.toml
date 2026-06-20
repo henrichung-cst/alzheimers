@@ -122,6 +122,8 @@ r-knitr = "*"
 r-rmarkdown = "*"
 r-roxygen2 = "*"
 r-seurat = ">=5.0.0"
+# Read10X_h5 (NSCLC ProjecTILs subset projection) requires the HDF5 R binding.
+r-hdf5r = "*"
 r-testthat = ">=3.0.0"
 bioconductor-limma = "*"
 bioconductor-deseq2 = "*"

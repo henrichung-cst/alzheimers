@@ -545,8 +545,7 @@ NSCLC_10X_GRAPHCLUST_FILE = os.path.join(
 NSCLC_10X_DIFFEXP_FILE = os.path.join(
     NSCLC_10X_CACHE_DIR, "analysis", "diffexp",
     "gene_expression_graphclust", "differential_expression.csv")
-# T/NK subset exported for ProjecTILs (native 10x h5; streamed, bounded memory).
-NSCLC_10X_TNK_SUBSET_H5 = os.path.join(NSCLC_10X_CACHE_DIR, "tnk_subset_feature_bc_matrix.h5")
+# ProjecTILs full-cohort projection (all cells gated by scGate -> 14 states).
 NSCLC_PROJECTILS_PREDICTIONS_FILE = os.path.join(
     NSCLC_10X_CACHE_DIR, "projectils_predictions.csv")
 # Derived per-cell label tables.

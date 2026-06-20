@@ -7,25 +7,28 @@ cohort from the public 10x "Aggregate of 900k human NSCLC + normal-adjacent
 cells" Flex dataset (Cell Ranger multi 7.1.0).
 
 The 10x dataset ships NO cell-type labels — only unsupervised graphclust
-clusters (86) + per-cluster diffexp. Cell types are therefore DERIVED in two
-stages (see docs/plans/todo2_tcell_specificity_reference.md, REVISION 2026-06-19):
+clusters (86) + per-cluster diffexp. Cell types are therefore DERIVED by two
+complementary annotators (see docs/plans/todo2_tcell_specificity_reference.md):
 
   --label-clusters : score each of the 86 graphclust clusters against canonical
                      lineage marker sets (T/NK, B/plasma, Myeloid, Epithelial,
                      Endothelial, Fibroblast, Mast) using the shipped diffexp
-                     Mean Counts; assign argmax lineage. Writes the per-cluster
-                     and per-barcode coarse label tables. Cheap (no matrix load).
+                     Mean Counts; assign argmax lineage. This labels the NON-T
+                     compartment (which ProjecTILs structurally cannot) and
+                     sanity-checks the T calls. Cheap (no matrix load).
 
-  (between the two)  alz/ingest/nsclc_subset_tnk.py exports the T/NK barcodes to
-                     a native 10x h5; alz/ingest/nsclc_projectils_map.R projects
-                     them onto the CD8/CD4 ProjecTILs human refs (14 states),
-                     writing projectils_predictions.csv. Heavy — run capped.
+  (heavy step)       alz/ingest/nsclc_projectils_map.R projects ALL 897,733
+                     cells onto the CD8/CD4 ProjecTILs human refs (14 states).
+                     scGate (inside filter.cells=TRUE) is the authoritative
+                     T-cell gate — it accepts/rejects every cell, so a true T
+                     cell the markers mislabeled is still recovered. Writes
+                     projectils_predictions.csv. Run capped (see runner).
 
   --run            : stream the full 10x CSC matrix (h5py, indptr-bounded cell
                      chunks — NEVER full-load; 1.3 B nnz), assign each cell its
-                     final label (ProjecTILs state for gated T cells, else the
-                     coarse lineage), accumulate per (gene, cell_type). Writes
-                     nsclc_kinase_expression.csv.
+                     final label (ProjecTILs state where scGate gated it as a T
+                     cell, else the coarse marker lineage), accumulate per
+                     (gene, cell_type). Writes nsclc_kinase_expression.csv.
 
   --audit          : cross MEA-predicted kinases (FDR<0.25) against the reference;
                      report panel-covered kinases expressed nowhere. Writes
@@ -159,60 +162,41 @@ def label_clusters() -> pd.DataFrame:
         "cluster": assign.index,
         "lineage": assign.values,
         "margin": margin.reindex(assign.index).values,
-        # Guardrail 1: T/NK marker z-score per cluster. A non-T/NK cluster with
-        # a high t_nk_score is a candidate T-cell leak (false negative — a true
-        # T cell my pre-filter would withhold from ProjecTILs). scGate inside
-        # filter.cells=TRUE is the real gate, so this only flags what to inspect.
+        # T/NK marker z-score per cluster — a sanity column. ProjecTILs/scGate
+        # (not these markers) gates T cells now, so a non-T cluster with a high
+        # t_nk_score is something to cross-check against scGate's calls, not a
+        # pre-filter input.
         "t_nk_score": S["T_NK"].reindex(assign.index).round(3).values,
         "n_cells": counts.reindex(assign.index).fillna(0).astype(int).values,
     })
     out["ambiguous"] = out["margin"] < AMBIGUOUS_MARGIN
-    # A non-T/NK cluster whose T/NK score is positive AND ranks 2nd is a leak risk.
-    out["tnk_leak_risk"] = (out["lineage"] != "T_NK") & (out["t_nk_score"] > 0.5)
     out = out.sort_values("n_cells", ascending=False).reset_index(drop=True)
     out.to_csv(config.NSCLC_CLUSTER_LABELS_FILE, index=False)
     print(f"  Wrote {len(out)} cluster labels -> {config.NSCLC_CLUSTER_LABELS_FILE}")
 
-    # Per-barcode coarse label (cluster -> lineage join). projectils_candidate
-    # marks cells sent to ProjecTILs: the T/NK compartment PLUS leak-risk
-    # clusters (guardrail 1 — let scGate inside filter.cells arbitrate rather
-    # than my marker pre-filter withholding a possible T cell).
+    # Per-barcode coarse marker lineage (cluster -> lineage join). This labels
+    # the non-T compartment for the specificity denominator; ProjecTILs/scGate
+    # overrides it for cells it gates as T (full-cohort projection).
     cluster_to_lineage = dict(zip(out["cluster"], out["lineage"]))
-    cluster_to_leak = dict(zip(out["cluster"], out["tnk_leak_risk"]))
     cells = gc.rename(columns={"Barcode": "barcode", "Cluster": "cluster_num"})
     cells["cluster"] = "Cluster " + cells["cluster_num"].astype(str)
     cells["coarse_lineage"] = cells["cluster"].map(cluster_to_lineage)
-    cells["projectils_candidate"] = (
-        (cells["coarse_lineage"] == "T_NK")
-        | cells["cluster"].map(cluster_to_leak).fillna(False))
-    cells[["barcode", "cluster_num", "coarse_lineage",
-           "projectils_candidate"]].to_csv(config.NSCLC_CELL_LABELS_FILE, index=False)
-    print(f"  Wrote {len(cells):,} per-barcode labels "
-          f"({int(cells['projectils_candidate'].sum()):,} ProjecTILs candidates) "
+    cells[["barcode", "cluster_num", "coarse_lineage"]].to_csv(
+        config.NSCLC_CELL_LABELS_FILE, index=False)
+    print(f"  Wrote {len(cells):,} per-barcode coarse labels "
           f"-> {config.NSCLC_CELL_LABELS_FILE}")
 
     # Summary
     agg = out.groupby("lineage")["n_cells"].agg(["sum", "count"]).sort_values(
         "sum", ascending=False)
-    print("\n  Lineage partition (cells / clusters):")
+    print("\n  Marker lineage partition (cells / clusters):")
     for lin, row in agg.iterrows():
         print(f"    {lin:<12} {int(row['sum']):>9,}  ({int(row['count'])} clusters)")
     n_amb = int(out["ambiguous"].sum())
-    print(f"  T/NK cells (-> ProjecTILs): {agg.loc['T_NK','sum']:,}")
+    print(f"  Marker T/NK cells: {agg.loc['T_NK','sum']:,} "
+          f"(scGate makes the authoritative T call over ALL cells)")
     print(f"  Ambiguous clusters (margin<{AMBIGUOUS_MARGIN}): {n_amb} "
           f"({out.loc[out.ambiguous,'n_cells'].sum():,} cells)")
-    # Guardrail 1: report any non-T/NK cluster carrying T-cell signal.
-    leaks = out[out["tnk_leak_risk"]]
-    if len(leaks):
-        print(f"  [guardrail] {len(leaks)} non-T/NK cluster(s) with T/NK score>0.5 "
-              f"({int(leaks['n_cells'].sum()):,} cells) — potential T-cell leak, "
-              f"inspect before trusting 'absent' audit calls:")
-        for _, r in leaks.iterrows():
-            print(f"      {r['cluster']:<12} labeled {r['lineage']:<11} "
-                  f"t_nk_score={r['t_nk_score']:.2f}  n={int(r['n_cells']):,}")
-    else:
-        print("  [guardrail] no non-T/NK cluster carries appreciable T/NK signal "
-              "(clean lineage separation).")
     return out
 
 
@@ -222,40 +206,49 @@ def label_clusters() -> pd.DataFrame:
 
 
 def _final_cell_labels() -> pd.Series:
-    """barcode -> final cell_type. Non-T/NK keep their coarse lineage; T/NK
-    cells take their ProjecTILs functional.cluster when gated, else T_NK_other."""
+    """barcode -> final cell_type. scGate (inside ProjecTILs, run over ALL cells)
+    is the authoritative T gate: a gated cell takes its ProjecTILs functional
+    state; every other cell keeps its coarse marker lineage. A marker-T cell
+    scGate rejected falls to T_NK_other (T by markers, unplaceable by ProjecTILs)."""
     if not os.path.exists(config.NSCLC_CELL_LABELS_FILE):
         raise FileNotFoundError(
             f"{config.NSCLC_CELL_LABELS_FILE} missing — run --label-clusters first.")
     cells = pd.read_csv(config.NSCLC_CELL_LABELS_FILE)
     label = cells.set_index("barcode")["coarse_lineage"].copy()
+    marker_tnk = label == "T_NK"
 
-    # True T/NK-coarse cells fall back to T_NK_other when ungated. Leak-risk
-    # cells (candidate but coarse_lineage != T_NK) keep their marker lineage if
-    # scGate rejects them — only a ProjecTILs state overwrites them.
-    tnk_mask = label == "T_NK"
-    label[tnk_mask] = "T_NK_other"
-    n_tnk = int(tnk_mask.sum())
-
-    if os.path.exists(config.NSCLC_PROJECTILS_PREDICTIONS_FILE):
-        pred = pd.read_csv(config.NSCLC_PROJECTILS_PREDICTIONS_FILE)
-        pred = pred[pred["functional.cluster"].notna()]
-        proj = pred.set_index("barcode")["functional.cluster"]
-        # ProjecTILs ran on all candidates; a gated state overwrites any label.
-        common = label.index.intersection(proj.index)
-        label.loc[common] = proj.loc[common].values
-        accept = 100.0 * len(common) / max(n_tnk, 1)
-        # Guardrail 1a: scGate (inside filter.cells) is the authoritative T gate.
-        # High acceptance => my marker pre-filter agrees with ProjecTILs' own
-        # gate. Low acceptance => the pre-filter swept in many non-T cells
-        # (over-inclusive) OR ProjecTILs rejects this tissue's TILs.
-        print(f"  [guardrail] ProjecTILs/scGate accepted {len(common):,}/{n_tnk:,} "
-              f"({accept:.1f}%) of marker-defined T/NK cells -> "
-              f"{proj.loc[common].nunique()} states; "
-              f"{int((label=='T_NK_other').sum()):,} remain T_NK_other (ungated).")
-    else:
-        print("  WARNING: no ProjecTILs predictions found — all T/NK cells "
+    if not os.path.exists(config.NSCLC_PROJECTILS_PREDICTIONS_FILE):
+        # No projection yet: marker-T cells have no functional state.
+        label[marker_tnk] = "T_NK_other"
+        print("  WARNING: no ProjecTILs predictions found — all marker T/NK cells "
               "labeled T_NK_other (run nsclc_projectils_map.R for state resolution).")
+        return label
+
+    pred = pd.read_csv(config.NSCLC_PROJECTILS_PREDICTIONS_FILE)
+    gated = pred[pred["functional.cluster"].notna()].set_index("barcode")
+    proj = gated["functional.cluster"]
+    scgate_t = label.index.isin(proj.index)        # cells scGate accepted as T
+
+    # Sanity check: marker-T vs scGate-T agreement (the markers' new role).
+    both   = int((marker_tnk.to_numpy() & scgate_t).sum())   # agree: T
+    only_m = int((marker_tnk.to_numpy() & ~scgate_t).sum())  # markers say T, scGate no
+    only_s = int((~marker_tnk.to_numpy() & scgate_t).sum())  # scGate found T markers missed
+    n_marker_t = int(marker_tnk.sum())
+    print(f"  [sanity] marker-T vs scGate-T: agree={both:,}  "
+          f"marker-only={only_m:,} (-> T_NK_other)  "
+          f"scGate-only={only_s:,} (recall recovered by scGate)")
+    if n_marker_t:
+        print(f"           scGate confirms {100.0*both/n_marker_t:.1f}% of marker T/NK; "
+              f"{only_s:,} additional T cells found outside marker-T clusters.")
+
+    # scGate-gated cells (anywhere in the TME) take their ProjecTILs state.
+    common = label.index.intersection(proj.index)
+    label.loc[common] = proj.loc[common].values
+    # Marker-T cells scGate rejected: T by markers, no state -> T_NK_other.
+    rej = marker_tnk & ~label.index.isin(proj.index)
+    label[rej] = "T_NK_other"
+    print(f"  ProjecTILs gated {len(common):,} cells -> {proj.nunique()} states; "
+          f"{int((label=='T_NK_other').sum()):,} marker-T cells remain T_NK_other.")
     return label
 
 
@@ -317,11 +310,18 @@ def compute_expression() -> pd.DataFrame:
         chunk_data = data_ds[p0:p1].astype(np.float64)
         chunk_idx = idx_ds[p0:p1]
         local_indptr = indptr[c0:c1 + 1][:] - p0
-        # CSC chunk: genes x (c1-c0); restrict to kinase rows then densify
+        # CSC chunk: genes x (c1-c0). Per-cell CPM normalization (÷ total UMI
+        # over ALL genes × 1e6) then log2(CPM+1) — the Allen ABC / WMB-HBCA
+        # convention, so mean_log2_expression and the mean>1 binary threshold
+        # live on the SAME scale as the sibling references. Raw counts alone
+        # (shallow Flex depth) would read systematically low and break
+        # cross-reference comparability.
         mat = csc_matrix((chunk_data, chunk_idx, local_indptr),
                          shape=(n_genes, c1 - c0))
-        sub = mat[kinase_idx, :].toarray()          # n_k x chunk
-        sub = np.log2(sub + 1.0)                    # mean log2(count+1)
+        cell_total = np.asarray(mat.sum(axis=0)).ravel()      # per-cell UMI, all genes
+        raw = mat[kinase_idx, :].toarray()                    # n_k x chunk raw counts
+        cpm = raw / np.maximum(cell_total, 1.0)[None, :] * 1e6
+        sub = np.log2(cpm + 1.0)                              # log2(CPM+1)
         chunk_ct = cell_ct_idx[c0:c1]
         # scatter-add per cell type
         for ci in np.unique(chunk_ct):

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# TODO #2: T/NK subset export + ProjecTILs projection for the 10x NSCLC reference.
+# TODO #2: full-cohort ProjecTILs projection for the 10x NSCLC reference.
 #
-# Two steps, both memory-bounded:
-#   1. nsclc_subset_tnk.py  — stream the full 10x matrix, write the ~182 K-cell
-#      T/NK subset to a native 10x h5 (peak RAM = one chunk's nnz).
-#   2. nsclc_projectils_map.R — Read10X_h5 the subset, project onto CD8/CD4
-#      human ProjecTILs refs (plan(sequential)). This is the heavy step.
+# nsclc_projectils_map.R hyperslab-reads the full 10x CSC h5 in 25 K-cell column
+# batches and projects every cell onto the CD8/CD4 human ProjecTILs refs; scGate
+# (filter.cells=TRUE) gates T cells per cell. The full matrix is never loaded
+# whole (1.3 B nnz). plan(sequential) — a future worker would duplicate the ref.
 #
 # Runs inside a systemd --user scope with MemoryMax so an OOM is confined to
 # this scope, never the shared box (pattern from run_hbca_download.sh).
@@ -25,9 +24,6 @@ systemd-run --user --scope --unit "$SCOPE" \
   -p MemoryMax="$MEM_CAP" -p MemorySwapMax=0 \
   bash -c "
     set -euo pipefail
-    echo '== [1/2] T/NK subset export =='
-    pixi run python alz/ingest/nsclc_subset_tnk.py
-    echo '== [2/2] ProjecTILs projection =='
     pixi run Rscript alz/ingest/nsclc_projectils_map.R
   " 2>&1 | tee "$LOG"
 
