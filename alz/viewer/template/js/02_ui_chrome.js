@@ -96,3 +96,104 @@ const TAB_MANIFEST = {
     rerenderOn: {},
   },
 };
+
+// ---------------------------------------------------------------------------
+// 5xFAD incytr surfacing. The cortex/hippocampus incytr lives under
+// incytr_pathways.by_context (context ids fivexfad_cortex / fivexfad_hippocampus)
+// and is reached inside the 5xFAD mode: the Incytr Heatmap + Incytr Pathways
+// tabs are mode-shared (mouse → Song AD, fivexfad → 5xFAD), and a Cortex/
+// Hippocampus toggle picks the tissue context. See body.html
+// #fivexfad-tissue-toggle and boot.js (mode→context wiring).
+// ---------------------------------------------------------------------------
+const _INCYTR_TAB_IDS = new Set(["incytrheatmap", "incytrpathways"]);
+let _fivexfadIncytrContextPref = null;   // remembers the last tissue choice
+
+function _fivexfadIncytrContexts() {
+  if (typeof ViewerPayload === "undefined") return [];
+  return ViewerPayload.contexts().filter(
+    c => c.cohort === "fivexfad" && c.capabilities && c.capabilities.incytr);
+}
+
+function _defaultFivexfadIncytrContext() {
+  const list = _fivexfadIncytrContexts();
+  if (!list.length) return null;
+  if (_fivexfadIncytrContextPref
+      && list.some(c => c.id === _fivexfadIncytrContextPref))
+    return _fivexfadIncytrContextPref;
+  return list[0].id;
+}
+
+// Add the incytr tabs to the 5xFAD mode once, after payload load reveals that
+// 5xFAD incytr data exists. Mutates the shared TAB_MANIFEST in place.
+function _enableFivexfadIncytrTabs() {
+  if (!HAS_FIVEXFAD_INCYTR) return;
+  _INCYTR_TAB_IDS.forEach(id => {
+    const m = TAB_MANIFEST[id];
+    if (m && Array.isArray(m.modes) && !m.modes.includes("fivexfad"))
+      m.modes = m.modes.concat("fivexfad");
+  });
+}
+
+// Mode → incytr context: 5xFAD mode points incytr at its tissue context; any
+// other mode restores the cohort default (Song AD). Called from boot.js on
+// mode change.
+function _applyModeContext(mode) {
+  if (typeof ViewerPayload === "undefined") return;
+  const want = (mode === "fivexfad")
+    ? _defaultFivexfadIncytrContext()
+    : ViewerPayload.defaultContext();
+  if (want && Store.state.selection.context !== want)
+    Store.dispatch({ type: "SET_SELECTION", key: "context", value: want });
+}
+
+function _tissueLabel(ctx) {
+  // "5xFAD Cortex" → "Cortex"; fall back to the raw label.
+  const lbl = String(ctx.label || ctx.id);
+  return lbl.replace(/^5xFAD\s+/i, "") || lbl;
+}
+
+// Build the Cortex/Hippocampus buttons from the available 5xFAD incytr
+// contexts and wire click → SET_SELECTION context. Idempotent.
+function wireFivexfadTissueToggle() {
+  const wrap = document.getElementById("fivexfad-tissue-toggle");
+  if (!wrap) return;
+  if (!wrap._built) {
+    const list = _fivexfadIncytrContexts();
+    wrap.innerHTML = list.map((c, i) =>
+      '<button class="mode-btn" role="tab" data-context="' + c.id + '"'
+      + ' aria-selected="' + (i === 0 ? "true" : "false") + '">'
+      + _escapeHtml(_tissueLabel(c)) + '</button>'
+    ).join("");
+    wrap._built = true;
+  }
+  wrap.querySelectorAll("button.mode-btn").forEach(btn => {
+    if (btn._wired) return;
+    btn._wired = true;
+    btn.addEventListener("click", () => {
+      const ctx = btn.dataset.context;
+      _fivexfadIncytrContextPref = ctx;
+      if (ctx !== ViewerPayload.activeContext())
+        Store.dispatch({ type: "SET_SELECTION", key: "context", value: ctx });
+    });
+  });
+}
+
+// Visible only in 5xFAD mode while an incytr tab is active (tissue is an
+// incytr-only axis; the 5xFAD kinase tab is tissue-pooled). Highlights the
+// button matching the active context.
+function _syncFivexfadTissueToggle() {
+  const wrap = document.getElementById("fivexfad-tissue-toggle");
+  if (!wrap) return;
+  const mode = (Store.state.view && Store.state.view.mode) || "mouse";
+  const tab = Store.state.view && Store.state.view.activeTab;
+  const show = HAS_FIVEXFAD_INCYTR && mode === "fivexfad"
+    && _INCYTR_TAB_IDS.has(tab);
+  wrap.hidden = !show;
+  if (!show) return;
+  const ctx = ViewerPayload.activeContext();
+  wrap.querySelectorAll("button.mode-btn").forEach(btn => {
+    const on = btn.dataset.context === ctx;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+}

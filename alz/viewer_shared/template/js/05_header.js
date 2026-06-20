@@ -150,6 +150,8 @@ function wireTabs() {
       });
     });
   }
+  // Optional 5xFAD incytr tissue toggle (unified viewer only).
+  if (typeof wireFivexfadTissueToggle === "function") wireFivexfadTissueToggle();
 }
 
 function _syncModeToggle() {
@@ -197,6 +199,7 @@ function syncTabsFromStore() {
   _wireTabHandlers();
   _syncModeToggle();
   _syncDonorToggle();
+  if (typeof _syncFivexfadTissueToggle === "function") _syncFivexfadTissueToggle();
   // If the active tab is not visible in the current mode, snap to the mode's default.
   const visible = _activeModeTabs();
   let active = Store.state.view.activeTab;

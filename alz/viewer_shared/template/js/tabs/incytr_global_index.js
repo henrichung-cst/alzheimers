@@ -103,6 +103,14 @@ window.IncytrGlobalIndex = (function() {
     return _loadPromise;
   }
 
+  // Drop the cached binary index so the next ensureLoaded() refetches against
+  // the active context's manifest. Called on context switch (the index is a
+  // per-context artifact — Song AD and each 5xFAD tissue have their own).
+  function reset() {
+    _data = null;
+    _loadPromise = null;
+  }
+
   // Build a Uint8 membership mask of `vocab` ids whose lowercased name includes
   // `tok`. Used per search token across each searchable vocab.
   function _member(lcVocab, tok) {
@@ -364,5 +372,5 @@ window.IncytrGlobalIndex = (function() {
     return row;
   }
 
-  return { available, loaded, manifest, ensureLoaded, filterRank, materialize };
+  return { available, loaded, manifest, ensureLoaded, filterRank, materialize, reset };
 })();

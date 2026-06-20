@@ -53,7 +53,12 @@ const ViewerPayload = (function(){
   function _contextBlock(block, contextId) {
     if (!block) return null;
     const id = contextId || activeContext();
-    if (block.by_context && block.by_context[id]) return block.by_context[id];
+    // Context-keyed blocks resolve strictly: a missing id means "no data for
+    // this context" (caller's default applies), NOT "return the whole wrapper".
+    // Returning the {by_context:{…}} envelope here would hand kinases()/
+    // celltypes() a malformed shape under a context that only carries incytr
+    // (e.g. fivexfad_cortex). Flat legacy blocks (no by_context) pass through.
+    if (block.by_context) return block.by_context[id] || null;
     return block;
   }
   function kinases(contextId) {

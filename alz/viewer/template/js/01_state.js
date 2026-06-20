@@ -53,6 +53,12 @@ async function _loadPayload() {
   HAS_HUMAN = !!(PAYLOAD && PAYLOAD.human);
   HAS_FIVEXFAD = !!(PAYLOAD && PAYLOAD.supporting_5xfad
     && Array.isArray(PAYLOAD.supporting_5xfad.rows));
+  // 5xFAD incytr is a separate axis from the 5xFAD kinase MEA: it lives in
+  // incytr_pathways.by_context under fivexfad_* context ids, surfaced inside
+  // the 5xFAD mode via a Cortex/Hippocampus tissue toggle.
+  HAS_FIVEXFAD_INCYTR = ViewerPayload.contexts().some(
+    c => c.cohort === "fivexfad" && c.capabilities && c.capabilities.incytr);
+  if (typeof _enableFivexfadIncytrTabs === "function") _enableFivexfadIncytrTabs();
   // Populate human-tab cached refs (declared in kinase_human.js).
   if (typeof _KH_HAS !== "undefined") {
     _KH_HAS = HAS_HUMAN;
@@ -78,6 +84,7 @@ async function _fetchJsonSidecar(path) {
 // Populated after _loadPayload() resolves.
 let HAS_HUMAN = false;
 let HAS_FIVEXFAD = false;
+let HAS_FIVEXFAD_INCYTR = false;
 const INITIAL_STATE = {
   selection: { kinase:null, backbone:null, celltype:null, kinaseHuman:null,
                kinaseFiveXFAD:null,

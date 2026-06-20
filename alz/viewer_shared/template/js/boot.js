@@ -106,6 +106,11 @@ function boot() {
       Store.dispatch({type:"SET_SELECTION", key:"kinase", value:null});
       Store.dispatch({type:"SET_SELECTION", key:"kinaseHuman", value:null});
       Store.dispatch({type:"SET_SELECTION", key:"kinaseFiveXFAD", value:null});
+      // Mode drives the incytr context: 5xFAD mode points incytr at its tissue
+      // context, every other mode restores Song AD. (No-op in viewers without
+      // the hook, e.g. the t-cell viewer.) Dispatching here cascades into the
+      // contextChanged branch, which re-renders the active tab.
+      if (typeof _applyModeContext === "function") _applyModeContext(next.view.mode);
       syncTabsFromStore();
       return;
     }
@@ -114,7 +119,11 @@ function boot() {
       // Context switch: clear context-scoped selections, refresh prereq cards,
       // and re-render the active tab against the new context's vocab/shards.
       if (typeof resetKinaseContextCaches === "function") resetKinaseContextCaches();
-      RECEIVERS = ViewerPayload.celltypes().name;
+      // The incytr binary filter-index is a per-context artifact; drop the
+      // cached one so it refetches against the new context's manifest.
+      if (typeof IncytrGlobalIndex !== "undefined" && IncytrGlobalIndex.reset)
+        IncytrGlobalIndex.reset();
+      RECEIVERS = ViewerPayload.celltypes().name || [];
       if (next.selection.kinase != null)
         Store.dispatch({type:"SET_SELECTION", key:"kinase", value:null});
       if (next.selection.backbone != null)
