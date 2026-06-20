@@ -4,7 +4,42 @@
 
 ---
 
-## REVISION 2026-06-19 — implementation reality vs. §3 assumption
+## REVISION 2 (FINAL, 2026-06-19) — full-cohort ProjecTILs gating
+
+The hybrid below (REVISION 1) was implemented, then **superseded** once batched
+projection proved scGate tractable at bounded memory. The marker *pre-filter* was
+the only reason ProjecTILs saw a 182 K-cell subset rather than all cells — and a
+pre-filter gate can withhold a true T cell our crude markers mislabel. Now:
+
+- **scGate gates T over ALL 897,733 cells.** `nsclc_projectils_map.R` hyperslab-reads
+  the 10x CSC h5 in 25 K-cell column batches (never full-loading the 1.3 B-nnz matrix)
+  and projects every cell against the CD8 + CD4 human refs; `filter.cells=TRUE` accepts
+  or rejects each cell. Result: **77,760 gated T cells** (41,130 CD4 / 36,621 CD8 / 9
+  doublets) → 14 ProjecTILs states. This is the authoritative T gate, identical to the
+  cohort's own `tcells_projectils_map.R`.
+- **Markers now only (a) label the non-T TME compartment** (Epithelial / Fibroblast /
+  B_plasma / Myeloid / Endothelial / Mast — which ProjecTILs structurally cannot label,
+  needed for the specificity denominator) **and (b) sanity-check the T calls** (marker-T
+  vs scGate-T agreement: scGate confirmed 42.4 % of marker-T, recovered 251 T cells in
+  non-marker-T clusters). The marker pre-filter, the `projectils_candidate` column, the
+  `tnk_leak_risk` guardrail, and `nsclc_subset_tnk.py` are **removed** (anti-shim).
+- **Expression is `log2(CPM+1)` per cell** (Allen ABC / WMB-HBCA convention), not raw-count
+  `log2`. Raw shallow Flex counts read systematically low (whole-dataset max mean was 1.56,
+  so the `mean>1` binary threshold almost never fired) and broke cross-reference
+  comparability. After the fix, 79–214 kinases expressed per cell type on the same scale
+  as the sibling references; ZAP70 correctly T-dominant (CD8.TEMRA 8.87), CSF1R Myeloid,
+  DDR1 Epithelial.
+
+**Guardrail 2 (specificity over coarse groups) stands** — still collapses the 14 T states
+to one cell-weighted `T_NK` group. **Guardrail 1 is retired** (no pre-filter to guard).
+
+Audit finding: 351 MEA-predicted (FDR<0.25) → 339 panel-covered → 260 expressed → **79
+expressed nowhere** (testis/muscle/neuronal-restricted families = MEA motif false positives).
+Commits 1f2fa8e (pipeline), dbae990 (viewer). Outputs in `outputs/reports/nsclc_reference/`.
+
+---
+
+## REVISION 1 (SUPERSEDED by REVISION 2) — implementation reality vs. §3 assumption
 
 Confirmed download manifest (dataset slug `16plex_900k_32_NSCLC_multiplex`, Cell Ranger
 multi 7.1.0). Fetched to `data/external/nsclc_10x/`:
