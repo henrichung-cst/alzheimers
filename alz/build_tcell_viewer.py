@@ -546,6 +546,22 @@ def _tcell_attribution_uniform(donor: str) -> float | None:
     return (1.0 / n_states) if n_states else None
 
 
+def _nsclc_attribution_uniform() -> float | None:
+    """Uniform baseline 1/N_coarse_groups for the external-reference NSCLC tier.
+
+    The external 10x NSCLC reference is the human cohort's analog of the mouse
+    viewer's WMB cross-check: a kinase's transcript share across the coarse TME
+    groups (the 14 ProjecTILs T-states collapse to one T_NK group; the non-T
+    lineages stay separate). The fold-over-uniform tier in the attribution
+    verdict table is share / (1/N_groups), so we ship N_groups here.
+    """
+    src = config.NSCLC_KINASE_EXPRESSION_FILE
+    if not os.path.exists(src):
+        return None
+    n_groups = pd.read_csv(src, usecols=["spec_group"])["spec_group"].nunique()
+    return (1.0 / n_groups) if n_groups else None
+
+
 def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list) -> dict:
     """Columnar attribution_index consumed by the viewer JS getScopedAttribution.
 
@@ -1746,9 +1762,11 @@ def _register_kinase_audit_tables(tables: dict) -> None:
         shutil.copyfile(src, dest)
         tables[key] = _audit_csv_meta(dest, label, key)
     # NSCLC 10x cell-type specificity reference — the human cohort's analog of
-    # the mouse viewer's WMB dot plot. Per-(kinase, cell_type) mean_log2(CPM+1),
-    # fraction expressing, and specificity share over coarse TME groups; rendered
-    # in the attribution drawer's NSCLC dot plot.
+    # the mouse viewer's WMB cross-check. Per-(kinase, cell_type) mean_log2(CPM+1),
+    # fraction expressing, and specificity share over coarse TME groups. Surfaced
+    # as the external-reference tier column in the attribution verdict table
+    # (T_NK-group share vs the 1/N_groups uniform) + a per-lineage specificity
+    # strip in the drawer.
     nsclc_src = config.NSCLC_KINASE_EXPRESSION_FILE
     if os.path.exists(nsclc_src):
         os.makedirs(AUDIT_SOURCES_DIR, exist_ok=True)
@@ -2451,6 +2469,7 @@ def build_tcell_payload() -> dict:
         "fdr_threshold": fdr_thresh,
         "mea_kinase_donor": "donor1",
         "tcell_attribution_uniform": attribution_uniform,
+        "nsclc_attribution_uniform": _nsclc_attribution_uniform(),
         "tcell_attribution_caveat": TCELL_ATTRIBUTION_CAVEAT,
         "transcript_trace": transcript_trace_meta,
         "omics_trace": omics_trace_meta,

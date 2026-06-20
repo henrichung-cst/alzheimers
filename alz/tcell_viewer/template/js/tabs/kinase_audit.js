@@ -569,6 +569,39 @@ function _allenABALink(gene) {
   );
 }
 
+// External-reference (10x NSCLC TME) specificity tiers — the human cohort's
+// analog of the mouse viewer's WMB cross-check. share / (1/N_coarse_groups),
+// binned 10×/5×/2×/1×. N_groups (=7) is shipped as PAYLOAD.meta.nsclc_attribution_uniform.
+function _nsclcUniform() {
+  return (typeof PAYLOAD !== "undefined" && PAYLOAD && PAYLOAD.meta &&
+          PAYLOAD.meta.nsclc_attribution_uniform) || (1 / 7);
+}
+function _nsclcTier(share) {
+  if (share == null || !isFinite(share)) return 0;
+  const fold = share / _nsclcUniform();
+  return fold >= 10 ? 10 : (fold >= 5 ? 5 : (fold >= 2 ? 2 : (fold >= 1 ? 1 : 0)));
+}
+function _nsclcTierBadge(share) {
+  const t = _nsclcTier(share);
+  if (!t) return '<span class="muted">—</span>';
+  const cls = t >= 10 ? "vhi" : (t >= 5 ? "hi" : (t >= 2 ? "mid" : "lo"));
+  const n = Math.round(1 / _nsclcUniform());
+  return '<span class="badge ' + cls + '" title="External NSCLC TME reference: T_NK-compartment transcript share ' +
+         ((share != null && isFinite(share)) ? share.toFixed(3) : "?") + ' ≥ ' + t + '× uniform (1/' + n +
+         ' ≈ ' + _nsclcUniform().toFixed(3) + ')">≥' + t + '×</span>';
+}
+// Per coarse TME group: the kinase's specificity share (constant within a group
+// for one gene). Returns Map<spec_group, share>.
+function _nsclcGroupShares(nsclcRows) {
+  const byGroup = new Map();
+  for (const r of (nsclcRows || [])) {
+    const g = String(r.spec_group || "");
+    if (!g || byGroup.has(g)) continue;
+    byGroup.set(g, Number(r.specificity_score) || 0);
+  }
+  return byGroup;
+}
+
 const ATTR_VERDICT_COLS = [
   {key:"cell_type",                    label:"Cell type",        type:"str", group:"id",
    title:""},
@@ -582,6 +615,8 @@ const ATTR_VERDICT_COLS = [
    title:"sign(bulk NES) · transcript Δ vs d2. Positive = transcript moves with the bulk kinase activity. SHOWN ONLY — never filters: kinase activity is post-translationally decoupled from its own mRNA, so sign-agreement is at chance (OR≈1, same in the mouse Song reference)."},
   {key:"tcell_consistency",            label:"Timecourse",       type:"num", group:"attr",
    title:"Count of contrast days {d13, d17, d20} where the transcript moves concordantly with the bulk NES. Credibility comes from timecourse consistency, not a per-day p-value."},
+  {key:"nsclc_tier",                   label:"NSCLC TME",        type:"num", group:"ext",
+   title:"External reference (10x 900k-cell NSCLC tumor microenvironment): the kinase transcript's share in the T_NK compartment as a multiple of the uniform baseline (1/N_TME_groups). Constant across T-states — it asks whether an INDEPENDENT human dataset agrees the kinase is T-lineage-expressed at all, not which T-state. Empty = below 1× uniform / not in the NSCLC probe panel. See the per-lineage strip in the drawer for the full TME breakdown."},
 ];
 function _attrVerdictCmp(a, b, key, type, asc) {
   let va, vb;
@@ -630,6 +665,17 @@ function _renderAttributionVerdict(hostId, ctx) {
   }
   const rows = Array.from(deduped.values());
 
+  // External-reference (NSCLC TME) tier — the T_NK compartment's share for this
+  // gene, constant across all T-state rows (the external reference does not
+  // resolve sub-T-state structure; it corroborates that the kinase is T-lineage
+  // transcribed at all). Empty when the gene is outside the NSCLC probe panel.
+  const _nsclcShares = _nsclcGroupShares(ctx.nsclcRows);
+  const _tNkShare = _nsclcShares.has("T_NK") ? _nsclcShares.get("T_NK") : null;
+  for (const r of rows) {
+    r.nsclc_specificity = _tNkShare;
+    r.nsclc_tier = _nsclcTier(_tNkShare);
+  }
+
   // Bulk MEA anchor — the same NES/FDR for every row at this kinase × contrast.
   const _K = ViewerPayload.kinases();
   const _bulkNes = (_K && _K["NES_" + ctx.contrast]) ? _K["NES_" + ctx.contrast][ctx.kinase_id] : null;
@@ -668,6 +714,7 @@ function _renderAttributionVerdict(hostId, ctx) {
       lfcCell +
       concCell +
       consistCell +
+      `<td>${_nsclcTierBadge(r.nsclc_specificity)}</td>` +
       `</tr>`;
   }).join("");
   const headCells = ATTR_VERDICT_COLS.map(c => {
@@ -675,12 +722,14 @@ function _renderAttributionVerdict(hostId, ctx) {
     const title = c.title ? ` title="${_escapeHtml(c.title)}"` : "";
     return `<th class="attr-verdict-th" data-sort-key="${c.key}"${title}>${c.label}${arrow}</th>`;
   }).join("");
-  // Super-header groups the id column and the within-cohort attribution columns.
+  // Super-header groups the id column, the within-cohort attribution columns,
+  // and the external-reference (NSCLC TME) cross-check column.
   const _grpCounts = ATTR_VERDICT_COLS.reduce((acc, c) => { acc[c.group] = (acc[c.group]||0)+1; return acc; }, {});
   const superHead =
     `<tr class="attr-verdict-supergroup">` +
       `<th class="attr-supergroup-spacer" colspan="${_grpCounts.id || 0}"></th>` +
       `<th class="attr-supergroup-attr" colspan="${_grpCounts.attr || 0}" title="Within-cohort cell-type attribution: transcript specificity in this cohort's own scRNA + concordance vs the bulk kinase-MEA direction at this contrast.">Within-cohort attribution (vs bulk direction)</th>` +
+      `<th class="attr-supergroup-ext" colspan="${_grpCounts.ext || 0}" title="External human reference: 10x 900k-cell NSCLC tumor microenvironment (ProjecTILs/scGate T-states + marker-labeled non-T lineages). Cross-checks whether the kinase is transcribed in the T lineage at all, independent of this cohort's own scRNA.">External ref (NSCLC TME)</th>` +
     `</tr>`;
   // Bulk anchor — every row compares against this kinase's bulk MEA at this contrast.
   const _bulkSig = _bulkFdr != null && isFinite(_bulkFdr) && _bulkFdr < 0.25;
@@ -703,12 +752,13 @@ function _renderAttributionVerdict(hostId, ctx) {
     `<div class="muted attr-verdict-note" style="margin-top:4px;font-size:11px;">All ${rows.length} cell-type states shown — nothing is filtered or hidden. Sort any column to reorder.</div>` +
     `<details class="attr-explainer"><summary>How to read within-cohort attribution</summary>` +
       `<div class="attr-explainer-body">` +
-      `<p>This localizes the <strong>bulk</strong> kinase-activity signal to a cell-type state using only this cohort's own paired scRNA — no external disease reference. The axes are <strong>shown for you to read</strong>; none of them filters the table.</p>` +
+      `<p>The <strong>within-cohort</strong> axes localize the <strong>bulk</strong> kinase-activity signal to a cell-type state using only this cohort's own paired scRNA. The <strong>NSCLC TME</strong> axis is an <strong>independent human reference</strong> (10x 900k-cell tumor microenvironment) cross-checking whether the kinase is T-lineage transcribed at all. All axes are <strong>shown for you to read</strong>; none of them filters the table.</p>` +
       `<table class="attr-explainer-table" style="margin-bottom:8px;">` +
         `<thead><tr><th>Axis</th><th>What it tells you</th></tr></thead><tbody>` +
         `<tr><td><strong>Specificity</strong></td><td>Is the kinase's transcript preferentially expressed in this state? Share of total expression, binned as a multiple of the uniform baseline (1/N_states). Pooled across all scRNA days — a static descriptor. This is the informative localizer.</td></tr>` +
         `<tr><td><strong>Δ vs d2 / Concordance</strong></td><td>Does the transcript move the same direction as the bulk kinase activity at this day? Pseudobulk log2 fold change vs the d2 baseline, sign-checked against the bulk NES.</td></tr>` +
         `<tr><td><strong>Timecourse</strong></td><td>How many of the three contrast days (d13/d17/d20) agree in direction.</td></tr>` +
+        `<tr><td><strong>NSCLC TME</strong></td><td>External cross-check: the kinase's transcript share in the T_NK compartment of an independent 10x NSCLC reference, as a multiple of the 1/N_TME_groups uniform. Constant across T-states (the reference doesn't resolve sub-T structure) — it asks whether an outside dataset agrees the kinase is T-lineage expressed. Click a row for the full per-lineage breakdown in the drawer; a kinase absent from every TME compartment is an MEA motif false-positive candidate.</td></tr>` +
         `</tbody></table>` +
       `<p><strong>No p-value / FDR.</strong> Donor1 is a single donor with one scRNA library per day — there are no biological replicates, so a per-(state, day) significance test would be pseudoreplication (Squair et al. 2021). Direction + magnitude + timecourse consistency are reported instead.</p>` +
       (caveat ? `<p class="attr-caveat" style="border-left:3px solid #b58900;padding-left:8px;"><strong>On concordance:</strong> ${_escapeHtml(caveat)} <span class="muted">(Verified 2026-06-03: sign-agreement between MEA activity and kinase transcript is statistically independent, OR≈0.98, reproduced in the published mouse Song method at OR≈1.01. It is shown as a label only.)</span></p>` : "") +
@@ -777,13 +827,10 @@ function _renderAttributionDrawer(hostId, ctx, cellType) {
     `<section class="attr-section attr-section-wide"><h5>Within-cohort transcript trace ` +
       `<span class="muted">(unified_attribution_tcells.csv)</span></h5>` +
       traceBody + `</section>` +
-    `<section class="attr-section attr-section-wide"><h5>NSCLC TME expression across cell types ` +
+    `<section class="attr-section attr-section-wide"><h5>NSCLC TME specificity by lineage ` +
       `<span class="muted">(nsclc_kinase_expression.csv)</span></h5>` +
-      `<p class="muted attr-caption">Independent human reference: Seurat-style dot plot for ${_escapeHtml(gene)} across the 10x 900k-cell NSCLC tumor microenvironment ` +
-      `(ProjecTILs/scGate-gated T states + marker-labeled non-T compartments). Color = mean log2(CPM+1), dot size = fraction of cells expressing. ` +
-      `The cohort's own T state is outlined. Shows whether the kinase is transcribed in this lineage at all — a kinase absent everywhere here is an MEA motif false-positive candidate.</p>` +
-      `<div id="attr-nsclc-dotplot"></div></section>`;
-  _renderNSCLCDotPlot("attr-nsclc-dotplot", ctx, cellType);
+      `<div id="attr-nsclc-strip"></div></section>`;
+  _renderNSCLCLineageStrip("attr-nsclc-strip", ctx);
 }
 
 function _renderDecompOlsTable(hostId, ctx, cellType) {
@@ -860,56 +907,48 @@ function _renderDecompOlsTable(hostId, ctx, cellType) {
   });
 }
 
-function _renderNSCLCDotPlot(hostId, ctx, targetCellType) {
+// Per-lineage specificity strip — the external NSCLC TME reference's full
+// breakdown for one kinase. One chip per coarse TME group (T_NK + non-T
+// lineages), each a fold-over-uniform tier badge on the group's transcript
+// share. This is where cross-lineage breadth lives: the T-only verdict table
+// can only show the constant T_NK tier, so the audit signal ("expressed in T
+// but also myeloid? or nowhere?") is read here.
+function _renderNSCLCLineageStrip(hostId, ctx) {
   const host = document.getElementById(hostId);
   if (!host) return;
-  const rows = (ctx.nsclcRows || []).slice();
+  const rows = ctx.nsclcRows || [];
   if (rows.length === 0) {
-    host.innerHTML = `<div class="muted">${_escapeHtml(ctx.gene || '')} is not in the NSCLC Flex probe panel (not covered).</div>`;
+    host.innerHTML = `<div class="muted">${_escapeHtml(ctx.gene || '')} is not in the NSCLC Flex probe panel — the external reference cannot speak to it.</div>`;
     return;
   }
-  rows.sort((a, b) => (Number(b.mean_log2_expression) || 0) - (Number(a.mean_log2_expression) || 0));
-  const maxExpr = Math.max(...rows.map(r => Number(r.mean_log2_expression) || 0), 1);
-  const W = 720, H = 18 * rows.length + 60, padL = 160, padT = 30, padR = 40;
-  const innerW = W - padL - padR;
-  const x0 = padL, x1 = padL + innerW;
-  const colorAt = (v) => {
-    const t = Math.max(0, Math.min(1, v / maxExpr));
-    // grey → deep blue ramp
-    const r = Math.round(240 - 180 * t), g = Math.round(240 - 130 * t), b = Math.round(240 - 50 * t);
-    return `rgb(${r},${g},${b})`;
-  };
-  const sizeAt = (frac) => {
-    const f = Math.max(0, Math.min(1, Number(frac) || 0));
-    return 2 + 9 * Math.sqrt(f);
-  };
-  const tickValues = [0, 0.5, 1.0, 2.0, 4.0, 6.0, 8.0].filter(v => v <= maxExpr * 1.05);
-  const xScale = (v) => x0 + (Math.max(0, Math.min(maxExpr, v)) / maxExpr) * innerW;
-  const ticks = tickValues.map(v => `<line x1="${xScale(v)}" x2="${xScale(v)}" y1="${padT - 4}" y2="${padT}" stroke="#9ca3af" stroke-width="1"/>` +
-    `<text x="${xScale(v)}" y="${padT - 8}" font-size="10" text-anchor="middle" fill="#6b7280">${v}</text>`).join("");
-  const dots = rows.map((r, i) => {
-    const expr = Number(r.mean_log2_expression) || 0;
-    const frac = Number(r.fraction_cells_expressing) || 0;
-    const cx = xScale(expr);
-    const cy = padT + 18 * i + 9;
-    const isTarget = r.cell_type === targetCellType;
-    const stroke = isTarget ? "#111827" : "#cbd5e0";
-    const strokeW = isTarget ? 2 : 0.8;
-    const labelClass = isTarget ? "attr-dot-label attr-dot-label-target" : "attr-dot-label";
-    const title = `${r.cell_type}: log2 expr = ${expr.toFixed(2)}, fraction = ${frac.toFixed(2)}, specificity = ${(Number(r.specificity_score) || 0).toFixed(3)}`;
-    return `<g><title>${_escapeHtml(title)}</title>` +
-      `<text x="${x0 - 8}" y="${cy + 3.5}" text-anchor="end" font-size="11" class="${labelClass}">${_escapeHtml(r.cell_type)}</text>` +
-      `<line x1="${x0}" x2="${x1}" y1="${cy}" y2="${cy}" stroke="#e5e7eb" stroke-dasharray="2,2"/>` +
-      `<circle cx="${cx}" cy="${cy}" r="${sizeAt(frac).toFixed(1)}" fill="${colorAt(expr)}" stroke="${stroke}" stroke-width="${strokeW}"/>` +
-      `</g>`;
+  // Aggregate to coarse TME groups. specificity_score is the group share
+  // (constant within a group for one gene); binary_expressed / fraction are
+  // taken at their per-group peak to flag "expressed in this lineage".
+  const byGroup = new Map();
+  for (const r of rows) {
+    const g = String(r.spec_group || "");
+    if (!g) continue;
+    const cur = byGroup.get(g) || { share: Number(r.specificity_score) || 0, expr: false, maxFrac: 0 };
+    if (String(r.binary_expressed).toLowerCase() === "true" || Number(r.binary_expressed) === 1) cur.expr = true;
+    cur.maxFrac = Math.max(cur.maxFrac, Number(r.fraction_cells_expressing) || 0);
+    byGroup.set(g, cur);
+  }
+  const entries = Array.from(byGroup.entries()).sort((a, b) => b[1].share - a[1].share);
+  const nExpr = entries.filter(e => e[1].expr).length;
+  const nGroups = Math.round(1 / _nsclcUniform());
+  const chips = entries.map(([g, v]) => {
+    const dim = v.expr ? "" : ' nsclc-lineage-chip-dim';
+    const exprMark = v.expr ? "" : ' <span class="muted" style="font-size:10px;">low</span>';
+    return `<span class="nsclc-lineage-chip${dim}" title="${_escapeHtml(g)}: specificity share ${v.share.toFixed(3)}, peak fraction expressing ${v.maxFrac.toFixed(2)}">` +
+      `<strong>${_escapeHtml(g)}</strong> ${_nsclcTierBadge(v.share)}${exprMark}</span>`;
   }).join("");
-  const legend = `<g transform="translate(${padL}, ${H - 22})">` +
-    `<text x="0" y="0" font-size="10" fill="#6b7280">Color: log2 expression (0 → ${maxExpr.toFixed(1)})  ·  Size: fraction of cells expressing (0 → 1)</text>` +
-    `</g>`;
-  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" class="attr-svg">` +
-    `<line x1="${x0}" x2="${x1}" y1="${padT}" y2="${padT}" stroke="#9ca3af" stroke-width="1"/>` +
-    ticks + dots + legend +
-    `</svg>`;
+  const verdict = nExpr === 0
+    ? `<span class="attr-bulk-down">expressed in 0 / ${nGroups} TME compartments — MEA motif false-positive candidate</span>`
+    : `expressed in ${nExpr} / ${nGroups} TME compartments`;
+  host.innerHTML =
+    `<p class="muted attr-caption">Independent human reference (10x 900k-cell NSCLC TME). Tier = ${_escapeHtml(ctx.gene || '')} transcript share per coarse lineage ` +
+    `as a multiple of the 1/${nGroups} uniform baseline; the 14 ProjecTILs T-states are pooled into T_NK. ${verdict}.</p>` +
+    `<div class="nsclc-lineage-strip">${chips}</div>`;
 }
 
 
