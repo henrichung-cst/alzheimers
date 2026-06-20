@@ -6,9 +6,6 @@
     <button class="mode-btn" data-mode="fivexfad" role="tab" aria-selected="false">Mouse (5xFAD)</button>
     <button class="mode-btn" data-mode="human" role="tab" aria-selected="false">Human (Mukesh)</button>
   </div>
-  <!-- 5xFAD incytr tissue selector: buttons built at runtime from the 5xFAD
-       incytr contexts; shown only in 5xFAD mode on an incytr tab. -->
-  <div class="mode-toggle" id="fivexfad-tissue-toggle" role="tablist" aria-label="5xFAD tissue" hidden></div>
   <label class="filter-label" data-filter="fdr" data-metric="fdr">FDR &lt; <input id="f-fdr" aria-label="FDR threshold" type="number" step="0.05" min="0" max="1"
     value="0.25" style="width:60px;"></label>
   <button id="glossary-toggle" aria-controls="glossary-panel" aria-expanded="false" title="Open metric definitions and abbreviations">Glossary</button>
@@ -249,6 +246,9 @@
   <div id="tab-incytrheatmap" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytrheatmap" hidden>
     <div class="card">
       <div class="ke-toolbar ke-toolbar-multi">
+        <label class="ke-filter-label" id="ih-tissue-wrap" title="5xFAD tissue. Switches the incytr dataset between cortex and hippocampus." hidden>Tissue
+          <select id="ih-tissue" aria-label="5xFAD tissue"></select>
+        </label>
         <label class="ke-filter-label">Disease
           <select id="ih-disease" aria-label="Disease"></select>
         </label>
@@ -312,6 +312,9 @@
   <div id="tab-incytrpathways" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytrpathways" hidden>
     <div class="card">
       <div class="ke-toolbar ke-toolbar-multi">
+        <label class="ke-filter-label" id="ip-tissue-wrap" title="5xFAD tissue. Switches the incytr dataset between cortex and hippocampus." hidden>Tissue
+          <select id="ip-tissue" aria-label="5xFAD tissue"></select>
+        </label>
         <label class="ke-filter-label" title="Top overall ranks the packaged top pathway instances across all sender/receiver cell-type pairs. Cell Type loads one sender/receiver pair for detailed evidence inspection.">View
           <select id="ip-mode" aria-label="Incytr pathway view">
             <option value="top">Top overall</option>

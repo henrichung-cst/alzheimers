@@ -152,48 +152,47 @@ function _tissueLabel(ctx) {
   return lbl.replace(/^5xFAD\s+/i, "") || lbl;
 }
 
-// Build the Cortex/Hippocampus buttons from the available 5xFAD incytr
-// contexts and wire click → SET_SELECTION context. Idempotent.
+// The 5xFAD tissue selector is an in-tab filter: a Tissue <select> at the head
+// of each incytr toolbar (#ih-tissue / #ip-tissue), sitting with the rest of
+// that tab's filters. Both selects are populated from the available 5xFAD
+// incytr contexts and dispatch SET_SELECTION context on change. Idempotent.
+const _FIVEXFAD_TISSUE_SELECT_IDS = ["ih-tissue", "ip-tissue"];
+
 function wireFivexfadTissueToggle() {
-  const wrap = document.getElementById("fivexfad-tissue-toggle");
-  if (!wrap) return;
-  if (!wrap._built) {
-    const list = _fivexfadIncytrContexts();
-    wrap.innerHTML = list.map((c, i) =>
-      '<button class="mode-btn" role="tab" data-context="' + c.id + '"'
-      + ' aria-selected="' + (i === 0 ? "true" : "false") + '">'
-      + _escapeHtml(_tissueLabel(c)) + '</button>'
-    ).join("");
-    wrap._built = true;
-  }
-  wrap.querySelectorAll("button.mode-btn").forEach(btn => {
-    if (btn._wired) return;
-    btn._wired = true;
-    btn.addEventListener("click", () => {
-      const ctx = btn.dataset.context;
-      _fivexfadIncytrContextPref = ctx;
-      if (ctx !== ViewerPayload.activeContext())
-        Store.dispatch({ type: "SET_SELECTION", key: "context", value: ctx });
-    });
+  const list = _fivexfadIncytrContexts();
+  _FIVEXFAD_TISSUE_SELECT_IDS.forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    if (!sel._built) {
+      sel.innerHTML = list.map(c =>
+        '<option value="' + c.id + '">' + _escapeHtml(_tissueLabel(c)) + '</option>'
+      ).join("");
+      sel._built = true;
+    }
+    if (!sel._wired) {
+      sel._wired = true;
+      sel.addEventListener("change", () => {
+        const ctx = sel.value;
+        _fivexfadIncytrContextPref = ctx;
+        if (ctx !== ViewerPayload.activeContext())
+          Store.dispatch({ type: "SET_SELECTION", key: "context", value: ctx });
+      });
+    }
   });
 }
 
-// Visible only in 5xFAD mode while an incytr tab is active (tissue is an
-// incytr-only axis; the 5xFAD kinase tab is tissue-pooled). Highlights the
-// button matching the active context.
+// Shown only in 5xFAD mode (Song mode is single-context, no tissue choice).
+// Keeps both selects' values in lockstep with the active context. The incytr
+// tab panels handle their own visibility, so no per-tab gating is needed here.
 function _syncFivexfadTissueToggle() {
-  const wrap = document.getElementById("fivexfad-tissue-toggle");
-  if (!wrap) return;
   const mode = (Store.state.view && Store.state.view.mode) || "mouse";
-  const tab = Store.state.view && Store.state.view.activeTab;
-  const show = HAS_FIVEXFAD_INCYTR && mode === "fivexfad"
-    && _INCYTR_TAB_IDS.has(tab);
-  wrap.hidden = !show;
-  if (!show) return;
+  const show = HAS_FIVEXFAD_INCYTR && mode === "fivexfad";
   const ctx = ViewerPayload.activeContext();
-  wrap.querySelectorAll("button.mode-btn").forEach(btn => {
-    const on = btn.dataset.context === ctx;
-    btn.classList.toggle("active", on);
-    btn.setAttribute("aria-selected", on ? "true" : "false");
+  _FIVEXFAD_TISSUE_SELECT_IDS.forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const wrap = document.getElementById(id + "-wrap");
+    if (wrap) wrap.hidden = !show;
+    if (show && sel.value !== ctx) sel.value = ctx;
   });
 }
