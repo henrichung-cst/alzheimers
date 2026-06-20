@@ -9,6 +9,23 @@ _INCYTR_LABEL_NODES = _INCYTR_FC_NODES
 _INCYTR_LABEL_COLS = tuple(f"{n}_label" for n in _INCYTR_LABEL_NODES)
 _INCYTR_LABEL_VOCAB = ("DEG", "prG")
 _INCYTR_SCORE_COLS = ("TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "SiK_score")
+
+# FC metric suffixes emitted by the incytr driver (one per node × assay channel).
+_INCYTR_FC_METRICS = ("sclog2FC", "pr_log2FC", "ps_log2FC", "py_log2FC")
+_INCYTR_FC_COLS = tuple(
+    f"{node}_{metric}" for node in _INCYTR_FC_NODES for metric in _INCYTR_FC_METRICS
+)
+# Label source column → canonical label column rename (raw driver → viewer payload).
+_INCYTR_LABEL_SRC = tuple(f"{n}.label" for n in _INCYTR_LABEL_NODES)
+
+# Pre-aggregation threshold grids — user input is snapped to the nearest entry.
+_INCYTR_PATHWAY_PVALUES = (0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
+_INCYTR_PATHWAY_ABS_PDS = (0.0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
+
+# On-disk sidecar filenames (same for every cohort).
+_INCYTR_INDEX_FILENAME = "incytr_index.bin.gz"
+_INCYTR_GENE_NODE_INDEX_FILENAME = "gene_node_index.json.gz"
+
 _SIGN_VEC_LABELS = (
     "always-up",        # uuu — every PDS > 0
     "always-down",      # ddd — every PDS < 0

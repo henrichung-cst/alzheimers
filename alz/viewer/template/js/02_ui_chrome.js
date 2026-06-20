@@ -76,14 +76,14 @@ const TAB_MANIFEST = {
   },
   incytrheatmap: {
     group: "landscape", label: "Incytr Heatmap",
-    filters: [], requires: [], modes: ["mouse"],
+    filters: [], requires: [], modes: ["mouse", "fivexfad"],
     wire: () => wireIncytrHeatmap(),
     render: () => renderIncytrHeatmap(),
     rerenderOn: { filters: false, selection: [] },
   },
   incytrpathways: {
     group: "drilldown", label: "Incytr Pathways",
-    filters: [], requires: [], modes: ["mouse"],
+    filters: [], requires: [], modes: ["mouse", "fivexfad"],
     wire: () => wireIncytrPathways(),
     render: () => renderIncytrPathways(),
     rerenderOn: { filters: false, selection: [] },
@@ -101,37 +101,29 @@ const TAB_MANIFEST = {
 // 5xFAD incytr surfacing. The cortex/hippocampus incytr lives under
 // incytr_pathways.by_context (context ids fivexfad_cortex / fivexfad_hippocampus)
 // and is reached inside the 5xFAD mode: the Incytr Heatmap + Incytr Pathways
-// tabs are mode-shared (mouse → Song AD, fivexfad → 5xFAD), and a Cortex/
-// Hippocampus toggle picks the tissue context. See body.html
-// #fivexfad-tissue-toggle and boot.js (mode→context wiring).
+// tabs declare modes:["mouse","fivexfad"] and _modeAvailable("fivexfad")
+// (gated by HAS_FIVEXFAD) controls visibility without any post-hoc mutation.
+// A Tissue <select> in each incytr tab's toolbar switches the active context.
 // ---------------------------------------------------------------------------
-const _INCYTR_TAB_IDS = new Set(["incytrheatmap", "incytrpathways"]);
-let _fivexfadIncytrContextPref = null;   // remembers the last tissue choice
 
+// Static after payload load — cached to avoid filtering on every Store sync.
+let _f5IncytrCtxCache = null;
 function _fivexfadIncytrContexts() {
+  if (_f5IncytrCtxCache) return _f5IncytrCtxCache;
   if (typeof ViewerPayload === "undefined") return [];
-  return ViewerPayload.contexts().filter(
+  _f5IncytrCtxCache = ViewerPayload.contexts().filter(
     c => c.cohort === "fivexfad" && c.capabilities && c.capabilities.incytr);
+  return _f5IncytrCtxCache;
 }
 
 function _defaultFivexfadIncytrContext() {
   const list = _fivexfadIncytrContexts();
   if (!list.length) return null;
-  if (_fivexfadIncytrContextPref
-      && list.some(c => c.id === _fivexfadIncytrContextPref))
-    return _fivexfadIncytrContextPref;
+  // If the current context is already a valid 5xFAD incytr context (user
+  // previously chose a tissue), stay on it.
+  const cur = Store.state.selection.context;
+  if (cur && list.some(c => c.id === cur)) return cur;
   return list[0].id;
-}
-
-// Add the incytr tabs to the 5xFAD mode once, after payload load reveals that
-// 5xFAD incytr data exists. Mutates the shared TAB_MANIFEST in place.
-function _enableFivexfadIncytrTabs() {
-  if (!HAS_FIVEXFAD_INCYTR) return;
-  _INCYTR_TAB_IDS.forEach(id => {
-    const m = TAB_MANIFEST[id];
-    if (m && Array.isArray(m.modes) && !m.modes.includes("fivexfad"))
-      m.modes = m.modes.concat("fivexfad");
-  });
 }
 
 // Mode → incytr context: 5xFAD mode points incytr at its tissue context; any
@@ -147,16 +139,16 @@ function _applyModeContext(mode) {
 }
 
 function _tissueLabel(ctx) {
-  // "5xFAD Cortex" → "Cortex"; fall back to the raw label.
   const lbl = String(ctx.label || ctx.id);
   return lbl.replace(/^5xFAD\s+/i, "") || lbl;
 }
 
 // The 5xFAD tissue selector is an in-tab filter: a Tissue <select> at the head
-// of each incytr toolbar (#ih-tissue / #ip-tissue), sitting with the rest of
-// that tab's filters. Both selects are populated from the available 5xFAD
-// incytr contexts and dispatch SET_SELECTION context on change. Idempotent.
+// of each incytr toolbar (#ih-tissue / #ip-tissue). Populated from the 5xFAD
+// incytr contexts; dispatches SET_SELECTION context on change. Idempotent.
+// Caches the {sel, wrap} pairs so _syncFivexfadTissueToggle avoids DOM lookups.
 const _FIVEXFAD_TISSUE_SELECT_IDS = ["ih-tissue", "ip-tissue"];
+let _f5TissueSels = null;   // [{sel, wrap}] cached after first wire
 
 function wireFivexfadTissueToggle() {
   const list = _fivexfadIncytrContexts();
@@ -172,26 +164,23 @@ function wireFivexfadTissueToggle() {
     if (!sel._wired) {
       sel._wired = true;
       sel.addEventListener("change", () => {
-        const ctx = sel.value;
-        _fivexfadIncytrContextPref = ctx;
-        if (ctx !== ViewerPayload.activeContext())
-          Store.dispatch({ type: "SET_SELECTION", key: "context", value: ctx });
+        if (sel.value !== ViewerPayload.activeContext())
+          Store.dispatch({ type: "SET_SELECTION", key: "context", value: sel.value });
       });
     }
   });
+  _f5TissueSels = _FIVEXFAD_TISSUE_SELECT_IDS
+    .map(id => ({ sel: document.getElementById(id), wrap: document.getElementById(id + "-wrap") }))
+    .filter(p => p.sel);
 }
 
-// Shown only in 5xFAD mode (Song mode is single-context, no tissue choice).
-// Keeps both selects' values in lockstep with the active context. The incytr
-// tab panels handle their own visibility, so no per-tab gating is needed here.
+// Shown only in 5xFAD mode; keeps both selects' values in lockstep with the
+// active context. Uses the cached pairs to avoid getElementById on every sync.
 function _syncFivexfadTissueToggle() {
-  const mode = (Store.state.view && Store.state.view.mode) || "mouse";
-  const show = HAS_FIVEXFAD_INCYTR && mode === "fivexfad";
+  if (!HAS_FIVEXFAD_INCYTR) return;
+  const show = ((Store.state.view && Store.state.view.mode) || "mouse") === "fivexfad";
   const ctx = ViewerPayload.activeContext();
-  _FIVEXFAD_TISSUE_SELECT_IDS.forEach(id => {
-    const sel = document.getElementById(id);
-    if (!sel) return;
-    const wrap = document.getElementById(id + "-wrap");
+  (_f5TissueSels || []).forEach(({ sel, wrap }) => {
     if (wrap) wrap.hidden = !show;
     if (show && sel.value !== ctx) sel.value = ctx;
   });

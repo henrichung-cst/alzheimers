@@ -29,9 +29,16 @@ from alz.viewer.paths import (
     UNIFIED_VIEWER_DIR,
 )
 from alz.viewer.shared.incytr_index import (
+    _INCYTR_FC_COLS,
+    _INCYTR_FC_METRICS,
+    _INCYTR_GENE_NODE_INDEX_FILENAME,
+    _INCYTR_INDEX_FILENAME,
     _INCYTR_LABEL_COLS,
     _INCYTR_LABEL_NODES,
+    _INCYTR_LABEL_SRC,
     _INCYTR_LABEL_VOCAB,
+    _INCYTR_PATHWAY_ABS_PDS,
+    _INCYTR_PATHWAY_PVALUES,
     _INCYTR_SCORE_COLS,
     _SIGN_VEC_LABELS,
     _idx_label_bits,
@@ -805,30 +812,6 @@ def _annotate_trajectory_columns(
             inplace=True, errors="ignore")
     return df, recur_index, traj_summary
 
-# Fixed pvalue grid for the Temporal v2 pathway layer. User-entered pvalue is
-# snapped down to the nearest threshold; counts are pre-aggregated per
-# (contrast, sign(PDS), pvalue_threshold, abs_pds_threshold) to keep the
-# payload tiny (9 × 3 × 8 × 8 × 4B ≈ 7 KB).
-_INCYTR_PATHWAY_PVALUES = (0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
-# |PDS| ≥ threshold (so 0 = no effect-size gate). PDS is the composite
-# multimodel Pathway Disturbance Score — OLS-derived, consistent with the
-# rest of the viewer. 0.01 is the "real signal" floor; 0.5 is "very strong".
-# Replaced the legacy sigprob_max filter (outlier-driven mean ratio) on
-# 2026-05-12.
-_INCYTR_PATHWAY_ABS_PDS = (0.0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
-
-# Global filter-index: one packed binary covering EVERY pathway (replaces the
-# former top-5000 `top_instances` pre-cap, which acted as a data-availability
-# gate — any filter whose survivors were under-represented in the |PDS|-top-5000
-# collapsed). Columns are concatenated little-endian, each of length N (= total
-# shard rows), rows pre-sorted by ABS(PDS) DESC so global rank = row position.
-# The viewer maps it into TypedArrays and runs filter → rank → slice(N) over the
-# complete universe, making the per-page cap a true render budget. Format +
-# rationale: docs/foundation/viewer_payload_contract.md.
-_INCYTR_INDEX_FILENAME = "incytr_index.bin.gz"
-# Audit P5: gene→node-pair index, sidecar (pair-mode gene search only, lazy fetch).
-_INCYTR_GENE_NODE_INDEX_FILENAME = "gene_node_index.json.gz"
-
 _INCYTR_LOW_SIGNAL_MEDIAN_N_THRESHOLD = 3
 
 
@@ -914,21 +897,6 @@ def _read_incytr_celltype_qc(celltypes: list[str]) -> dict:
     print(f"  incytr celltype_qc: {len(low)} low-signal endpoint(s) "
           f"at median_n <= {threshold}", flush=True)
     return out
-# Per-node log2 fold-change columns. Only the four genuine log2FC metrics are
-# shipped — the Hill-shrunk aFC variants emitted by Incytr are NOT log2 fold-
-# changes (β × adjustment in (0,1]) and were dropped from the viewer payload
-# to avoid mixed-units confusion. 4 nodes × 4 metrics = 16 columns.
-_INCYTR_FC_METRICS = (
-    "sclog2FC",
-    "pr_log2FC",
-    "ps_log2FC",
-    "py_log2FC",
-)
-_INCYTR_FC_COLS = tuple(
-    f"{node}_{metric}" for node in _INCYTR_FC_NODES for metric in _INCYTR_FC_METRICS
-)
-
-_INCYTR_LABEL_SRC = tuple(f"{n}.label" for n in _INCYTR_LABEL_NODES)
 
 
 def _incytr_sanitize(name: str) -> str:

@@ -31,9 +31,15 @@ from alz.viewer.paths import (
 )
 from alz.viewer.shared.cohort_slice import CohortViewerSlice
 from alz.viewer.shared.incytr_index import (
+    _INCYTR_FC_COLS,
+    _INCYTR_GENE_NODE_INDEX_FILENAME,
+    _INCYTR_INDEX_FILENAME,
     _INCYTR_LABEL_COLS,
     _INCYTR_LABEL_NODES,
+    _INCYTR_LABEL_SRC,
     _INCYTR_LABEL_VOCAB,
+    _INCYTR_PATHWAY_ABS_PDS,
+    _INCYTR_PATHWAY_PVALUES,
     _INCYTR_SCORE_COLS,
     _SIGN_VEC_LABELS,
     _idx_label_bits,
@@ -1574,27 +1580,18 @@ def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None
 # ---------------------------------------------------------------------------
 _5XFAD_INCYTR_CONTRASTS = ("TG_3mo", "TG_6mo", "TG_9mo", "TG_12mo")
 _5XFAD_TRAJ_TIMEPOINTS = ("3mo", "6mo", "9mo", "12mo")
-_5XFAD_INCYTR_FC_METRICS = ("sclog2FC", "pr_log2FC", "ps_log2FC", "py_log2FC")
-_5XFAD_INCYTR_FC_COLS = tuple(
-    f"{node}_{metric}" for node in _INCYTR_FC_NODES for metric in _5XFAD_INCYTR_FC_METRICS
-)
-_5XFAD_INCYTR_LABEL_SRC = tuple(f"{n}.label" for n in _INCYTR_LABEL_NODES)
-_5XFAD_INCYTR_PATHWAY_PVALUES = (0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
-_5XFAD_INCYTR_PATHWAY_ABS_PDS = (0.0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
-_5XFAD_INCYTR_INDEX_FILENAME = "incytr_index.bin.gz"
-_5XFAD_INCYTR_GENE_NODE_INDEX_FILENAME = "gene_node_index.json.gz"
 
-_5XFAD_TISSUE_TO_EDGE_DIR = {
-    "cortex": EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_CORTEX_DIR,
-    "hippocampus": EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_HIPPO_DIR,
-}
-_5XFAD_TISSUE_TO_CONTEXT_ID = {
-    "cortex": "fivexfad_cortex",
-    "hippocampus": "fivexfad_hippocampus",
-}
-_5XFAD_TISSUE_TO_URL_PREFIX = {
-    "cortex": "edge_slices/incytr_pathways_fivexfad_cortex/",
-    "hippocampus": "edge_slices/incytr_pathways_fivexfad_hippocampus/",
+_5XFAD_INCYTR_TISSUE = {
+    "cortex": {
+        "edge_dir": EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_CORTEX_DIR,
+        "context_id": "fivexfad_cortex",
+        "url_prefix": "edge_slices/incytr_pathways_fivexfad_cortex/",
+    },
+    "hippocampus": {
+        "edge_dir": EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_HIPPO_DIR,
+        "context_id": "fivexfad_hippocampus",
+        "url_prefix": "edge_slices/incytr_pathways_fivexfad_hippocampus/",
+    },
 }
 
 
@@ -1732,11 +1729,11 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
     edge_slices subdirectory. Returns the block for `incytr_pathways.by_context`
     or None when the input dir is absent.
     """
-    if tissue not in _5XFAD_TISSUE_TO_EDGE_DIR:
+    if tissue not in _5XFAD_INCYTR_TISSUE:
         raise ValueError(f"unknown 5xFAD tissue: {tissue!r}")
 
-    out_dir = _5XFAD_TISSUE_TO_EDGE_DIR[tissue]
-    url_prefix = _5XFAD_TISSUE_TO_URL_PREFIX[tissue]
+    out_dir = _5XFAD_INCYTR_TISSUE[tissue]["edge_dir"]
+    url_prefix = _5XFAD_INCYTR_TISSUE[tissue]["url_prefix"]
 
     input_dir = os.path.join(
         config.REPO_ROOT, "outputs", "reports",
@@ -1829,12 +1826,12 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
         fc_clauses = ",\n          ".join(
             (f'CAST("{c}" AS DOUBLE) AS "{c}"' if c in names
              else f'CAST(NULL AS DOUBLE) AS "{c}"')
-            for c in _5XFAD_INCYTR_FC_COLS
+            for c in _INCYTR_FC_COLS
         )
         label_clauses = ",\n          ".join(
             (f'CAST("{src}" AS VARCHAR) AS "{dst}"' if src in names
              else f'CAST(NULL AS VARCHAR) AS "{dst}"')
-            for src, dst in zip(_5XFAD_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS)
+            for src, dst in zip(_INCYTR_LABEL_SRC, _INCYTR_LABEL_COLS)
         )
         clauses = [score_clauses, missing_score_clauses, sik_clause,
                    dir_clauses, path_clauses, fc_clauses, label_clauses]
@@ -1873,13 +1870,13 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
     print(f"    senders={n_s}, receivers={n_r}, contrasts={n_c} "
           f"(pair count={n_s * n_r})", flush=True)
 
-    n_thr = len(_5XFAD_INCYTR_PATHWAY_PVALUES)
-    n_ap = len(_5XFAD_INCYTR_PATHWAY_ABS_PDS)
+    n_thr = len(_INCYTR_PATHWAY_PVALUES)
+    n_ap = len(_INCYTR_PATHWAY_ABS_PDS)
     pval_filter = (lambda tp: f"pvalue < {tp}") if has_pvalue else (lambda tp: "TRUE")
     pval_where = "WHERE pvalue IS NOT NULL" if has_pvalue else ""
     hm_thr_clauses_list = []
-    for ip, tp in enumerate(_5XFAD_INCYTR_PATHWAY_PVALUES):
-        for iap, tap in enumerate(_5XFAD_INCYTR_PATHWAY_ABS_PDS):
+    for ip, tp in enumerate(_INCYTR_PATHWAY_PVALUES):
+        for iap, tap in enumerate(_INCYTR_PATHWAY_ABS_PDS):
             hm_thr_clauses_list.append(
                 f"COUNT(*) FILTER (WHERE {pval_filter(tp)} "
                 f"AND COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
@@ -1906,8 +1903,8 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
         for iap in range(n_ap):
             totals[ip, iap] = int(grid[:, :, :, ip, iap].sum())
     heatmap_counts = {
-        "thresholds": list(_5XFAD_INCYTR_PATHWAY_PVALUES),
-        "abs_pds_thresholds": list(_5XFAD_INCYTR_PATHWAY_ABS_PDS),
+        "thresholds": list(_INCYTR_PATHWAY_PVALUES),
+        "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
         "shape": [n_s, n_r, n_c, n_thr, n_ap],
         "counts": grid.flatten().tolist(),
         "total_by_threshold": totals.tolist(),
@@ -1940,8 +1937,8 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
                     signed_grid[:, :, :, sign_i, ip, iap].sum()
                 )
     heatmap_counts_signed = {
-        "thresholds": list(_5XFAD_INCYTR_PATHWAY_PVALUES),
-        "abs_pds_thresholds": list(_5XFAD_INCYTR_PATHWAY_ABS_PDS),
+        "thresholds": list(_INCYTR_PATHWAY_PVALUES),
+        "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
         "shape": [n_s, n_r, n_c, 3, n_thr, n_ap],
         "counts": signed_grid.flatten().tolist(),
         "total_by_sign_threshold": signed_totals.tolist(),
@@ -1950,8 +1947,8 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
 
     def _build_pathway_counts(where_extra: str = "") -> dict:
         thr_clauses = []
-        for ip, tp in enumerate(_5XFAD_INCYTR_PATHWAY_PVALUES):
-            for iap, tap in enumerate(_5XFAD_INCYTR_PATHWAY_ABS_PDS):
+        for ip, tp in enumerate(_INCYTR_PATHWAY_PVALUES):
+            for iap, tap in enumerate(_INCYTR_PATHWAY_ABS_PDS):
                 thr_clauses.append(
                     f"COUNT(*) FILTER (WHERE {pval_filter(tp)} "
                     f"AND COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
@@ -1978,8 +1975,8 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
                 for iap in range(n_ap):
                     pathway_arr[c_idx, s_idx, ip, iap] = int(row[2 + ip * n_ap + iap])
         return {
-            "thresholds": list(_5XFAD_INCYTR_PATHWAY_PVALUES),
-            "abs_pds_thresholds": list(_5XFAD_INCYTR_PATHWAY_ABS_PDS),
+            "thresholds": list(_INCYTR_PATHWAY_PVALUES),
+            "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
             "contrasts": list(present_contrasts),
             "counts": pathway_arr.flatten().tolist(),
             "shape": [n_c, 3, n_thr, n_ap],
@@ -2045,7 +2042,7 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
 
     fc_select = [
         f'"{c}"' if c in src_cols_view else f'CAST(NULL AS DOUBLE) AS "{c}"'
-        for c in _5XFAD_INCYTR_FC_COLS
+        for c in _INCYTR_FC_COLS
     ]
     label_select = [
         f'"{dst}"' if dst in src_cols_view else f'CAST(NULL AS VARCHAR) AS "{dst}"'
@@ -2056,7 +2053,7 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
         + list(_INCYTR_SCORE_COLS)
         + dir_flag_cols
         + extra_path_cols
-        + list(_5XFAD_INCYTR_FC_COLS)
+        + list(_INCYTR_FC_COLS)
         + list(_INCYTR_LABEL_COLS)
     )
     float_cols = (
@@ -2064,7 +2061,7 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
         + list(_INCYTR_SCORE_COLS)
         + dir_flag_cols
         + extra_path_cols
-        + list(_5XFAD_INCYTR_FC_COLS)
+        + list(_INCYTR_FC_COLS)
     )
     float32_cols = [c for c in float_cols if c in ("pvalue", "PDS", "log2FC")]
     float16_cols = [c for c in float_cols if c not in float32_cols]
@@ -2199,10 +2196,10 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
         del cols
         raw_bin = bytes(buf_bytes)
         gz_bin = gzip.compress(raw_bin, compresslevel=6)
-        with open(os.path.join(out_dir, _5XFAD_INCYTR_INDEX_FILENAME), "wb") as f:
+        with open(os.path.join(out_dir, _INCYTR_INDEX_FILENAME), "wb") as f:
             f.write(gz_bin)
         global_index = {
-            "url": f"{url_prefix}{_5XFAD_INCYTR_INDEX_FILENAME}",
+            "url": f"{url_prefix}{_INCYTR_INDEX_FILENAME}",
             "nrows": n_idx,
             "rank_by": "abs(PDS)",
             "byteorder": "little",
@@ -2250,7 +2247,7 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
         "global_index": global_index,
         "gene_node_index_shard": _write_gene_node_index_shard(
             gene_node_index, out_dir,
-            _5XFAD_INCYTR_GENE_NODE_INDEX_FILENAME,
+            _INCYTR_GENE_NODE_INDEX_FILENAME,
             url_prefix=url_prefix,
         ),
         "trajectory_summary": traj_summary,
@@ -2266,7 +2263,7 @@ def build_5xfad_incytr_blocks() -> dict[str, dict]:
     """
     blocks = {}
     for tissue in ("cortex", "hippocampus"):
-        context_id = _5XFAD_TISSUE_TO_CONTEXT_ID[tissue]
+        context_id = _5XFAD_INCYTR_TISSUE[tissue]["context_id"]
         block = _write_5xfad_incytr_pair_pathways(tissue)
         if block is not None:
             blocks[context_id] = block

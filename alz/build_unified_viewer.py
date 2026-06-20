@@ -1027,54 +1027,37 @@ def build_payload(data: UnifiedData) -> dict:
     # 5xFAD incytr: build per-tissue blocks; merge into incytr_pathways.by_context
     # AFTER composition, since Song already owns the incytr_pathways owned section.
     fivexfad_incytr_blocks = build_5xfad_incytr_blocks()
-    _5xfad_incytr_context_meta = {
-        "fivexfad_cortex": {
-            "id": "fivexfad_cortex",
-            "label": "5xFAD Cortex",
-            "cohort": "fivexfad",
-            "axis_kind": "timepoint",
-            "contrasts": ["TG_3mo", "TG_6mo", "TG_9mo", "TG_12mo"],
-            "contrast_axis": {
-                "primary": "timepoint",
-                "groups": ["TG"],
-                "timepoints": ["3mo", "6mo", "9mo", "12mo"],
-                "baseline": "WT",
-            },
-            "capabilities": {
-                "kinases": False, "celltypes": False, "incytr": True,
-                "decomp_ols": False, "song_concordance": False,
-                "human_reference": False, "supporting_5xfad": False,
-                "subclass_breakdown": False, "audit_tables": False,
-                "transcript_trace": False, "omics_trace": False,
-            },
-            "notes": [],
-        },
-        "fivexfad_hippocampus": {
-            "id": "fivexfad_hippocampus",
-            "label": "5xFAD Hippocampus",
-            "cohort": "fivexfad",
-            "axis_kind": "timepoint",
-            "contrasts": ["TG_3mo", "TG_6mo", "TG_9mo", "TG_12mo"],
-            "contrast_axis": {
-                "primary": "timepoint",
-                "groups": ["TG"],
-                "timepoints": ["3mo", "6mo", "9mo", "12mo"],
-                "baseline": "WT",
-            },
-            "capabilities": {
-                "kinases": False, "celltypes": False, "incytr": True,
-                "decomp_ols": False, "song_concordance": False,
-                "human_reference": False, "supporting_5xfad": False,
-                "subclass_breakdown": False, "audit_tables": False,
-                "transcript_trace": False, "omics_trace": False,
-            },
-            "notes": [],
-        },
+    _5xfad_incytr_ctx_labels = {
+        "fivexfad_cortex": "5xFAD Cortex",
+        "fivexfad_hippocampus": "5xFAD Hippocampus",
+    }
+    _5xfad_incytr_capabilities = {
+        "kinases": False, "celltypes": False, "incytr": True,
+        "decomp_ols": False, "song_concordance": False,
+        "human_reference": False, "supporting_5xfad": False,
+        "subclass_breakdown": False, "audit_tables": False,
+        "transcript_trace": False, "omics_trace": False,
     }
     for ctx_id, block in fivexfad_incytr_blocks.items():
-        ctx_meta = _5xfad_incytr_context_meta[ctx_id].copy()
-        ctx_meta["celltypes"] = block.get("celltypes", [])
-        meta["contexts"].append(ctx_meta)
+        contrasts = block.get("contrasts", [])
+        groups = sorted({c.split("_")[0] for c in contrasts if "_" in c})
+        timepoints = [c.split("_", 1)[1] for c in contrasts if "_" in c]
+        meta["contexts"].append({
+            "id": ctx_id,
+            "label": _5xfad_incytr_ctx_labels[ctx_id],
+            "cohort": "fivexfad",
+            "axis_kind": "timepoint",
+            "contrasts": contrasts,
+            "contrast_axis": {
+                "primary": "timepoint",
+                "groups": groups,
+                "timepoints": timepoints,
+                "baseline": "WT",
+            },
+            "capabilities": {**_5xfad_incytr_capabilities},
+            "celltypes": block.get("celltypes", []),
+            "notes": [],
+        })
 
     slices = [sb.slice]
     if mukesh_slice is not None:

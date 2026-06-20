@@ -58,7 +58,6 @@ async function _loadPayload() {
   // the 5xFAD mode via a Cortex/Hippocampus tissue toggle.
   HAS_FIVEXFAD_INCYTR = ViewerPayload.contexts().some(
     c => c.cohort === "fivexfad" && c.capabilities && c.capabilities.incytr);
-  if (typeof _enableFivexfadIncytrTabs === "function") _enableFivexfadIncytrTabs();
   // Populate human-tab cached refs (declared in kinase_human.js).
   if (typeof _KH_HAS !== "undefined") {
     _KH_HAS = HAS_HUMAN;
