@@ -776,7 +776,14 @@ function _renderAttributionDrawer(hostId, ctx, cellType) {
     ` &middot; <span class="muted">${_escapeHtml(gene)} / ${_escapeHtml(ctx.contrast)}</span></div>` +
     `<section class="attr-section attr-section-wide"><h5>Within-cohort transcript trace ` +
       `<span class="muted">(unified_attribution_tcells.csv)</span></h5>` +
-      traceBody + `</section>`;
+      traceBody + `</section>` +
+    `<section class="attr-section attr-section-wide"><h5>NSCLC TME expression across cell types ` +
+      `<span class="muted">(nsclc_kinase_expression.csv)</span></h5>` +
+      `<p class="muted attr-caption">Independent human reference: Seurat-style dot plot for ${_escapeHtml(gene)} across the 10x 900k-cell NSCLC tumor microenvironment ` +
+      `(ProjecTILs/scGate-gated T states + marker-labeled non-T compartments). Color = mean log2(CPM+1), dot size = fraction of cells expressing. ` +
+      `The cohort's own T state is outlined. Shows whether the kinase is transcribed in this lineage at all — a kinase absent everywhere here is an MEA motif false-positive candidate.</p>` +
+      `<div id="attr-nsclc-dotplot"></div></section>`;
+  _renderNSCLCDotPlot("attr-nsclc-dotplot", ctx, cellType);
 }
 
 function _renderDecompOlsTable(hostId, ctx, cellType) {
@@ -853,12 +860,12 @@ function _renderDecompOlsTable(hostId, ctx, cellType) {
   });
 }
 
-function _renderWMBDotPlot(hostId, ctx, targetCellType) {
+function _renderNSCLCDotPlot(hostId, ctx, targetCellType) {
   const host = document.getElementById(hostId);
   if (!host) return;
-  const rows = (ctx.wmbRows || []).slice();
+  const rows = (ctx.nsclcRows || []).slice();
   if (rows.length === 0) {
-    host.innerHTML = `<div class="muted">No WMB rows for ${_escapeHtml(ctx.gene || '')}.</div>`;
+    host.innerHTML = `<div class="muted">${_escapeHtml(ctx.gene || '')} is not in the NSCLC Flex probe panel (not covered).</div>`;
     return;
   }
   rows.sort((a, b) => (Number(b.mean_log2_expression) || 0) - (Number(a.mean_log2_expression) || 0));
@@ -905,65 +912,6 @@ function _renderWMBDotPlot(hostId, ctx, targetCellType) {
     `</svg>`;
 }
 
-function _renderSEAADHeatmap(hostId, ctx, targetCellType) {
-  const host = document.getElementById(hostId);
-  if (!host) return;
-  const stratumByPathway = {App: "early", Tau: "late", ApTt: "full"};
-  const pathway = _attrPathwayFromContrast(ctx.contrast);
-  const stratum = stratumByPathway[pathway] || "full";
-  const rows = (ctx.seaSuperRows || []).filter(r => r.stratum === stratum);
-  if (rows.length === 0) {
-    host.innerHTML = `<div class="muted">No SEA-AD supertype rows for ${_escapeHtml(ctx.gene || '')} (stratum: ${_escapeHtml(stratum)}).</div>`;
-    return;
-  }
-  // Group by subclass
-  const bySubclass = new Map();
-  for (const r of rows) {
-    const sc = r.subclass || "(unknown)";
-    if (!bySubclass.has(sc)) bySubclass.set(sc, []);
-    bySubclass.get(sc).push(r);
-  }
-  const subclasses = Array.from(bySubclass.keys()).sort((a, b) => {
-    if (a === targetCellType) return -1;
-    if (b === targetCellType) return 1;
-    return a.localeCompare(b);
-  });
-  const allLfcs = rows.map(r => Number(r.supertype_lfc) || 0);
-  const maxAbs = Math.max(...allLfcs.map(Math.abs), 0.5);
-  const cellW = 22, cellH = 16, padL = 170;
-  let maxCols = 0;
-  for (const arr of bySubclass.values()) maxCols = Math.max(maxCols, arr.length);
-  const W = padL + cellW * maxCols + 30;
-  const H = subclasses.length * cellH + 50;
-  const lfcColor = (v) => {
-    const m = Math.min(Math.abs(v) / maxAbs, 1);
-    const alpha = 0.15 + 0.75 * m;
-    if (v > 0) return `rgba(197, 48, 48, ${alpha.toFixed(3)})`;
-    if (v < 0) return `rgba(43, 108, 176, ${alpha.toFixed(3)})`;
-    return "#f3f4f6";
-  };
-  const cells = subclasses.map((sc, i) => {
-    const arr = bySubclass.get(sc).slice().sort((a, b) => (Number(b.supertype_lfc) || 0) - (Number(a.supertype_lfc) || 0));
-    const isTarget = sc === targetCellType;
-    const labelClass = isTarget ? "attr-hm-label-target" : "";
-    const median = arr.map(r => Number(r.supertype_lfc) || 0).sort((a, b) => a - b)[Math.floor(arr.length / 2)] || 0;
-    const cellsRow = arr.map((r, j) => {
-      const v = Number(r.supertype_lfc) || 0;
-      const x = padL + j * cellW;
-      const y = i * cellH + 30;
-      return `<g><title>${_escapeHtml(r.supertype)}: LFC = ${v.toFixed(3)}</title>` +
-        `<rect x="${x}" y="${y}" width="${cellW - 1}" height="${cellH - 1}" fill="${lfcColor(v)}" stroke="#fff"/>` +
-        `</g>`;
-    }).join("");
-    const median_str = `median ${median.toFixed(2)} (n=${arr.length})`;
-    return `<g><text x="${padL - 8}" y="${i * cellH + 30 + 11}" text-anchor="end" font-size="11" class="${labelClass}">${_escapeHtml(sc)}</text>` +
-      cellsRow +
-      `<text x="${padL + maxCols * cellW + 6}" y="${i * cellH + 30 + 11}" font-size="10" fill="#6b7280">${median_str}</text></g>`;
-  }).join("");
-  const legend = `<g transform="translate(${padL}, ${H - 14})"><text x="0" y="0" font-size="10" fill="#6b7280">stratum: ${_escapeHtml(stratum)} CPS · color: red = up in AD, blue = down · one square per supertype, grouped by subclass</text></g>`;
-  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" class="attr-svg">` +
-    cells + legend + `</svg>`;
-}
 
 function _renderSongOLSPanel(hostId, ctx, targetCellType) {
   const host = document.getElementById(hostId);
@@ -1074,7 +1022,7 @@ async function _loadKinaseAuditContext(kinase_id, seq) {
 
   const [stoichRows, rawRows, olsRows, rawMatrix, stoichMatrix, uaRows,
          normRows, sampleRows, winsorRows, globalRows, subsRows,
-         wmbAllRows, seaSuperAllRows] = await Promise.all([
+         nsclcAllRows] = await Promise.all([
     AuditDataStore.load(tk("mea_stoichiometry")),
     AuditDataStore.load(tk("mea_raw_phospho")).catch(() => []),
     AuditDataStore.load(tk("site_level_ols")),
@@ -1086,8 +1034,7 @@ async function _loadKinaseAuditContext(kinase_id, seq) {
     AuditDataStore.load(tk("winsorized_sites")),
     AuditDataStore.load(tk("mea_global_shift")),
     AuditDataStore.load(tk("mea_substrate_sets")).catch(() => []),
-    AuditDataStore.load("wmb_kinase_expression").catch(() => []),
-    AuditDataStore.load("sea_ad_supertype_lfc").catch(() => []),
+    AuditDataStore.load("nsclc_kinase_expression").catch(() => []),
   ]);
   if (seq !== _kinaseAuditSeq || Store.state.selection.kinase !== kinase_id) return null;
 
@@ -1106,9 +1053,7 @@ async function _loadKinaseAuditContext(kinase_id, seq) {
   }));
   const attrRows = uaRows.filter(r => r.kinase === name || r.gene_symbol === K.gene_symbol[ki]);
   const geneUpper = String(K.gene_symbol[ki] || "").toUpperCase();
-  const wmbRows = (wmbAllRows || []).filter(r =>
-    String(r.gene_symbol || "").toUpperCase() === geneUpper);
-  const seaSuperRows = (seaSuperAllRows || []).filter(r =>
+  const nsclcRows = (nsclcAllRows || []).filter(r =>
     String(r.gene_symbol || "").toUpperCase() === geneUpper);
 
   // Substrate-set sites for this kinase + contrast (kinase library's substrate
@@ -1139,7 +1084,7 @@ async function _loadKinaseAuditContext(kinase_id, seq) {
     kinase_id, ki, name, gene:K.gene_symbol[ki], contrast,
     residueType,
     meaStoich, meaRaw, leadRow, siteIds, siteRows, attrRows, olsRows,
-    wmbRows, seaSuperRows,
+    nsclcRows,
     substrateMotifs, klPctByMotif, substrateSiteIds, substrateSiteRows, subsRows,
     rawMatrix, stoichMatrix, normRows, sampleRows, winsorRows, globalRows,
   };

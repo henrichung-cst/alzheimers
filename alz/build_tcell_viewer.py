@@ -1690,8 +1690,6 @@ _KINASE_AUDIT_SHIMS: tuple[tuple[str, str], ...] = (
     ("mea_raw_phospho_pY",      "raw-phospho MEA track (pY) not run for T-cell"),
     ("normalization_summary",   "T-cell normalization is per-batch (Forperseus); no summary JSON"),
     ("sample_mapping",          "T-cell sample mapping not surfaced (per-donor TMT plex)"),
-    ("wmb_kinase_expression",   "WMB atlas is mouse-only; not applicable to human T-cell"),
-    ("sea_ad_supertype_lfc",    "SEA-AD atlas is brain cortex; not applicable to T-cell"),
 )
 
 
@@ -1747,6 +1745,21 @@ def _register_kinase_audit_tables(tables: dict) -> None:
         os.makedirs(AUDIT_SOURCES_DIR, exist_ok=True)
         shutil.copyfile(src, dest)
         tables[key] = _audit_csv_meta(dest, label, key)
+    # NSCLC 10x cell-type specificity reference — the human cohort's analog of
+    # the mouse viewer's WMB dot plot. Per-(kinase, cell_type) mean_log2(CPM+1),
+    # fraction expressing, and specificity share over coarse TME groups; rendered
+    # in the attribution drawer's NSCLC dot plot.
+    nsclc_src = config.NSCLC_KINASE_EXPRESSION_FILE
+    if os.path.exists(nsclc_src):
+        os.makedirs(AUDIT_SOURCES_DIR, exist_ok=True)
+        dest = os.path.join(AUDIT_SOURCES_DIR, "nsclc_kinase_expression.csv")
+        shutil.copyfile(nsclc_src, dest)
+        tables["nsclc_kinase_expression"] = _audit_csv_meta(
+            dest, "NSCLC 10x cell-type expression reference", "nsclc_kinase_expression")
+    else:
+        tables["nsclc_kinase_expression"] = _shim_audit_entry(
+            "nsclc_kinase_expression", "NSCLC 10x cell-type expression reference",
+            "run pixi run nsclc-expression first")
     for key, reason in _KINASE_AUDIT_SHIMS:
         # Use a stable label even for shims so the drawer's "source: ..." text
         # reads coherently when the panel renders empty.
@@ -2364,7 +2377,7 @@ def build_tcell_payload() -> dict:
             "incytr": bool(ip_block.get("slice_index", {}).get("present")),
             "decomp_ols": False,
             "song_concordance": False,
-            "human_reference": False,
+            "human_reference": True,
             "subclass_breakdown": False,
             # Within-cohort cell-type attribution (specificity + concordance vs
             # bulk NES). Donor1 only — requires the IMAC kinase MEA.
@@ -2419,7 +2432,7 @@ def build_tcell_payload() -> dict:
             "incytr": any(c["capabilities"]["incytr"] for c in contexts),
             "decomp_ols": False,
             "song_concordance": False,
-            "human_reference": False,
+            "human_reference": True,
             "subclass_breakdown": False,
             "within_cohort_attribution": any(
                 c["capabilities"]["within_cohort_attribution"] for c in contexts),
