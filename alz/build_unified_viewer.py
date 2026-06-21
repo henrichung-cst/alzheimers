@@ -827,16 +827,20 @@ def load_all_data() -> UnifiedData:
     _ua_full_cols = [
         "kinase", "contrast", "cell_type",
         "confidence_tier", "confidence_basis",
-        "song_direction_support", "song_location_tier",
-        "wmb_crosscheck_tier", "human_location_tier", "decomp_agrees_bulk",
-        "wmb_specificity", "wmb_mean_log2_expression",
-        "wmb_fraction_cells_expressing", "wmb_binary_expressed",
+        "song_direction_support", "human_location_tier", "decomp_agrees_bulk",
+        # WMB detection metric (standard attribution): per-class detection +
+        # detected-set concentration / tier, replacing the share.
+        "wmb_detected", "wmb_concentration", "wmb_concentration_tier",
+        "wmb_mean_log2_expression", "wmb_fraction_cells_expressing",
+        "wmb_binary_expressed",
         "sea_ad_lfc", "song_lfc", "concordance_source",
         "seaad_location_score", "hbca_location_score", "human_location_score",
         "decomp_nes", "decomp_fdr",
-        # Song location specificity (favored mouse signal) + concordance stats —
-        # consumed by attribution_index and the kinase_celltype_evidence merge.
-        "song_specificity", "song_tau", "song_top_share", "song_top_cluster",
+        # Song detection metric (favored mouse signal): per-cluster detection +
+        # concentration / tier + per-gene effective number of cell types.
+        "song_detected", "song_concentration", "song_concentration_tier",
+        "song_fraction_cells_expressing", "song_effective_n",
+        "song_top_celltype", "song_top_concentration",
         "song_pval", "song_fdr",
         "NES", "FDR",
     ]
@@ -946,19 +950,16 @@ def build_payload(data: UnifiedData) -> dict:
     contrasts = data.edge_metadata["contrasts"]
     context_id = "song_ad"
 
-    # WMB specificity is a share normalized over the retained WMB classes the
-    # spine maps onto and that actually carry atlas cells (N≈9); the honest "even
-    # split" baseline for its cross-check tier is 1/N, not 1/31 or 1/11. Read the
-    # SAME ruler the recover.py gate uses so display and pipeline never diverge
-    # (see docs/foundation/concordance.md §6, F1/F2/F6).
+    # The Song cohort's attribution is detection-gated (standard metric): its
+    # Song-share fold-pill baseline (song_uniform) is gone. wmb_uniform is kept
+    # only for the still-share-based 5xFAD WMB cross-check column (its own
+    # unmigrated surface; 5xFAD's primary attribution is presence-grounded OLS
+    # decomposition). See docs/plans/standard_attribution_metric.md.
     meta = {
         "schema_version": SCHEMA_VERSION,
         "viewer_payload_schema_version": 2,
         "generated_at": pd.Timestamp.utcnow().isoformat(),
         "wmb_uniform": config.wmb_specificity_uniform(),
-        # song_specificity is a share summing to 1 over the 31 Levy-t5 clusters,
-        # so its even-split baseline is 1/N_CELL_TYPES (the M-spec fold pills).
-        "song_uniform": 1.0 / config.N_CELL_TYPES,
         "cohort": "song_ad",
         "default_context": context_id,
         "contexts": [

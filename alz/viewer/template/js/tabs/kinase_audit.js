@@ -555,30 +555,36 @@ function _allenABALink(gene) {
   );
 }
 
-// Song location fold pills. song_specificity is a share summing to 1 over the 31
-// Levy-t5 clusters, so the even-split baseline is 1/31 ≈ 0.032 (meta.song_uniform).
-// Pills mirror the WMB tier vocabulary (≥10× / ≥5× / ≥2× / ≥1× uniform).
-const _MS_UNIFORM = (typeof PAYLOAD !== "undefined" && PAYLOAD && PAYLOAD.meta
-  && PAYLOAD.meta.song_uniform) || (1 / 31);
-const _MS_TIER_VALUES = [10, 5, 2, 1];
-function _msTier(s) {
-  if (s == null || !isFinite(s)) return 0;
-  for (const t of _MS_TIER_VALUES) {
-    if (s >= t * _MS_UNIFORM) return t;
+// Song detection display. Replaces the former share-fold pill (_msTier/_msTierBadge).
+// Shows detected/not-detected gate (fraction ≥ 0.10), concentration tier when detected,
+// and effective # cell types (breadth indicator) when available.
+function _songDetCell(detected, frac, tier, effectiveN) {
+  const detBool = detected === true || detected === "True" || detected === "true";
+  const fracPct = (frac != null && isFinite(frac)) ? (Number(frac) * 100).toFixed(0) + "%" : "";
+  const tierN = Number(tier) || 0;
+  const effTxt = (effectiveN != null && isFinite(effectiveN)) ? Number(effectiveN).toFixed(1) + "ct" : "";
+  if (!detBool) {
+    return `<span class="song-det-no" title="Not detected in this cluster (${fracPct ? fracPct + ' cells' : 'frac n/a'} < 10% threshold)">✗ ${fracPct}</span>`;
   }
-  return 0;
+  const tierBadge = tierN > 0
+    ? `<span class="badge ${tierN >= 10 ? 'vhi' : tierN >= 5 ? 'hi' : tierN >= 2 ? 'mid' : 'lo'}" title="Concentration ≥${tierN}× over detected-cell-type uniform">≥${tierN}×</span>`
+    : "";
+  const nBadge = effTxt ? ` <span class="muted" title="Effective # cell types (lower = more specific)">${effTxt}</span>` : "";
+  return `<span class="song-det-yes" title="Detected (${fracPct ? fracPct + ' cells' : ''}; ≥10% threshold passed)">✓ ${fracPct}</span>${tierBadge}${nBadge}`;
 }
-function _msTierBadge(t, share, topCluster, tau) {
-  // num() is locally scoped inside the render fns, so format inline here.
-  const where = topCluster ? "concentrates in " + topCluster : "";
-  const tauTxt = (tau != null && isFinite(tau)) ? " · τ " + Number(tau).toFixed(2) : "";
-  const shareTxt = (share != null && isFinite(share)) ? "share " + Number(share).toFixed(3) : "";
-  const tip = "Song location evidence ≥ " + t + "× even-split (1/31 ≈ 0.032)"
-    + (shareTxt ? " · " + shareTxt : "") + (where ? " · " + where : "") + tauTxt;
-  if (!t) return '<span class="muted" title="' + _escapeHtml("below 1× even-split"
-    + (shareTxt ? " · " + shareTxt : "") + (where ? " · " + where : "") + tauTxt) + '">—</span>';
-  const cls = t >= 10 ? "vhi" : (t >= 5 ? "hi" : (t >= 2 ? "mid" : "lo"));
-  return '<span class="badge ' + cls + '" title="' + _escapeHtml(tip) + '">≥' + t + '×</span>';
+
+// WMB detection display. Replaces the former wmb_tier badge.
+function _wmbDetCell(detected, frac, tier) {
+  const detBool = detected === true || detected === "True" || detected === "true";
+  const fracPct = (frac != null && isFinite(frac)) ? (Number(frac) * 100).toFixed(0) + "%" : "";
+  const tierN = Number(tier) || 0;
+  if (!detBool) {
+    return `<span class="song-det-no" title="Not detected in this WMB class (${fracPct ? fracPct + ' cells' : 'frac n/a'} < 10% threshold)">✗ ${fracPct}</span>`;
+  }
+  const tierBadge = tierN > 0
+    ? `<span class="badge ${tierN >= 10 ? 'vhi' : tierN >= 5 ? 'hi' : tierN >= 2 ? 'mid' : 'lo'}" title="WMB concentration ≥${tierN}× over detected-class uniform">≥${tierN}×</span>`
+    : "";
+  return `<span class="song-det-yes" title="Detected in WMB atlas (${fracPct ? fracPct + ' cells' : ''}; ≥10% threshold passed)">✓ ${fracPct}</span>${tierBadge}`;
 }
 
 const ATTR_VERDICT_COLS = [
@@ -586,10 +592,10 @@ const ATTR_VERDICT_COLS = [
    title:""},
   {key:"confidence_tier",              label:"Conf",        type:"conf", group:"attr",
    title:"Canonical confidence tier assigned in Python. Song is the primary high-confidence evidence; WMB, human specificity, and decomposition are cross-checks."},
-  {key:"song_specificity",             label:"Song",        type:"num", group:"attr",
-   title:"Song location evidence — this kinase's share of expression in this cell type across the levy_t5 pseudobulk, shown as fold over the even-split baseline (1/31 ≈ 0.032): ≥10× / ≥5× / ≥2× / ≥1×. Sort uses the underlying share."},
-  {key:"wmb_tier",                     label:"WMB tier",    type:"num", group:"attr",
-   title:"WMB cross-check tier as a multiple of uniform (1/9 ≈ 0.111): ≥10× / ≥5× / ≥2× / ≥1×. Empty = below 1× uniform. Inherited from the WMB class this Levy-T5 cluster maps to."},
+  {key:"song_detected",                label:"Song",        type:"num", group:"attr",
+   title:"Song detection: whether this kinase is expressed in ≥10% of cells in this cell type. ✓ = detected (concentration tier and effective # cell types shown); ✗ = not detected. Sort uses song_concentration."},
+  {key:"wmb_detected",                 label:"WMB",         type:"num", group:"attr",
+   title:"WMB cross-check detection: whether this kinase is expressed in ≥10% of WMB cells in this class. ✓ = detected; concentration tier shown when detected."},
   {key:"sea_ad_lfc",                   label:"SEA-AD LFC",  type:"num", group:"attr",
    title:"SEA-AD log2 fold change in human AD vs control, median across SEA-AD supertypes mapped to this subclass. Stratum (early / late / full CPS) is selected from the contrast pathway. Color: red = up in AD, blue = down."},
   {key:"song_lfc",                     label:"Song LFC",    type:"num", group:"attr",
@@ -648,7 +654,7 @@ function _renderAttributionVerdict(hostId, ctx) {
   for (const r of allRows) {
     const k = rowKey(r);
     const prev = deduped.get(k);
-    if (!prev || _cmpSongFirstAttribution(r, prev) < 0) deduped.set(k, r);
+    if (!prev || _cmpCanonicalAttribution(r, prev) < 0) deduped.set(k, r);
   }
   const rows = Array.from(deduped.values());
 
@@ -672,7 +678,7 @@ function _renderAttributionVerdict(hostId, ctx) {
       const sig = r.decomp_fdr != null && isFinite(r.decomp_fdr) && r.decomp_fdr < 0.25;
       r.bulk_match = agree ? (sig ? 2 : 1) : (sig ? -2 : -1);
     }
-    r.wmb_tier = _wmbTier(Number(r.wmb_specificity));
+    // wmb_concentration_tier is precomputed in attribution_index; no local recompute needed.
   }
 
   const sortKey = host.dataset.sortKey || "confidence_tier";
@@ -740,8 +746,8 @@ function _renderAttributionVerdict(hostId, ctx) {
     return `<tr data-cell-type="${_escapeHtml(r.cell_type)}" class="attr-verdict-row${i === 0 ? ' attr-verdict-selected' : ''}">` +
       `<td class="attr-celltype"${_sbAttr}>${_escapeHtml(r.cell_type)}${_sbTip ? ' <span class="attr-subclass-marker" aria-hidden="true">ⓘ</span>' : ''} ${expBadge}</td>` +
       `<td><span class="${_attrConfidenceClass(r.confidence_tier)}" title="${_escapeHtml((r.confidence_basis || 'none') + (r.decomp_agrees_bulk ? ' · decomp agrees with bulk' : ''))}">${_escapeHtml((r.confidence_tier || '').replace('_', ' '))}</span></td>` +
-      `<td class="attr-num">${_msTierBadge(_msTier(Number(r.song_specificity)), r.song_specificity, r.song_top_cluster, r.song_tau)}</td>` +
-      `<td class="attr-num">${_wmbTierBadge(_wmbTier(Number(r.wmb_specificity)))}</td>` +
+      `<td class="attr-num">${_songDetCell(r.song_detected, r.song_fraction_cells_expressing, r.song_concentration_tier, r.song_effective_n)}</td>` +
+      `<td class="attr-num">${_wmbDetCell(r.wmb_detected, r.wmb_fraction_cells_expressing, r.wmb_concentration_tier)}</td>` +
       seaCell +
       songCell +
       decompNesCell +
@@ -1395,7 +1401,7 @@ async function renderActiveKinaseAuditTab(kinase_id) {
         `<div id="audit-attribution"></div></section>`;
       _renderAttributionVerdict("attr-verdict", ctx);
       _renderAuditTable("audit-attribution", "unified_attribution", ctx.attrRows,
-        ["kinase","gene_symbol","contrast","cell_type","confidence_tier","confidence_basis","song_specificity","song_tau","song_top_cluster","song_direction_support","song_location_tier","wmb_crosscheck_tier","human_location_tier","decomp_agrees_bulk","wmb_specificity","wmb_mean_log2_expression","wmb_fraction_cells_expressing","sea_ad_lfc","song_lfc","seaad_location_score","hbca_location_score","human_location_score","decomp_nes","decomp_fdr"],
+        ["kinase","gene_symbol","contrast","cell_type","confidence_tier","confidence_basis","song_detected","song_concentration","song_concentration_tier","song_effective_n","song_top_celltype","song_fraction_cells_expressing","song_direction_support","human_location_tier","decomp_agrees_bulk","wmb_detected","wmb_concentration","wmb_concentration_tier","wmb_fraction_cells_expressing","wmb_mean_log2_expression","sea_ad_lfc","song_lfc","seaad_location_score","hbca_location_score","human_location_score","decomp_nes","decomp_fdr"],
         "unified_attribution");
     }
   } catch (e) {

@@ -478,6 +478,9 @@ main#app-main { padding:14px; }
 .badge.expr { background:#dcedc8; color:#33691e; }
 .badge.imp { background:#ffe0b2; color:#bf360c; }
 .badge.mix { background:#d1c4e9; color:#4527a0; }
+/* Song/WMB detection gate indicators (✓ detected / ✗ not detected). */
+.song-det-yes { color:#1b5e20; font-size:11px; }
+.song-det-no  { color:#b71c1c; font-size:11px; }
 .track-badge { display:inline-block; padding:0 5px; border-radius:6px; font-size:9px;
   font-weight:700; letter-spacing:0.3px; vertical-align:1px; }
 .track-badge.track-y { background:#ede7f6; color:#4527a0; border:1px solid #d1c4e9; }
