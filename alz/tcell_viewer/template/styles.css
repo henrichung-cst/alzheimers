@@ -343,6 +343,18 @@ main#app-main { padding:14px; }
   border-radius:10px; background:#f1f5f9; border:1px solid #cbd5e1; font-size:11px; white-space:nowrap; }
 .nsclc-lineage-chip strong { font-weight:600; color:#334155; }
 .nsclc-lineage-chip-dim { opacity:0.55; }
+/* NSCLC reference detection (standard attribution metric) */
+.nsclc-det-yes { color:#15803d; font-weight:600; }
+.nsclc-det-no { color:#b91c1c; font-weight:600; }
+/* Within-cohort detection (standard attribution metric) */
+.tcell-det-yes { color:#1b5e20; font-size:11px; }
+.tcell-det-no  { color:#b71c1c; font-size:11px; }
+.attr-fp-badge { display:inline-block; margin-left:4px; padding:1px 6px; border-radius:9px;
+  font-size:10px; font-weight:600; background:#fee2e2; color:#991b1b; border:1px solid #fca5a5;
+  white-space:nowrap; }
+.attr-verdict-row.attr-verdict-fp { background:#fff5f5; }
+.attr-verdict-row.attr-verdict-fp td.attr-celltype { box-shadow:inset 3px 0 0 #ef4444; }
+.attr-tier-overridden { opacity:0.5; text-decoration:line-through; }
 .attr-svg { display:block; max-width:100%; height:auto; }
 .attr-hm-label-target { font-weight:700; fill:#111827; }
 .attr-song-table { width:100%; border-collapse:collapse; font-size:12px; }

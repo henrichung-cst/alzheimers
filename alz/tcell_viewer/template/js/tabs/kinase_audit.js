@@ -569,54 +569,52 @@ function _allenABALink(gene) {
   );
 }
 
-// External-reference (10x NSCLC TME) specificity tiers — the human cohort's
-// analog of the mouse viewer's WMB cross-check. share / (1/N_coarse_groups),
-// binned 10×/5×/2×/1×. N_groups (=7) is shipped as PAYLOAD.meta.nsclc_attribution_uniform.
-function _nsclcUniform() {
-  return (typeof PAYLOAD !== "undefined" && PAYLOAD && PAYLOAD.meta &&
-          PAYLOAD.meta.nsclc_attribution_uniform) || (1 / 7);
+// External-reference (10x 897k-cell NSCLC) DETECTION — the independent check on
+// whether the kinase is actually present in a cell type (fraction of cells with
+// a non-zero count ≥ 0.10, the standard's normalization-free gate). This replaces
+// the old transcript-share tier: a share is a relative ranking, not presence, and
+// was shown inversely predictive of truth (docs/plans/standard_attribution_metric.md).
+// All values are precomputed in Python; the JS only renders.
+function _nsclcDetCell(frac, detected, fp) {
+  // Per-state reference detection for the verdict table. null = the kinase is
+  // outside the NSCLC probe panel (the reference cannot speak to it). When `fp`
+  // the MEA false-positive badge is appended — it overrides a high within-cohort
+  // tier on the same row.
+  const fpBadge = fp ? (" " + _meaFpBadge()) : "";
+  if (frac == null || detected == null) return '<td class="attr-num"><span class="muted">n/a</span></td>';
+  const pct = (Number(frac) * 100).toFixed(0) + "%";
+  return detected
+    ? '<td class="attr-num nsclc-det-yes" title="Detected in this cell type in the independent NSCLC reference: ' +
+        pct + ' of cells express the kinase (≥10% gate).">✓ ' + pct + fpBadge + '</td>'
+    : '<td class="attr-num nsclc-det-no" title="NOT detected in this cell type in the independent NSCLC reference: only ' +
+        pct + ' of cells express the kinase (below the 10% gate).">✗ ' + pct + fpBadge + '</td>';
 }
-function _nsclcTier(share) {
-  if (share == null || !isFinite(share)) return 0;
-  const fold = share / _nsclcUniform();
-  return fold >= 10 ? 10 : (fold >= 5 ? 5 : (fold >= 2 ? 2 : (fold >= 1 ? 1 : 0)));
+function _meaFpBadge() {
+  return '<span class="attr-fp-badge" title="MEA false-positive candidate: the within-cohort scRNA detects this kinase in this T-cell state and the bulk MEA is significant, but the independent 897k-cell NSCLC reference does NOT detect the kinase in this state. MEA infers activity from phosphosite abundance and can attribute it to a cell type where the kinase is not expressed.">⚠ MEA false-positive candidate</span>';
 }
-function _nsclcTierBadge(share) {
-  const t = _nsclcTier(share);
-  if (!t) return '<span class="muted">—</span>';
+function _nsclcConcTierBadge(tier) {
+  // Concentration tier (≥2×/5×/10× of an even share among DETECTED lineages),
+  // precomputed in Python. Tier 1 = at/above even share; 0 / null = not detected.
+  const t = Number(tier) || 0;
+  if (!t) return "";
   const cls = t >= 10 ? "vhi" : (t >= 5 ? "hi" : (t >= 2 ? "mid" : "lo"));
-  const n = Math.round(1 / _nsclcUniform());
-  return '<span class="badge ' + cls + '" title="External NSCLC TME reference: T_NK-compartment transcript share ' +
-         ((share != null && isFinite(share)) ? share.toFixed(3) : "?") + ' ≥ ' + t + '× uniform (1/' + n +
-         ' ≈ ' + _nsclcUniform().toFixed(3) + ')">≥' + t + '×</span>';
-}
-// Per coarse TME group: the kinase's specificity share (constant within a group
-// for one gene). Returns Map<spec_group, share>.
-function _nsclcGroupShares(nsclcRows) {
-  const byGroup = new Map();
-  for (const r of (nsclcRows || [])) {
-    const g = String(r.spec_group || "");
-    if (!g || byGroup.has(g)) continue;
-    byGroup.set(g, Number(r.specificity_score) || 0);
-  }
-  return byGroup;
+  return ' <span class="badge ' + cls + '" title="Concentrated here: ≥' + t +
+         '× an even share among the lineages this kinase is detected in.">≥' + t + '×</span>';
 }
 
 const ATTR_VERDICT_COLS = [
   {key:"cell_type",                    label:"Cell type",        type:"str", group:"id",
    title:""},
-  {key:"tcell_tier",                   label:"Specificity",      type:"num", group:"attr",
-   title:"Within-cohort specificity tier — the kinase's transcript share in this cell-type state as a multiple of the uniform baseline (1/N_states): ≥10× / ≥5× / ≥2× / ≥1×. Empty = below 1× uniform. Pooled across all scRNA days; binned in alz/cross_reference/tcell_within_cohort.py."},
-  {key:"tcell_specificity",            label:"Share",            type:"num", group:"attr",
-   title:"Raw specificity share: this state's mean per-cell log-expression of the kinase transcript ÷ the sum across all states. Uniform = 1/N_states."},
+  {key:"tcell_concentration_tier",     label:"Within-cohort",    type:"num", group:"attr",
+   title:"Within-cohort standard detection metric (pooled across all scRNA days). ✓/✗ = the kinase's transcript is detected in this state (fraction of cells expressing ≥ 10%, normalization-free presence), with the % shown. The ≥t× badge is the detected-set concentration tier (≥10×/≥5×/≥2×/≥1× over an even share among the states the kinase is detected in); the trailing 'ct' is the per-gene effective # of states (lower = more specific). Replaces the former transcript share, which was inversely predictive of presence. Computed in alz/cross_reference/tcell_within_cohort.py."},
   {key:"tcell_lfc",                    label:"Δ vs d2",          type:"num", group:"attr",
    title:"Pseudobulk transcript log2 fold change vs the d2 baseline at this contrast day (mean per-cell log-expression difference). Color: red = up, blue = down. No p-value — a single donor has no biological replicates (see Methods)."},
   {key:"tcell_concordance",            label:"vs Bulk",          type:"num", group:"attr",
    title:"sign(bulk NES) · transcript Δ vs d2. Positive = transcript moves with the bulk kinase activity. SHOWN ONLY — never filters: kinase activity is post-translationally decoupled from its own mRNA, so sign-agreement is at chance (OR≈1, same in the mouse Song reference)."},
   {key:"tcell_consistency",            label:"Timecourse",       type:"num", group:"attr",
    title:"Count of contrast days {d13, d17, d20} where the transcript moves concordantly with the bulk NES. Credibility comes from timecourse consistency, not a per-day p-value."},
-  {key:"nsclc_tier",                   label:"NSCLC TME",        type:"num", group:"ext",
-   title:"External reference (10x 900k-cell NSCLC tumor microenvironment): the kinase transcript's share in the T_NK compartment as a multiple of the uniform baseline (1/N_TME_groups). Constant across T-states — it asks whether an INDEPENDENT human dataset agrees the kinase is T-lineage-expressed at all, not which T-state. Empty = below 1× uniform / not in the NSCLC probe panel. See the per-lineage strip in the drawer for the full TME breakdown."},
+  {key:"nsclc_detected",               label:"NSCLC detected",   type:"num", group:"ext",
+   title:"Independent reference (10x 897k-cell NSCLC): is the kinase actually present in THIS exact T-cell state? Shows the fraction of reference cells expressing it (✓ ≥10% detected / ✗ below the 10% gate). Unlike the old share, this is normalization-free presence at the matched state. n/a = the kinase is outside the NSCLC probe panel. A ✗ on a state the within-cohort share localized to (≥2× tier) is flagged a MEA false-positive candidate."},
 ];
 function _attrVerdictCmp(a, b, key, type, asc) {
   let va, vb;
@@ -661,30 +659,24 @@ function _renderAttributionVerdict(hostId, ctx) {
   const deduped = new Map();
   for (const r of allRows) {
     const prev = deduped.get(r.cell_type);
-    if (!prev || (r.tcell_tier || 0) > (prev.tcell_tier || 0)) deduped.set(r.cell_type, r);
+    if (!prev || (r.tcell_concentration_tier || 0) > (prev.tcell_concentration_tier || 0)) deduped.set(r.cell_type, r);
   }
   const rows = Array.from(deduped.values());
 
-  // External-reference (NSCLC TME) tier — the T_NK compartment's share for this
-  // gene, constant across all T-state rows (the external reference does not
-  // resolve sub-T-state structure; it corroborates that the kinase is T-lineage
-  // transcribed at all). Empty when the gene is outside the NSCLC probe panel.
-  const _nsclcShares = _nsclcGroupShares(ctx.nsclcRows);
-  const _tNkShare = _nsclcShares.has("T_NK") ? _nsclcShares.get("T_NK") : null;
-  for (const r of rows) {
-    r.nsclc_specificity = _tNkShare;
-    r.nsclc_tier = _nsclcTier(_tNkShare);
-  }
+  // Per-state NSCLC reference detection + MEA false-positive flag are carried on
+  // each row from the attribution_index (joined to the reference in Python via
+  // the state crosswalk): r.nsclc_frac, r.nsclc_detected, r.mea_false_positive.
+  // Unlike the old constant T_NK share, this resolves the EXACT state.
 
   // Bulk MEA anchor — the same NES/FDR for every row at this kinase × contrast.
   const _K = ViewerPayload.kinases();
   const _bulkNes = (_K && _K["NES_" + ctx.contrast]) ? _K["NES_" + ctx.contrast][ctx.kinase_id] : null;
   const _bulkFdr = (_K && _K["FDR_" + ctx.contrast]) ? _K["FDR_" + ctx.contrast][ctx.kinase_id] : null;
 
-  const sortKey = host.dataset.sortKey || "tcell_tier";
+  const sortKey = host.dataset.sortKey || "tcell_concentration_tier";
   const sortAsc = host.dataset.sortAsc === "1";
   const sortCol = ATTR_VERDICT_COLS.find(c => c.key === sortKey)
-    || ATTR_VERDICT_COLS.find(c => c.key === "tcell_tier")
+    || ATTR_VERDICT_COLS.find(c => c.key === "tcell_concentration_tier")
     || ATTR_VERDICT_COLS[1];
   // Default ordering: tier desc, then concordance desc, as a stable secondary key.
   rows.sort((a, b) => {
@@ -707,14 +699,21 @@ function _renderAttributionVerdict(hostId, ctx) {
     const consist = r.tcell_consistency || 0;
     const consistCell = `<td class="attr-num" title="${consist} of 3 contrast days (d13/d17/d20) move concordantly with bulk.">`
       + `${consist}<span class="muted" style="font-size:10px;"> / 3</span></td>`;
-    return `<tr data-cell-type="${_escapeHtml(r.cell_type)}" class="attr-verdict-row${i === 0 ? ' attr-verdict-selected' : ''}">` +
+    const fpClass = r.mea_false_positive ? ' attr-verdict-fp' : '';
+    // When the independent reference contradicts the within-cohort detection (FP),
+    // dim the within-cohort cell so the reference verdict reads as authoritative.
+    const detInner = _tcellDetCell(r.tcell_detected, r.tcell_fraction_expressing,
+                                   r.tcell_concentration_tier, r.tcell_effective_n);
+    const withinCohort = r.mea_false_positive
+      ? `<span class="attr-tier-overridden" title="Within-cohort scRNA detects the kinase here, but the independent reference does not detect it in this state — see the MEA false-positive flag.">${detInner}</span>`
+      : detInner;
+    return `<tr data-cell-type="${_escapeHtml(r.cell_type)}" class="attr-verdict-row${i === 0 ? ' attr-verdict-selected' : ''}${fpClass}">` +
       `<td class="attr-celltype">${_escapeHtml(r.cell_type)}</td>` +
-      `<td>${_tcellTierBadge(r.tcell_tier || 0)}</td>` +
-      `<td class="attr-num">${num(r.tcell_specificity, 3)}</td>` +
+      `<td class="attr-num">${withinCohort}</td>` +
       lfcCell +
       concCell +
       consistCell +
-      `<td>${_nsclcTierBadge(r.nsclc_specificity)}</td>` +
+      _nsclcDetCell(r.nsclc_frac, r.nsclc_detected, r.mea_false_positive) +
       `</tr>`;
   }).join("");
   const headCells = ATTR_VERDICT_COLS.map(c => {
@@ -729,7 +728,7 @@ function _renderAttributionVerdict(hostId, ctx) {
     `<tr class="attr-verdict-supergroup">` +
       `<th class="attr-supergroup-spacer" colspan="${_grpCounts.id || 0}"></th>` +
       `<th class="attr-supergroup-attr" colspan="${_grpCounts.attr || 0}" title="Within-cohort cell-type attribution: transcript specificity in this cohort's own scRNA + concordance vs the bulk kinase-MEA direction at this contrast.">Within-cohort attribution (vs bulk direction)</th>` +
-      `<th class="attr-supergroup-ext" colspan="${_grpCounts.ext || 0}" title="External human reference: 10x 900k-cell NSCLC tumor microenvironment (ProjecTILs/scGate T-states + marker-labeled non-T lineages). Cross-checks whether the kinase is transcribed in the T lineage at all, independent of this cohort's own scRNA.">External ref (NSCLC TME)</th>` +
+      `<th class="attr-supergroup-ext" colspan="${_grpCounts.ext || 0}" title="Independent human reference: 10x 897k-cell NSCLC (ProjecTILs/scGate T-states + marker-labeled non-T lineages). Detection (fraction of cells expressing) at the matched T-state — is the kinase actually present where the within-cohort share localized it?">NSCLC reference (detection)</th>` +
     `</tr>`;
   // Bulk anchor — every row compares against this kinase's bulk MEA at this contrast.
   const _bulkSig = _bulkFdr != null && isFinite(_bulkFdr) && _bulkFdr < 0.25;
@@ -752,13 +751,13 @@ function _renderAttributionVerdict(hostId, ctx) {
     `<div class="muted attr-verdict-note" style="margin-top:4px;font-size:11px;">All ${rows.length} cell-type states shown — nothing is filtered or hidden. Sort any column to reorder.</div>` +
     `<details class="attr-explainer"><summary>How to read within-cohort attribution</summary>` +
       `<div class="attr-explainer-body">` +
-      `<p>The <strong>within-cohort</strong> axes localize the <strong>bulk</strong> kinase-activity signal to a cell-type state using only this cohort's own paired scRNA. The <strong>NSCLC TME</strong> axis is an <strong>independent human reference</strong> (10x 900k-cell tumor microenvironment) cross-checking whether the kinase is T-lineage transcribed at all. All axes are <strong>shown for you to read</strong>; none of them filters the table.</p>` +
+      `<p>The <strong>within-cohort</strong> axes localize the <strong>bulk</strong> kinase-activity signal to a cell-type state using only this cohort's own paired scRNA. The <strong>NSCLC detection</strong> column is an <strong>independent human reference</strong> (10x 897k-cell) checking whether the kinase is actually present in that exact state. When the within-cohort share localizes a kinase to a state the reference does not detect it in, the row is flagged a <strong>MEA false-positive candidate</strong> — MEA infers activity from phosphosite abundance and can attribute it to a cell type where the kinase is not expressed. The within-cohort axes are shown for you to read and do not filter the table.</p>` +
       `<table class="attr-explainer-table" style="margin-bottom:8px;">` +
         `<thead><tr><th>Axis</th><th>What it tells you</th></tr></thead><tbody>` +
-        `<tr><td><strong>Specificity</strong></td><td>Is the kinase's transcript preferentially expressed in this state? Share of total expression, binned as a multiple of the uniform baseline (1/N_states). Pooled across all scRNA days — a static descriptor. This is the informative localizer.</td></tr>` +
+        `<tr><td><strong>Specificity / Share</strong></td><td>Within-cohort transcript share in this state, binned as a multiple of the uniform baseline (1/N_states). A relative ranking, <em>not</em> presence — shown for continuity, but the NSCLC detection column is the authority on whether the kinase is actually here. Within-cohort detection lands in a later phase.</td></tr>` +
         `<tr><td><strong>Δ vs d2 / Concordance</strong></td><td>Does the transcript move the same direction as the bulk kinase activity at this day? Pseudobulk log2 fold change vs the d2 baseline, sign-checked against the bulk NES.</td></tr>` +
         `<tr><td><strong>Timecourse</strong></td><td>How many of the three contrast days (d13/d17/d20) agree in direction.</td></tr>` +
-        `<tr><td><strong>NSCLC TME</strong></td><td>External cross-check: the kinase's transcript share in the T_NK compartment of an independent 10x NSCLC reference, as a multiple of the 1/N_TME_groups uniform. Constant across T-states (the reference doesn't resolve sub-T structure) — it asks whether an outside dataset agrees the kinase is T-lineage expressed. Click a row for the full per-lineage breakdown in the drawer; a kinase absent from every TME compartment is an MEA motif false-positive candidate.</td></tr>` +
+        `<tr><td><strong>NSCLC detected</strong></td><td>Independent 10x 897k-cell NSCLC reference: fraction of cells in this exact T-state that express the kinase (✓ ≥10% / ✗ below). Normalization-free presence at the matched state. A ✗ where the within-cohort share localized the kinase (≥2× tier) with a significant bulk MEA is flagged a <strong>MEA false-positive candidate</strong>. Click a row for the per-lineage detection + effective-number-of-cell-types breakdown in the drawer.</td></tr>` +
         `</tbody></table>` +
       `<p><strong>No p-value / FDR.</strong> Donor1 is a single donor with one scRNA library per day — there are no biological replicates, so a per-(state, day) significance test would be pseudoreplication (Squair et al. 2021). Direction + magnitude + timecourse consistency are reported instead.</p>` +
       (caveat ? `<p class="attr-caveat" style="border-left:3px solid #b58900;padding-left:8px;"><strong>On concordance:</strong> ${_escapeHtml(caveat)} <span class="muted">(Verified 2026-06-03: sign-agreement between MEA activity and kinase transcript is statistically independent, OR≈0.98, reproduced in the published mouse Song method at OR≈1.01. It is shown as a label only.)</span></p>` : "") +
@@ -800,8 +799,10 @@ function _renderAttributionDrawer(hostId, ctx, cellType) {
   if (cellRows.length === 0) {
     traceBody = `<div class="muted">No within-cohort rows for ${_escapeHtml(cellType)}.</div>`;
   } else {
-    const spec = cellRows[0].tcell_specificity;
-    const tier = cellRows[0].tcell_tier || 0;
+    const detected = cellRows[0].tcell_detected;
+    const frac = cellRows[0].tcell_fraction_expressing;
+    const tier = cellRows[0].tcell_concentration_tier || 0;
+    const effN = cellRows[0].tcell_effective_n;
     const byDay = cellRows.slice().sort((a, b) =>
       String(CONTRASTS[a.contrast_id]).localeCompare(String(CONTRASTS[b.contrast_id])));
     const trRows = byDay.map(r => {
@@ -814,8 +815,8 @@ function _renderAttributionDrawer(hostId, ctx, cellType) {
       return `<tr><td>${_escapeHtml(day)} vs d2</td><td class="attr-num">${num(r.nes, 2)}</td>${lfcCell}${concCell}</tr>`;
     }).join("");
     traceBody =
-      `<p class="muted attr-caption">Specificity ${_tcellTierBadge(tier)} `
-        + `(share ${num(spec, 3)} of total expression; uniform = ${num(_tcellUniform(), 3)}). `
+      `<p class="muted attr-caption">Within-cohort ${_tcellDetCell(detected, frac, tier, effN)} `
+        + `(detection gate: ≥10% of cells express; concentration tier over an even share among detected states). `
         + `Each row is one contrast day: bulk NES, the pseudobulk transcript Δ vs d2, and their sign concordance. No p-value (single-donor timecourse).</p>` +
       `<table class="attr-verdict-table"><thead><tr>` +
         `<th>Contrast</th><th>Bulk NES</th><th>Δ transcript vs d2</th><th>Concordance</th>` +
@@ -827,8 +828,8 @@ function _renderAttributionDrawer(hostId, ctx, cellType) {
     `<section class="attr-section attr-section-wide"><h5>Within-cohort transcript trace ` +
       `<span class="muted">(unified_attribution_tcells.csv)</span></h5>` +
       traceBody + `</section>` +
-    `<section class="attr-section attr-section-wide"><h5>NSCLC TME specificity by lineage ` +
-      `<span class="muted">(nsclc_kinase_expression.csv)</span></h5>` +
+    `<section class="attr-section attr-section-wide"><h5>NSCLC reference detection by lineage ` +
+      `<span class="muted">(nsclc_kinase_specificity.csv)</span></h5>` +
       `<div id="attr-nsclc-strip"></div></section>`;
   _renderNSCLCLineageStrip("attr-nsclc-strip", ctx);
 }
@@ -907,47 +908,63 @@ function _renderDecompOlsTable(hostId, ctx, cellType) {
   });
 }
 
-// Per-lineage specificity strip — the external NSCLC TME reference's full
-// breakdown for one kinase. One chip per coarse TME group (T_NK + non-T
-// lineages), each a fold-over-uniform tier badge on the group's transcript
-// share. This is where cross-lineage breadth lives: the T-only verdict table
-// can only show the constant T_NK tier, so the audit signal ("expressed in T
-// but also myeloid? or nowhere?") is read here.
+// Per-lineage detection strip — the independent NSCLC reference's breadth
+// readout for one kinase. One chip per coarse lineage (T_NK + the non-T
+// lineages), showing whether the kinase is DETECTED there (≥10% of cells) and
+// how concentrated it is. This answers the breadth question the T-only verdict
+// table cannot: is the kinase even a T-lineage kinase, and how many cell types
+// would a knockout touch? All values precomputed in Python
+// (nsclc_kinase_specificity.csv); the JS only renders.
 function _renderNSCLCLineageStrip(hostId, ctx) {
   const host = document.getElementById(hostId);
   if (!host) return;
   const rows = ctx.nsclcRows || [];
   if (rows.length === 0) {
-    host.innerHTML = `<div class="muted">${_escapeHtml(ctx.gene || '')} is not in the NSCLC Flex probe panel — the external reference cannot speak to it.</div>`;
+    host.innerHTML = `<div class="muted">${_escapeHtml(ctx.gene || '')} is not in the NSCLC Flex probe panel — the independent reference cannot speak to it.</div>`;
     return;
   }
-  // Aggregate to coarse TME groups. specificity_score is the group share
-  // (constant within a group for one gene); binary_expressed / fraction are
-  // taken at their per-group peak to flag "expressed in this lineage".
-  const byGroup = new Map();
-  for (const r of rows) {
-    const g = String(r.spec_group || "");
-    if (!g) continue;
-    const cur = byGroup.get(g) || { share: Number(r.specificity_score) || 0, expr: false, maxFrac: 0 };
-    if (String(r.binary_expressed).toLowerCase() === "true" || Number(r.binary_expressed) === 1) cur.expr = true;
-    cur.maxFrac = Math.max(cur.maxFrac, Number(r.fraction_cells_expressing) || 0);
-    byGroup.set(g, cur);
-  }
-  const entries = Array.from(byGroup.entries()).sort((a, b) => b[1].share - a[1].share);
-  const nExpr = entries.filter(e => e[1].expr).length;
-  const nGroups = Math.round(1 / _nsclcUniform());
-  const chips = entries.map(([g, v]) => {
-    const dim = v.expr ? "" : ' nsclc-lineage-chip-dim';
-    const exprMark = v.expr ? "" : ' <span class="muted" style="font-size:10px;">low</span>';
-    return `<span class="nsclc-lineage-chip${dim}" title="${_escapeHtml(g)}: specificity share ${v.share.toFixed(3)}, peak fraction expressing ${v.maxFrac.toFixed(2)}">` +
-      `<strong>${_escapeHtml(g)}</strong> ${_nsclcTierBadge(v.share)}${exprMark}</span>`;
+  const num = (v, d=1) => (v == null || !isFinite(Number(v))) ? "?" : Number(v).toFixed(d);
+  // One row per coarse lineage; per-kinase breadth summary is denormalized on
+  // each (read from the first row).
+  const s = rows[0] || {};
+  const isTrue = (v) => v === true || String(v).toLowerCase() === "true" || Number(v) === 1;
+  const entries = rows
+    .map(r => ({ g: String(r.spec_group || ""),
+                 det: isTrue(r.group_detected),
+                 frac: Number(r.group_fraction) || 0,
+                 tier: Number(r.concentration_tier_coarse) || 0 }))
+    .filter(e => e.g)
+    .sort((a, b) => (b.det - a.det) || (b.frac - a.frac));
+  const nGroups = entries.length;
+  const nDet = entries.filter(e => e.det).length;
+  const tNk = entries.find(e => e.g === "T_NK");
+  const tNkDetected = !!(tNk && tNk.det);
+  const effCoarse = num(s.effective_n_coarse, 1);
+  const effNative = num(s.effective_n_native, 1);
+
+  const chips = entries.map(e => {
+    const dim = e.det ? "" : ' nsclc-lineage-chip-dim';
+    const mark = e.det
+      ? `<span class="nsclc-det-yes">✓ ${(e.frac * 100).toFixed(0)}%</span>`
+      : `<span class="muted">✗ ${(e.frac * 100).toFixed(0)}%</span>`;
+    return `<span class="nsclc-lineage-chip${dim}" title="${_escapeHtml(e.g)}: ${(e.frac * 100).toFixed(0)}% of cells express the kinase ${e.det ? '(detected, ≥10% gate)' : '(below the 10% detection gate)'}.">` +
+      `<strong>${_escapeHtml(e.g)}</strong> ${mark}${_nsclcConcTierBadge(e.tier)}</span>`;
   }).join("");
-  const verdict = nExpr === 0
-    ? `<span class="attr-bulk-down">expressed in 0 / ${nGroups} TME compartments — MEA motif false-positive candidate</span>`
-    : `expressed in ${nExpr} / ${nGroups} TME compartments`;
+
+  // The audit verdict: a kinase the bulk MEA attributed to T cells but the
+  // reference does not detect in the T_NK lineage at all is a false-positive
+  // candidate (its activity signal is not backed by T-cell expression).
+  let verdict;
+  if (nDet === 0) {
+    verdict = `<span class="attr-bulk-down">detected in 0 / ${nGroups} lineages — MEA false-positive candidate (not expressed anywhere in the reference)</span>`;
+  } else if (!tNkDetected) {
+    verdict = `<span class="attr-bulk-down">NOT detected in the T_NK lineage (present in ${nDet} / ${nGroups} non-T lineages) — MEA T-cell attribution is a false-positive candidate</span>`;
+  } else {
+    verdict = `detected in ${nDet} / ${nGroups} lineages; effectively present in ~${effCoarse} lineages (~${effNative} cell types at full resolution)`;
+  }
   host.innerHTML =
-    `<p class="muted attr-caption">Independent human reference (10x 900k-cell NSCLC TME). Tier = ${_escapeHtml(ctx.gene || '')} transcript share per coarse lineage ` +
-    `as a multiple of the 1/${nGroups} uniform baseline; the 14 ProjecTILs T-states are pooled into T_NK. ${verdict}.</p>` +
+    `<p class="muted attr-caption">Independent human reference (10x 897k-cell NSCLC). Detection = ≥10% of a lineage's cells express ${_escapeHtml(ctx.gene || '')}; ` +
+    `the 14 ProjecTILs T-states are pooled into T_NK. ${verdict}.</p>` +
     `<div class="nsclc-lineage-strip">${chips}</div>`;
 }
 
@@ -1073,7 +1090,7 @@ async function _loadKinaseAuditContext(kinase_id, seq) {
     AuditDataStore.load(tk("winsorized_sites")),
     AuditDataStore.load(tk("mea_global_shift")),
     AuditDataStore.load(tk("mea_substrate_sets")).catch(() => []),
-    AuditDataStore.load("nsclc_kinase_expression").catch(() => []),
+    AuditDataStore.load("nsclc_kinase_specificity").catch(() => []),
   ]);
   if (seq !== _kinaseAuditSeq || Store.state.selection.kinase !== kinase_id) return null;
 
@@ -1301,7 +1318,7 @@ async function renderActiveKinaseAuditTab(kinase_id) {
         `<div id="audit-attribution"></div></section>`;
       _renderAttributionVerdict("attr-verdict", ctx);
       _renderAuditTable("audit-attribution", "unified_attribution", ctx.attrRows,
-        ["kinase","gene_symbol","contrast","cell_type","tcell_specificity","tcell_tier","tcell_lfc","tcell_concordance","tcell_consistency","NES","FDR"],
+        ["kinase","gene_symbol","contrast","cell_type","tcell_detected","tcell_fraction_expressing","tcell_concentration","tcell_concentration_tier","tcell_effective_n","tcell_lfc","tcell_concordance","tcell_consistency","NES","FDR"],
         "unified_attribution");
     }
   } catch (e) {

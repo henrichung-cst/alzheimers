@@ -33,28 +33,40 @@ function _confPass(rowConf, threshold) {
   return (_CONF_RANK[rowConf] || 0) >= (_CONF_RANK[threshold] || 0);
 }
 
-// Within-cohort specificity tiers expressed as multiples of the uniform
-// baseline (1/N_states; donor1 = 1/14 ≈ 0.0714). 10× / 5× / 2× / 1×. The tier
-// integer is precomputed in Python (alz/cross_reference/tcell_within_cohort.py)
-// because N_states is donor-dependent; here we only need the uniform value for
-// the badge tooltip.
-function _tcellUniform() {
-  return (typeof PAYLOAD !== "undefined" && PAYLOAD && PAYLOAD.meta &&
-          PAYLOAD.meta.tcell_attribution_uniform) || (1 / 14);
-}
+// Within-cohort standard detection metric (docs/plans/standard_attribution_metric.md):
+// a detection gate (tcell_fraction_expressing >= 0.10) paired with a detected-set
+// concentration tier (≥t× over even share among detected states; 10×/5×/2×/1×,
+// precomputed in Python because n_detected is per-gene) and the per-gene effective
+// # of states (breadth). Replaces the former share-fold over a 1/N_states uniform,
+// which was inversely predictive of presence.
 function _tcellTierLabel(t) { return t > 0 ? "≥" + t + "×" : ""; }
-function _tcellTierBadge(t) {
+function _tcellConcTierBadge(t) {
   if (!t) return '<span class="muted">—</span>';
   const cls = t >= 10 ? "vhi" : (t >= 5 ? "hi" : (t >= 2 ? "mid" : "lo"));
-  return '<span class="badge ' + cls + '" title="Within-cohort specificity ≥ ' + t +
-         '× uniform (' + (t * _tcellUniform()).toFixed(3) + ')">' + _tcellTierLabel(t) + '</span>';
+  return '<span class="badge ' + cls + '" title="Within-cohort concentration ≥' + t +
+         '× over even share among detected states">' + _tcellTierLabel(t) + '</span>';
+}
+// Per-(state) detection cell: ✓/✗ + % of cells expressing, then the concentration
+// tier badge and (per-gene) effective # states. Mirrors the unified viewer.
+function _tcellDetCell(detected, frac, tier, effectiveN) {
+  const detBool = detected === true || detected === "True" || detected === "true";
+  const fracPct = (frac != null && isFinite(frac)) ? (Number(frac) * 100).toFixed(0) + "%" : "";
+  const tierN = Number(tier) || 0;
+  if (!detBool) {
+    return `<span class="tcell-det-no" title="Not detected in this state (${fracPct ? fracPct + ' cells' : 'frac n/a'} < 10% threshold)">✗ ${fracPct}</span>`;
+  }
+  const tierBadge = tierN > 0 ? " " + _tcellConcTierBadge(tierN) : "";
+  const effTxt = (effectiveN != null && isFinite(effectiveN))
+    ? ` <span class="muted" title="Effective # states (lower = more specific)">${Number(effectiveN).toFixed(1)}ct</span>` : "";
+  return `<span class="tcell-det-yes" title="Detected (${fracPct ? fracPct + ' cells' : ''}; ≥10% threshold)">✓ ${fracPct}</span>${tierBadge}${effTxt}`;
 }
 
 function getScopedAttribution(kinaseId, filter) {
   // Returns filtered within-cohort attribution rows from
-  // PAYLOAD.attribution_index for one kinase. The T-cell attribution carries
-  // binned specificity (tcell_tier ∈ {0,1,2,5,10}) + pseudobulk concordance vs
-  // bulk NES (no confidence string, no FDR — see
+  // PAYLOAD.attribution_index for one kinase. The T-cell attribution carries the
+  // standard detection metric (tcell_detected + tcell_concentration_tier ∈
+  // {0,1,2,5,10} + per-gene tcell_effective_n) + pseudobulk concordance vs bulk
+  // NES (no confidence string, no FDR — see
   // docs/tcell_exhaustion_analysis_summary.md). filter dimensions may be
   // string ("" = any) or array ([] = any); celltype scopes the cell_type axis.
   const AI = PAYLOAD.attribution_index || {};
@@ -69,14 +81,22 @@ function getScopedAttribution(kinaseId, filter) {
     out.push({
       contrast_id:        AI.contrast_id[j],
       cell_type:          AI.cell_type[j],
-      tcell_specificity:  AI.tcell_specificity  ? AI.tcell_specificity[j]  : null,
-      tcell_tier:         AI.tcell_tier         ? AI.tcell_tier[j]         : 0,
+      tcell_detected:           AI.tcell_detected           ? AI.tcell_detected[j]           : false,
+      tcell_fraction_expressing: AI.tcell_fraction_expressing ? AI.tcell_fraction_expressing[j] : null,
+      tcell_concentration:      AI.tcell_concentration      ? AI.tcell_concentration[j]      : null,
+      tcell_concentration_tier: AI.tcell_concentration_tier ? AI.tcell_concentration_tier[j] : 0,
+      tcell_effective_n:        AI.tcell_effective_n        ? AI.tcell_effective_n[j]        : null,
+      tcell_top_celltype:       AI.tcell_top_celltype       ? AI.tcell_top_celltype[j]       : "",
+      tcell_top_concentration:  AI.tcell_top_concentration  ? AI.tcell_top_concentration[j]  : null,
       tcell_lfc:          AI.tcell_lfc          ? AI.tcell_lfc[j]          : null,
       tcell_concordance:  AI.tcell_concordance  ? AI.tcell_concordance[j]  : null,
       tcell_concordant:   AI.tcell_concordant   ? AI.tcell_concordant[j]   : null,
       tcell_consistency:  AI.tcell_consistency  ? AI.tcell_consistency[j]  : 0,
       nes:                AI.nes                ? AI.nes[j]                : null,
       fdr:                AI.fdr                ? AI.fdr[j]                : null,
+      nsclc_frac:         AI.nsclc_frac         ? AI.nsclc_frac[j]         : null,
+      nsclc_detected:     AI.nsclc_detected     ? AI.nsclc_detected[j]     : null,
+      mea_false_positive: AI.mea_false_positive ? AI.mea_false_positive[j] : false,
     });
   }
   return out;
@@ -244,7 +264,7 @@ function _kineMaxAbsNesScoped(r, scopedCtxIds) {
 function _kineMaxTcellTierScoped(kinaseId, filter) {
   let best = 0;
   for (const e of getScopedAttribution(kinaseId, filter)) {
-    const t = e.tcell_tier || 0;
+    const t = e.tcell_concentration_tier || 0;
     if (t > best) best = t;
   }
   return best;
@@ -327,11 +347,11 @@ function _makeKeCompare(scopedCtxIds) {
     }
     else if (col === "n_attributed_celltypes") {
       // Match what the Cell types pill column displays: dedup by cell_type
-      // keeping best tier, then count cell types specific at ≥ 1× uniform.
+      // keeping best tier, then count cell types at ≥ 1× even share among detected.
       const _bestTierByCT = (kid) => {
         const m = new Map();
         for (const e of getScopedAttribution(kid, kf)) {
-          const t = e.tcell_tier || 0;
+          const t = e.tcell_concentration_tier || 0;
           if (t > (m.get(e.cell_type) || 0)) m.set(e.cell_type, t);
         }
         let n = 0;
@@ -457,22 +477,22 @@ function _renderAgreementProfile(r) {
 }
 
 function _renderCellTypesCell(r, filter) {
-  // Cell types this kinase is specific to (≥1× uniform) in the active filter
-  // scope — a compact specificity summary (full per-state rows live in the
-  // Attribution verdict tab). Dedup by cell_type keeping the best tier.
+  // Cell types this kinase concentrates in (≥1× even share among detected) in the
+  // active filter scope — a compact specificity summary (full per-state rows live
+  // in the Attribution verdict tab). Dedup by cell_type keeping the best tier.
   const rows = getScopedAttribution(r.id, filter || {});
   const byCell = new Map();
   for (const e of rows) {
     const prev = byCell.get(e.cell_type);
-    if (!prev || (e.tcell_tier || 0) > (prev.tcell_tier || 0) ||
-        ((e.tcell_tier || 0) === (prev.tcell_tier || 0)
+    if (!prev || (e.tcell_concentration_tier || 0) > (prev.tcell_concentration_tier || 0) ||
+        ((e.tcell_concentration_tier || 0) === (prev.tcell_concentration_tier || 0)
          && (e.tcell_concordance || 0) > (prev.tcell_concordance || 0)))
       byCell.set(e.cell_type, e);
   }
-  const displayRows = Array.from(byCell.values()).filter(e => (e.tcell_tier || 0) >= 1);
+  const displayRows = Array.from(byCell.values()).filter(e => (e.tcell_concentration_tier || 0) >= 1);
   // Sort: tier first (10 → 5 → 2), then concordance desc within tier.
   displayRows.sort((a, b) => {
-    const dt = (b.tcell_tier || 0) - (a.tcell_tier || 0);
+    const dt = (b.tcell_concentration_tier || 0) - (a.tcell_concentration_tier || 0);
     if (dt !== 0) return dt;
     return (b.tcell_concordance || 0) - (a.tcell_concordance || 0);
   });
@@ -480,10 +500,10 @@ function _renderCellTypesCell(r, filter) {
   if (n === 0) return `<span class="muted">—</span>`;
   const top = displayRows.slice(0, 3);
   const tip = displayRows.map(e =>
-    `${e.cell_type} (≥${e.tcell_tier}× uniform, concordance ${Number(e.tcell_concordance).toFixed(3)})`).join("\n");
+    `${e.cell_type} (≥${e.tcell_concentration_tier}× even share among detected, concordance ${Number(e.tcell_concordance).toFixed(3)})`).join("\n");
   const topNames = top.map(e => {
-    const cls = e.tcell_tier >= 10 ? "vhi" : e.tcell_tier >= 5 ? "hi"
-      : e.tcell_tier >= 2 ? "mid" : "lo";
+    const cls = e.tcell_concentration_tier >= 10 ? "vhi" : e.tcell_concentration_tier >= 5 ? "hi"
+      : e.tcell_concentration_tier >= 2 ? "mid" : "lo";
     return `<span class="badge ${cls}">${_escapeHtml(e.cell_type)}</span>`;
   }).join(" ");
   return `<span title="${_escapeHtml(tip)}"><strong>${n}</strong> ${topNames}${displayRows.length > 3 ? ` <span class="muted">+${displayRows.length - 3}</span>` : ""}</span>`;
@@ -606,8 +626,9 @@ function renderKinaseExplorer() {
     // if persisted localStorage filters would otherwise disqualify it.
     if (!q && gridActive && !kinaseQualifies(r.id, kf)) continue;
     // Opt-in specificity narrowing (tcellMin > 0, off by default): kinase passes
-    // if any attribution row in scope reaches the requested tier (≥ tcellMin ×
-    // uniform). Specificity only — concordance is never used to filter (de-gate
+    // if any attribution row in scope reaches the requested concentration tier
+    // (≥ tcellMin × even share among detected). Specificity only — concordance is
+    // never used to filter (de-gate
     // directive, docs/tcell_exhaustion_analysis_summary.md). Skipped
     // under text search so a targeted lookup always surfaces the kinase.
     if (!q && tcellMin > 0 && _kineMaxTcellTierScoped(r.id, kf) < tcellMin) continue;
@@ -660,8 +681,8 @@ function renderKinaseExplorer() {
     const subCls = scopedSig === 0 ? " sub-thresh" : "";
     const drvCls = (drvSet && drvSet.has(r.id)) ? " driver" : "";
 
-    // Specificity tier badge (max within-cohort tier in scope) + cell-types pill.
-    const specBadge = _tcellTierBadge(_kineMaxTcellTierScoped(r.id, colFilter));
+    // Concentration tier badge (max within-cohort tier in scope) + cell-types pill.
+    const specBadge = _tcellConcTierBadge(_kineMaxTcellTierScoped(r.id, colFilter));
     const cellTypesCell = _renderCellTypesCell(r, colFilter);
 
     const residueBadge = r.residue_type === "Y"

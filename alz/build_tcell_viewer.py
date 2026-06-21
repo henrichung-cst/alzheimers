@@ -537,42 +537,63 @@ def _load_kinase_to_gene_map() -> dict[str, str]:
     }
 
 
-def _tcell_attribution_uniform(donor: str) -> float | None:
-    """Uniform specificity baseline 1/N_states for the badge tooltip."""
-    cc = os.path.join(TCELLS_INCYTR_INPUTS_DIR, donor, "scrna", "cell_counts.csv")
-    if not os.path.exists(cc):
-        return None
-    n_states = pd.read_csv(cc, usecols=["state"])["state"].nunique()
-    return (1.0 / n_states) if n_states else None
+# Crosswalk: within-cohort sanitized ProjecTILs state → NSCLC reference cell
+# type (raw ProjecTILs `functional.cluster`). Both derive from the SAME
+# ProjecTILs vocabulary, so this is a 1:1 relabeling. The within-cohort states
+# without an NSCLC analog never occur (the cohort uses the 14 standard states).
+_TCELL_STATE_TO_NSCLC = {
+    "CD4CTLeomes": "CD4.CTL_EOMES", "CD4CTLexh": "CD4.CTL_Exh",
+    "CD4CTLgnly": "CD4.CTL_GNLY",   "CD4Naive": "CD4.NaiveLike",
+    "CD4Tfh": "CD4.Tfh",            "CD4Th17": "CD4.Th17",
+    "CD8CM": "CD8.CM",              "CD8EM": "CD8.EM",
+    "CD8MAIT": "CD8.MAIT",          "CD8Naive": "CD8.NaiveLike",
+    "CD8TEMRA": "CD8.TEMRA",        "CD8Tex": "CD8.TEX",
+    "CD8Tpex": "CD8.TPEX",          "Treg": "CD4.Treg",
+}
 
 
-def _nsclc_attribution_uniform() -> float | None:
-    """Uniform baseline 1/N_coarse_groups for the external-reference NSCLC tier.
-
-    The external 10x NSCLC reference is the human cohort's analog of the mouse
-    viewer's WMB cross-check: a kinase's transcript share across the coarse TME
-    groups (the 14 ProjecTILs T-states collapse to one T_NK group; the non-T
-    lineages stay separate). The fold-over-uniform tier in the attribution
-    verdict table is share / (1/N_groups), so we ship N_groups here.
-    """
+def _load_nsclc_detection() -> dict:
+    """Per-(gene, NSCLC cell type) detection from the reference, for the MEA
+    false-positive flag. Returns {(GENE_UPPER, nsclc_cell_type): (frac, detected)}.
+    Detection is the standard `fraction_cells_expressing ≥ 0.10` gate computed in
+    alz/reference/nsclc_expression.py (no share)."""
     src = config.NSCLC_KINASE_EXPRESSION_FILE
     if not os.path.exists(src):
-        return None
-    n_groups = pd.read_csv(src, usecols=["spec_group"])["spec_group"].nunique()
-    return (1.0 / n_groups) if n_groups else None
+        return {}
+    df = pd.read_csv(src, usecols=["gene_symbol", "cell_type",
+                                   "fraction_cells_expressing", "detected"])
+    out: dict = {}
+    for r in df.itertuples(index=False):
+        out[(str(r.gene_symbol).upper(), str(r.cell_type))] = (
+            float(r.fraction_cells_expressing),
+            bool(r.detected) if pd.notna(r.detected) else False)
+    return out
 
 
-def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list) -> dict:
+def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list,
+                                   gene_map: dict, fdr_thresh: float,
+                                   nsclc_det: dict) -> dict:
     """Columnar attribution_index consumed by the viewer JS getScopedAttribution.
 
     Maps kinase→kinase_id (the slice's kid map) and contrast day→contrast_id
     (index into the slice's short_contrasts). Rows whose kinase or day aren't in
-    the MEA slice are dropped (shouldn't happen — same MEA source)."""
+    the MEA slice are dropped (shouldn't happen — same MEA source).
+
+    Each (kinase, within-cohort state) row is joined to the NSCLC reference's
+    detection at the crosswalked state (`nsclc_frac`, `nsclc_detected`), and
+    flagged `mea_false_positive` when the bulk MEA is significant at this contrast
+    AND the within-cohort scRNA DETECTS the kinase in this state AND the
+    independent reference does NOT detect it there — the within-cohort-present-
+    but-reference-absent rows the standard is designed to catch."""
     c_idx = {c: i for i, c in enumerate(short_contrasts)}
     cols: dict[str, list] = {k: [] for k in (
-        "kinase_id", "contrast_id", "cell_type", "tcell_specificity",
-        "tcell_tier", "tcell_lfc", "tcell_concordance", "tcell_concordant",
-        "tcell_consistency", "nes", "fdr")}
+        "kinase_id", "contrast_id", "cell_type",
+        "tcell_detected", "tcell_fraction_expressing", "tcell_concentration",
+        "tcell_concentration_tier", "tcell_effective_n", "tcell_top_celltype",
+        "tcell_top_concentration",
+        "tcell_lfc", "tcell_concordance", "tcell_concordant",
+        "tcell_consistency", "nes", "fdr",
+        "nsclc_frac", "nsclc_detected", "mea_false_positive")}
 
     def _f(v):  # NaN/None → null (the full grid carries NaN for genes absent in scRNA)
         return float(v) if pd.notna(v) else None
@@ -585,17 +606,38 @@ def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list) ->
         cc = c_idx.get(str(r.contrast))
         if kk is None or cc is None:
             continue
+        gene_upper = str(gene_map.get(str(r.kinase), str(r.kinase))).upper()
+        nsclc_ct = _TCELL_STATE_TO_NSCLC.get(str(r.cell_type))
+        det_entry = nsclc_det.get((gene_upper, nsclc_ct)) if nsclc_ct else None
+        nsclc_frac = det_entry[0] if det_entry else None
+        nsclc_detected = det_entry[1] if det_entry else None
+        detected = bool(r.tcell_detected)
+        bulk_sig = pd.notna(r.FDR) and float(r.FDR) < fdr_thresh
+        # FP only when the reference can speak (gene in panel + state mapped) and
+        # says absent, while the within-cohort scRNA detects the kinase here and
+        # bulk is sig.
+        fp = bool(det_entry is not None and nsclc_detected is False
+                  and detected and bulk_sig)
         cols["kinase_id"].append(kk)
         cols["contrast_id"].append(cc)
         cols["cell_type"].append(str(r.cell_type))
-        cols["tcell_specificity"].append(_f(r.tcell_specificity))
-        cols["tcell_tier"].append(int(r.tcell_tier))
+        cols["tcell_detected"].append(detected)
+        cols["tcell_fraction_expressing"].append(_f(r.tcell_fraction_expressing))
+        cols["tcell_concentration"].append(_f(r.tcell_concentration))
+        cols["tcell_concentration_tier"].append(int(r.tcell_concentration_tier))
+        cols["tcell_effective_n"].append(_f(r.tcell_effective_n))
+        cols["tcell_top_celltype"].append(
+            str(r.tcell_top_celltype) if pd.notna(r.tcell_top_celltype) else "")
+        cols["tcell_top_concentration"].append(_f(r.tcell_top_concentration))
         cols["tcell_lfc"].append(_f(r.tcell_lfc))
         cols["tcell_concordance"].append(_f(r.tcell_concordance))
         cols["tcell_concordant"].append(bool(r.tcell_concordant))
         cols["tcell_consistency"].append(int(r.tcell_consistency))
         cols["nes"].append(_f(r.NES))
         cols["fdr"].append(_f(r.FDR))
+        cols["nsclc_frac"].append(round(nsclc_frac, 4) if nsclc_frac is not None else None)
+        cols["nsclc_detected"].append(nsclc_detected)
+        cols["mea_false_positive"].append(fp)
     return cols
 
 
@@ -707,21 +749,31 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
             cols["n_sig_contrasts"].append(0)
 
     # Within-cohort attribution: columnar index for the viewer + per-kinase
-    # top attributed cell type (highest specificity tier, then concordance).
+    # top attributed cell type (highest concentration_tier, then concordance).
     attr_df = _load_tcell_attribution(donor)
     attribution_index = None
-    attribution_uniform = None
     if attr_df is not None:
+        nsclc_det = _load_nsclc_detection()
         attribution_index = _build_tcell_attribution_index(
-            attr_df, kid, short_contrasts)
-        attribution_uniform = _tcell_attribution_uniform(donor)
+            attr_df, kid, short_contrasts, gene_map, fdr_thresh, nsclc_det)
+        # Detection-gated top cell type (standard, finding A): attribute to the
+        # highest within-cohort concentration_tier state the INDEPENDENT NSCLC
+        # reference also detects the kinase in — never to a state where it is
+        # absent. Among ties, higher concordance wins. If the reference detects
+        # the kinase in none of the attributed states, top_celltype is left blank
+        # (within-cohort concentration alone is not trusted to localize it).
         top = attr_df.sort_values(
-            ["tcell_tier", "tcell_concordance"], ascending=False)
+            ["tcell_concentration_tier", "tcell_concordance"], ascending=False)
         top_by_key = {}
         for r in top.itertuples(index=False):
             residue_type = str(getattr(r, "residue_type", "") or "")
             key = (str(r.kinase), residue_type)
-            if key not in top_by_key:
+            if key in top_by_key:
+                continue
+            gene_upper = str(gene_map.get(str(r.kinase), str(r.kinase))).upper()
+            nsclc_ct = _TCELL_STATE_TO_NSCLC.get(str(r.cell_type))
+            det_entry = nsclc_det.get((gene_upper, nsclc_ct)) if nsclc_ct else None
+            if det_entry is not None and det_entry[1] is True:
                 top_by_key[key] = str(r.cell_type)
         cols["top_celltype_1"] = [
             top_by_key.get((k, residue_type), "")
@@ -735,7 +787,6 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
         "kid": kid,
         "fdr_threshold": fdr_thresh,
         "attribution_index": attribution_index,
-        "attribution_uniform": attribution_uniform,
     }
 
 
@@ -1761,12 +1812,13 @@ def _register_kinase_audit_tables(tables: dict) -> None:
         os.makedirs(AUDIT_SOURCES_DIR, exist_ok=True)
         shutil.copyfile(src, dest)
         tables[key] = _audit_csv_meta(dest, label, key)
-    # NSCLC 10x cell-type specificity reference — the human cohort's analog of
-    # the mouse viewer's WMB cross-check. Per-(kinase, cell_type) mean_log2(CPM+1),
-    # fraction expressing, and specificity share over coarse TME groups. Surfaced
-    # as the external-reference tier column in the attribution verdict table
-    # (T_NK-group share vs the 1/N_groups uniform) + a per-lineage specificity
-    # strip in the drawer.
+    # NSCLC 10x cell-type reference — the human cohort's independent detector.
+    # Per-(kinase, cell_type) mean_log2(CPM+1) + fraction_cells_expressing +
+    # detection. The standard attribution metric (detection-gated concentration +
+    # effective number of cell types) is in nsclc_kinase_specificity.csv: the
+    # drawer's per-lineage strip reads its coarse-group detection + breadth, and
+    # the verdict table's per-state detection / MEA-false-positive flag come from
+    # the attribution_index (joined to this reference in Python).
     nsclc_src = config.NSCLC_KINASE_EXPRESSION_FILE
     if os.path.exists(nsclc_src):
         os.makedirs(AUDIT_SOURCES_DIR, exist_ok=True)
@@ -1778,6 +1830,19 @@ def _register_kinase_audit_tables(tables: dict) -> None:
         tables["nsclc_kinase_expression"] = _shim_audit_entry(
             "nsclc_kinase_expression", "NSCLC 10x cell-type expression reference",
             "run pixi run nsclc-expression first")
+    nsclc_spec_src = config.NSCLC_KINASE_SPECIFICITY_FILE
+    if os.path.exists(nsclc_spec_src):
+        os.makedirs(AUDIT_SOURCES_DIR, exist_ok=True)
+        dest = os.path.join(AUDIT_SOURCES_DIR, "nsclc_kinase_specificity.csv")
+        shutil.copyfile(nsclc_spec_src, dest)
+        tables["nsclc_kinase_specificity"] = _audit_csv_meta(
+            dest, "NSCLC standard attribution metric (detection + effective N)",
+            "nsclc_kinase_specificity")
+    else:
+        tables["nsclc_kinase_specificity"] = _shim_audit_entry(
+            "nsclc_kinase_specificity",
+            "NSCLC standard attribution metric (detection + effective N)",
+            "run alz/reference/nsclc_expression.py --metrics first")
     for key, reason in _KINASE_AUDIT_SHIMS:
         # Use a stable label even for shims so the drawer's "source: ..." text
         # reads coherently when the panel renders empty.
@@ -2266,7 +2331,6 @@ def build_tcell_payload() -> dict:
     contrast_union: list[str] = []
     fdr_thresh = 0.25
     attribution_index: dict | None = None
-    attribution_uniform: float | None = None
     for donor in DONORS:
         block = _build_donor_kinases_slice(donor)
         if block is None:
@@ -2282,7 +2346,6 @@ def build_tcell_payload() -> dict:
         # donor, which getScopedAttribution reads globally.
         if block.get("attribution_index") and attribution_index is None:
             attribution_index = block["attribution_index"]
-            attribution_uniform = block.get("attribution_uniform")
             n_attr = len(attribution_index["kinase_id"])
             print(f"  {donor}: within-cohort attribution rows: {n_attr}",
                   flush=True)
@@ -2468,8 +2531,6 @@ def build_tcell_payload() -> dict:
         "familyMap": family_map,
         "fdr_threshold": fdr_thresh,
         "mea_kinase_donor": "donor1",
-        "tcell_attribution_uniform": attribution_uniform,
-        "nsclc_attribution_uniform": _nsclc_attribution_uniform(),
         "tcell_attribution_caveat": TCELL_ATTRIBUTION_CAVEAT,
         "transcript_trace": transcript_trace_meta,
         "omics_trace": omics_trace_meta,
