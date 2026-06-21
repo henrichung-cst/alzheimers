@@ -215,19 +215,23 @@ def prepare_wmb_specificity(wmb_df):
         return None
     wmb = wmb_df.copy()
     wmb["_gene_upper"] = wmb["gene_symbol"].str.upper()
-    wmb_top = (wmb.sort_values("specificity_score")
+    # Standard attribution metric (detection-gated): per-(gene, class) detection
+    # + detected-set concentration / tier, replacing the share `specificity_score`.
+    wmb_top = (wmb.sort_values("fraction_cells_expressing")
                   .drop_duplicates(["_gene_upper", "cell_type"], keep="last")
-                  [["_gene_upper", "cell_type", "specificity_score",
-                    "mean_log2_expression", "fraction_cells_expressing",
-                    "binary_expressed"]]
+                  [["_gene_upper", "cell_type", "detected", "concentration",
+                    "concentration_tier", "mean_log2_expression",
+                    "fraction_cells_expressing", "binary_expressed"]]
                   .rename(columns={
                       "cell_type": "wmb_class",
-                      "specificity_score": "wmb_specificity",
+                      "detected": "wmb_detected",
+                      "concentration": "wmb_concentration",
+                      "concentration_tier": "wmb_concentration_tier",
                       "mean_log2_expression": "wmb_mean_log2_expression",
                       "fraction_cells_expressing": "wmb_fraction_cells_expressing",
                       "binary_expressed": "wmb_binary_expressed",
                   }))
-    print(f"  WMB specificity: {len(wmb_top)} (gene, wmb_class) pairs loaded")
+    print(f"  WMB detection: {len(wmb_top)} (gene, wmb_class) pairs loaded")
     return wmb_top
 
 
@@ -236,22 +240,27 @@ def prepare_song_specificity(song_sp_df):
         return None
     song_sp = song_sp_df.copy()
     song_sp["_gene_upper"] = song_sp["gene_symbol"].str.upper()
-    # per-(gene,cluster) share + the per-gene tau / top-cluster summary (tau is
-    # the headline location-specificity metric; the share is the per-cluster cell)
-    cols = ["_gene_upper", "cell_type", "specificity_score"]
-    rename = {"specificity_score": "song_specificity"}
-    for src, dst in (("tau", "song_tau"),
-                     ("top_cluster", "song_top_cluster"),
-                     ("top_share", "song_top_share")):
+    # Standard attribution metric (detection-gated): per-(gene, cluster)
+    # detection + detected-set concentration / tier, plus the per-gene breadth
+    # summary (effective number of cell types, top cell type). Replaces the
+    # share `specificity_score` and the rejected `tau`.
+    cols = ["_gene_upper", "cell_type", "detected", "concentration",
+            "concentration_tier", "fraction_cells_expressing"]
+    rename = {"detected": "song_detected",
+              "concentration": "song_concentration",
+              "concentration_tier": "song_concentration_tier",
+              "fraction_cells_expressing": "song_fraction_cells_expressing"}
+    for src, dst in (("effective_n_celltypes", "song_effective_n"),
+                     ("top_celltype", "song_top_celltype"),
+                     ("top_concentration", "song_top_concentration")):
         if src in song_sp.columns:
             cols.append(src)
             rename[src] = dst
-    song_spec_top = (song_sp.sort_values("specificity_score")
+    song_spec_top = (song_sp.sort_values("fraction_cells_expressing")
                             .drop_duplicates(["_gene_upper", "cell_type"], keep="last")
                             [cols]
                             .rename(columns=rename))
-    print(f"  Song specificity: {len(song_spec_top)} (gene, cell_type) pairs loaded "
-          f"(tau {'present' if 'song_tau' in song_spec_top.columns else 'ABSENT'})")
+    print(f"  Song detection: {len(song_spec_top)} (gene, cell_type) pairs loaded")
     return song_spec_top
 
 

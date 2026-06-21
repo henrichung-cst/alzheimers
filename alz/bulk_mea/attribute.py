@@ -145,23 +145,28 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
         unified["_sea_ad_directional_lfc"] = np.nan
 
     if wmb_top is not None:
-        # Lineage-level WMB join: (_gene_upper, wmb_class) → specificity.
+        # Lineage-level WMB join: (_gene_upper, wmb_class) → detection metric.
         unified = unified.merge(wmb_top, on=["_gene_upper", "wmb_class"], how="left")
     else:
-        unified["wmb_specificity"] = np.nan
-        unified["wmb_mean_log2_expression"] = np.nan
-        unified["wmb_fraction_cells_expressing"] = np.nan
-        unified["wmb_binary_expressed"] = np.nan
-    unified["wmb_specificity"] = unified["wmb_specificity"].fillna(0.0)
+        for _c in ("wmb_detected", "wmb_concentration", "wmb_concentration_tier",
+                   "wmb_mean_log2_expression", "wmb_fraction_cells_expressing",
+                   "wmb_binary_expressed"):
+            unified[_c] = np.nan
+    unified["wmb_detected"] = unified["wmb_detected"].fillna(False).astype(bool)
+    unified["wmb_concentration"] = unified["wmb_concentration"].fillna(0.0)
+    unified["wmb_concentration_tier"] = unified["wmb_concentration_tier"].fillna(0).astype(int)
     unified["wmb_binary_expressed"] = unified["wmb_binary_expressed"].fillna(False).astype(bool)
 
     if song_spec_top is not None:
         unified = unified.merge(song_spec_top, on=["_gene_upper", "cell_type"], how="left")
-    else:
-        unified["song_specificity"] = np.nan
-    for _col in ("song_specificity", "song_tau", "song_top_share", "song_top_cluster"):
+    for _col in ("song_detected", "song_concentration", "song_concentration_tier",
+                 "song_fraction_cells_expressing", "song_effective_n",
+                 "song_top_celltype", "song_top_concentration"):
         if _col not in unified.columns:
             unified[_col] = np.nan
+    unified["song_detected"] = unified["song_detected"].fillna(False).astype(bool)
+    unified["song_concentration"] = unified["song_concentration"].fillna(0.0)
+    unified["song_concentration_tier"] = unified["song_concentration_tier"].fillna(0).astype(int)
 
     if song_cd_top is not None:
         unified["_song_contrast"] = (unified["contrast"] if song_key_is_contrast
@@ -240,9 +245,9 @@ def _assemble_unified(sig, sea_ad_df, wmb_top, song_spec_top,
     attributed = attributed.sort_values(
         [
             "_confidence_rank",
-            "song_specificity",
+            "song_concentration",
             "decomp_agrees_bulk",
-            "wmb_specificity",
+            "wmb_concentration",
             "human_location_score",
             "_song_lfc_abs",
             "_sea_ad_lfc_abs",

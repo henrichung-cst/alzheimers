@@ -104,13 +104,9 @@ def _build_celltype_evidence(uaf_full):
 
     Deduplicate by taking the row with the highest canonical confidence tier,
     then explicit Song/decomposition/localization evidence. Keep rows that are
-    attributed or have Song location specificity above the Levy-T5 uniform
-    baseline.
+    attributed or where the kinase is detected (expressed) in that cell type per
+    the Song within-cohort reference.
     """
-    spec_low = config.wmb_specificity_uniform()
-    spec_high = 2.0 * spec_low
-    song_uniform = 1.0 / config.N_CELL_TYPES
-
     uaf_ranked = uaf_full.copy()
     uaf_ranked["_confidence_rank"] = (
         uaf_ranked["confidence_tier"].map(CONFIDENCE_RANK).fillna(0).astype(int)
@@ -121,9 +117,9 @@ def _build_celltype_evidence(uaf_full):
            .sort_values(
                [
                    "_confidence_rank",
-                   "song_specificity",
+                   "song_concentration",
                    "decomp_agrees_bulk",
-                   "wmb_specificity",
+                   "wmb_concentration",
                    "human_location_score",
                    "_song_lfc_abs",
                    "_sea_ad_lfc_abs",
@@ -138,16 +134,12 @@ def _build_celltype_evidence(uaf_full):
 
     filtered = deduped[
         (deduped["confidence_tier"].astype(str) != "none")
-        | (deduped["song_specificity"].fillna(0) >= song_uniform)
+        | (deduped["song_detected"].fillna(False).astype(bool))
     ].copy()
 
-    filtered["wmb_fold_over_uniform"] = (
-        filtered["wmb_specificity"] / spec_low)
     filtered["concordance_direction"] = filtered["sea_ad_lfc"].apply(
         lambda x: "up" if x > config.SEA_AD_LFC_MIN
         else ("down" if x < -config.SEA_AD_LFC_MIN else "none"))
-    filtered["wmb_tier"] = filtered["wmb_specificity"].apply(
-        lambda x: "high" if x >= spec_high else "low")
 
     # Song within-cohort concordance (carry forward from unified attribution)
     if "song_lfc" in filtered.columns:
@@ -162,13 +154,15 @@ def _build_celltype_evidence(uaf_full):
     cols = [
         "kinase", "gene_symbol", "cell_type",
         "confidence_tier", "confidence_basis",
-        "song_direction_support", "song_location_tier",
-        "wmb_crosscheck_tier", "human_location_tier", "decomp_agrees_bulk",
-        "wmb_specificity", "wmb_fold_over_uniform",
-        "song_specificity", "song_tau", "song_top_share", "song_top_cluster",
+        "song_direction_support", "human_location_tier", "decomp_agrees_bulk",
+        "wmb_detected", "wmb_concentration", "wmb_concentration_tier",
+        "wmb_fraction_cells_expressing",
+        "song_detected", "song_concentration", "song_concentration_tier",
+        "song_fraction_cells_expressing", "song_effective_n",
+        "song_top_celltype", "song_top_concentration",
         "sea_ad_lfc", "sea_ad_n_supertypes",
         "seaad_location_score", "hbca_location_score", "human_location_score",
-        "concordance_direction", "wmb_tier",
+        "concordance_direction",
         "song_lfc", "song_concordance_direction",
         "decomp_nes", "decomp_fdr",
     ]
@@ -182,7 +176,7 @@ def _build_celltype_evidence(uaf_full):
     filtered["_song_lfc_abs"] = filtered["song_lfc"].abs()
     filtered["_sea_ad_lfc_abs"] = filtered["sea_ad_lfc"].abs()
     sorted_filtered = filtered.sort_values(
-        ["kinase", "_confidence_rank", "song_specificity", "_song_lfc_abs", "_sea_ad_lfc_abs"],
+        ["kinase", "_confidence_rank", "song_concentration", "_song_lfc_abs", "_sea_ad_lfc_abs"],
         ascending=[True, False, False, False, False],
     )
     return sorted_filtered[cols]
@@ -321,7 +315,7 @@ def _build_kinase_hypothesis_table(t1, t2):
         t2_work["confidence_tier"].map(CONFIDENCE_RANK).fillna(0).astype(int)
     )
     sort_keys = ["kinase", "_confidence_rank",
-                 "_weighted_concordance", "wmb_fold_over_uniform"]
+                 "_weighted_concordance", "wmb_concentration"]
     ascending = [True, False, False, False]
     t2_sorted = t2_work.sort_values(sort_keys, ascending=ascending)
 
@@ -335,14 +329,14 @@ def _build_kinase_hypothesis_table(t1, t2):
         for i, rank in enumerate([1, 2, 3]):
             if i < len(top):
                 result[f"top_celltype_{rank}"] = top.loc[i, "cell_type"]
-                result[f"top_celltype_{rank}_wmb_fold"] = top.loc[i, "wmb_fold_over_uniform"]
+                result[f"top_celltype_{rank}_wmb_tier"] = top.loc[i, "wmb_concentration_tier"]
                 result[f"top_celltype_{rank}_sea_ad_lfc"] = top.loc[i, "sea_ad_lfc"]
                 result[f"top_celltype_{rank}_evidence"] = top.loc[i, "confidence_basis"]
                 if has_song:
                     result[f"top_celltype_{rank}_song_lfc"] = top.loc[i, "song_lfc"]
             else:
                 result[f"top_celltype_{rank}"] = None
-                result[f"top_celltype_{rank}_wmb_fold"] = None
+                result[f"top_celltype_{rank}_wmb_tier"] = None
                 result[f"top_celltype_{rank}_sea_ad_lfc"] = None
                 result[f"top_celltype_{rank}_evidence"] = None
                 if has_song:
@@ -444,9 +438,9 @@ def print_summary():
         print(f"\nS4 (Table 2): Cell-Type Evidence Table")
         print(f"  {len(t2)} (kinase, cell_type) pairs")
         print(f"  {t2['kinase'].nunique()} unique kinases")
-        print(f"  WMB tier breakdown:")
-        for tier, cnt in t2["wmb_tier"].value_counts().items():
-            print(f"    {tier}: {cnt}")
+        print(f"  Song detection breakdown:")
+        for det, cnt in t2["song_detected"].value_counts().items():
+            print(f"    detected={det}: {cnt}")
     else:
         print("\nS4 (Table 2): Not yet computed")
 

@@ -28,24 +28,12 @@ CONFIDENCE_COLUMNS = [
     "confidence_tier",
     "confidence_basis",
     "song_direction_support",
-    "song_location_tier",
-    "wmb_crosscheck_tier",
     "human_location_tier",
     "decomp_agrees_bulk",
 ]
 
 HUMAN_STRONG_LOG2_SPECIFICITY = 1.0
 DECOMP_FDR_AGREEMENT = 0.25
-
-
-def _tier_from_share(value: float, uniform: float) -> str:
-    if not np.isfinite(value) or value <= 0:
-        return "none"
-    if value >= 2.0 * uniform:
-        return "high"
-    if value >= uniform:
-        return "above_uniform"
-    return "below_uniform"
 
 
 def _human_location_tier(value: float) -> str:
@@ -134,8 +122,8 @@ def assign_confidence(unified: pd.DataFrame) -> pd.DataFrame:
 
     for col, default in [
         ("song_lfc", np.nan),
-        ("song_specificity", np.nan),
-        ("wmb_specificity", np.nan),
+        ("song_detected", False),
+        ("wmb_detected", False),
         ("sea_ad_lfc", np.nan),
         ("human_location_score", np.nan),
         ("decomp_nes", np.nan),
@@ -148,8 +136,8 @@ def assign_confidence(unified: pd.DataFrame) -> pd.DataFrame:
 
     eligible = out["mea_significant"].astype(bool) & (out["_effective_concordance"].fillna(0.0) > 0)
     song_lfc = pd.to_numeric(out["song_lfc"], errors="coerce")
-    song_spec = pd.to_numeric(out["song_specificity"], errors="coerce")
-    wmb_spec = pd.to_numeric(out["wmb_specificity"], errors="coerce")
+    song_detected = out["song_detected"].fillna(False).astype(bool)
+    wmb_detected = out["wmb_detected"].fillna(False).astype(bool)
     human_score = pd.to_numeric(out["human_location_score"], errors="coerce")
     sea_lfc = pd.to_numeric(out["sea_ad_lfc"], errors="coerce")
     bulk_nes = pd.to_numeric(out["NES"], errors="coerce")
@@ -159,8 +147,12 @@ def assign_confidence(unified: pd.DataFrame) -> pd.DataFrame:
     song_contributed = out["concordance_source"].isin(("song", "both"))
     seaad_contributed = out["concordance_source"].isin(("sea_ad", "both"))
     song_direction_support = song_contributed & (song_lfc.abs() > config.SONG_LFC_MIN)
-    song_location_high = song_spec >= (2.0 / config.N_CELL_TYPES)
-    wmb_crosscheck = wmb_spec >= config.wmb_specificity_uniform()
+    # Detection-gated attribution (standard metric): a kinase is only attributed
+    # "high"/"moderate_seaad" at a cell type where it is actually expressed
+    # (fraction_cells_expressing ≥ 0.10). Replaces the share gates, which were
+    # inversely predictive of presence.
+    song_location_high = song_detected
+    wmb_crosscheck = wmb_detected
     strong_human_location = human_score >= HUMAN_STRONG_LOG2_SPECIFICITY
     decomp_agrees_bulk = (
         (decomp_fdr < DECOMP_FDR_AGREEMENT)
@@ -196,12 +188,6 @@ def assign_confidence(unified: pd.DataFrame) -> pd.DataFrame:
     out["confidence_basis"] = basis
 
     out["song_direction_support"] = song_direction_support.astype(bool)
-    out["song_location_tier"] = [
-        _tier_from_share(float(v), 1.0 / config.N_CELL_TYPES) for v in song_spec.fillna(np.nan)
-    ]
-    out["wmb_crosscheck_tier"] = [
-        _tier_from_share(float(v), config.wmb_specificity_uniform()) for v in wmb_spec.fillna(np.nan)
-    ]
     out["human_location_tier"] = [
         _human_location_tier(float(v)) for v in human_score.fillna(np.nan)
     ]
