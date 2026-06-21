@@ -47,6 +47,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from alz.shared import config
+from alz.cross_reference import specificity
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -55,6 +56,7 @@ from alz.shared import config
 OUTPUT_DIR = config.SNRNA_INTEGRATION_OUTPUT_DIR
 PSEUDOBULK_FILE = config.SONG_PSEUDOBULK_FILE
 CELL_COUNTS_FILE = config.SONG_CELL_COUNTS_FILE
+DETECTION_FILE = config.SONG_DETECTION_FILE
 SPECIFICITY_FILE = config.SONG_EXPRESSION_FILE
 CONCORDANCE_FILE = config.SONG_CONCORDANCE_FILE
 
@@ -148,6 +150,29 @@ def step_pseudobulk() -> None:
         pb_meta.append({"sample": sample, "cell_type": cluster_name})
         pb_data.append(log2_cpm)
 
+    # Per-(gene, cluster) detection — fraction of spine nuclei in the cluster
+    # with a non-zero raw count, pooled across ALL animals (not the per-animal
+    # SONG_MIN_CELLS gate, which only governs the pseudobulk DE design). Count-
+    # based → normalization-free, so it means the same thing as every other
+    # cohort's detection. Computed from the raw sparse matrix, where the zero
+    # structure is intact (before the CPM step destroys it).
+    print("  Computing per-cluster detection (fraction cells expressing) ...")
+    clabel = obs["cluster_name"].values
+    det_frames = []
+    for cluster_name in sorted(set(clabel)):
+        pos = np.where(clabel == cluster_name)[0]
+        n_ct = int(pos.size)
+        if n_ct == 0:
+            continue
+        nonzero = np.asarray((X[pos] > 0).sum(axis=0)).ravel()
+        det_frames.append(pd.DataFrame({
+            "cell_type": cluster_name,
+            "gene_symbol": genes,
+            "fraction_cells_expressing": (nonzero / n_ct).round(6),
+            "n_cells": n_ct,
+        }))
+    detection = pd.concat(det_frames, ignore_index=True)
+
     # Build output DataFrames
     cell_counts = pd.DataFrame(cell_counts_rows)
     if pb_data:
@@ -164,6 +189,11 @@ def step_pseudobulk() -> None:
     cell_counts.to_csv(CELL_COUNTS_FILE, index=False)
     print(f"  Cell counts: {len(cell_counts)} (animal × class) pairs → "
           f"{CELL_COUNTS_FILE}")
+
+    detection.to_csv(DETECTION_FILE, index=False)
+    n_det_clusters = detection["cell_type"].nunique()
+    print(f"  Detection: {len(detection):,} (gene × cluster) pairs "
+          f"({n_det_clusters} clusters) → {DETECTION_FILE}")
 
     pseudobulk.to_csv(PSEUDOBULK_FILE, index=False)
     n_samples = pseudobulk["sample"].nunique()
@@ -214,85 +244,79 @@ def step_pseudobulk() -> None:
 
 
 def step_specificity() -> None:
-    """Compute within-cohort expression specificity per gene per cluster.
+    """Within-cohort expression specificity via the standard attribution metric.
 
-    Pools all animals (males + females) to maximize power for a static
-    property. Emits two granularities:
-      - per-(gene, cluster) `share` = mean_in_cluster / Σ means  (WMB-style)
-      - per-gene `tau` (Yanai tissue-specificity index) + top_cluster/top_share
-        — the headline location-specificity metric, normalized for cluster count.
-    Clusters are the spine subclasses (config.CLUSTER_SPINE — Levy-t5, 31).
+    Replaces the relative share localizer (proven inversely predictive of
+    presence — the harder it localized, the likelier the call was a biological
+    false positive) with the repo-wide standard
+    (``alz/cross_reference/specificity.py``): per-(gene, cluster) DETECTION
+    (``fraction_cells_expressing >= 0.10``, normalization-free) + detected-set
+    linear ``concentration`` + 2×/5×/10× ``concentration_tier`` over
+    ``1/n_detected`` + per-gene ``effective_n_celltypes``. Pools all animals.
+
+    ``mean_log2_expression`` is the per-cluster mean over animals of the
+    pseudobulk log2(CPM+1); ``fraction_cells_expressing`` comes from the
+    per-cell detection pass (``--pseudobulk``). Both are joined per
+    (gene, cluster) and fed to ``specificity.compute()`` at native (31-cluster)
+    resolution. Clusters are the spine subclasses (``config.CLUSTER_SPINE``).
     """
     print("=" * 72)
-    print("S2  Within-cohort expression specificity")
+    print("S2  Within-cohort expression specificity (standard attribution metric)")
     print("=" * 72)
 
-    if not os.path.exists(PSEUDOBULK_FILE):
-        print(f"  ERROR: pseudobulk file not found: {PSEUDOBULK_FILE}")
-        print("  Run --pseudobulk first.")
-        sys.exit(1)
+    for path in (PSEUDOBULK_FILE, DETECTION_FILE):
+        if not os.path.exists(path):
+            print(f"  ERROR: required input not found: {path}")
+            print("  Run --pseudobulk first.")
+            sys.exit(1)
 
     pb = pd.read_csv(PSEUDOBULK_FILE)
-    print(f"  Loaded pseudobulk: {len(pb)} rows")
-
     gene_cols = [c for c in pb.columns if c not in ("sample", "cell_type")]
-    cell_types = sorted(pb["cell_type"].unique())
-    print(f"  Spine clusters: {len(cell_types)}, genes: {len(gene_cols)}")
+    print(f"  Pseudobulk: {len(pb)} rows, {len(gene_cols)} genes, "
+          f"{pb['cell_type'].nunique()} clusters")
 
-    # Mean expression per subclass (pool across all animals)
-    mean_by_ct = pb.groupby("cell_type")[gene_cols].mean()  # (n_subclass, n_genes)
+    # Per-cluster mean of log2(CPM+1), pooled across all animals.
+    mean_long = (pb.groupby("cell_type")[gene_cols].mean()
+                 .stack().reset_index())
+    mean_long.columns = ["cell_type", "gene_symbol", "mean_log2_expression"]
 
-    # Per-(gene, cluster) share: fraction of total expression in each subclass
-    # (same family as WMB's specificity_score — a per-cluster cell value).
-    total_expr = mean_by_ct.sum(axis=0)  # (n_genes,)
-    total_expr_safe = total_expr.replace(0, np.nan)  # avoid division by zero
-    specificity = mean_by_ct.div(total_expr_safe, axis=1)  # (n_subclass, n_genes)
+    detection = pd.read_csv(DETECTION_FILE)
+    print(f"  Detection: {len(detection):,} (gene × cluster) rows, "
+          f"{detection['cell_type'].nunique()} clusters")
 
-    # Per-gene tau: Yanai tissue-specificity index over the cluster vector,
-    #   tau = Σ_i (1 − x_i / x_max) / (N − 1),  0 = uniform → 1 = one cluster.
-    # Unlike a peak/even-split ratio, tau is normalized for cluster count, so it
-    # does NOT inflate at 31 clusters (the trap that over-calls housekeeping
-    # kinases as "specific"). This is the headline location-specificity metric;
-    # the per-cluster `share` above is the readable companion.
-    m = mean_by_ct.clip(lower=0)
-    n_ct = m.shape[0]
-    xmax = m.max(axis=0)  # (n_genes,)
-    ratio = m.div(xmax.replace(0, np.nan), axis=1)
-    tau = (1.0 - ratio).sum(axis=0) / (n_ct - 1)
-    tau[xmax <= 0] = 0.0
-    per_gene = pd.DataFrame({
-        "gene_symbol": gene_cols,
-        "tau": tau.reindex(gene_cols).round(6).values,
-        "top_cluster": m.idxmax(axis=0).reindex(gene_cols).values,
-        "top_share": (xmax / total_expr_safe).fillna(0.0).reindex(gene_cols).round(6).values,
-        "n_expressing": (m > 0).sum(axis=0).reindex(gene_cols).astype(int).values,
+    df = mean_long.merge(detection, on=["cell_type", "gene_symbol"], how="inner")
+
+    per_label, _, per_gene = specificity.compute(
+        df,
+        gene_col="gene_symbol",
+        label_col="cell_type",
+        mean_log2_col="mean_log2_expression",
+        frac_col="fraction_cells_expressing",
+        ncells_col="n_cells",
+    )
+
+    per_gene = per_gene.rename(columns={
+        "n_detected_native": "n_celltypes_detected",
+        "effective_n_native": "effective_n_celltypes",
+        "top_celltype_native": "top_celltype",
+        "top_concentration_native": "top_concentration",
     })
-    print(f"  tau over {n_ct} spine clusters: "
-          f"{per_gene['tau'].min():.3f}..{per_gene['tau'].max():.3f} "
-          f"(median {per_gene['tau'].median():.3f})")
-
-    # Reshape to long format matching WMB output schema (vectorized)
-    spec_long = specificity.stack().reset_index()
-    spec_long.columns = ["cell_type", "gene_symbol", "specificity_score"]
-    mean_long = mean_by_ct.stack().reset_index()
-    mean_long.columns = ["cell_type", "gene_symbol", "mean_expression"]
-    df = spec_long.merge(mean_long, on=["cell_type", "gene_symbol"])
-    df = df.merge(per_gene, on="gene_symbol", how="left")
-    df = df[np.isfinite(df["specificity_score"]) & (df["mean_expression"] > 0)].copy()
+    out = per_label.merge(per_gene, on="gene_symbol", how="left")
+    # Emit rows where the gene is expressed in the cluster (detected rows — frac
+    # ≥ 0.10 — are a strict subset). Genes undetected everywhere carry NaN
+    # breadth and contribute no attribution.
+    out = out[out["mean_log2_expression"] > 0].copy()
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    df.to_csv(SPECIFICITY_FILE, index=False)
-    print(f"  Output: {len(df)} (gene × subclass) pairs → {SPECIFICITY_FILE}")
+    out.to_csv(SPECIFICITY_FILE, index=False)
 
-    # Summary: top specific genes per class
-    print(f"\n  Top 3 most specific genes per spine cluster:")
-    for ct in sorted(df["cell_type"].unique()):
-        ct_df = df[df["cell_type"] == ct].nlargest(3, "specificity_score")
-        genes_str = ", ".join(
-            f"{r['gene_symbol']} ({r['specificity_score']:.3f})"
-            for _, r in ct_df.iterrows()
-        )
-        print(f"    {ct:<22s}  {genes_str}")
+    detected_genes = per_gene[per_gene["n_celltypes_detected"] > 0]
+    eff = detected_genes["effective_n_celltypes"]
+    print(f"  Output: {len(out):,} (gene × cluster) rows → {SPECIFICITY_FILE}")
+    print(f"  Detected in ≥1 cluster (frac ≥ 0.10): "
+          f"{len(detected_genes):,}/{len(per_gene):,} genes; "
+          f"median effective # cell types = "
+          f"{eff.median():.2f}" if len(eff) else "  (no detected genes)")
 
 
 # ---------------------------------------------------------------------------

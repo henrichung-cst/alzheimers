@@ -525,6 +525,10 @@ HBCA_TAXONOMY_TERM_SET = "CCN202210140_SUPC"
 
 WMB_EXPRESSION_OUTPUT_DIR = os.path.join("outputs", "reports", "wmb_expression")
 WMB_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_kinase_expression.csv")
+# Per-kinase standard attribution breadth summary (effective number of cell
+# types / top class) over the retained WMB classes. Detection-gated; the share
+# `specificity_score` it replaces is removed from wmb_kinase_expression.csv.
+WMB_KINASE_SPECIFICITY_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_kinase_specificity.csv")
 WMB_EXPRESSION_SUBCLASS_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_kinase_expression_subclass.csv")
 WMB_SUBCLASS_TO_CLASS_FILE = os.path.join(DERIVED_BRIDGES_DIR, "wmb_subclass_to_class.csv")
 WMB_REGIONAL_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_regional_kinase_expression.csv")
@@ -554,6 +558,9 @@ NSCLC_CELL_LABELS_FILE = os.path.join(NSCLC_10X_CACHE_DIR, "nsclc_cell_labels.cs
 # Outputs.
 NSCLC_REFERENCE_OUTPUT_DIR = os.path.join("outputs", "reports", "nsclc_reference")
 NSCLC_KINASE_EXPRESSION_FILE = os.path.join(NSCLC_REFERENCE_OUTPUT_DIR, "nsclc_kinase_expression.csv")
+# Per-(kinase, coarse lineage) standard attribution metrics + per-kinase breadth
+# summary (detection-gated concentration / effective number of cell types).
+NSCLC_KINASE_SPECIFICITY_FILE = os.path.join(NSCLC_REFERENCE_OUTPUT_DIR, "nsclc_kinase_specificity.csv")
 NSCLC_KINASE_AUDIT_FILE = os.path.join(NSCLC_REFERENCE_OUTPUT_DIR, "nsclc_kinase_audit.csv")
 
 SONG_H5AD_FILE = os.path.join(SONG_TRANSCRIPTOMICS_DIR, "170_gex_celltypes_00.h5ad")
@@ -562,6 +569,11 @@ SNRNA_INTEGRATION_OUTPUT_DIR = os.path.join("outputs", "reports", "snrna_integra
 SONG_PSEUDOBULK_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "pseudobulk_cpm.csv")
 SONG_CELL_COUNTS_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "pseudobulk_cell_counts.csv")
 SONG_EXPRESSION_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "song_expression_specificity.csv")
+# Per-(gene, cluster) detection: fraction of spine nuclei with a non-zero raw
+# count, pooled across animals. Count-based → normalization-free; the single
+# presence gate of the standard attribution metric. Written by --pseudobulk
+# (needs per-cell counts), consumed by --specificity.
+SONG_DETECTION_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "song_detection.csv")
 SONG_CONCORDANCE_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "song_concordance.csv")
 
 SONG_LFC_MIN = 0.1       # minimum |song_lfc| for concordance (same as SEA_AD_LFC_MIN)

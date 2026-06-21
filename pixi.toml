@@ -65,6 +65,8 @@ human = { depends-on = ["human-ingest", "human-perdonor", "human-seaad"] }
 all = "bash alz/runners/main/run_all.sh"
 atlas = "python alz/reference/atlas.py --run"
 wmb-export = "python alz/reference/wmb_expression.py --run"
+# Standard attribution metric from the existing WMB expression CSV (no re-stream).
+wmb-metrics = "python alz/reference/wmb_expression.py --metrics"
 snrna = "python alz/reference/snrna_integration.py --run"
 bubbles = "python alz/plot_attribution_bubbles.py"
 viewer = "python alz/build_unified_viewer.py"

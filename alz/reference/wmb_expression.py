@@ -50,6 +50,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from alz.shared import config
+from alz.cross_reference import specificity
 from alz.reference.atlas import (
     get_all_kinase_genes,
     get_phosphatase_genes_from_genelist,
@@ -538,6 +539,84 @@ def _stream_wmb_expression(
     return accum, regional_rows, subclass_accum
 
 
+def _write_attribution_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute the standard attribution metric and write the two WMB outputs.
+
+    See alz/cross_reference/specificity.py and
+    docs/plans/standard_attribution_metric.md for the definition. The 9 retained
+    WMB classes are already broad lineages, so there is no coarse vs. native
+    distinction — the metric is computed once over them (group_col=None).
+
+      wmb_kinase_expression.csv  — per (kinase, class): raw facts (mean,
+        fraction, binary_expressed, n_cells) + native metrics (detected,
+        linear_expression, concentration, concentration_tier). The share
+        `specificity_score` is removed; detection replaces it. "Other" catch-all
+        rows are kept for visibility with detection only (excluded from breadth).
+      wmb_kinase_specificity.csv — per kinase: breadth summary (n_celltypes
+        detected, effective number of cell types, top class, top concentration).
+    """
+    retained_mask = df["cell_type"].isin(RETAINED_WMB_CLASSES)
+    retained = df[retained_mask].copy()
+
+    per_label, _, per_gene = specificity.compute(
+        retained, gene_col="gene_symbol", label_col="cell_type",
+        mean_log2_col="mean_log2_expression",
+        frac_col="fraction_cells_expressing", ncells_col="n_cells")
+
+    # "Other" rows: detection only (frac ≥ 0.10); not part of the breadth
+    # denominator, so concentration/tier are undefined.
+    other = df[~retained_mask].copy()
+    if len(other):
+        other["linear_expression"] = other["mean_log2_expression"].map(specificity.delog2)
+        other["detected"] = other["fraction_cells_expressing"].astype(float) >= specificity.DETECTION_FRAC_MIN
+        other["concentration"] = np.nan
+        other["concentration_tier"] = 0
+
+    expr_cols = ["kinase_id", "gene_symbol", "cell_type",
+                 "mean_log2_expression", "fraction_cells_expressing",
+                 "binary_expressed", "n_cells",
+                 "linear_expression", "detected", "concentration", "concentration_tier"]
+    expr = pd.concat([per_label, other], ignore_index=True)[expr_cols]
+    expr.to_csv(WMB_EXPR_FILE, index=False)
+    print(f"\n  Saved {len(expr)} rows to {WMB_EXPR_FILE}")
+    _write_scope_sidecar(WMB_EXPR_FILE)
+
+    per_gene = per_gene.rename(columns={
+        "n_detected_native": "n_celltypes_detected",
+        "effective_n_native": "effective_n_celltypes",
+        "top_celltype_native": "top_celltype",
+        "top_concentration_native": "top_concentration",
+    })
+    kid = retained.drop_duplicates("gene_symbol")[["gene_symbol", "kinase_id"]]
+    per_gene = per_gene.merge(kid, on="gene_symbol", how="left")
+    for c in ("effective_n_celltypes", "top_concentration"):
+        per_gene[c] = per_gene[c].astype(float).round(6)
+    per_gene.to_csv(config.WMB_KINASE_SPECIFICITY_FILE, index=False)
+    print(f"  Saved {len(per_gene)} per-kinase breadth rows to "
+          f"{config.WMB_KINASE_SPECIFICITY_FILE}")
+
+    n_det = int((per_gene["n_celltypes_detected"] > 0).sum())
+    eff = per_gene.loc[per_gene["n_celltypes_detected"] > 0, "effective_n_celltypes"]
+    print(f"  Kinases detected in ≥1 class: {n_det}/{len(per_gene)}; "
+          f"median effective # cell types = "
+          f"{eff.median():.2f}" if len(eff) else "  (no detected kinases)")
+    return expr
+
+
+def compute_metrics() -> pd.DataFrame:
+    """Recompute the standard attribution metric from the existing WMB
+    expression CSV — no h5ad re-stream (detection is already present)."""
+    if not os.path.exists(WMB_EXPR_FILE):
+        raise FileNotFoundError(f"{WMB_EXPR_FILE} missing — run --run first.")
+    df = pd.read_csv(WMB_EXPR_FILE)
+    needed = {"kinase_id", "gene_symbol", "cell_type", "mean_log2_expression",
+              "fraction_cells_expressing", "binary_expressed", "n_cells"}
+    missing = needed - set(df.columns)
+    if missing:
+        raise ValueError(f"{WMB_EXPR_FILE} missing columns {missing}")
+    return _write_attribution_metrics(df)
+
+
 def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
     """Compute whole-brain kinase/phosphatase expression matrix.
 
@@ -602,33 +681,19 @@ def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
                     "cell_type": ct,
                     "mean_log2_expression": round(float(mean_expr[i]), 6),
                     "fraction_cells_expressing": round(float(frac_expr[i]), 6),
-                    "specificity_score": np.nan,
                     "binary_expressed": bool(mean_expr[i] > 1 and frac_expr[i] > 0.10),
                     "n_cells": int(n_total),
                 })
 
         df = pd.DataFrame(rows)
 
-        # Specificity = share-of-total across the retained WMB classes (the
-        # subset that any spine cluster maps to). "Other" rows still exist for
-        # visibility but don't dilute the score.
-        named_mask = df["cell_type"].isin(RETAINED_WMB_CLASSES)
-        for gene in kinase_genes:
-            gene_mask = (df["gene_symbol"] == gene) & named_mask
-            gene_df = df.loc[gene_mask]
-            total_expr = gene_df["mean_log2_expression"].sum()
-            if total_expr > 0:
-                spec = (gene_df["mean_log2_expression"] / total_expr).round(6)
-                df.loc[gene_mask, "specificity_score"] = spec.values
-            else:
-                df.loc[gene_mask, "specificity_score"] = 0.0
-        # "Other" rows: specificity not defined under the retained-class denominator
-        df.loc[~named_mask, "specificity_score"] = 0.0
-
-        df.to_csv(WMB_EXPR_FILE, index=False)
-        print(f"\n  Saved {len(df)} rows to {WMB_EXPR_FILE}")
-
-        _write_scope_sidecar(WMB_EXPR_FILE)
+        # Standard attribution metric (detection-gated concentration + effective
+        # number of cell types) over the retained WMB classes. Replaces the
+        # share `specificity_score`, which was shown inversely predictive of
+        # presence. Writes wmb_kinase_expression.csv (augmented) +
+        # wmb_kinase_specificity.csv (per-kinase breadth). See
+        # alz/cross_reference/specificity.py.
+        df = _write_attribution_metrics(df)
 
         # Audit sidecar: per-WMB-subclass expression
         sub_rows = []
@@ -832,6 +897,9 @@ def main():
                        help="Compute proteome-wide WMB expression matrix")
     group.add_argument("--summary", action="store_true",
                        help="Print cached results")
+    group.add_argument("--metrics", action="store_true",
+                       help="Recompute the standard attribution metric from the "
+                            "existing expression CSV (no h5ad re-stream)")
     parser.add_argument("--force", action="store_true",
                         help="Force recomputation even if cached results exist")
 
@@ -841,6 +909,8 @@ def main():
         compute_wmb_expression(force=args.force)
     elif args.proteome:
         compute_wmb_proteome_expression(force=args.force)
+    elif args.metrics:
+        compute_metrics()
     elif args.summary:
         print_summary()
 
