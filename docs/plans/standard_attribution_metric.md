@@ -247,12 +247,26 @@ human/Mukesh tab. Those keep the shared share-fold helpers. Migrating 5xFAD's WM
 follow-on. `alz/ingest/test_fivexfad.py` was therefore NOT changed (it asserts on the 5xFAD path,
 which is unchanged).
 
-## Remaining phase (GATED compute)
+## Phase 2D — Within-cohort T-cell detection — DONE 2026-06-21
 
-3b. **Within-cohort T-cell (2D)** — `tcells_scrna_extract.R` now emits `pct_expressing.csv`
-    (DONE, code only). **The capped re-run needs the donor Seurat object — stop and report before
-    running.** Then `tcell_within_cohort.py` consumes detection and `tcell-viewer` is rebuilt so
-    the within-cohort share tier is retired there too.
+- `tcells_scrna_extract.R` emits `pct_expressing.csv` (fraction of cells expressing per
+  state×day). Capped re-run of both donors (`MemoryMax=20G`, `SwapMax=0`): donor1 25,678 cells ×
+  27,486 genes, donor2 20,654 × 29,191; `readRDS` peaked ~6.5 GB, never near the cap.
+- `tcell_within_cohort.py`: `_per_state_detection` pools `pct_expressing` over days **cell-weighted**
+  (Σ pct·n_cells / Σ n_cells); `_compute_metric` feeds the per-state mean log2-expression + pooled
+  detection into the shared `specificity.compute` (one cross-cohort definition). Emits
+  `tcell_detected` / `tcell_fraction_expressing` / `tcell_concentration` / `tcell_concentration_tier`
+  + per-gene `tcell_effective_n` / `tcell_top_celltype`. The share localizer (mean_in_state / Σ,
+  binned over 1/N_states) is removed.
+- donor1 result: 384,804 (gene×state) rows, 71,088 detected; unified grid 16,338 rows (guard ✓);
+  concentration_tier dist `{2:129, 1:2637, 0:13572}` — broad detection, low concentration (no
+  5×/10×), the honest signature of kinase mRNA being post-translationally decoupled from activity.
+- `validate_cohort.py` contract → `tcell_detected` + `tcell_concentration`; `tcells: PASS=106 FAIL=0`.
+- Viewer: `build_tcell_viewer.py` payload + `tcell_viewer` `kinase_explorer.js` / `kinase_audit.js` /
+  `styles.css` migrated to detection cells (✓/✗ + % cells), `concentration_tier` badge, `effective_n`;
+  `attribution_uniform` / `_tcellUniform` / `_tcellTierBadge` retired; MEA false-positive now keys on
+  within-cohort **detection** vs reference-absent. Rebuilt: payload 11.99 MB raw / 1.49 MB gz, all 6
+  detection fields present, zero stale share fields.
 
 ### Out-of-scope collateral surfaced (need a separate decision)
 - `alz/reference/wmb_expression.py --proteome` still emits a share `specificity_score` — a
