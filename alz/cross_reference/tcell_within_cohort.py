@@ -18,18 +18,25 @@ Two deliberate departures from the mouse design (see
    fabricated. The mouse tier never consumed the Song p-value anyway. Concordance
    is a pseudobulk log2FC (direction + magnitude); credibility comes from
    timecourse consistency across d13/d17/d20.
-2. **Binned specificity (1x/2x/5x/10x of uniform = 1/N_states) replaces the
-   high/moderate/low confidence tiers** — copying the unified viewer's WMB-tier
-   design. Binning is done HERE in Python (not in JS like the mouse) because the
-   uniform baseline 1/N_states is donor-dependent.
+2. **Standard detection metric** — the within-cohort localizer is the same one
+   every cohort uses (`alz/cross_reference/specificity.py`): a detection gate
+   (`tcell_fraction_expressing >= 0.10`, normalization-free), detected-set
+   linear `tcell_concentration` + `tcell_concentration_tier`, and per-gene
+   `tcell_effective_n` (effective number of states). This replaces the prior
+   share localizer (mean_in_state / Σ means, binned over 1/N_states), which —
+   like every share — was inversely predictive of presence.
 
 CORRECTNESS TRAP: `aggexp_data.csv` is `AggregateExpression(slot="data")` — a SUM
 of log-normalized expression across cells, NOT a mean. Every value is divided by
 the matching `cell_counts.csv` n_cells to recover per-cell mean log-expression
-`m[state,day]`; otherwise abundant states look artificially "specific".
+`m[state,day]`; otherwise abundant states look artificially abundant. (The
+detection input `pct_expressing.csv` is already a fraction, not a sum — it is
+pooled across days cell-weighted, no per-state division needed.)
 
 Outputs (donor1) under outputs/reports/kinase_attribution_tcells/donor1/:
-  tcell_specificity.csv          (gene, state, tcell_specificity, tcell_mean_log2_expression)
+  tcell_specificity.csv          (gene, state, tcell_detected, tcell_fraction_expressing,
+                                  tcell_concentration, tcell_concentration_tier,
+                                  tcell_mean_log2_expression)
   tcell_concordance.csv          (gene, state, day, tcell_lfc)
   unified_attribution_tcells.csv full kinase-track × state × day grid — EVERY row ships
                                  (no gate). `tcell_concordant` is a shown label,
@@ -54,10 +61,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 from alz.shared import config  # noqa: E402
-
-# Binned-specificity tiers: multiples of the uniform baseline 1/N_states.
-# Mirrors kinase_explorer.js _WMB_TIER_VALUES = [10, 5, 2, 1].
-TIER_MULTIPLES = (10, 5, 2, 1)
+from alz.cross_reference import specificity  # noqa: E402
 
 # Bulk MEA contrast days that also have scRNA (MEA days {13,15,17,19,20} ∩
 # scRNA days {0,2,9,13,17,20}, minus the d2 baseline). d15/d19 have no scRNA →
@@ -121,33 +125,73 @@ def _per_cell_mean(donor: str) -> tuple[pd.DataFrame, list[str]]:
     return long[["gene", "state", "day", "m"]], states
 
 
-def _compute_specificity(mean_long: pd.DataFrame, states: list[str],
-                         n_states: int) -> pd.DataFrame:
-    """Song S2 specificity, pooled across all available scRNA days per state.
+def _per_state_detection(donor: str) -> pd.DataFrame:
+    """Pool pct_expressing across days into per-(gene, state) detection.
 
-    For each gene: mean_in_state = mean over that state's available days of
-    m[state,day]; tcell_specificity = mean_in_state / Σ_states mean_in_state.
-    Tier = first TIER_MULTIPLE t where specificity >= t/N_states, else 0.
+    `pct_expressing.csv` is the fraction of cells expressing per (state, day);
+    pooling over a state's days is CELL-WEIGHTED (Σ pct·n_cells / Σ n_cells =
+    fraction of all that state's cells, across days, that express), not a plain
+    mean of fractions. Returns (gene, state, tcell_fraction_expressing, n_cells).
     """
-    # Pool across days (the static-property analog of Song pooling all animals).
+    pct = pd.read_csv(os.path.join(_donor_dir(donor), "pct_expressing.csv"))
+    counts = pd.read_csv(os.path.join(_donor_dir(donor), "cell_counts.csv"))
+    counts["day"] = "d" + counts["day"].astype(int).astype(str)
+
+    gene_col = pct.columns[0]
+    value_cols = [c for c in pct.columns if c != gene_col]
+    parsed = [(c, *c.rsplit("__", 1)) for c in value_cols]
+    col_meta = pd.DataFrame(parsed, columns=["_col", "state", "day"])
+
+    long = pct.melt(id_vars=[gene_col], value_vars=value_cols,
+                    var_name="_col", value_name="frac")
+    long = (long.merge(col_meta, on="_col").drop(columns="_col")
+            .rename(columns={gene_col: "gene"})
+            .merge(counts[["state", "day", "n_cells"]], on=["state", "day"],
+                   how="left"))
+    missing = long[long["n_cells"].isna()][["state", "day"]].drop_duplicates()
+    if len(missing):
+        raise AssertionError(
+            f"pct_expressing (state,day) columns with no cell_counts entry: "
+            f"{missing.to_dict('records')}")
+    long["_n_expr"] = long["frac"] * long["n_cells"]
+    pooled = long.groupby(["gene", "state"], as_index=False).agg(
+        _n_expr=("_n_expr", "sum"), n_cells=("n_cells", "sum"))
+    pooled["tcell_fraction_expressing"] = (
+        pooled["_n_expr"] / pooled["n_cells"].clip(lower=1))
+    return pooled[["gene", "state", "tcell_fraction_expressing", "n_cells"]]
+
+
+def _compute_metric(donor: str, mean_long: pd.DataFrame
+                    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Standard detection metric per (gene, state), pooled across scRNA days.
+
+    Expression is pooled as the mean over a state's available days of the
+    per-cell mean m[state,day]; detection is pooled cell-weighted from
+    pct_expressing. Both feed `specificity.compute` (the one cross-cohort
+    definition). Returns (per_label, per_gene) renamed to the tcell_* schema.
+    """
     mean_in_state = (mean_long.groupby(["gene", "state"], as_index=False)["m"]
                      .mean().rename(columns={"m": "tcell_mean_log2_expression"}))
-    total = (mean_in_state.groupby("gene")["tcell_mean_log2_expression"]
-             .transform("sum"))
-    spec = mean_in_state["tcell_mean_log2_expression"] / total.replace(0, np.nan)
-    mean_in_state["tcell_specificity"] = spec
-    mean_in_state = mean_in_state[
-        np.isfinite(mean_in_state["tcell_specificity"])
-        & (mean_in_state["tcell_mean_log2_expression"] > 0)].copy()
+    det = _per_state_detection(donor)
+    df = mean_in_state.merge(det, on=["gene", "state"], how="left")
+    df["tcell_fraction_expressing"] = df["tcell_fraction_expressing"].fillna(0.0)
+    df["n_cells"] = df["n_cells"].fillna(0).astype(int)
 
-    uniform = 1.0 / n_states
-    s = mean_in_state["tcell_specificity"].to_numpy()
-    tier = np.zeros(len(s), dtype=int)
-    for t in TIER_MULTIPLES:  # descending; first satisfied wins
-        tier = np.where((tier == 0) & (s >= t * uniform), t, tier)
-    mean_in_state["tcell_tier"] = tier
-    return mean_in_state[["gene", "state", "tcell_specificity",
-                          "tcell_mean_log2_expression", "tcell_tier"]]
+    per_label, _, per_gene = specificity.compute(
+        df, gene_col="gene", label_col="state",
+        mean_log2_col="tcell_mean_log2_expression",
+        frac_col="tcell_fraction_expressing", ncells_col="n_cells",
+        group_col=None)
+    per_label = per_label.rename(columns={
+        "detected": "tcell_detected",
+        "concentration": "tcell_concentration",
+        "concentration_tier": "tcell_concentration_tier"})
+    per_gene = per_gene.rename(columns={
+        "n_detected_native": "tcell_n_detected",
+        "effective_n_native": "tcell_effective_n",
+        "top_celltype_native": "tcell_top_celltype",
+        "top_concentration_native": "tcell_top_concentration"})
+    return per_label, per_gene
 
 
 def _compute_concordance(mean_long: pd.DataFrame) -> pd.DataFrame:
@@ -209,20 +253,24 @@ def build(donor: str = "donor1") -> dict:
     mean_long, states = _per_cell_mean(donor)
     n_states = len(states)
     print(f"  states: {n_states}  ({', '.join(states)})")
-    print(f"  uniform baseline 1/N = {1.0 / n_states:.4f}; "
-          f"tiers {[f'{t}x={t / n_states:.4f}' for t in TIER_MULTIPLES]}")
+    print(f"  detection gate: fraction_cells_expressing >= "
+          f"{specificity.DETECTION_FRAC_MIN}")
 
-    spec = _compute_specificity(mean_long, states, n_states)
+    spec, gene_breadth = _compute_metric(donor, mean_long)
     conc = _compute_concordance(mean_long)
     mea = _load_mea(donor)
     k2g = _load_kinase_to_gene()
 
     out_dir = _out_dir(donor)
     os.makedirs(out_dir, exist_ok=True)
-    spec.drop(columns="tcell_tier").rename(columns={"state": "state"}).to_csv(
+    spec_cols = ["gene", "state", "tcell_detected", "tcell_fraction_expressing",
+                 "tcell_concentration", "tcell_concentration_tier",
+                 "tcell_mean_log2_expression"]
+    spec[spec_cols].to_csv(
         os.path.join(out_dir, "tcell_specificity.csv"), index=False)
     conc.to_csv(os.path.join(out_dir, "tcell_concordance.csv"), index=False)
-    print(f"  tcell_specificity.csv: {len(spec)} (gene × state) rows")
+    print(f"  tcell_specificity.csv: {len(spec)} (gene × state) rows, "
+          f"{int(spec['tcell_detected'].sum())} detected (frac>=0.10)")
     print(f"  tcell_concordance.csv: {len(conc)} (gene × state × day) rows")
 
     # --- cross-join: kinase × state × contrast-day -------------------------
@@ -240,11 +288,20 @@ def build(donor: str = "donor1") -> dict:
     # bulk anchor
     grid = grid.merge(mea.rename(columns={"day": "contrast"}),
                       on=["kinase", "residue_type", "contrast"], how="left")
-    # specificity (per gene × state, repeated across days)
+    # detection metric (per gene × state, repeated across contrast days)
     grid = grid.merge(
-        spec.rename(columns={"gene": "gene_symbol", "state": "cell_type"}),
+        spec[spec_cols].rename(columns={"gene": "gene_symbol",
+                                        "state": "cell_type"}),
         on=["gene_symbol", "cell_type"], how="left")
-    grid["tcell_tier"] = grid["tcell_tier"].fillna(0).astype(int)
+    grid = grid.merge(
+        gene_breadth[["gene", "tcell_effective_n", "tcell_top_celltype",
+                      "tcell_top_concentration"]].rename(
+            columns={"gene": "gene_symbol"}),
+        on="gene_symbol", how="left")
+    grid["tcell_detected"] = (
+        grid["tcell_detected"].fillna(False).infer_objects(copy=False).astype(bool))
+    grid["tcell_concentration_tier"] = (
+        grid["tcell_concentration_tier"].fillna(0).astype(int))
     # concordance lfc (per gene × state × day)
     grid = grid.merge(
         conc.rename(columns={"gene": "gene_symbol", "state": "cell_type",
@@ -271,8 +328,12 @@ def build(donor: str = "donor1") -> dict:
     grid["tcell_concordant"] = grid["tcell_concordance"] > 0
 
     cols = ["kinase", "residue_type", "gene_symbol", "contrast", "cell_type",
-            "NES", "FDR", "tcell_specificity", "tcell_tier", "tcell_lfc",
-            "tcell_concordance", "tcell_concordant", "tcell_consistency"]
+            "NES", "FDR",
+            "tcell_detected", "tcell_fraction_expressing", "tcell_concentration",
+            "tcell_concentration_tier", "tcell_effective_n", "tcell_top_celltype",
+            "tcell_top_concentration",
+            "tcell_lfc", "tcell_concordance", "tcell_concordant",
+            "tcell_consistency"]
     full = grid[cols].copy()
 
     expected = len(kinases) * n_states * len(CONTRAST_DAYS)
@@ -282,28 +343,33 @@ def build(donor: str = "donor1") -> dict:
             f"(n_kinase_tracks {len(kinases)} × n_states {n_states} × "
             f"n_contrast_days {len(CONTRAST_DAYS)}) — silent drop in merge")
 
-    # Ship the ENTIRE grid (no concordance/specificity gate). Sorted for
-    # readability only (tier desc, then concordance desc).
+    # Ship the ENTIRE grid (no detection/concordance gate — detection is a SHOWN
+    # axis, like the mouse). Sorted for readability only (concentration_tier
+    # desc, then concentration desc; undetected rows have NaN concentration and
+    # fall last).
     shipped = full.sort_values(
-        ["tcell_tier", "tcell_concordance"], ascending=False)
+        ["tcell_concentration_tier", "tcell_concentration"], ascending=False)
     shipped.to_csv(os.path.join(out_dir, "unified_attribution_tcells.csv"),
                    index=False)
 
-    tier_dist = (shipped["tcell_tier"].value_counts().sort_index(ascending=False)
-                 .to_dict())
+    tier_dist = (shipped["tcell_concentration_tier"]
+                 .value_counts().sort_index(ascending=False).to_dict())
     n_conc = int(shipped["tcell_concordant"].sum())
+    n_detected = int(shipped["tcell_detected"].sum())
     print(f"  unified_attribution_tcells.csv: {len(shipped)} rows "
           f"(guard {expected} ✓; all rows shipped, no gate)")
     print(f"  concordance is a LABEL: {n_conc} concordant / "
           f"{len(shipped) - n_conc} discordant")
-    print(f"  tier distribution (tier: rows): {tier_dist}")
-    n_no_gene = full["tcell_specificity"].isna().groupby(
-        [full["kinase"], full["residue_type"]]).all().sum()
+    print(f"  detected (frac>=0.10): {n_detected}/{len(shipped)} rows; "
+          f"concentration_tier dist {tier_dist}")
+    n_no_gene = grid["tcell_mean_log2_expression"].isna().groupby(
+        [grid["kinase"], grid["residue_type"]]).all().sum()
     print(f"  kinase tracks with no transcript in scRNA: {n_no_gene}")
 
     return {"n_states": n_states, "n_kinases": len(kinases),
             "n_full": len(full), "n_shipped": len(shipped),
-            "n_concordant": n_conc, "tier_dist": tier_dist}
+            "n_concordant": n_conc, "n_detected": n_detected,
+            "tier_dist": tier_dist}
 
 
 if __name__ == "__main__":
