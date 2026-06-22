@@ -274,3 +274,36 @@ which is unchanged).
 - `alz/supplementary/{aggregation_robustness,threshold_sensitivity}.py` test the *old*
   share-confidence model (read `specificity_score` / `wmb_specificity`); they will break/degrade
   and need porting to detection or retiring.
+
+## Phase 3 — 5xFAD within-cohort detection metric — DONE 2026-06-22
+
+Closes the consistency pass: 5xFAD was the last cohort on legacy share/τ. Plan:
+[`fivexfad_detection_metric_migration.md`](./fivexfad_detection_metric_migration.md).
+
+- **Producer** `alz/ingest/build_5xfad_snrna_attribution.R` is now a pseudobulk +
+  detection exporter: per-(gene, tissue, cell type) `fraction_cells_expressing`
+  (from the counts layer) + `mean_log2_expression` (`mean_ln / log(2)`, the exact
+  log2 bridge from Seurat's natural-log `data` layer) → `fivexfad_snrna_expression.csv`,
+  completed to the full 46-cluster × 2-tissue grid. The attribution CSV now carries
+  only the direction signal (`fivexfad_lfc/pval/fdr` + cell support).
+  `specificity_tau` / `location_tier` / share / fold deleted.
+- **New step** `alz/cohorts/fivexfad/snrna_specificity.py` runs `specificity.compute`
+  per tissue → `fivexfad_expression_specificity.csv` (`fivexfad_detected`,
+  `fivexfad_concentration`, `fivexfad_concentration_of_total`,
+  `fivexfad_concentration_tier`, `fivexfad_effective_n`, `fivexfad_top_celltype`).
+  pixi task `5xfad-snrna-specificity` chained into `5xfad-viewer`.
+- **Consumer** `alz/viewer/cohorts/fivexfad.py` joins the specificity CSV; confidence
+  gates on `fivexfad_detected` + `fivexfad_concentration_tier` (≥2 → high). WMB
+  cross-check moved off `wmb_specificity` shares to `wmb_detected` /
+  `wmb_concentration` / `wmb_concentration_tier` from `celltype_evidence_table.csv`.
+- **Viewer** `kinase_fivexfad.js` + `kinase_crosstable.js` render the shared
+  `_detGateCell` / `_concTierCell` widgets; share fold-pills and the `_F5_UNIFORM`
+  baseline removed. `test_fivexfad.py` updated to assert the detection schema.
+- **Kept (still in use by the Song/WMB path, NOT orphaned):**
+  `config.wmb_specificity_uniform()` / `meta.wmb_uniform` / `_wmbTier` /
+  `_wmbTierBadge` — they drive the Song WMB share→tier conversion in
+  `kinase_explorer.js`. `wmb_expression.py --proteome` still emits a proteome-wide
+  share, a distinct surface unrelated to kinase attribution.
+
+**One metric, every cohort** is now literally true for the within-cohort and
+reference expression surfaces (Song, WMB, NSCLC, T-cell, 5xFAD).

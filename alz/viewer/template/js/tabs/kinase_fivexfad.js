@@ -4,7 +4,6 @@
 // workbench grammar as the Song and Mukesh kinase tabs.
 
 const _F5_AGES = [3, 6, 9, 12];
-const _F5_UNIFORM = 1 / 46;
 const _F5_AUDIT_TABS = [
   {id: "measurement-trace", label: "Measurement Trace"},
   {id: "mea-input", label: "MEA Preparation"},
@@ -268,22 +267,26 @@ function _f5AttrSummaryRows(group) {
 function _f5CmpAttr(a, b) {
   const cr = _f5ConfRank(b.confidence_tier) - _f5ConfRank(a.confidence_tier);
   if (cr) return cr;
-  const sr = (_f5Num(b.fivexfad_specificity) || -1) - (_f5Num(a.fivexfad_specificity) || -1);
+  const sr = (_f5Num(b.fivexfad_concentration) || -1) - (_f5Num(a.fivexfad_concentration) || -1);
   if (sr) return sr;
-  return (_f5Num(b.wmb_specificity) || -1) - (_f5Num(a.wmb_specificity) || -1);
+  return (_f5Num(b.wmb_concentration) || -1) - (_f5Num(a.wmb_concentration) || -1);
 }
 
 const F5_ATTR_COLS = [
   {key: "cell_type", label: "Cell type", type: "str", group: "id",
    title: "5xFAD new_clusters cell type on the shared 46-cluster mouse spine."},
   {key: "confidence_tier", label: "Conf", type: "conf", group: "attr",
-   title: "Tissue-specific 5xFAD snRNA location tier. Hover the chip for the evidence basis."},
-  {key: "fivexfad_specificity", label: "5xFAD snRNA", type: "num", group: "attr",
-   title: "Tissue-specific 5xFAD snRNA location evidence for new_clusters, shown as expression share."},
+   title: "5xFAD snRNA location confidence tier. Hover the chip for the evidence basis."},
+  {key: "fivexfad_detected", label: "Detected", type: "num", group: "attr",
+   title: "Whether the kinase transcript is detected in this 5xFAD new_clusters cell type (fraction of cells ≥ 10%)."},
+  {key: "fivexfad_concentration_tier", label: "Conc", type: "num", group: "attr",
+   title: "5xFAD snRNA detected-set concentration as a multiple of the even 1/N share of total expression across cell types."},
   {key: "fivexfad_lfc", label: "snRNA LFC", type: "num", group: "attr",
    title: "5xFAD snRNA TG-vs-WT log-expression difference for the selected tissue and age."},
-  {key: "wmb_tier", label: "WMB tier", type: "num", group: "attr",
-   title: "WMB cross-check tier as a multiple of uniform expression across WMB classes."},
+  {key: "wmb_detected", label: "Detected", type: "num", group: "attr",
+   title: "Whether the kinase transcript is detected in the matching WMB class (fraction of cells ≥ 10%)."},
+  {key: "wmb_concentration_tier", label: "Conc", type: "num", group: "attr",
+   title: "WMB cross-check detected-set concentration as a multiple of the even share across WMB classes."},
   {key: "sea_ad_lfc", label: "SEA-AD LFC", type: "num", group: "attr",
    title: "Human SEA-AD AD-vs-control log2 fold change mapped to this cell type where available."},
   {key: "decomp_nes", label: "Decomp NES", type: "num", group: "decomp",
@@ -327,7 +330,7 @@ function _f5SortAttrRows(rows, body) {
       if (primary !== 0) return primary;
       return (_f5NativeTier(b) - _f5NativeTier(a)) ||
              (_f5WmbTier(b) - _f5WmbTier(a)) ||
-             ((_f5Num(b.fivexfad_specificity) || -Infinity) - (_f5Num(a.fivexfad_specificity) || -Infinity));
+             ((_f5Num(b.fivexfad_concentration) || -Infinity) - (_f5Num(a.fivexfad_concentration) || -Infinity));
     });
   }
   return {sortCol, sortAsc};
@@ -344,36 +347,19 @@ function _f5ScopedAttrRows(group) {
   return rows.sort(_f5CmpAttr);
 }
 
+// Precomputed by the standard attribution metric (specificity.compute) — the tier
+// is non-monotonic in the 0–1 share across kinases, so it must NOT be recomputed
+// from a share/fold; read the int directly.
 function _f5NativeTier(row) {
-  const fold = _f5Num(row && row.fivexfad_fold_over_uniform);
-  if (fold == null) return 0;
-  for (const t of [10, 5, 2, 1]) if (fold >= t) return t;
-  return 0;
+  return Number(row && row.fivexfad_concentration_tier) || 0;
 }
 
 function _f5NativeTierBadge(row) {
-  const tier = _f5NativeTier(row);
-  const share = _f5Num(row && row.fivexfad_specificity);
-  const fold = _f5Num(row && row.fivexfad_fold_over_uniform);
-  const topCluster = (row && row.fivexfad_top_cluster) || "";
-  const tau = _f5Num(row && row.fivexfad_tau);
-  const where = topCluster ? `concentrates in ${topCluster}` : "";
-  const tauTxt = tau == null ? "" : ` · tau ${tau.toFixed(2)}`;
-  const shareTxt = share == null ? "" : `share ${share.toFixed(3)}`;
-  const foldTxt = fold == null ? "" : `${fold.toFixed(1)}x even-split`;
-  const title = `Tissue-specific 5xFAD snRNA location evidence${tier ? ` >= ${tier}x even-split` : " below 1x even-split"}`
-    + (foldTxt ? ` · ${foldTxt}` : "")
-    + (shareTxt ? ` · ${shareTxt}` : "")
-    + (where ? ` · ${where}` : "")
-    + tauTxt;
-  if (!tier) return `<span class="muted" title="${_f5Esc(title)}">—</span>`;
-  const cls = tier >= 10 ? "vhi" : (tier >= 5 ? "hi" : (tier >= 2 ? "mid" : "lo"));
-  return `<span class="badge ${cls}" title="${_f5Esc(title)}">${tier}x</span>`;
+  return _concTierCell(row && row.fivexfad_concentration_tier);
 }
 
 function _f5WmbTier(row) {
-  const spec = _f5Num(row && row.wmb_specificity);
-  return typeof _wmbTier === "function" ? _wmbTier(spec) : 0;
+  return Number(row && row.wmb_concentration_tier) || 0;
 }
 
 function _f5BestAttr(group) {
@@ -398,9 +384,13 @@ function _f5CellTypesCell(group) {
   const displayRows = Array.from(byCell.values()).sort(_f5CmpAttr);
   if (!displayRows.length) return '<span class="muted">—</span>';
   const tip = displayRows.map(r => {
-    const spec = _f5Num(r.fivexfad_specificity);
-    const specTxt = spec == null ? "5xFAD n/a" : `5xFAD ${(spec / _F5_UNIFORM).toFixed(1)}x`;
-    return `${r.cell_type} (${specTxt}, ${String(r.confidence_tier || "").replace("_", " ")})`;
+    const tier = _f5NativeTier(r);
+    const frac = _f5Num(r.fivexfad_fraction_cells_expressing);
+    const detTxt = r.fivexfad_detected
+      ? `detected${frac == null ? "" : ` ${(frac * 100).toFixed(0)}%`}`
+      : "not detected";
+    const concTxt = tier ? `, ≥${tier}× conc` : "";
+    return `${r.cell_type} (5xFAD ${detTxt}${concTxt}, ${String(r.confidence_tier || "").replace("_", " ")})`;
   }).join("\n");
   const pills = displayRows.slice(0, 3).map(r => {
     const cls = r.confidence_tier === "very_high" ? "vhi"
@@ -633,8 +623,8 @@ function _f5FilteredRows() {
       va = _f5DisagreeCountScoped(a, ages);
       vb = _f5DisagreeCountScoped(b, ages);
     } else if (col === "fivexfad_spec") {
-      va = _f5BestAttr(a) ? _f5Num(_f5BestAttr(a).fivexfad_specificity) : null;
-      vb = _f5BestAttr(b) ? _f5Num(_f5BestAttr(b).fivexfad_specificity) : null;
+      va = _f5BestAttr(a) ? _f5Num(_f5BestAttr(a).fivexfad_concentration) : null;
+      vb = _f5BestAttr(b) ? _f5Num(_f5BestAttr(b).fivexfad_concentration) : null;
     } else if (col === "wmb_max_tier") {
       va = Math.max(0, ..._f5ScopedAttrRows(a).map(_f5WmbTier));
       vb = Math.max(0, ..._f5ScopedAttrRows(b).map(_f5WmbTier));
@@ -852,7 +842,7 @@ function renderFiveXFADKinase() {
   // Stamp export-friendly computed values onto each row.
   for (const r of rows) {
     const bestAttr = _f5BestAttr(r);
-    r._exportF5Snrna = bestAttr ? _f5Num(bestAttr.fivexfad_specificity) : null;
+    r._exportF5Snrna = bestAttr ? _f5Num(bestAttr.fivexfad_concentration) : null;
     r._exportWmbTier = Math.max(0, ..._f5ScopedAttrRows(r).map(_f5WmbTier));
     r._exportConf = bestAttr ? (bestAttr.confidence_tier || null) : null;
   }
@@ -1634,7 +1624,6 @@ function _f5RenderAttribution(body, group) {
       ? ((dNes > 0) === (nes > 0))
       : false;
     return Object.assign({}, r, {
-      wmb_tier: _f5WmbTier(r),
       decomp_nes: dNes,
       decomp_fdr: dFdr,
       decomp_agrees_bulk: agrees ? "yes" : (sig ? "opposes" : ""),
@@ -1678,13 +1667,13 @@ function _f5RenderAttribution(body, group) {
   const tbody = visibleRows.map((r, i) => {
     const conf = r.confidence_tier || "none";
     const confChip = `<span class="${_attrConfidenceClass(conf)}" title="${_f5Esc(r.confidence_basis || conf)}">${_f5Esc(conf.replace("_", " "))}</span>`;
-    const nativeCell = _f5NativeTierBadge(r);
+    const f5DetCell = _detGateCell(r.fivexfad_detected, r.fivexfad_fraction_cells_expressing, "this 5xFAD cell type");
+    const f5ConcCell = _concTierCell(r.fivexfad_concentration_tier);
     const lfcCell = _f5Num(r.fivexfad_lfc) == null
       ? `<td class="attr-num attr-empty">—</td>`
       : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(r.fivexfad_lfc)}">${num(r.fivexfad_lfc, 3)}</td>`;
-    const wmbCell = typeof _wmbTierBadge === "function"
-      ? _wmbTierBadge(_f5WmbTier(r))
-      : '<span class="muted">—</span>';
+    const wmbDetCell = _detGateCell(r.wmb_detected, r.wmb_fraction_cells_expressing, "this WMB class");
+    const wmbConcCell = _concTierCell(r.wmb_concentration_tier);
     const seaCell = _f5Num(r.sea_ad_lfc) == null
       ? `<td class="attr-num attr-empty">—</td>`
       : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(r.sea_ad_lfc)}">${num(r.sea_ad_lfc, 3)}</td>`;
@@ -1705,9 +1694,11 @@ function _f5RenderAttribution(body, group) {
     return `<tr data-cell-type="${_f5Esc(r.cell_type || "")}" class="attr-verdict-row${i === 0 ? " attr-verdict-selected" : ""}">` +
       `<td class="attr-celltype">${_f5Esc(r.cell_type || "")}</td>` +
       `<td>${confChip}</td>` +
-      `<td class="attr-num">${nativeCell}</td>` +
+      `<td class="attr-num">${f5DetCell}</td>` +
+      `<td class="attr-num">${f5ConcCell}</td>` +
       lfcCell +
-      `<td class="attr-num">${wmbCell}</td>` +
+      `<td class="attr-num">${wmbDetCell}</td>` +
+      `<td class="attr-num">${wmbConcCell}</td>` +
       seaCell +
       nesCell +
       fdrCell +
@@ -1773,10 +1764,6 @@ function _f5RenderAttributionDrawer(hostId, group, row) {
     return;
   }
   const gene = group.gene_symbol || row.gene_symbol || group.kinase || "";
-  const nativeSpec = _f5Num(row.fivexfad_specificity);
-  const nativeTxt = nativeSpec == null ? "—" : `${(nativeSpec / _F5_UNIFORM).toFixed(1)}x even-split`;
-  const wmb = _f5Num(row.wmb_specificity);
-  const wmbTxt = wmb == null ? "—" : wmb.toFixed(3);
   const sea = _f5Num(row.sea_ad_lfc);
   const f5Lfc = _f5Num(row.fivexfad_lfc);
   const decomp = _f5CelltypeMeaFor(group, row.cell_type);
@@ -1793,12 +1780,14 @@ function _f5RenderAttributionDrawer(hostId, group, row) {
         `<p class="muted attr-caption">Native matched 5xFAD location evidence is computed within the selected tissue using <code>new_clusters</code> labels on the shared 46-cluster mouse spine.</p>` +
         `<div class="kh-audit-tablewrap"><table class="data-table"><tbody>` +
           `<tr><th>Confidence</th><td><span class="${_attrConfidenceClass(row.confidence_tier || "none")}" title="${_f5Esc(row.confidence_basis || "")}">${_f5Esc(String(row.confidence_tier || "none").replace("_", " "))}</span></td></tr>` +
-          `<tr><th>5xFAD snRNA</th><td>${_f5NativeTierBadge(row)} <span class="muted">${_f5Esc(nativeTxt)}</span></td></tr>` +
+          `<tr><th>5xFAD detected</th><td>${_detGateCell(row.fivexfad_detected, row.fivexfad_fraction_cells_expressing, "this 5xFAD cell type")}</td></tr>` +
+          `<tr><th>5xFAD concentration</th><td>${_concTierCell(row.fivexfad_concentration_tier)}</td></tr>` +
           `<tr><th>snRNA LFC</th><td>${f5Lfc == null ? '<span class="muted">—</span>' : `<span class="attr-num-lfc" style="background:${_attrLfcColor(f5Lfc)}">${f5Lfc.toFixed(3)}</span>`}</td></tr>` +
           `<tr><th>snRNA samples</th><td>${_f5Esc(snrnaSamples)}</td></tr>` +
           `<tr><th>snRNA cells</th><td>${_f5Esc(snrnaCells)}</td></tr>` +
           `<tr><th>Cluster source</th><td>${_f5Esc(row.cluster_source || "new_clusters")}</td></tr>` +
-          `<tr><th>WMB</th><td>${typeof _wmbTierBadge === "function" ? _wmbTierBadge(_f5WmbTier(row)) : ""} <span class="muted">${_f5Esc(wmbTxt)}</span></td></tr>` +
+          `<tr><th>WMB detected</th><td>${_detGateCell(row.wmb_detected, row.wmb_fraction_cells_expressing, "this WMB class")}</td></tr>` +
+          `<tr><th>WMB concentration</th><td>${_concTierCell(row.wmb_concentration_tier)}</td></tr>` +
         `</tbody></table></div></section>` +
       `<section class="attr-section"><h5>Cross-dataset disease evidence</h5>` +
         `<p class="muted attr-caption">SEA-AD evidence is a reference disease-direction layer. 5xFAD activity remains bulk tissue-level activity.</p>` +

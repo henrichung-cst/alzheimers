@@ -191,21 +191,16 @@ class FiveXFADTests(unittest.TestCase):
                     "residue_type": ["ST", "ST"],
                 }
             ).to_parquet(celltype_dir / "fivexfad_celltype_mea.parquet", index=False)
+            # Direction CSV: LFC + cell support only (specificity is contrast-invariant
+            # and lives in fivexfad_expression_specificity.csv, joined by the consumer).
             pd.DataFrame(
                 {
                     "kinase": ["AKT1", "AKT1"],
                     "gene_symbol": ["AKT1", "AKT1"],
+                    "matched_gene": ["AKT1_MAPPED", "AKT1_MAPPED"],
                     "tissue": ["cortex", "cortex"],
                     "age_months": [3, 3],
                     "cell_type": ["Astrocytes", "Microglia"],
-                    "confidence_tier": ["high", "low"],
-                    "confidence_basis": ["native 5xFAD evidence", "below display threshold"],
-                    "wmb_specificity": [0.2, 0.05],
-                    "wmb_fold_over_uniform": [4.0, 1.0],
-                    "fivexfad_specificity": [0.3, 0.02],
-                    "fivexfad_fold_over_uniform": [13.8, 0.9],
-                    "fivexfad_tau": [0.7, 0.1],
-                    "fivexfad_top_cluster": ["Astrocytes", "Microglia"],
                     "fivexfad_lfc": [0.4, -0.1],
                     "fivexfad_pval": [0.01, 0.6],
                     "fivexfad_fdr": [0.02, 0.8],
@@ -214,13 +209,26 @@ class FiveXFADTests(unittest.TestCase):
                     "n_cells_wt": [100, 50],
                     "n_cells_tg": [110, 55],
                     "cluster_source": ["new_clusters", "new_clusters"],
-                    "sea_ad_lfc": [0.15, None],
-                    "seaad_location_score": [None, None],
-                    "hbca_location_score": [None, None],
-                    "human_location_score": [None, None],
-                    "wmb_tier": ["moderate", "none"],
                 }
             ).to_csv(out / "fivexfad_snrna_attribution.csv", index=False)
+            # Standard detection-metric specificity (from specificity.compute).
+            pd.DataFrame(
+                {
+                    "kinase": ["AKT1", "AKT1"],
+                    "gene_symbol": ["AKT1", "AKT1"],
+                    "matched_gene": ["AKT1_MAPPED", "AKT1_MAPPED"],
+                    "tissue": ["cortex", "cortex"],
+                    "cell_type": ["Astrocytes", "Microglia"],
+                    "fivexfad_detected": [True, False],
+                    "fivexfad_fraction_cells_expressing": [0.8, 0.02],
+                    "fivexfad_concentration": [0.9, 0.0],
+                    "fivexfad_concentration_of_total": [0.75, 0.01],
+                    "fivexfad_concentration_tier": [10, 0],
+                    "fivexfad_effective_n": [1.2, 1.2],
+                    "fivexfad_top_celltype": ["Astrocytes", "Astrocytes"],
+                    "fivexfad_n_celltypes_detected": [1, 1],
+                }
+            ).to_csv(out / "fivexfad_expression_specificity.csv", index=False)
             pd.DataFrame(
                 {
                     "kinase": ["AKT1"],
@@ -446,7 +454,7 @@ class FiveXFADTests(unittest.TestCase):
         self.assertNotIn('label: "Basis"', attr_renderer)
         self.assertNotIn('label: "Song tier"', attr_renderer)
         self.assertNotIn("song_specificity", attr_renderer)
-        self.assertIn('label: "5xFAD snRNA"', tab_js)
+        self.assertIn('key: "fivexfad_concentration_tier", label: "Conc"', tab_js)
 
         self.assertIn('label: "Decomp NES"', tab_js)
         self.assertIn('label: "Decomp FDR"', tab_js)
@@ -485,29 +493,51 @@ class FiveXFADTests(unittest.TestCase):
         self.assertNotIn("QC status", tab_js)
         self.assertNotIn("<th>QC</th>", tab_js)
 
-    def test_fivexfad_snrna_specificity_is_tissue_scoped(self) -> None:
+    def test_fivexfad_snrna_uses_standard_detection_metric(self) -> None:
+        """5xFAD within-cohort specificity is the repo-wide detection metric.
+
+        The producer exports detection + mean log2(x+1); the Python step runs
+        specificity.compute; the viewer and tab render detection/concentration —
+        the legacy share/τ localizer is gone everywhere (anti-shim).
+        """
         root = Path(__file__).resolve().parents[2]
         script = (root / "alz/ingest/build_5xfad_snrna_attribution.R").read_text()
+        spec_step = (root / "alz/cohorts/fivexfad/snrna_specificity.py").read_text()
         viewer_py = (root / "alz/viewer/cohorts/fivexfad.py").read_text()
         tab_js = (root / "alz/viewer/template/js/tabs/kinase_fivexfad.js").read_text()
 
-        self.assertIn("for (tissue in c(\"cortex\", \"hippocampus\"))", script)
-        self.assertIn("tissue_mask <- group_meta$tissue == tissue", script)
-        self.assertIn("tissue_meta <- group_meta[tissue_mask, , drop = FALSE]", script)
-        self.assertIn("tapply(tissue_linear, tissue_meta$cell_type", script)
-        self.assertNotIn("tapply(linear, group_meta$cell_type", script)
-        self.assertIn("tissue-specific new_clusters location tier", script)
-        self.assertIn("min_cells_per_contrast <- 3L", script)
-        self.assertIn("(n_cells_wt + n_cells_tg) < min_cells_per_contrast", script)
-        self.assertIn("Fewer than \", min_cells_per_contrast", script)
-        self.assertIn("tissue-specific location tier not applied", script)
+        # Producer: count-based detection + log2 expression per (tissue, cell type),
+        # written to the expression export. No share/τ math remains.
+        self.assertIn("det_group <- paste(md$tissue, md$new_clusters", script)
+        self.assertIn("fraction_cells_expressing", script)
+        self.assertIn("mean_log2_expression = as.numeric(mean_ln_tc) / log(2)", script)
+        self.assertIn("fivexfad_snrna_expression.csv", script)
+        self.assertNotIn("specificity_tau", script)
+        self.assertNotIn("location_tier", script)
+        self.assertNotIn("fivexfad_fold_over_uniform", script)
+
+        # Python step: the shared standard metric, not a 5xFAD reimplementation.
+        self.assertIn("from alz.cross_reference import specificity", spec_step)
+        self.assertIn("specificity.compute(", spec_step)
+        self.assertIn("fivexfad_expression_specificity.csv", spec_step)
+
+        # Consumer: joins the specificity CSV and gates on detection + concentration.
+        self.assertIn("fivexfad_expression_specificity.csv", viewer_py)
+        self.assertIn("fivexfad_concentration_tier", viewer_py)
+        self.assertIn("fivexfad_detected", viewer_py)
+        self.assertIn("wmb_concentration_tier", viewer_py)
+        self.assertNotIn("fivexfad_fold_over_uniform", viewer_py)
+        self.assertNotIn("fivexfad_specificity", viewer_py)
         self.assertIn("_F5_MIN_CELLS_PER_CONTRAST = 3", viewer_py)
-        self.assertIn("_f5_celltype_contrast_cell_counts", viewer_py)
-        self.assertIn(">= _F5_MIN_CELLS_PER_CONTRAST", viewer_py)
-        self.assertIn("_assign_fivexfad_song_aligned_confidence", viewer_py)
         self.assertIn("config.SONG_LFC_MIN", viewer_py)
-        self.assertIn("5xFAD snRNA direction + tissue-specific high location", viewer_py)
-        self.assertIn("Tissue-specific 5xFAD snRNA location evidence", tab_js)
+        self.assertIn("≥2× concentration over even share", viewer_py)
+
+        # Tab: shared detection-cell / concentration-tier widgets, no share pills.
+        self.assertIn("_detGateCell(", tab_js)
+        self.assertIn("_concTierCell(", tab_js)
+        self.assertIn("fivexfad_concentration_tier", tab_js)
+        self.assertNotIn("fivexfad_specificity", tab_js)
+        self.assertNotIn("fivexfad_fold_over_uniform", tab_js)
 
 
 if __name__ == "__main__":

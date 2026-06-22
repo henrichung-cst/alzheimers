@@ -19,10 +19,11 @@ ingest-5xfad-snrna-rds = "rclone-ingest sync 5xfad-snrna --group scrna"
 5xfad-build-omics-join-manifest = "python alz/ingest/build_5xfad_omics_join_manifest.py"
 5xfad-mea = "python -m alz.cohorts.fivexfad.ingest --mea"
 5xfad-snrna-attribution = "Rscript alz/ingest/build_5xfad_snrna_attribution.R"
+5xfad-snrna-specificity = { cmd = "python -m alz.cohorts.fivexfad.snrna_specificity", depends-on = ["5xfad-snrna-attribution"] }
 5xfad-snrna-decomp-pseudobulk = "Rscript alz/ingest/build_5xfad_snrna_decomposition_pseudobulk.R"
 5xfad-celltype-mea = { cmd = "python -m alz.cohorts.fivexfad.celltype_mea", depends-on = ["5xfad-snrna-decomp-pseudobulk"] }
 5xfad-celltype-mea-smoke = { cmd = "python -m alz.cohorts.fivexfad.celltype_mea --tissue cortex --track py --max-celltypes 1", depends-on = ["5xfad-snrna-decomp-pseudobulk"] }
-5xfad-viewer = { cmd = "python alz/build_unified_viewer.py", depends-on = ["5xfad-mea", "5xfad-snrna-attribution", "5xfad-celltype-mea"] }
+5xfad-viewer = { cmd = "python alz/build_unified_viewer.py", depends-on = ["5xfad-mea", "5xfad-snrna-attribution", "5xfad-snrna-specificity", "5xfad-celltype-mea"] }
 5xfad-viewer-package = "python alz/build_unified_viewer.py --supporting-5xfad-only"
 5xfad-inspect-snrna-rds = "Rscript alz/ingest/inspect_5xfad_snrna_rds.R"
 5xfad-audit-snrna-transgenes = "Rscript alz/ingest/audit_5xfad_snrna_transgenes.R"

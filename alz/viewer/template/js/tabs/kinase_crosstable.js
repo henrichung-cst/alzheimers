@@ -26,7 +26,7 @@ let _KX_HUMAN_PERDONOR = null;    // Map<kid, Map<donor, {nes, fdr}>>
 let _KX_HUMAN_SPEC_BY_NAME = null;
 let _KX_WMB_BY_KIN_CLUSTER = null; // Map<`kid|cluster`, wmb_concentration_tier (int)>
 let _KX_WMB_MAX_BY_KID = null;     // Map<kid, {tier, cluster}> — peak WMB concentration tier (for "Any")
-let _KX_SONG_BY_KID = null;        // Map<kid, {effectiveN, topCelltype, topConcentration}> — Song detection evidence (per kinase)
+let _KX_SONG_BY_KID = null;        // Map<kid, {topCelltype, topConcentration}> — Song detection evidence (per kinase)
 let _KX_SEAAD_MAX_BY_NAME = null;  // Map<name, {score, cluster}> — peak SEA-AD specificity (for "Any")
 let _KX_DECOMP_BY_KIN_CTX = null;
 let _KX_F5_BY_KEY = null;          // Map<`kinase|residue|tissue`, {rows: Map<age,row>}>
@@ -175,10 +175,17 @@ function _kxBuildIndexes() {
   _KX_WMB_BY_KIN_CLUSTER = new Map();
   _KX_WMB_MAX_BY_KID = new Map();
   _KX_SONG_BY_KID = new Map();
+  const _kxSongMaxTier = new Map();
   const A = PAYLOAD.attribution_index;
   if (A && A.kinase_id) {
     for (let i = 0; i < A.kinase_id.length; i++) {
       const kid = A.kinase_id[i], ct = A.cell_type[i];
+      // Song: peak precomputed concentration_tier across this kid's rows = the
+      // tier at its dominant cluster (tier is monotonic in share).
+      if (A.song_concentration_tier) {
+        const st = Number(A.song_concentration_tier[i]) || 0;
+        if (st > (_kxSongMaxTier.get(kid) || 0)) _kxSongMaxTier.set(kid, st);
+      }
       // WMB: store precomputed concentration_tier (int: 0/1/2/5/10) per (kinase, cluster).
       const wt = A.wmb_concentration_tier ? Number(A.wmb_concentration_tier[i]) : 0;
       if (wt > 0) {
@@ -191,19 +198,19 @@ function _kxBuildIndexes() {
         const mx = _KX_WMB_MAX_BY_KID.get(kid);
         if (!mx || wt > mx.tier) _KX_WMB_MAX_BY_KID.set(kid, {tier: wt, cluster: ct});
       }
-      // Song detection/breadth evidence is per-gene (effectiveN + topCelltype +
-      // topConcentration), constant across the rows for a kid — stamp once.
-      if (!_KX_SONG_BY_KID.has(kid) && A.song_effective_n) {
-        const effN = A.song_effective_n[i];
-        if (effN != null && isFinite(effN)) {
+      // Song detection evidence is per-gene (topCelltype + topConcentration),
+      // constant across the rows for a kid — stamp once.
+      if (!_KX_SONG_BY_KID.has(kid) && A.song_top_concentration) {
+        const topConc = isFinite(A.song_top_concentration[i]) ? A.song_top_concentration[i] : null;
+        if (topConc != null) {
           _KX_SONG_BY_KID.set(kid, {
-            effectiveN: effN,
             topCelltype: (A.song_top_celltype && A.song_top_celltype[i]) || "",
-            topConcentration: (A.song_top_concentration && isFinite(A.song_top_concentration[i])) ? A.song_top_concentration[i] : null,
+            topConcentration: topConc,
           });
         }
       }
     }
+    for (const [kid, obj] of _KX_SONG_BY_KID) obj.topTier = _kxSongMaxTier.get(kid) || 0;
   }
 
   _KX_HUMAN_BY_NAME = new Map();
@@ -370,16 +377,16 @@ function _kxBuildF5AttrIndex() {
         tissue,
         celltypes: [],
         best_confidence_tier: "none",
-        top_fivexfad_fold_over_uniform: null,
+        top_fivexfad_concentration_tier: 0,
       };
       _KX_F5_ATTR_BY_KEY.set(key, rec);
     }
     if (_kxConfRank(row.best_confidence_tier) > _kxConfRank(rec.best_confidence_tier)) {
       rec.best_confidence_tier = row.best_confidence_tier || "none";
     }
-    const topFold = _kxF5Num(row.top_fivexfad_fold_over_uniform);
-    if (topFold != null && (rec.top_fivexfad_fold_over_uniform == null || topFold > rec.top_fivexfad_fold_over_uniform)) {
-      rec.top_fivexfad_fold_over_uniform = topFold;
+    const topTier = _kxF5Num(row.top_fivexfad_concentration_tier);
+    if (topTier != null && topTier > (rec.top_fivexfad_concentration_tier || 0)) {
+      rec.top_fivexfad_concentration_tier = topTier;
     }
     for (const ct of (row.celltypes || [])) {
       if (!ct.cell_type) continue;
@@ -422,30 +429,23 @@ function _kxLog2TierBadge(score, atCluster) {
   if (!rank) return `<td class="muted" title="log2 ${score.toFixed(3)}${_escapeHtml(at)}">&lt;1×</td>`;
   return `<td style="text-align:center;padding:2px 4px;" title="log2 ${score.toFixed(3)}${_escapeHtml(at)}">${_khSpecTierBadge(rank)}</td>`;
 }
-// Primary mouse specificity: Song location specificity (per kinase), as fold over
-// Primary mouse specificity: Song detection breadth (per kinase). Shows concentration
-// tier at the top cell type (×2/5/10 over detected-set uniform) and effective # cell
-// types (breadth; lower = more specific). Replaces the former share-fold. `pinned` is
-// the active cluster pivot (or "").
+// Primary mouse specificity: Song detection (per kinase). Shows the concentration
+// tier at the top cell type (×2/5/10 the even 1/N share of total expression across
+// all cell types — comparable across kinases). `pinned` is the active cluster pivot.
 function _kxSongTierBadge(song, pinned) {
   if (!song || song.topConcentration == null) return `<td class="muted">–</td>`;
   const top = song.topCelltype || "?";
-  const conc = song.topConcentration;
-  const effN = song.effectiveN;
-  let tier = 0;
-  if (conc >= 10) tier = 10;
-  else if (conc >= 5) tier = 5;
-  else if (conc >= 2) tier = 2;
-  else if (conc >= 1) tier = 1;
-  const effTxt = (effN != null && isFinite(effN)) ? ` ${effN.toFixed(1)}ct` : "";
+  // Read the precomputed fold-over-uniform tier; do NOT recompute from a 0–1
+  // share, which can never reach the 2/5/10 thresholds.
+  const tier = song.topTier || 0;
   let mark = "";
   if (pinned) mark = (pinned === top)
     ? ` <span title="this pinned cell type IS where it concentrates">★</span>`
     : ` <span class="muted" title="concentrates in ${_escapeHtml(top)}, not the pinned ${_escapeHtml(pinned)}">·</span>`;
-  const tip = `Song: concentrates in ${top} · concentration ${conc != null ? conc.toFixed(2) + '×' : 'n/a'} (≥${tier}×) · effective # cell types: ${effN != null ? effN.toFixed(1) : 'n/a'} (lower = more specific)`;
-  if (!tier) return `<td class="muted" title="${_escapeHtml(tip)}">&lt;1×${_escapeHtml(effTxt)}</td>`;
+  const tip = `Song: concentrates in ${top} · ≥${tier}× the even 1/N share of total expression across all cell types`;
+  if (!tier) return `<td class="muted" title="${_escapeHtml(tip)}">&lt;1×</td>`;
   const cls = tier >= 10 ? "badge vhi" : tier >= 5 ? "badge hi" : tier >= 2 ? "badge mid" : "badge lo";
-  return `<td style="text-align:center;padding:2px 4px;"><span class="${cls}" title="${_escapeHtml(tip)}">≥${tier}×</span>${_escapeHtml(effTxt)}${mark}</td>`;
+  return `<td style="text-align:center;padding:2px 4px;"><span class="${cls}" title="${_escapeHtml(tip)}">≥${tier}×</span>${mark}</td>`;
 }
 // WMB tier badge: accepts a precomputed tier int (0/1/2/5/10) directly.
 function _kxWmbTierBadge(tier, atCluster) {
@@ -499,8 +499,8 @@ function _kxRenderSpecAligned(hostEl, row) {
       const o = at(c);
       const sConc = EV.song_concentration ? EV.song_concentration[k] : null;
       o.song = (sConc != null && isFinite(sConc)) ? sConc : null;
+      o.songTier = EV.song_concentration_tier ? Number(EV.song_concentration_tier[k]) || 0 : 0;
       o.songDetected = EV.song_detected ? Boolean(EV.song_detected[k]) : false;
-      o.songEffectiveN = EV.song_effective_n ? EV.song_effective_n[k] : null;
       o.wmbTier = EV.wmb_concentration_tier ? Number(EV.wmb_concentration_tier[k]) || 0 : 0;
     }
   }
@@ -516,15 +516,8 @@ function _kxRenderSpecAligned(hostEl, row) {
     return;
   }
   for (const o of rows) {
-    let songTier = 0;
-    if (o.song != null && isFinite(o.song)) {
-      if (o.song >= 10) songTier = 10;
-      else if (o.song >= 5) songTier = 5;
-      else if (o.song >= 2) songTier = 2;
-      else if (o.song >= 1) songTier = 1;
-    }
     o._t = {
-      song: songTier,
+      song: o.songTier || 0,
       wmb: o.wmbTier || 0,
       seaad: o.seaad != null ? _kxFoldTier(Math.pow(2, o.seaad)) : 0,
       hbca: o.hbca != null ? _kxFoldTier(Math.pow(2, o.hbca)) : 0,
@@ -549,9 +542,9 @@ function _kxRenderSpecAligned(hostEl, row) {
   const body = rows.map(o => {
     const t = o._t;
     const songTip = o.song != null
-      ? `Song: concentration ${o.song.toFixed(2)}× (≥${t.song}×)${(o.songEffectiveN != null && isFinite(o.songEffectiveN)) ? ` · effective # cell types: ${o.songEffectiveN.toFixed(1)}` : ""}${o.songDetected ? '' : ' (not detected in this cell type)'}`
+      ? `Song: ≥${t.song}× the even 1/N share of total expression across all cell types${o.songDetected ? '' : ' (not detected in this cell type)'}`
       : "Not measured in mouse (Song)";
-    const wmbTip = o.wmbTier > 0 ? `WMB concentration ≥${o.wmbTier}× over detected-class uniform` : "Not detected in this WMB class (< 10% cells)";
+    const wmbTip = o.wmbTier > 0 ? `WMB: ≥${o.wmbTier}× the even 1/N share of total expression across all WMB classes` : "Not detected in this WMB class (< 10% cells)";
     const seaTip = o.seaad != null
       ? `SEA-AD expr ${Math.pow(2, o.seaad).toFixed(1)}× brain mean (log2 ${o.seaad.toFixed(2)}). Location evidence only; SEA-AD LFC is shown in the NES tab.`
       : "No SEA-AD cross-check at this cluster";
@@ -563,8 +556,8 @@ function _kxRenderSpecAligned(hostEl, row) {
 
   const head = `<thead><tr>` +
     `<th title="Levy-T5 cluster — the shared axis: WMB classes, SEA-AD supertypes, and HBCA superclusters are all rolled up to this nomenclature before ranking.">Cell type</th>` +
-    `<th title="Song detection evidence — the primary mouse call. Whether this kinase is concentrated in this cell type: concentration tier (×2/5/10 over detected-set uniform). Effective # cell types (breadth) in tooltip.">Song</th>` +
-    `<th title="WMB (Allen Whole Mouse Brain) atlas cross-check — concentration tier (×2/5/10 over detected-class uniform). Detection gate: ≥10% cells expressing.">WMB</th>` +
+    `<th title="Song detection evidence — the primary mouse call. Whether this kinase is concentrated in this cell type: concentration tier (×2/5/10 the even 1/N share of total expression across all cell types).">Song</th>` +
+    `<th title="WMB (Allen Whole Mouse Brain) atlas cross-check — concentration tier (×2/5/10 the even 1/N share of total expression across all WMB classes). Detection gate: ≥10% cells expressing.">WMB</th>` +
     `<th title="SEA-AD MTG human expression reference — 2^log2(cell-type mean / brain-wide mean). Location evidence only; SEA-AD LFC is shown in the NES tab.">SEA-AD expr</th>` +
     `<th title="Allen HBCA human atlas cross-check — 2^log2(cell-type mean / brain-wide mean).">HBCA</th>` +
     `</tr></thead>`;
@@ -648,15 +641,14 @@ function _kxF5AttrRows(row, tissue) {
   return s && Array.isArray(s.celltypes) ? s.celltypes : [];
 }
 
+// 5xFAD attribution now carries precomputed standard-metric concentration_tier
+// ints (0/1/2/5/10) — read directly, do not recompute from a share/fold.
 function _kxF5WmbTier(attrRow) {
-  const spec = _kxF5Num(attrRow && attrRow.wmb_specificity);
-  if (typeof _wmbTier === "function") return _wmbTier(spec);
-  return _kxFoldTier(spec);
+  return Number(attrRow && attrRow.wmb_concentration_tier) || 0;
 }
 
 function _kxF5NativeTier(attrRow) {
-  const fold = _kxF5Num(attrRow && attrRow.fivexfad_fold_over_uniform);
-  return _kxFoldTier(fold);
+  return Number(attrRow && attrRow.fivexfad_concentration_tier) || 0;
 }
 
 function _kxF5ScopedAttrRows(row, tissue, state) {
@@ -1119,21 +1111,21 @@ function _kxRenderF5AttrMini(row, tissue) {
   const rows = _kxF5ScopedAttrRows(row, tissue, _kxState())
     .slice()
     .sort((a, b) => (_kxConfRank(b.confidence_tier) - _kxConfRank(a.confidence_tier)) ||
-      ((_kxF5Num(b.fivexfad_fold_over_uniform) || -1) - (_kxF5Num(a.fivexfad_fold_over_uniform) || -1)))
+      (_kxF5NativeTier(b) - _kxF5NativeTier(a)))
     .slice(0, 4);
   if (!rows.length) return `<div class="muted">No matching 5xFAD attribution rows.</div>`;
   const body = rows.map(r => {
-    const fold = _kxF5Num(r.fivexfad_fold_over_uniform);
     const lfc = _kxF5Num(r.fivexfad_lfc);
     return `<tr>` +
       `<td>${_escapeHtml(r.cell_type || "")}${r.age_months ? ` <span class="muted">${_escapeHtml(String(r.age_months))}mo</span>` : ""}</td>` +
       `<td>${_escapeHtml((r.confidence_tier || "none").replace("_", " "))}</td>` +
-      `<td class="kx-nes-num">${fold == null ? "–" : fold.toFixed(1) + "x"}</td>` +
+      `<td class="kx-nes-num">${_detGateCell(r.fivexfad_detected, r.fivexfad_fraction_cells_expressing, "this 5xFAD cell type")}</td>` +
+      `<td class="kx-nes-num">${_concTierCell(r.fivexfad_concentration_tier)}</td>` +
       `<td class="kx-nes-num">${lfc == null ? "–" : `${lfc >= 0 ? "+" : ""}${lfc.toFixed(2)}`}</td>` +
       `</tr>`;
   }).join("");
   return `<table class="data-table kx-f5-attr-table"><thead><tr>` +
-    `<th>Cell type</th><th>Conf</th><th>snRNA</th><th>LFC</th>` +
+    `<th>Cell type</th><th>Conf</th><th>Detected</th><th>Conc</th><th>LFC</th>` +
     `</tr></thead><tbody>${body}</tbody></table>`;
 }
 
@@ -1181,8 +1173,8 @@ function _kxBuildHeader(s) {
   cells.push(TH("f5_med", "5xFAD med", "5xFAD median NES over cortex and hippocampus age units feeding the direction call (FDR-significant, or all when 'All samples' is on). – = none. Sort by magnitude.", "kx-nes-num"));
   cells.push(TH("agree_score", "Crossplay", "Categorical comparison under the active scope: Song, Mukesh AD, and/or 5xFAD aggregate cortex+hippocampus. CTRL donors are visual reference only.", "kx-agree-col"));
   const specScope = s.cluster ? `at ${s.cluster}` : "— peak across all clusters (hover for the cluster)";
-  cells.push(TH("m_spec", "Song", `Song detection evidence — concentration tier (×2/5/10 over detected-cell-type uniform) at the kinase's top cell type. Effective # cell types (breadth; lower = more specific) shown in the cell. ★ = the pinned cluster IS that cell type.`, "kx-spec"));
-  cells.push(TH("wmb", "WMB", `WMB atlas cross-check: concentration tier (×2/5/10 over detected-class uniform) ${specScope}. Detection gate: ≥10% of cells expressing.`, "kx-spec"));
+  cells.push(TH("m_spec", "Song", `Song detection evidence — concentration tier (×2/5/10 the even 1/N share of total expression across all cell types) at the kinase's top cell type. ★ = the pinned cluster IS that cell type.`, "kx-spec"));
+  cells.push(TH("wmb", "WMB", `WMB atlas cross-check: concentration tier (×2/5/10 the even 1/N share of total expression across all WMB classes) ${specScope}. Detection gate: ≥10% of cells expressing.`, "kx-spec"));
   cells.push(TH("h_spec", "SEA-AD expr", `Human SEA-AD MTG expression location tier ${specScope}. This is expression enrichment, not SEA-AD LFC.`, "kx-spec"));
   return `<thead><tr>${cells.join("")}</tr></thead>`;
 }
@@ -1249,12 +1241,15 @@ function _kxSortRows(rows, s) {
   rows.sort((a, b) => {
     let av, bv;
     if (s.sortKey === "m_spec") {
-      // Song top concentration (higher = more specific) — per kinase, pivot-independent.
+      // Song concentration tier (the displayed ≥2×/5×/10×), share as tiebreaker
+      // — per kinase, pivot-independent. Tier is not monotonic in share across
+      // kinases (n_detected differs), so order by the tier that's shown.
       const sa = _KX_SONG_BY_KID.get(a.kid), sb = _KX_SONG_BY_KID.get(b.kid);
-      const ta = sa ? sa.topConcentration : null, tb = sb ? sb.topConcentration : null;
-      const ax = (ta == null || !isFinite(ta)) ? -Infinity : ta;
-      const bx = (tb == null || !isFinite(tb)) ? -Infinity : tb;
-      return s.sortDir * (bx - ax);
+      const ta = sa ? (sa.topTier || 0) : 0, tb = sb ? (sb.topTier || 0) : 0;
+      if (ta !== tb) return s.sortDir * (tb - ta);
+      const ca = sa && isFinite(sa.topConcentration) ? sa.topConcentration : -Infinity;
+      const cb = sb && isFinite(sb.topConcentration) ? sb.topConcentration : -Infinity;
+      return s.sortDir * (cb - ca);
     } else if (s.sortKey === "wmb") {
       if (cluster) {
         av = _KX_WMB_BY_KIN_CLUSTER.get(`${a.kid}|${cluster}`) || null;
@@ -1310,14 +1305,10 @@ function _kxFilteredRows(s) {
     }
     if (mMin > 0 || hMin > 0) {
       const sp = _kxResolveSpec(r, s.cluster);
-      // mMin is a concentration-tier threshold (2/5/10×) on the Song top concentration.
+      // mMin is a concentration-tier threshold (2/5/10×) on the kinase's peak
+      // Song tier — read the precomputed tier, never recompute from the share.
       if (mMin > 0) {
-        const songConc = sp.song ? sp.song.topConcentration : null;
-        let tier = 0;
-        if (songConc != null && isFinite(songConc)) {
-          if (songConc >= 10) tier = 10; else if (songConc >= 5) tier = 5; else if (songConc >= 2) tier = 2; else if (songConc >= 1) tier = 1;
-        }
-        if (tier < mMin) return false;
+        if (!sp.song || (sp.song.topTier || 0) < mMin) return false;
       }
       if (hMin > 0 && (sp.seaad == null || sp.seaad < hLog2Min)) return false;
     }
@@ -1350,7 +1341,7 @@ function _kxRenderTable() {
   // Stamp resolved spec onto each row for export, then store the visible set.
   for (const r of shown) {
     const sp = _kxResolveSpec(r, s.cluster);
-    r._exportSongFold = (sp.song && sp.song.topConcentration != null) ? sp.song.topConcentration : null;
+    r._exportSongTier = (sp.song && sp.song.topTier != null) ? sp.song.topTier : null;
     r._exportWmb = sp.wmb;
     r._exportSeaad = sp.seaad;
   }
@@ -1616,8 +1607,8 @@ function wireKinaseCrosstable() {
 
 function exportCrosstableCsv() {
   const stamp = new Date().toISOString().slice(0, 10);
-  const headers = ["Kinase","Gene","Residue","Family","Mouse_med_NES","Human_med_NES","5xFAD_med_NES","Crossplay","Song_fold","WMB_tier","SEAAD_log2"];
-  const keys    = ["name","gene","residue","family","_mNes","_hNes","_f5Nes","_agreeCategory","_exportSongFold","_exportWmb","_exportSeaad"];
+  const headers = ["Kinase","Gene","Residue","Family","Mouse_med_NES","Human_med_NES","5xFAD_med_NES","Crossplay","Song_tier","WMB_tier","SEAAD_log2"];
+  const keys    = ["name","gene","residue","family","_mNes","_hNes","_f5Nes","_agreeCategory","_exportSongTier","_exportWmb","_exportSeaad"];
   csvDownload(csvSerialize(headers, keys, _kxVisible), `crosstable_${stamp}.csv`);
 }
 

@@ -244,8 +244,19 @@ def _f5_site_label_value(row: Any) -> str:
 
 
 def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None) -> list[dict]:
-    """Native 5xFAD snRNA attribution rows keyed by kinase, tissue, and age."""
+    """Native 5xFAD snRNA attribution rows keyed by kinase, tissue, and age.
+
+    The within-cohort localizer is the repo-wide standard detection metric
+    (``alz/cross_reference/specificity.py``): the direction CSV
+    (``fivexfad_snrna_attribution.csv`` — LFC + cell support per tissue/age/cell
+    type) is joined with the contrast-invariant specificity CSV
+    (``fivexfad_expression_specificity.csv`` — detection + concentration per
+    tissue/cell type), broadcasting specificity across ages. The WMB cross-check
+    likewise uses WMB detection (``wmb_detected`` / ``wmb_concentration``), not the
+    retired ``wmb_specificity`` share.
+    """
     path = os.path.join(FIVEXFAD_KINASE_DIR, "fivexfad_snrna_attribution.csv")
+    spec_path = os.path.join(FIVEXFAD_KINASE_DIR, "fivexfad_expression_specificity.csv")
     if not os.path.exists(path):
         return []
     kinases = {str(r.get("kinase", "")) for r in rows if str(r.get("kinase", ""))}
@@ -257,9 +268,22 @@ def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None)
         ev = ev[~ev["cell_type"].astype(str).str.match(r"^cluster-\d+$", na=False)].copy()
     if ev.empty:
         return []
+    if os.path.exists(spec_path):
+        spec = pd.read_csv(spec_path)
+        spec = spec[spec["kinase"].astype(str).isin(kinases)].copy()
+        spec_cols = [
+            "kinase", "tissue", "cell_type", "fivexfad_detected",
+            "fivexfad_fraction_cells_expressing", "fivexfad_concentration",
+            "fivexfad_concentration_of_total", "fivexfad_concentration_tier",
+            "fivexfad_effective_n", "fivexfad_top_celltype",
+        ]
+        spec = spec[[c for c in spec_cols if c in spec.columns]].drop_duplicates(
+            ["kinase", "tissue", "cell_type"], keep="first")
+        ev = ev.merge(spec, on=["kinase", "tissue", "cell_type"], how="left")
     if data is not None and not data.celltype_evidence.empty:
         ref_cols = [
-            "kinase", "cell_type", "wmb_specificity", "wmb_fold_over_uniform",
+            "kinase", "cell_type", "wmb_detected", "wmb_concentration",
+            "wmb_concentration_tier", "wmb_fraction_cells_expressing",
             "sea_ad_lfc", "seaad_location_score", "hbca_location_score",
             "human_location_score", "wmb_tier",
         ]
@@ -276,12 +300,17 @@ def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None)
         ("confidence_basis", ""),
         ("tissue", ""),
         ("age_months", 0),
-        ("wmb_specificity", float("nan")),
-        ("wmb_fold_over_uniform", float("nan")),
-        ("fivexfad_specificity", float("nan")),
-        ("fivexfad_fold_over_uniform", float("nan")),
-        ("fivexfad_tau", float("nan")),
-        ("fivexfad_top_cluster", ""),
+        ("wmb_detected", False),
+        ("wmb_concentration", float("nan")),
+        ("wmb_concentration_tier", 0),
+        ("wmb_fraction_cells_expressing", float("nan")),
+        ("fivexfad_detected", False),
+        ("fivexfad_fraction_cells_expressing", float("nan")),
+        ("fivexfad_concentration", float("nan")),
+        ("fivexfad_concentration_of_total", float("nan")),
+        ("fivexfad_concentration_tier", 0),
+        ("fivexfad_effective_n", float("nan")),
+        ("fivexfad_top_celltype", ""),
         ("fivexfad_lfc", float("nan")),
         ("fivexfad_pval", float("nan")),
         ("fivexfad_fdr", float("nan")),
@@ -299,21 +328,23 @@ def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None)
         if col not in ev.columns:
             ev[col] = default
     ev["_rank"] = ev["confidence_tier"].map(_F5_CONF_RANK).fillna(0)
-    ev["_f5"] = pd.to_numeric(ev["fivexfad_specificity"], errors="coerce").fillna(-1.0)
-    ev["_wmb"] = pd.to_numeric(ev["wmb_specificity"], errors="coerce").fillna(-1.0)
+    ev["_f5"] = pd.to_numeric(ev["fivexfad_concentration"], errors="coerce").fillna(-1.0)
+    ev["_wmb"] = pd.to_numeric(ev["wmb_concentration"], errors="coerce").fillna(-1.0)
     ev = ev.sort_values(["kinase", "tissue", "age_months", "cell_type", "_rank", "_f5", "_wmb"], ascending=[True, True, True, True, False, False, False])
     ev = ev.drop_duplicates(["kinase", "tissue", "age_months", "cell_type"], keep="first")
     ev = ev.sort_values(["kinase", "tissue", "age_months", "_rank", "_f5", "_wmb"], ascending=[True, True, True, False, False, False])
     cols = [
         "kinase", "gene_symbol", "tissue", "age_months", "cell_type",
-        "confidence_tier", "confidence_basis", "wmb_specificity",
-        "wmb_fold_over_uniform", "fivexfad_specificity",
-        "fivexfad_fold_over_uniform", "fivexfad_tau",
-        "fivexfad_top_cluster", "fivexfad_lfc", "fivexfad_pval",
-        "fivexfad_fdr", "n_snrna_samples_wt", "n_snrna_samples_tg",
-        "n_cells_wt", "n_cells_tg", "cluster_source", "sea_ad_lfc",
-        "seaad_location_score", "hbca_location_score", "human_location_score",
-        "wmb_tier",
+        "confidence_tier", "confidence_basis", "wmb_detected",
+        "wmb_concentration", "wmb_concentration_tier",
+        "wmb_fraction_cells_expressing", "fivexfad_detected",
+        "fivexfad_fraction_cells_expressing", "fivexfad_concentration",
+        "fivexfad_concentration_of_total", "fivexfad_concentration_tier",
+        "fivexfad_effective_n", "fivexfad_top_celltype", "fivexfad_lfc",
+        "fivexfad_pval", "fivexfad_fdr", "n_snrna_samples_wt",
+        "n_snrna_samples_tg", "n_cells_wt", "n_cells_tg", "cluster_source",
+        "sea_ad_lfc", "seaad_location_score", "hbca_location_score",
+        "human_location_score", "wmb_tier",
     ]
     return _f5_records(ev, cols)
 
@@ -345,12 +376,16 @@ def _build_fivexfad_attribution_summary_index(attribution_rows: list[dict]) -> l
             celltypes.append({
                 "cell_type": r.get("cell_type"),
                 "confidence_tier": r.get("confidence_tier"),
-                "fivexfad_specificity": r.get("fivexfad_specificity"),
-                "fivexfad_fold_over_uniform": r.get("fivexfad_fold_over_uniform"),
-                "fivexfad_tau": r.get("fivexfad_tau"),
-                "fivexfad_top_cluster": r.get("fivexfad_top_cluster"),
+                "fivexfad_detected": r.get("fivexfad_detected"),
+                "fivexfad_fraction_cells_expressing": r.get("fivexfad_fraction_cells_expressing"),
+                "fivexfad_concentration": r.get("fivexfad_concentration"),
+                "fivexfad_concentration_tier": r.get("fivexfad_concentration_tier"),
+                "fivexfad_effective_n": r.get("fivexfad_effective_n"),
+                "fivexfad_top_celltype": r.get("fivexfad_top_celltype"),
                 "fivexfad_lfc": r.get("fivexfad_lfc"),
-                "wmb_specificity": r.get("wmb_specificity"),
+                "wmb_detected": r.get("wmb_detected"),
+                "wmb_concentration": r.get("wmb_concentration"),
+                "wmb_concentration_tier": r.get("wmb_concentration_tier"),
                 "sea_ad_lfc": r.get("sea_ad_lfc"),
             })
         out.append({
@@ -361,12 +396,13 @@ def _build_fivexfad_attribution_summary_index(attribution_rows: list[dict]) -> l
             "high_moderate_celltype_count": len({r.get("cell_type") for r in display_rows if r.get("cell_type")}),
             "best_confidence_tier": best.get("confidence_tier", "none"),
             "top_cell_type": best_display.get("cell_type"),
-            "top_fivexfad_specificity": best_display.get("fivexfad_specificity"),
-            "top_fivexfad_fold_over_uniform": best_display.get("fivexfad_fold_over_uniform"),
-            "top_fivexfad_tau": best_display.get("fivexfad_tau"),
-            "top_fivexfad_cluster": best_display.get("fivexfad_top_cluster"),
+            "top_fivexfad_detected": best_display.get("fivexfad_detected"),
+            "top_fivexfad_fraction_cells_expressing": best_display.get("fivexfad_fraction_cells_expressing"),
+            "top_fivexfad_concentration": best_display.get("fivexfad_concentration"),
+            "top_fivexfad_concentration_tier": best_display.get("fivexfad_concentration_tier"),
+            "top_fivexfad_effective_n": best_display.get("fivexfad_effective_n"),
             "top_fivexfad_lfc": best_display.get("fivexfad_lfc"),
-            "top_wmb_specificity": best_display.get("wmb_specificity"),
+            "top_wmb_concentration": best_display.get("wmb_concentration"),
             "top_sea_ad_lfc": best_display.get("sea_ad_lfc"),
             "celltypes": celltypes,
         })
@@ -413,17 +449,24 @@ def _assign_fivexfad_song_aligned_confidence(
             str(rec.get("tissue", "")),
             int(age) if age is not None else -1,
         )
-        fold = _f5_float_or_none(rec.get("fivexfad_fold_over_uniform"))
+        detected = bool(rec.get("fivexfad_detected"))
+        tier = rec.get("fivexfad_concentration_tier")
+        tier = int(tier) if tier is not None and not pd.isna(tier) else 0
         lfc = _f5_float_or_none(rec.get("fivexfad_lfc"))
+        n_cells = (_f5_float_or_none(rec.get("n_cells_wt")) or 0) + (
+            _f5_float_or_none(rec.get("n_cells_tg")) or 0)
         bulk_sig_rows = bulk_by_key.get(key, [])
-        sparse_basis = "Fewer than " in str(rec.get("confidence_basis", ""))
 
         rec["decomp_agrees_bulk"] = False
-        if sparse_basis:
+        if n_cells < _F5_MIN_CELLS_PER_CONTRAST:
             rec["confidence_tier"] = "none"
-        elif fold is None:
+            rec["confidence_basis"] = (
+                f"Fewer than {_F5_MIN_CELLS_PER_CONTRAST} 5xFAD snRNA cells for this "
+                "tissue, age, and new_clusters label; confidence tier not applied"
+            )
+        elif not detected:
             rec["confidence_tier"] = "none"
-            rec["confidence_basis"] = "No usable 5xFAD snRNA location evidence; confidence tier not applied"
+            rec["confidence_basis"] = "Kinase not detected in this 5xFAD snRNA cell type (fraction < 0.10)"
         elif not bulk_sig_rows:
             rec["confidence_tier"] = "none"
             rec["confidence_basis"] = "5xFAD bulk MEA is not significant; Song-aligned confidence tier not applied"
@@ -439,12 +482,12 @@ def _assign_fivexfad_song_aligned_confidence(
             if not direction_support:
                 rec["confidence_tier"] = "none"
                 rec["confidence_basis"] = "5xFAD snRNA LFC direction does not match significant bulk MEA"
-            elif fold >= 2.0:
+            elif tier >= 2:
                 rec["confidence_tier"] = "high"
-                rec["confidence_basis"] = "5xFAD snRNA direction + tissue-specific high location"
+                rec["confidence_basis"] = "5xFAD snRNA direction + detected, ≥2× concentration over even share"
             else:
                 rec["confidence_tier"] = "moderate"
-                rec["confidence_basis"] = "5xFAD snRNA direction with sub-high tissue-specific location"
+                rec["confidence_basis"] = "5xFAD snRNA direction + detected, sub-2× concentration"
         out.append(rec)
     return out
 
@@ -562,12 +605,12 @@ def _f5_attr_record_cmp(a: dict, b: dict) -> int:
     cr = _F5_CONF_RANK.get(str(b.get("confidence_tier", "none")), 0) - _F5_CONF_RANK.get(str(a.get("confidence_tier", "none")), 0)
     if cr:
         return cr
-    af5 = _f5_sort_num(a.get("fivexfad_specificity"))
-    bf5 = _f5_sort_num(b.get("fivexfad_specificity"))
+    af5 = _f5_sort_num(a.get("fivexfad_concentration"))
+    bf5 = _f5_sort_num(b.get("fivexfad_concentration"))
     if af5 != bf5:
         return -1 if bf5 < af5 else 1
-    awmb = _f5_sort_num(a.get("wmb_specificity"))
-    bwmb = _f5_sort_num(b.get("wmb_specificity"))
+    awmb = _f5_sort_num(a.get("wmb_concentration"))
+    bwmb = _f5_sort_num(b.get("wmb_concentration"))
     if awmb != bwmb:
         return -1 if bwmb < awmb else 1
     acell = str(a.get("cell_type", "")).lower()

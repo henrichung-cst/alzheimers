@@ -216,7 +216,7 @@ if (btn) btn.addEventListener("click", exportCrosstableCsv);
 | Residue | `residue_type` |
 | n_sig | `sigCount` |
 | peak_NES | `peakAbsNes` |
-| 5xFAD_snrna | from `_f5BestAttr(r).fivexfad_specificity` or null |
+| 5xFAD_snrna | from `_f5BestAttr(r).fivexfad_concentration` or null |
 | WMB_tier | from `_f5BestAttr(r)` WMB tier |
 | Conf | from `_f5BestAttr(r).confidence_tier` or null |
 
