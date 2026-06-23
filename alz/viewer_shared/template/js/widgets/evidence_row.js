@@ -116,7 +116,18 @@ const OmicsTraceStore = (() => {
   // universal baseline. The shard schema is also different: mouse stores
   // sex/timepoint/genotype separately and filters males-only here; the T-cell
   // transcript_trace shard stores a single `group` column equal to the day.
+  // Cohort is resolved from the ACTIVE CONTEXT, not PAYLOAD.meta.cohort: the
+  // unified viewer hosts the 5xFAD tissues as contexts (cohort "fivexfad")
+  // under a song_ad-cohort payload, so the payload-global cohort is the wrong
+  // axis for the Evidence panel. Falls back to PAYLOAD.meta.cohort.
   function _cohort() {
+    try {
+      if (typeof ViewerPayload !== "undefined" && ViewerPayload.activeContext) {
+        const cid = ViewerPayload.activeContext();
+        const ctx = (ViewerPayload.contexts() || []).find(c => c.id === cid);
+        if (ctx && ctx.cohort) return ctx.cohort;
+      }
+    } catch (e) { /* fall through to payload cohort */ }
     return (typeof PAYLOAD !== "undefined" && PAYLOAD.meta && PAYLOAD.meta.cohort) || "mouse";
   }
   const _GENO_DECODE = { App: "AppP", Tau: "Ttau", ApTt: "ApTt" };
@@ -131,6 +142,15 @@ const OmicsTraceStore = (() => {
         { arm: baseline, group: baseline },
       ];
     }
+    // 5xFAD contrasts are `TG_<age>` (TG vs WT at the same timepoint); the
+    // shard group key is `<genotype>_<timepoint>` with no sex dimension.
+    if (_cohort() === "fivexfad") {
+      const [geno, age] = parts;
+      return [
+        { arm: geno, group: `${geno}_${age}`, timepoint: age, genotype: geno },
+        { arm: "WT", group: `WT_${age}`,      timepoint: age, genotype: "WT" },
+      ];
+    }
     const [geno, age] = parts;
     const genoCode = _GENO_DECODE[geno];
     if (!genoCode) return null;
@@ -142,12 +162,14 @@ const OmicsTraceStore = (() => {
 
   // Mouse: derive synthetic `ma_<tp>_<geno>` males-only group key from a raw
   // shard row (analysis_mode == males_only; female rows are dropped by
-  // returning null). T-cell omics_trace shards aren't shipped in this cohort
+  // returning null). 5xFAD: `<genotype>_<timepoint>` (per-sample, no sex
+  // filter). T-cell omics_trace shards aren't shipped in this cohort
   // (bulk-only, never per-cluster) but if they ever are, the row's `group`
   // column is authoritative.
   function rowGroupKey(r) {
     if (!r) return null;
     if (_cohort() === "tcell") return r.group != null ? String(r.group) : null;
+    if (_cohort() === "fivexfad") return `${String(r.genotype)}_${String(r.timepoint)}`;
     if (String(r.sex) !== "M") return null;
     return `ma_${String(r.timepoint)}_${String(r.genotype)}`;
   }
@@ -185,7 +207,7 @@ const OmicsTraceStore = (() => {
   }
 
   return { isAvailable, hasCluster, loadCluster, contrastToArms, rowGroupKey,
-           valuesForGene, siteRowsForGene, _sanitize };
+           valuesForGene, siteRowsForGene, _sanitize, _cohort };
 })();
 window.OmicsTraceStore = OmicsTraceStore;
 
@@ -244,11 +266,23 @@ const EvidencePanel = (() => {
     phospho_ps:  "deconvoluted pS/pT abundance, gene-mean",
     phospho_py:  "deconvoluted pY abundance, gene-mean",
   };
+  const _FIVEXFAD_LAYER_UNITS = {
+    transcript:  "log-norm pseudobulk mean",
+    protein:     "deconvoluted abundance",
+    phospho_ps:  "deconvoluted abundance, gene-mean",
+    phospho_py:  "deconvoluted abundance, gene-mean",
+  };
   function _layerUnit(layer) {
-    return (_panelCohort() === "tcell" ? _TCELL_LAYER_UNITS : _LAYER_UNITS)[layer] || "";
+    const c = _panelCohort();
+    const table = c === "tcell" ? _TCELL_LAYER_UNITS
+                : c === "fivexfad" ? _FIVEXFAD_LAYER_UNITS
+                : _LAYER_UNITS;
+    return table[layer] || "";
   }
+  // Context-aware (see OmicsTraceStore._cohort) — the 5xFAD tissues are
+  // contexts under a song_ad payload, so PAYLOAD.meta.cohort can't distinguish.
   function _panelCohort() {
-    return (typeof PAYLOAD !== "undefined" && PAYLOAD.meta && PAYLOAD.meta.cohort) || "";
+    return OmicsTraceStore._cohort();
   }
 
   // Map layer → stored LFC column suffix in the receiver-cache row.
@@ -684,13 +718,17 @@ const EvidencePanel = (() => {
     ];
 
     const arms = OmicsTraceStore.contrastToArms(contrast);
-    const isTcell = (PAYLOAD && PAYLOAD.meta && PAYLOAD.meta.cohort) === "tcell";
+    const cohort = _panelCohort();
+    const isTcell = cohort === "tcell";
     const tp   = contrast.split("_")[1] || "";
     const armsLabel = arms
       ? (isTcell
           ? `${arms[0].arm} vs ${arms[1].arm} (baseline)`
           : `${arms[0].arm} vs ${arms[1].arm} @ ${tp}`)
       : contrast;
+    const nLabel = isTcell ? `pseudobulk · n=1 vs n=1`
+      : cohort === "fivexfad" ? `deconvoluted · per-sample (TG vs WT)`
+      : `males-only · n=3 vs n=3`;
 
     const safeRk = rk.replace(/[^a-zA-Z0-9]/g, "_");
     const gridId = `ev-grid-${safeRk}`;
@@ -702,7 +740,7 @@ const EvidencePanel = (() => {
       + `<span class="ev-meta-sep">·</span>sender ${_esc(sender || "—")}`
       + `<span class="ev-meta-sep">·</span>receiver ${_esc(receiver || "—")}`
       + `<span class="ev-meta-sep">·</span>`
-      + (isTcell ? `pseudobulk · n=1 vs n=1` : `males-only · n=3 vs n=3`)
+      + nLabel
       + `</div>`;
 
     // Skeleton: matrix with loading cells.

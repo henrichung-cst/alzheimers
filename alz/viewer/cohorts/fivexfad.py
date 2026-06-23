@@ -21,6 +21,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from alz.bulk_mea.confidence import DECOMP_FDR_AGREEMENT
+from alz.bulk_mea.exclusivity_tier import (
+    BROAD_EFF_MAX as _F5_BROAD_EFF_MAX,
+    exclusivity_tier as _f5_exclusivity_tier,
+)
+from alz.bulk_mea.confidence import HUMAN_STRONG_LOG2_SPECIFICITY as _F5_HUMAN_STRONG
 from alz.shared import config
 from alz.viewer.paths import (
     EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_CORTEX_DIR,
@@ -275,7 +280,7 @@ def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None)
             "kinase", "tissue", "cell_type", "fivexfad_detected",
             "fivexfad_fraction_cells_expressing", "fivexfad_concentration",
             "fivexfad_concentration_of_total", "fivexfad_concentration_tier",
-            "fivexfad_effective_n", "fivexfad_top_celltype",
+            "fivexfad_effective_n", "fivexfad_unit_effective_n", "fivexfad_top_celltype",
         ]
         spec = spec[[c for c in spec_cols if c in spec.columns]].drop_duplicates(
             ["kinase", "tissue", "cell_type"], keep="first")
@@ -285,12 +290,12 @@ def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None)
             "kinase", "cell_type", "wmb_detected", "wmb_concentration",
             "wmb_concentration_tier", "wmb_fraction_cells_expressing",
             "sea_ad_lfc", "seaad_location_score", "hbca_location_score",
-            "human_location_score", "wmb_tier",
+            "human_location_score",
         ]
         ref = data.celltype_evidence.copy()
         for col in ref_cols:
             if col not in ref.columns:
-                ref[col] = float("nan") if col not in {"kinase", "cell_type", "wmb_tier"} else ""
+                ref[col] = float("nan") if col not in {"kinase", "cell_type"} else ""
         ref = ref[ref_cols].drop_duplicates(["kinase", "cell_type"], keep="first")
         ev = ev.merge(ref, on=["kinase", "cell_type"], how="left", suffixes=("", "_ref"))
     for col, default in [
@@ -310,6 +315,7 @@ def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None)
         ("fivexfad_concentration_of_total", float("nan")),
         ("fivexfad_concentration_tier", 0),
         ("fivexfad_effective_n", float("nan")),
+        ("fivexfad_unit_effective_n", float("nan")),
         ("fivexfad_top_celltype", ""),
         ("fivexfad_lfc", float("nan")),
         ("fivexfad_pval", float("nan")),
@@ -323,7 +329,6 @@ def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None)
         ("seaad_location_score", float("nan")),
         ("hbca_location_score", float("nan")),
         ("human_location_score", float("nan")),
-        ("wmb_tier", "none"),
     ]:
         if col not in ev.columns:
             ev[col] = default
@@ -340,11 +345,12 @@ def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None)
         "wmb_fraction_cells_expressing", "fivexfad_detected",
         "fivexfad_fraction_cells_expressing", "fivexfad_concentration",
         "fivexfad_concentration_of_total", "fivexfad_concentration_tier",
-        "fivexfad_effective_n", "fivexfad_top_celltype", "fivexfad_lfc",
+        "fivexfad_effective_n", "fivexfad_unit_effective_n", "fivexfad_top_celltype",
+        "fivexfad_lfc",
         "fivexfad_pval", "fivexfad_fdr", "n_snrna_samples_wt",
         "n_snrna_samples_tg", "n_cells_wt", "n_cells_tg", "cluster_source",
         "sea_ad_lfc", "seaad_location_score", "hbca_location_score",
-        "human_location_score", "wmb_tier",
+        "human_location_score",
     ]
     return _f5_records(ev, cols)
 
@@ -409,20 +415,53 @@ def _build_fivexfad_attribution_summary_index(attribution_rows: list[dict]) -> l
     return _sanitize(out)
 
 
-def _assign_fivexfad_song_aligned_confidence(
+def _apply_fivexfad_exclusivity_confidence(
     attribution_rows: list[dict],
     bulk_rows: list[dict],
+    celltype_rows: list[dict],
 ) -> list[dict]:
-    """Apply Song-style confidence semantics to 5xFAD attribution rows.
+    """Assign unified cell-type-exclusivity confidence tier to 5xFAD attribution rows.
 
-    Native 5xFAD snRNA location remains raw evidence. The categorical confidence
-    tier requires significant bulk MEA plus snRNA disease-direction support,
-    matching the convention users see in the Song attribution pane.
+    Replaces the prior bulk-MEA-significance + snRNA-direction hybrid
+    (``_assign_fivexfad_song_aligned_confidence``) and the decomp-agreement
+    promotion step (``_promote_fivexfad_attribution_confidence``).  Both old
+    gates are REMOVED as confidence gates; the signals are PRESERVED as
+    info-only fields (``bulk_mea_significant``, ``direction_concordant``,
+    ``decomp_agrees_bulk``) shown in the detail panel but never blocking or
+    promoting the pill.
+
+    Tier formula (single source of truth: ``alz/bulk_mea/exclusivity_tier.py``):
+        inputs:
+          detected     = fivexfad_detected (fraction_cells_expressing ≥ 0.10)
+          eff          = unit-level effective_n over curated specificity units
+                         (Song convention; collapses over-split new_clusters via
+                         load_specificity_unit_map). The raw per-cluster
+                         fivexfad_effective_n is kept only as the displayed
+                         subtype spread, NOT the pill input.
+          corroborated = WMB detects the home cell type
+                         OR SEA-AD specificity score ≥ 1.0 at the home cell type
+        tiers: none / low / moderate / high / very_high
+
+    Corroboration predicate for 5xFAD:
+        home_cell_type = fivexfad_top_celltype (highest-concentration detected cell)
+        wmb_agree      = wmb_detected is True at the row for home_cell_type
+        seaad_agree    = seaad_location_score ≥ 1.0 at the row for home_cell_type
+        corroborated   = wmb_agree OR seaad_agree
+
+    The n_cells gate (< _F5_MIN_CELLS_PER_CONTRAST) downgrades effective
+    detection: if the row has too few cells it is treated as not-detected for
+    confidence purposes regardless of fivexfad_detected.
+
+    Decomp agreement is computed per (kinase, tissue, age, cell_type) and stored
+    in ``decomp_agrees_bulk`` (info only — never gates the tier).
     """
     if not attribution_rows:
         return attribution_rows
 
-    bulk_by_key: dict[tuple[str, str, int], list[dict]] = {}
+    # --- Build info-only: bulk MEA significance index ---
+    # Key: (kinase, tissue, age) → True if any stoichiometry MEA row is significant
+    bulk_sig_by_key: dict[tuple[str, str, int], bool] = {}
+    bulk_nes_by_key: dict[tuple[str, str, int], list[float]] = {}
     for row in bulk_rows:
         if row.get("analysis_track") not in ("", None, "stoichiometry"):
             continue
@@ -431,84 +470,14 @@ def _assign_fivexfad_song_aligned_confidence(
             continue
         fdr = _f5_float_or_none(row.get("FDR"))
         nes = _f5_float_or_none(row.get("NES"))
-        if fdr is None or nes is None or nes == 0 or fdr >= config.MEA_FDR_THRESH:
-            continue
-        key = (
-            str(row.get("kinase", "")),
-            str(row.get("tissue", "")),
-            int(age),
-        )
-        bulk_by_key.setdefault(key, []).append(row)
+        key = (str(row.get("kinase", "")), str(row.get("tissue", "")), int(age))
+        if fdr is not None and nes is not None and nes != 0 and fdr < config.MEA_FDR_THRESH:
+            bulk_sig_by_key[key] = True
+            bulk_nes_by_key.setdefault(key, []).append(nes)
 
-    out: list[dict] = []
-    for row in attribution_rows:
-        rec = dict(row)
-        age = rec.get("age_months")
-        key = (
-            str(rec.get("kinase", "")),
-            str(rec.get("tissue", "")),
-            int(age) if age is not None else -1,
-        )
-        detected = bool(rec.get("fivexfad_detected"))
-        tier = rec.get("fivexfad_concentration_tier")
-        tier = int(tier) if tier is not None and not pd.isna(tier) else 0
-        lfc = _f5_float_or_none(rec.get("fivexfad_lfc"))
-        n_cells = (_f5_float_or_none(rec.get("n_cells_wt")) or 0) + (
-            _f5_float_or_none(rec.get("n_cells_tg")) or 0)
-        bulk_sig_rows = bulk_by_key.get(key, [])
-
-        rec["decomp_agrees_bulk"] = False
-        if n_cells < _F5_MIN_CELLS_PER_CONTRAST:
-            rec["confidence_tier"] = "none"
-            rec["confidence_basis"] = (
-                f"Fewer than {_F5_MIN_CELLS_PER_CONTRAST} 5xFAD snRNA cells for this "
-                "tissue, age, and new_clusters label; confidence tier not applied"
-            )
-        elif not detected:
-            rec["confidence_tier"] = "none"
-            rec["confidence_basis"] = "Kinase not detected in this 5xFAD snRNA cell type (fraction < 0.10)"
-        elif not bulk_sig_rows:
-            rec["confidence_tier"] = "none"
-            rec["confidence_basis"] = "5xFAD bulk MEA is not significant; Song-aligned confidence tier not applied"
-        elif lfc is None or abs(lfc) <= config.SONG_LFC_MIN:
-            rec["confidence_tier"] = "none"
-            rec["confidence_basis"] = "5xFAD snRNA LFC does not pass the Song direction-support gate"
-        else:
-            direction_support = any(
-                (lfc > 0) == (_f5_float_or_none(bulk.get("NES")) > 0)
-                for bulk in bulk_sig_rows
-                if _f5_float_or_none(bulk.get("NES")) is not None
-            )
-            if not direction_support:
-                rec["confidence_tier"] = "none"
-                rec["confidence_basis"] = "5xFAD snRNA LFC direction does not match significant bulk MEA"
-            elif tier >= 2:
-                rec["confidence_tier"] = "high"
-                rec["confidence_basis"] = "5xFAD snRNA direction + detected, ≥2× concentration over even share"
-            else:
-                rec["confidence_tier"] = "moderate"
-                rec["confidence_basis"] = "5xFAD snRNA direction + detected, sub-2× concentration"
-        out.append(rec)
-    return out
-
-
-def _promote_fivexfad_attribution_confidence(
-    attribution_rows: list[dict],
-    bulk_rows: list[dict],
-    celltype_rows: list[dict],
-) -> list[dict]:
-    """Mirror Song confidence promotion for 5xFAD native attribution rows.
-
-    A native 5xFAD high-confidence location row becomes very_high when the
-    matching per-cell-type MEA row agrees in sign with the bulk kinase MEA under
-    the same decomposition FDR agreement gate used by the Song attribution
-    model. This is a categorical cross-check; it does not create or expose a
-    synthetic score.
-    """
-    if not attribution_rows or not celltype_rows:
-        return attribution_rows
-
-    bulk_by_key: dict[tuple[str, str, str, int], dict] = {}
+    # --- Build info-only: decomp agreement index ---
+    # Key: (kinase, tissue, age, cell_type) → True if any decomp track agrees with bulk
+    bulk_full_by_key: dict[tuple[str, str, str, int], dict] = {}
     for row in bulk_rows:
         if row.get("analysis_track") not in ("", None, "stoichiometry"):
             continue
@@ -521,7 +490,7 @@ def _promote_fivexfad_attribution_confidence(
             str(row.get("track", "")),
             int(age),
         )
-        bulk_by_key[key] = row
+        bulk_full_by_key[key] = row
 
     decomp_by_key: dict[tuple[str, str, int, str], list[dict]] = {}
     for row in celltype_rows:
@@ -536,54 +505,113 @@ def _promote_fivexfad_attribution_confidence(
         )
         decomp_by_key.setdefault(key, []).append(row)
 
-    promoted = 0
-    out: list[dict] = []
-    for row in attribution_rows:
-        rec = dict(row)
-        if str(rec.get("confidence_tier", "")) != "high":
-            out.append(rec)
-            continue
-        age = rec.get("age_months")
-        if age is None:
-            out.append(rec)
-            continue
-        key = (
-            str(rec.get("kinase", "")),
-            str(rec.get("tissue", "")),
-            int(age),
-            str(rec.get("cell_type", "")),
-        )
-        agrees = False
+    def _decomp_agrees(kinase: str, tissue: str, age: int, cell_type: str) -> tuple[bool, dict | None]:
         best: dict | None = None
-        for drow in decomp_by_key.get(key, []):
+        for drow in decomp_by_key.get((kinase, tissue, age, cell_type), []):
             track = str(drow.get("track", ""))
-            bulk = bulk_by_key.get((key[0], key[1], track, key[2]), {})
+            bulk = bulk_full_by_key.get((kinase, tissue, track, age), {})
             bulk_nes = _f5_float_or_none(bulk.get("NES"))
             decomp_nes = _f5_float_or_none(drow.get("NES"))
             decomp_fdr = _f5_float_or_none(drow.get("FDR"))
             if (
-                bulk_nes is None
-                or decomp_nes is None
-                or decomp_fdr is None
-                or bulk_nes == 0
-                or decomp_nes == 0
+                bulk_nes is None or decomp_nes is None or decomp_fdr is None
+                or bulk_nes == 0 or decomp_nes == 0
                 or decomp_fdr >= DECOMP_FDR_AGREEMENT
             ):
                 continue
             if (bulk_nes > 0) == (decomp_nes > 0):
-                agrees = True
-                best = drow
-                break
-        if agrees:
-            rec["confidence_tier"] = "very_high"
-            rec["confidence_basis"] = "5xFAD snRNA high + decomp agreement"
-            rec["decomp_agrees_bulk"] = True
-            rec["decomp_nes"] = _f5_json_value((best or {}).get("NES"))
-            rec["decomp_fdr"] = _f5_json_value((best or {}).get("FDR"))
-            promoted += 1
+                return True, drow
+        return False, best
+
+    # --- Corroboration: per (kinase, tissue) — independent of age ---
+    # home_cell_type = fivexfad_top_celltype for the kinase-tissue group.
+    # WMB/SEA-AD corroboration is read from the attribution row whose
+    # cell_type matches the home cell type.
+    # Build corroboration lookup per (kinase, tissue).
+    corr_by_kt: dict[tuple[str, str], bool] = {}
+    corr_basis_by_kt: dict[tuple[str, str], str] = {}
+    # Group attribution rows by (kinase, tissue) to find home cell type and
+    # look up corroboration fields for it.
+    kt_groups: dict[tuple[str, str], list[dict]] = {}
+    for row in attribution_rows:
+        kt = (str(row.get("kinase", "")), str(row.get("tissue", "")))
+        kt_groups.setdefault(kt, []).append(row)
+
+    for kt, group in kt_groups.items():
+        # home cell type: fivexfad_top_celltype (per kinase-tissue, same across ages)
+        home = str(group[0].get("fivexfad_top_celltype") or "")
+        wmb_agree = False
+        seaad_agree = False
+        if home:
+            for row in group:
+                if str(row.get("cell_type", "")) == home:
+                    wmb_agree = bool(row.get("wmb_detected") or False)
+                    sl = _f5_float_or_none(row.get("seaad_location_score"))
+                    seaad_agree = sl is not None and sl >= _F5_HUMAN_STRONG
+                    break
+        corr_by_kt[kt] = wmb_agree or seaad_agree
+        parts: list[str] = []
+        if wmb_agree:
+            parts.append("WMB")
+        if seaad_agree:
+            parts.append("SEA-AD")
+        corr_basis_by_kt[kt] = (
+            ("corroborated by " + "+".join(parts)) if parts else "not corroborated by WMB or SEA-AD"
+        )
+
+    out: list[dict] = []
+    for row in attribution_rows:
+        rec = dict(row)
+        kinase = str(rec.get("kinase", ""))
+        tissue = str(rec.get("tissue", ""))
+        age = rec.get("age_months")
+        age_int = int(age) if age is not None else -1
+        cell_type = str(rec.get("cell_type", ""))
+        kt = (kinase, tissue)
+
+        # Unit-level eff (Song convention) drives the pill — precomputed per
+        # (gene, tissue) in snrna_specificity.py over the complete all-label set
+        # (collapsing over-split new_clusters onto curated specificity units).
+        # The raw per-cluster fivexfad_effective_n is kept only as subtype spread.
+        eff = _f5_float_or_none(rec.get("fivexfad_unit_effective_n"))
+        measurable = eff is not None and eff == eff
+        corroborated = corr_by_kt.get(kt, False)
+        corr_note = corr_basis_by_kt.get(kt, "")
+
+        tier, _generic_basis = _f5_exclusivity_tier(measurable, eff, corroborated)
+
+        # Build a 5xFAD-specific basis string.
+        if tier == "none":
+            basis = "No measurable 5xFAD snRNA expression distribution for this tissue"
+        elif tier == "low":
+            eff_s = f"{eff:.2f}" if (eff is not None and eff == eff) else "?"
+            basis = f"broadly expressed (eff {eff_s} specificity units); {corr_note}"
+        else:
+            eff_s = f"{eff:.2f}" if (eff is not None and eff == eff) else "?"
+            home = str(rec.get("fivexfad_top_celltype") or "")
+            basis = f"5xFAD exclusive to {home} (eff {eff_s} specificity units); {corr_note}"
+
+        rec["confidence_tier"] = tier
+        rec["confidence_basis"] = basis
+
+        # --- Info-only direction fields (never gate the pill) ---
+        bulk_key = (kinase, tissue, age_int)
+        rec["bulk_mea_significant"] = bool(bulk_sig_by_key.get(bulk_key, False))
+        lfc = _f5_float_or_none(rec.get("fivexfad_lfc"))
+        bulk_nes_list = bulk_nes_by_key.get(bulk_key, [])
+        if lfc is not None and abs(lfc) > config.SONG_LFC_MIN and bulk_nes_list:
+            rec["direction_concordant"] = any((lfc > 0) == (n > 0) for n in bulk_nes_list)
+        else:
+            rec["direction_concordant"] = False
+
+        # Decomp agreement: info only.
+        d_agrees, d_best = _decomp_agrees(kinase, tissue, age_int, cell_type)
+        rec["decomp_agrees_bulk"] = d_agrees
+        if d_agrees and d_best is not None:
+            rec["decomp_nes"] = _f5_json_value(d_best.get("NES"))
+            rec["decomp_fdr"] = _f5_json_value(d_best.get("FDR"))
+
         out.append(rec)
-    if promoted:
-        print(f"  supporting_5xfad_attribution: {promoted:,} high rows promoted to very_high", flush=True)
     return out
 
 
@@ -1549,8 +1577,7 @@ def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None
     ]
     celltype_mea_rows = _build_fivexfad_celltype_mea_rows(rows)
     attribution_rows = _build_fivexfad_attribution_rows(rows, data)
-    attribution_rows = _assign_fivexfad_song_aligned_confidence(attribution_rows, rows)
-    attribution_rows = _promote_fivexfad_attribution_confidence(
+    attribution_rows = _apply_fivexfad_exclusivity_confidence(
         attribution_rows,
         rows,
         celltype_mea_rows,

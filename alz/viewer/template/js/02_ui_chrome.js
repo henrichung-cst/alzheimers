@@ -10,6 +10,13 @@ function wireViewerSplitters() {
 // header filters, prerequisites, and lifecycle hooks (wire, render,
 // rerenderOn, onChange). See MANIFEST.md "Adding a new tab" for the contract.
 // ---------------------------------------------------------------------------
+
+// Toggle: 5xFAD Incytr results (Heatmap + Pathways) are not yet ready for
+// sharing. While false, both Incytr tabs are dropped from the 5xFAD view; they
+// stay visible in mouse/Song mode. Flip to true to surface them in 5xFAD.
+const SHOW_FIVEXFAD_INCYTR = false;
+const _INCYTR_MODES = SHOW_FIVEXFAD_INCYTR ? ["mouse", "fivexfad"] : ["mouse"];
+
 const TAB_MANIFEST = {
   temporalv2: {
     group: "landscape", label: "Temporal v2",
@@ -76,14 +83,14 @@ const TAB_MANIFEST = {
   },
   incytrheatmap: {
     group: "landscape", label: "Incytr Heatmap",
-    filters: [], requires: [], modes: ["mouse", "fivexfad"],
+    filters: [], requires: [], modes: _INCYTR_MODES,
     wire: () => wireIncytrHeatmap(),
     render: () => renderIncytrHeatmap(),
     rerenderOn: { filters: false, selection: [] },
   },
   incytrpathways: {
     group: "drilldown", label: "Incytr Pathways",
-    filters: [], requires: [], modes: ["mouse", "fivexfad"],
+    filters: [], requires: [], modes: _INCYTR_MODES,
     wire: () => wireIncytrPathways(),
     render: () => renderIncytrPathways(),
     rerenderOn: { filters: false, selection: [] },
@@ -101,8 +108,10 @@ const TAB_MANIFEST = {
 // 5xFAD incytr surfacing. The cortex/hippocampus incytr lives under
 // incytr_pathways.by_context (context ids fivexfad_cortex / fivexfad_hippocampus)
 // and is reached inside the 5xFAD mode: the Incytr Heatmap + Incytr Pathways
-// tabs declare modes:["mouse","fivexfad"] and _modeAvailable("fivexfad")
-// (gated by HAS_FIVEXFAD) controls visibility without any post-hoc mutation.
+// tabs declare modes:_INCYTR_MODES and _modeAvailable("fivexfad") controls
+// visibility without any post-hoc mutation. While SHOW_FIVEXFAD_INCYTR is
+// false the modes list excludes "fivexfad", so this machinery (tissue selector,
+// context switching) is dormant in 5xFAD until the toggle is flipped on.
 // A Tissue <select> in each incytr tab's toolbar switches the active context.
 // ---------------------------------------------------------------------------
 
@@ -174,11 +183,12 @@ function wireFivexfadTissueToggle() {
     .filter(p => p.sel);
 }
 
-// Shown only in 5xFAD mode; keeps both selects' values in lockstep with the
-// active context. Uses the cached pairs to avoid getElementById on every sync.
+// Shown only when 5xFAD Incytr is explicitly surfaced. The payload can package
+// 5xFAD cortex/hippocampus sidecars while SHOW_FIVEXFAD_INCYTR is false, so
+// visibility must follow the UI feature flag, not payload presence alone.
 function _syncFivexfadTissueToggle() {
-  if (!HAS_FIVEXFAD_INCYTR) return;
-  const show = ((Store.state.view && Store.state.view.mode) || "mouse") === "fivexfad";
+  const show = !!(SHOW_FIVEXFAD_INCYTR && HAS_FIVEXFAD_INCYTR
+    && ((Store.state.view && Store.state.view.mode) || "mouse") === "fivexfad");
   const ctx = ViewerPayload.activeContext();
   (_f5TissueSels || []).forEach(({ sel, wrap }) => {
     if (wrap) wrap.hidden = !show;

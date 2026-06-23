@@ -215,8 +215,8 @@ def prepare_wmb_specificity(wmb_df):
         return None
     wmb = wmb_df.copy()
     wmb["_gene_upper"] = wmb["gene_symbol"].str.upper()
-    # Standard attribution metric (detection-gated): per-(gene, class) detection
-    # + detected-set concentration / tier, replacing the share `specificity_score`.
+    # Standard attribution metric: per-(gene, class) detection evidence plus
+    # all-class concentration / tier.
     wmb_top = (wmb.sort_values("fraction_cells_expressing")
                   .drop_duplicates(["_gene_upper", "cell_type"], keep="last")
                   [["_gene_upper", "cell_type", "detected", "concentration",
@@ -231,6 +231,23 @@ def prepare_wmb_specificity(wmb_df):
                       "fraction_cells_expressing": "wmb_fraction_cells_expressing",
                       "binary_expressed": "wmb_binary_expressed",
                   }))
+
+    # Per-gene WMB dominant class, broadcast onto every (gene, class) row so it
+    # survives the lineage-level merge in `_assemble_unified`. The within-cohort
+    # confidence recalculation (`specificity_class.py`) corroborates Song's
+    # dominant lineage against WMB's; it needs WMB's *true* top class — argmax
+    # over all WMB classes — even when that class has no Levy-T5 cluster.
+    gene_rows: list[dict] = []
+    for gene, g in wmb.groupby("_gene_upper", sort=False):
+        ranked = g.copy()
+        if len(ranked) == 0:
+            gene_rows.append({"_gene_upper": gene, "wmb_top_celltype": ""})
+            continue
+        conc = pd.to_numeric(ranked["concentration"], errors="coerce").fillna(0.0).to_numpy()
+        classes = ranked["cell_type"].astype(str).to_numpy()
+        gene_rows.append({"_gene_upper": gene,
+                          "wmb_top_celltype": classes[int(np.nanargmax(conc))]})
+    wmb_top = wmb_top.merge(pd.DataFrame(gene_rows), on="_gene_upper", how="left")
     print(f"  WMB detection: {len(wmb_top)} (gene, wmb_class) pairs loaded")
     return wmb_top
 
@@ -240,8 +257,8 @@ def prepare_song_specificity(song_sp_df):
         return None
     song_sp = song_sp_df.copy()
     song_sp["_gene_upper"] = song_sp["gene_symbol"].str.upper()
-    # Standard attribution metric (detection-gated): per-(gene, cluster)
-    # detection + detected-set concentration / tier, plus the per-gene breadth
+    # Standard attribution metric: per-(gene, cluster) detection evidence plus
+    # all-cluster concentration / tier, plus the per-gene breadth
     # summary (effective number of cell types, top cell type). Replaces the
     # share `specificity_score` and the rejected `tau`.
     cols = ["_gene_upper", "cell_type", "detected", "concentration",
@@ -250,7 +267,8 @@ def prepare_song_specificity(song_sp_df):
               "concentration": "song_concentration",
               "concentration_tier": "song_concentration_tier",
               "fraction_cells_expressing": "song_fraction_cells_expressing"}
-    for src, dst in (("effective_n_celltypes", "song_effective_n"),
+    for src, dst in (("concentration_of_total", "song_concentration_of_total"),
+                     ("effective_n_celltypes", "song_effective_n"),
                      ("top_celltype", "song_top_celltype"),
                      ("top_concentration", "song_top_concentration")):
         if src in song_sp.columns:

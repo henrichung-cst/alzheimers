@@ -110,7 +110,17 @@ const TranscriptTraceStore = (() => {
   // gains a sex dimension or non-males-only pair runs land.
   const _GENO_INV = { App: "AppP", Tau: "Ttau", ApTt: "ApTt" };
 
+  // Context-aware (mirrors OmicsTraceStore._cohort): the 5xFAD tissues are
+  // contexts (cohort "fivexfad") under a song_ad payload, so the active
+  // context — not PAYLOAD.meta.cohort — determines the contrast schema.
   function _cohort() {
+    try {
+      if (typeof ViewerPayload !== "undefined" && ViewerPayload.activeContext) {
+        const cid = ViewerPayload.activeContext();
+        const ctx = (ViewerPayload.contexts() || []).find(c => c.id === cid);
+        if (ctx && ctx.cohort) return ctx.cohort;
+      }
+    } catch (e) { /* fall through to payload cohort */ }
     return (typeof PAYLOAD !== "undefined" && PAYLOAD.meta && PAYLOAD.meta.cohort) || "mouse";
   }
 
@@ -125,6 +135,15 @@ const TranscriptTraceStore = (() => {
       return [
         { arm: day,      group: day },
         { arm: baseline, group: baseline },
+      ];
+    }
+    // 5xFAD contrasts are `TG_<age>`; transcript shard `group` is
+    // `<genotype>_<timepoint>` (e.g. TG_3mo / WT_3mo).
+    if (_cohort() === "fivexfad") {
+      const [geno, age] = parts;
+      return [
+        { arm: geno, group: `${geno}_${age}` },
+        { arm: "WT", group: `WT_${age}` },
       ];
     }
     const [geno, age] = parts;

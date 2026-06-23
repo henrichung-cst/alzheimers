@@ -233,6 +233,19 @@ main#app-main { padding:14px; }
 .attr-verdict-table thead tr.attr-verdict-supergroup th.attr-supergroup-attr { background:#fef3c7; }
 .attr-verdict-table thead tr.attr-verdict-supergroup th.attr-supergroup-decomp { background:#dbeafe; }
 .attr-verdict-table thead tr.attr-verdict-supergroup th.attr-supergroup-spacer { background:transparent; border-bottom:none; }
+.attr-verdict-table thead tr.attr-verdict-subgroup th {
+  background:#f1f5f9; border-bottom:1px solid #e2e8f0; font-weight:600;
+  text-align:center; font-size:10px; letter-spacing:.02em; color:#475569; padding:3px 6px;
+  cursor:default;
+}
+.attr-verdict-table thead tr.attr-verdict-subgroup th.attr-subgroup-spacer { background:transparent; border-bottom:none; }
+.attr-excl-summary { margin:2px 0 8px; font-size:12px; color:#334155; }
+/* Collapsed specificity unit: expandable parent over its child Song clusters. */
+details.spec-unit > summary { list-style:none; cursor:pointer; }
+details.spec-unit > summary::-webkit-details-marker { display:none; }
+.spec-unit-n { font-size:9px; color:#64748b; margin-left:3px; white-space:nowrap; }
+ul.spec-unit-children { margin:3px 0 0; padding-left:14px; font-size:10px; color:#475569; list-style:disc; }
+ul.spec-unit-children li.muted { color:#9aa5b1; }
 .attr-bulk-anchor { padding:4px 0 8px; font-size:12px; color:#334155; }
 .attr-bulk-anchor .attr-bulk-pill { display:inline-block; padding:2px 8px; border-radius:10px;
   background:#f1f5f9; border:1px solid #cbd5e1; font-weight:600; }
@@ -275,6 +288,33 @@ main#app-main { padding:14px; }
 .attr-verdict-legend { padding:8px 0 2px; font-size:11px; line-height:1.45; }
 .attr-drawer-header { padding:6px 0 8px; border-bottom:1px solid var(--border);
   margin-bottom:8px; }
+/* Inline-expand accordion: a verdict row toggles a detail row directly beneath it. */
+.attr-verdict-row { cursor:pointer; }
+.attr-verdict-row:hover { background:#f8fafc; }
+.attr-chevron { display:inline-block; width:0.9em; color:#64748b; font-size:11px;
+  transition:transform 0.1s; }
+.attr-detail-row > td { background:#fbfbfd; border-top:0; padding:4px 10px 12px; }
+.attr-detail-host { overflow-x:auto; }
+/* §0 specificity verdict — the reconciliation headline. */
+.attr-spec-section { margin-bottom:12px; }
+.attr-spec-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:12px; }
+.attr-spec-block { background:#fff; border:1px solid var(--border); border-radius:4px; padding:8px 10px; }
+.attr-spec-h { font-weight:600; font-size:12px; margin-bottom:6px; }
+.attr-spec-dl { display:grid; grid-template-columns:auto 1fr; gap:2px 10px; margin:0; font-size:12px; }
+.attr-spec-dl dt { color:#64748b; }
+.attr-spec-dl dd { margin:0; }
+.attr-spec-reconcile { font-size:12px; line-height:1.45; margin:8px 0 0; padding-top:6px;
+  border-top:1px dashed var(--border); color:#334155; }
+.attr-spec-children { margin-top:6px; font-size:11px; }
+.attr-spec-kidlist { margin:2px 0 0; padding-left:16px; columns:2; }
+/* Explicit Song → WMB → SEA-AD crosswalk line. */
+.attr-crosswalk { font-size:12px; padding:6px 8px; margin-bottom:8px;
+  background:#f1f5f9; border:1px solid var(--border); border-radius:4px;
+  line-height:1.6; }
+.attr-xw-tag { font-weight:600; color:#475569; margin-right:4px; }
+.attr-xw-vocab { display:inline-block; font-size:10px; font-weight:600; color:#1e40af;
+  background:#dbeafe; border-radius:3px; padding:0 5px; margin:0 2px; vertical-align:middle; }
+.attr-xw-arrow { color:#94a3b8; margin:0 2px; }
 .attr-allen-link { color:#2b6cb0; text-decoration:none; font-size:12px; }
 .attr-allen-link:hover { text-decoration:underline; }
 .attr-drawer-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(360px, 1fr));
@@ -478,7 +518,7 @@ main#app-main { padding:14px; }
 .badge.expr { background:#dcedc8; color:#33691e; }
 .badge.imp { background:#ffe0b2; color:#bf360c; }
 .badge.mix { background:#d1c4e9; color:#4527a0; }
-/* Song/WMB detection gate indicators (✓ detected / ✗ not detected). */
+/* Song/WMB expression evidence indicators (✓ >=10% cells / ✗ below 10%). */
 .song-det-yes { color:#1b5e20; font-size:11px; }
 .song-det-no  { color:#b71c1c; font-size:11px; }
 .track-badge { display:inline-block; padding:0 5px; border-radius:6px; font-size:9px;

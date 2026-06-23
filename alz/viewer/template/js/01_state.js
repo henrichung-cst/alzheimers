@@ -167,7 +167,7 @@ const METRIC_DEFS = {
   nSig:          { label: "Sig vs WT",     short: "Number of contrasts where this kinase's MEA FDR is below the header threshold." },
   peakNES:       { label: "Peak NES",      short: "Largest |NES| across contrasts. Sign indicates direction." },
   topCelltype:   { label: "Top cell type", short: "Top attributed receiver cell type from the attribution evidence table." },
-  highConfAttr:  { label: "Conf",          short: "Whether the kinase has high-confidence cell-type attribution." },
+  highConfAttr:  { label: "Location confidence", short: "Whether the kinase has high-confidence cell-type attribution." },
   nBackbones:    { label: "#Backbones",    short: "Number of distinct pathway backbones with significant support from this kinase, across all contrasts." },
 
   // Pathway browser columns

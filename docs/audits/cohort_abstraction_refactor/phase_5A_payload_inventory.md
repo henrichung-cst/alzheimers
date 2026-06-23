@@ -1,5 +1,9 @@
 # Phase 5A — Payload Contract Inventory
 
+> Current Attribution tab architecture is documented in
+> [`docs/foundation/kinase_explorer_attribution.md`](../../foundation/kinase_explorer_attribution.md).
+> This file is a read-only payload inventory snapshot from 2026-06-17.
+
 **Date:** 2026-06-17
 **Branch:** `refactor/cohort-namespaces`
 **Scope:** Read-only survey of `build_unified_viewer.py`, `build_tcell_viewer.py`,

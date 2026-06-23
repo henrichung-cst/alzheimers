@@ -33,42 +33,34 @@ function _confPass(rowConf, threshold) {
   return (_CONF_RANK[rowConf] || 0) >= (_CONF_RANK[threshold] || 0);
 }
 
-// Within-cohort standard detection metric (docs/plans/standard_attribution_metric.md):
-// a detection gate (tcell_fraction_expressing >= 0.10) paired with a detected-set
-// concentration tier (≥t× over even share among detected states; 10×/5×/2×/1×,
-// precomputed in Python because n_detected is per-gene) and the per-gene effective
-// # of states (breadth). Replaces the former share-fold over a 1/N_states uniform,
-// which was inversely predictive of presence.
-function _tcellTierLabel(t) { return t > 0 ? "≥" + t + "×" : ""; }
-function _tcellConcTierBadge(t) {
-  if (!t) return '<span class="muted">—</span>';
-  const cls = t >= 10 ? "vhi" : (t >= 5 ? "hi" : (t >= 2 ? "mid" : "lo"));
-  return '<span class="badge ' + cls + '" title="Within-cohort concentration ≥' + t +
-         '× over even share among detected states">' + _tcellTierLabel(t) + '</span>';
-}
-// Per-(state) detection cell: ✓/✗ + % of cells expressing, then the concentration
-// tier badge and (per-gene) effective # states. Mirrors the unified viewer.
-function _tcellDetCell(detected, frac, tier, effectiveN) {
-  const detBool = detected === true || detected === "True" || detected === "true";
-  const fracPct = (frac != null && isFinite(frac)) ? (Number(frac) * 100).toFixed(0) + "%" : "";
-  const tierN = Number(tier) || 0;
-  if (!detBool) {
-    return `<span class="tcell-det-no" title="Not detected in this state (${fracPct ? fracPct + ' cells' : 'frac n/a'} < 10% threshold)">✗ ${fracPct}</span>`;
-  }
-  const tierBadge = tierN > 0 ? " " + _tcellConcTierBadge(tierN) : "";
-  const effTxt = (effectiveN != null && isFinite(effectiveN))
-    ? ` <span class="muted" title="Effective # states (lower = more specific)">${Number(effectiveN).toFixed(1)}ct</span>` : "";
-  return `<span class="tcell-det-yes" title="Detected (${fracPct ? fracPct + ' cells' : ''}; ≥10% threshold)">✓ ${fracPct}</span>${tierBadge}${effTxt}`;
+// Within-cohort T-cell specificity:
+// detection evidence (tcell_fraction_expressing >= 0.01) is shown separately.
+// STATE ENRICHMENT = each state's linear expression as a fold over the
+// kinase's median state across the full ProjecTILs state set (precomputed in Python). The standard
+// concentration-of-total tier is retired here — it saturates at ≥2× because the
+// ~14 ProjecTILs states are transcriptionally homogeneous, so it cannot localize
+// a kinase along the activation continuum. Enrichment uses the full state set and
+// discriminates. The location-confidence pill still uses the per-gene effective # of states.
+function _tcellEnrichBadge(fold) {
+  const v = Number(fold);
+  if (fold == null || !isFinite(v)) return '<span class="muted">—</span>';
+  const lbl = v.toFixed(1) + "×";
+  const cls = v >= 3 ? "hi" : (v >= 2 ? "mid" : (v >= 1.5 ? "lo" : ""));
+  if (!cls) return `<span class="muted" title="Within ~1.5× of the typical (median) T-cell state — broadly expressed, not state-enriched">${lbl}</span>`;
+  return `<span class="badge ${cls}" title="${lbl} the kinase's median-state expression — enriched in this state vs a typical T-cell state">${lbl}</span>`;
 }
 
 function getScopedAttribution(kinaseId, filter) {
   // Returns filtered within-cohort attribution rows from
   // PAYLOAD.attribution_index for one kinase. The T-cell attribution carries the
-  // standard detection metric (tcell_detected + tcell_concentration_tier ∈
-  // {0,1,2,5,10} + per-gene tcell_effective_n) + pseudobulk concordance vs bulk
-  // NES (no confidence string, no FDR — see
-  // docs/tcell_exhaustion_analysis_summary.md). filter dimensions may be
-  // string ("" = any) or array ([] = any); celltype scopes the cell_type axis.
+  // expression evidence (tcell_detected) + two specificity axes — cell-TYPE
+  // (tcell_top_celltype = CD8/CD4/Treg, which drives confidence_tier) and the
+  // activation-state axis (tcell_state_enrichment, gated on detection) — plus
+  // pseudobulk concordance vs bulk NES + confidence_tier/confidence_basis.
+  // specificity_celltype = home_state anchors the cell-type pill on the kinase's
+  // headline state row.
+  // filter dimensions may be string ("" = any) or array ([] = any);
+  // celltype scopes the cell_type axis.
   const AI = PAYLOAD.attribution_index || {};
   if (!AI.kinase_id) return [];
   const scopedCtx = getScopedContrastIds(filter);
@@ -78,16 +70,16 @@ function getScopedAttribution(kinaseId, filter) {
     if (AI.kinase_id[j] !== kinaseId) continue;
     if (scopedCtx.size > 0 && !scopedCtx.has(AI.contrast_id[j])) continue;
     if (ctSet.size && !ctSet.has(AI.cell_type[j]))                continue;
+    const topCt = AI.tcell_top_celltype ? AI.tcell_top_celltype[j] : "";
+    const homeState = AI.home_state ? AI.home_state[j] : "";
     out.push({
       contrast_id:        AI.contrast_id[j],
       cell_type:          AI.cell_type[j],
       tcell_detected:           AI.tcell_detected           ? AI.tcell_detected[j]           : false,
       tcell_fraction_expressing: AI.tcell_fraction_expressing ? AI.tcell_fraction_expressing[j] : null,
-      tcell_concentration:      AI.tcell_concentration      ? AI.tcell_concentration[j]      : null,
-      tcell_concentration_tier: AI.tcell_concentration_tier ? AI.tcell_concentration_tier[j] : 0,
       tcell_effective_n:        AI.tcell_effective_n        ? AI.tcell_effective_n[j]        : null,
-      tcell_top_celltype:       AI.tcell_top_celltype       ? AI.tcell_top_celltype[j]       : "",
-      tcell_top_concentration:  AI.tcell_top_concentration  ? AI.tcell_top_concentration[j]  : null,
+      tcell_top_celltype:       topCt,
+      tcell_state_enrichment:   AI.tcell_state_enrichment   ? AI.tcell_state_enrichment[j]   : null,
       tcell_lfc:          AI.tcell_lfc          ? AI.tcell_lfc[j]          : null,
       tcell_concordance:  AI.tcell_concordance  ? AI.tcell_concordance[j]  : null,
       tcell_concordant:   AI.tcell_concordant   ? AI.tcell_concordant[j]   : null,
@@ -96,7 +88,12 @@ function getScopedAttribution(kinaseId, filter) {
       fdr:                AI.fdr                ? AI.fdr[j]                : null,
       nsclc_frac:         AI.nsclc_frac         ? AI.nsclc_frac[j]         : null,
       nsclc_detected:     AI.nsclc_detected     ? AI.nsclc_detected[j]     : null,
-      mea_false_positive: AI.mea_false_positive ? AI.mea_false_positive[j] : false,
+      confidence_tier:    AI.confidence_tier    ? AI.confidence_tier[j]    : "none",
+      confidence_basis:   AI.confidence_basis   ? AI.confidence_basis[j]   : "",
+      // The cell-type confidence pill (a kinase-level property) is rendered once,
+      // on the kinase's headline STATE row — _attrVerdictConfCell shows it where
+      // cell_type === specificity_celltype.
+      specificity_celltype: homeState,
     });
   }
   return out;
@@ -160,6 +157,15 @@ function _buildKinaseRowModel() {
       peak_contrast: K.peak_contrast[i] || "",
       peak_NES: K.peak_NES[i],
       top_celltype_1: K.top_celltype_1[i] || "",
+      tcell_celltype: (K.tcell_celltype && K.tcell_celltype[i]) || "",
+      tcell_celltype_tier: (K.tcell_celltype_tier && K.tcell_celltype_tier[i] != null)
+        ? K.tcell_celltype_tier[i] : 0,
+      nsclc_lineages_detected: (K.nsclc_lineages_detected && K.nsclc_lineages_detected[i] != null)
+        ? K.nsclc_lineages_detected[i] : null,
+      nsclc_lineages_total: (K.nsclc_lineages_total && K.nsclc_lineages_total[i] != null)
+        ? K.nsclc_lineages_total[i] : null,
+      nsclc_top_lineage: (K.nsclc_top_lineage && K.nsclc_top_lineage[i]) || "",
+      nsclc_lineage_list: (K.nsclc_lineage_list && K.nsclc_lineage_list[i]) || null,
       _fdr: CONTRASTS.map(c => K["FDR_" + c][i]),
       _nes: CONTRASTS.map(c => K["NES_" + c][i]),
     });
@@ -179,7 +185,6 @@ function _ensureKinaseIdx() {
 function resetKinaseContextCaches() {
   _keRows = null;
   _kinaseIdxById = null;
-  _evidenceByKinase = null;
   _decompByKey = null;
   _decompByKinCtx = null;
   _agreementByKey = null;
@@ -189,17 +194,6 @@ function resetKinaseContextCaches() {
 
 function _ensureKinaseIndexes() {
   if (_keRows === null) _keRows = _buildKinaseRowModel();
-  if (_evidenceByKinase === null) {
-    const EV = PAYLOAD.kinase_celltype_evidence || {kinase_id:[]};
-    const m = new Map();
-    for (let k = 0; k < EV.kinase_id.length; k++) {
-      const kid = EV.kinase_id[k];
-      let arr = m.get(kid);
-      if (!arr) { arr = []; m.set(kid, arr); }
-      arr.push(k);
-    }
-    _evidenceByKinase = m;
-  }
   if (_decompByKey === null) {
     const D = PAYLOAD.decomposition_index || {kinase_id:[]};
     const m = new Map();
@@ -258,14 +252,14 @@ function _kineMaxAbsNesScoped(r, scopedCtxIds) {
   return best;
 }
 
-// Max within-cohort specificity tier across attribution rows for this kinase
-// under the active filter scope. Returns 0 when no qualifying rows. The tier is
-// precomputed (binned in Python), so we read it directly.
-function _kineMaxTcellTierScoped(kinaseId, filter) {
+// Peak within-cohort state enrichment across attribution rows for this kinase
+  // under the active filter scope (fold over the median state). Returns 0
+// when no qualifying rows. This is the T-cell specificity signal.
+function _kineMaxTcellEnrichScoped(kinaseId, filter) {
   let best = 0;
   for (const e of getScopedAttribution(kinaseId, filter)) {
-    const t = e.tcell_concentration_tier || 0;
-    if (t > best) best = t;
+    const v = e.tcell_state_enrichment;
+    if (v != null && isFinite(v) && v > best) best = v;
   }
   return best;
 }
@@ -346,28 +340,31 @@ function _makeKeCompare(scopedCtxIds) {
       if (vb == null) vb = -Infinity;
     }
     else if (col === "n_attributed_celltypes") {
-      // Match what the Cell types pill column displays: dedup by cell_type
-      // keeping best tier, then count cell types at ≥ 1× even share among detected.
-      const _bestTierByCT = (kid) => {
-        const m = new Map();
+      // Match the Cell states column: count distinct T-cell states the kinase is
+      // DETECTED in (≥1% of cells) in scope.
+      const _nDetectedStates = (kid) => {
+        const s = new Set();
         for (const e of getScopedAttribution(kid, kf)) {
-          const t = e.tcell_concentration_tier || 0;
-          if (t > (m.get(e.cell_type) || 0)) m.set(e.cell_type, t);
+          if (e.tcell_detected === true || e.tcell_detected === "True" || e.tcell_detected === "true")
+            s.add(e.cell_type);
         }
-        let n = 0;
-        for (const t of m.values()) if (t >= 1) n++;
-        return n;
+        return s.size;
       };
-      va = _bestTierByCT(a.id);
-      vb = _bestTierByCT(b.id);
+      va = _nDetectedStates(a.id);
+      vb = _nDetectedStates(b.id);
     }
     else if (col === "n_sig") {
       va = _kineSigCountScoped(a, fdr, scopedCtxIds);
       vb = _kineSigCountScoped(b, fdr, scopedCtxIds);
     }
-    else if (col === "tcell_max_tier") {
-      va = _kineMaxTcellTierScoped(a.id, kf);
-      vb = _kineMaxTcellTierScoped(b.id, kf);
+    else if (col === "tcell_max_enrich") {
+      va = _kineMaxTcellEnrichScoped(a.id, kf);
+      vb = _kineMaxTcellEnrichScoped(b.id, kf);
+    }
+    else if (col === "tcell_celltype") {
+      // Sort by cell-type concentration tier (concentrated kinases on top).
+      va = a.tcell_celltype_tier || 0;
+      vb = b.tcell_celltype_tier || 0;
     }
     else if (col === "agreement_profile") {
       va = _kineDisagreeCountScoped(a, scopedCtxIds);
@@ -477,36 +474,68 @@ function _renderAgreementProfile(r) {
 }
 
 function _renderCellTypesCell(r, filter) {
-  // Cell types this kinase concentrates in (≥1× even share among detected) in the
-  // active filter scope — a compact specificity summary (full per-state rows live
-  // in the Attribution verdict tab). Dedup by cell_type keeping the best tier.
+  // T-cell states this kinase is DETECTED in (fraction expressing ≥1%) in the
+  // active filter scope — breadth of detection within the cohort, parallel to the
+  // Cross-lineage (NSCLC) breadth column. Enrichment lives in the State
+  // specificity column; this counts presence, so it stays coherent with the
+  // per-state detection shown in the Attribution verdict tab.
   const rows = getScopedAttribution(r.id, filter || {});
-  const byCell = new Map();
+  const detectedCells = new Set();
   for (const e of rows) {
-    const prev = byCell.get(e.cell_type);
-    if (!prev || (e.tcell_concentration_tier || 0) > (prev.tcell_concentration_tier || 0) ||
-        ((e.tcell_concentration_tier || 0) === (prev.tcell_concentration_tier || 0)
-         && (e.tcell_concordance || 0) > (prev.tcell_concordance || 0)))
-      byCell.set(e.cell_type, e);
+    if (e.tcell_detected === true || e.tcell_detected === "True" || e.tcell_detected === "true")
+      detectedCells.add(e.cell_type);
   }
-  const displayRows = Array.from(byCell.values()).filter(e => (e.tcell_concentration_tier || 0) >= 1);
-  // Sort: tier first (10 → 5 → 2), then concordance desc within tier.
-  displayRows.sort((a, b) => {
-    const dt = (b.tcell_concentration_tier || 0) - (a.tcell_concentration_tier || 0);
-    if (dt !== 0) return dt;
-    return (b.tcell_concordance || 0) - (a.tcell_concordance || 0);
-  });
-  const n = displayRows.length;
-  if (n === 0) return `<span class="muted">—</span>`;
-  const top = displayRows.slice(0, 3);
-  const tip = displayRows.map(e =>
-    `${e.cell_type} (≥${e.tcell_concentration_tier}× even share among detected, concordance ${Number(e.tcell_concordance).toFixed(3)})`).join("\n");
-  const topNames = top.map(e => {
-    const cls = e.tcell_concentration_tier >= 10 ? "vhi" : e.tcell_concentration_tier >= 5 ? "hi"
-      : e.tcell_concentration_tier >= 2 ? "mid" : "lo";
-    return `<span class="badge ${cls}">${_escapeHtml(e.cell_type)}</span>`;
-  }).join(" ");
-  return `<span title="${_escapeHtml(tip)}"><strong>${n}</strong> ${topNames}${displayRows.length > 3 ? ` <span class="muted">+${displayRows.length - 3}</span>` : ""}</span>`;
+  const n = detectedCells.size;
+  if (n === 0) return `<span class="muted" title="Not detected (≥1% of cells) in any T-cell state in scope">0</span>`;
+  const names = Array.from(detectedCells).sort();
+  const tip = `Detected (≥1% of cells) in ${n} T-cell state(s): ${names.join(", ")}`;
+  return `<span title="${_escapeHtml(tip)}"><strong>${n}</strong><span class="muted" style="font-size:10px;"> / 14</span></span>`;
+}
+
+// Within-cohort cell-TYPE specificity (CD8 / CD4 / Treg) from the donor's own
+// scRNA: the dominant cell type + whether the kinase concentrates there (tier ≥2
+// = ≥2× the even 1/3 share) or is broad across the three types. Distinct from the
+// NSCLC cross-lineage column (beyond-T breadth). Precomputed in Python
+// (tcell_celltype / tcell_celltype_tier slice columns).
+function _renderCellTypeCell(r) {
+  const ct = r.tcell_celltype || "";
+  if (!ct) return '<span class="muted" title="No measurable cell-type expression distribution">—</span>';
+  const tier = r.tcell_celltype_tier || 0;
+  if (tier >= 2) {
+    return `<span class="badge hi" title="Concentrated in ${_escapeHtml(ct)} — ≥2× the even 1/3 cell-type share (cell-type specific)">${_escapeHtml(ct)} ✓</span>`;
+  }
+  // Broad: the kinase is spread across CD8/CD4/Treg. Naming the bare argmax (a
+  // near-tie) misreads as "it's a <type> kinase", so show only "broad".
+  return `<span class="muted" title="Broad across CD8 / CD4 / Treg — not concentrated in any single T-cell type (≤2× the even 1/3 share)">broad</span>`;
+}
+
+// Cell-TYPE breadth from the independent NSCLC reference (not the within-cohort
+// T-states): how many coarse lineages (T_NK + non-T) detect the kinase
+// (expressed in any cell — no minimum-fraction floor), out of those present, +
+// the dominant lineage. Fewer = more
+// cell-type-specific. n/a = the kinase is outside the NSCLC probe panel.
+// All values precomputed in Python (nsclc_lineages_* slice columns).
+function _renderNSCLCBreadthCell(r) {
+  const total = r.nsclc_lineages_total;
+  if (total == null) {
+    return `<span class="muted" title="Outside the NSCLC Flex probe panel — the independent reference cannot speak to this kinase.">n/a</span>`;
+  }
+  const nDet = r.nsclc_lineages_detected || 0;
+  const top = r.nsclc_top_lineage || "";
+  const members = Array.isArray(r.nsclc_lineage_list) ? r.nsclc_lineage_list : [];
+  // Fewer lineages detected = more cell-type-specific (the signal of interest).
+  const cls = nDet <= 1 ? "hi" : (nDet <= 2 ? "mid" : "lo");
+  const memberStr = members.length ? members.join(", ") : "none";
+  const tip = `Detected in ${nDet} of ${total} cell-type lineages (independent NSCLC reference; detection = ≥1% of cells expressing): ${memberStr}.` +
+    (top ? ` Most concentrated in ${top}. ` : " ") +
+    "Fewer lineages = more cell-type-specific.";
+  const badge = top ? ` <span class="badge ${cls}">${_escapeHtml(top)}</span>` : "";
+  // List the detected lineage names inline (muted) so the count is backed by the
+  // actual members, not just a dominant-lineage badge.
+  const memberInline = members.length
+    ? ` <span class="muted" style="font-size:10px;">${_escapeHtml(members.join(", "))}</span>`
+    : "";
+  return `<span title="${_escapeHtml(tip)}"><strong>${nDet}</strong><span class="muted" style="font-size:10px;"> / ${total}</span>${badge}${memberInline}</span>`;
 }
 
 function _renderKinaseWhitelistBanner(wl) {
@@ -594,7 +623,8 @@ function renderKinaseExplorer() {
     && (dSet.size > 0 || tSet.size > 0 || cSet.size > 0 || !!kf.confidence);
   const nSigMin = Math.min(scopedDenom, Math.max(0, parseInt(kf.nSigMin, 10) || 0));
   // Opt-in specificity narrowing. 0 = Any (off) — the default; hides nothing.
-  const tcellMin = Math.max(0, parseInt(kf.tcellMin, 10) || 0);
+  // Threshold is a state-enrichment fold (e.g. 1.5, 2, 3).
+  const tcellMin = Math.max(0, parseFloat(kf.tcellMin) || 0);
 
   // Whitelist mode (cross-tab handoff) has two sub-modes:
   //   stack=false (default): whitelist bypasses every other gate. Decomp-only
@@ -626,12 +656,12 @@ function renderKinaseExplorer() {
     // if persisted localStorage filters would otherwise disqualify it.
     if (!q && gridActive && !kinaseQualifies(r.id, kf)) continue;
     // Opt-in specificity narrowing (tcellMin > 0, off by default): kinase passes
-    // if any attribution row in scope reaches the requested concentration tier
-    // (≥ tcellMin × even share among detected). Specificity only — concordance is
+    // if any state in scope reaches the requested enrichment fold (≥ tcellMin ×
+    // the kinase's median state). Specificity only — concordance is
     // never used to filter (de-gate
     // directive, docs/tcell_exhaustion_analysis_summary.md). Skipped
     // under text search so a targeted lookup always surfaces the kinase.
-    if (!q && tcellMin > 0 && _kineMaxTcellTierScoped(r.id, kf) < tcellMin) continue;
+    if (!q && tcellMin > 0 && _kineMaxTcellEnrichScoped(r.id, kf) < tcellMin) continue;
     // Trajectory-shape pattern. Skipped under text search so a targeted lookup
     // still surfaces the kinase regardless of its NES shape.
     if (!q && kf.pattern && !TrendFilter.vectorMatches(r._nes, kf.pattern)) continue;
@@ -681,9 +711,12 @@ function renderKinaseExplorer() {
     const subCls = scopedSig === 0 ? " sub-thresh" : "";
     const drvCls = (drvSet && drvSet.has(r.id)) ? " driver" : "";
 
-    // Concentration tier badge (max within-cohort tier in scope) + cell-types pill.
-    const specBadge = _tcellConcTierBadge(_kineMaxTcellTierScoped(r.id, colFilter));
-    const cellTypesCell = _renderCellTypesCell(r, colFilter);
+    // Within-cohort cell-type badge + state-enrichment badge + cell-states pill +
+    // NSCLC cross-lineage breadth.
+    const cellTypeCell = _renderCellTypeCell(r);
+    const specBadge = _tcellEnrichBadge(_kineMaxTcellEnrichScoped(r.id, colFilter));
+    const cellStatesCell = _renderCellTypesCell(r, colFilter);
+    const nsclcBreadthCell = _renderNSCLCBreadthCell(r);
 
     const residueBadge = r.residue_type === "Y"
       ? ' <span class="track-badge track-y" title="Tyrosine kinase (pY track)">pY</span>'
@@ -698,8 +731,10 @@ function renderKinaseExplorer() {
       `<td>${profile}</td>` +
       `<td class="attr-num">${r.peak_NES != null && isFinite(r.peak_NES) ? (r.peak_NES > 0 ? "+" : "") + r.peak_NES.toFixed(2) : '<span class="muted">—</span>'}</td>` +
       `<td class="attr-num">${scopedSig}<span class="muted" style="font-size:10px;"> / ${sigDenom}</span></td>` +
+      `<td>${cellTypeCell}</td>` +
       `<td>${specBadge}</td>` +
-      `<td>${cellTypesCell}</td>` +
+      `<td>${cellStatesCell}</td>` +
+      `<td>${nsclcBreadthCell}</td>` +
       `</tr>`
     );
   }

@@ -587,9 +587,10 @@ window.KinaseFilter = (function() {
     celltype: [],     // [] = any; within-cohort attributed cell-type states.
     confidence: "",   // Legacy/shared handoff slot; not exposed in T-cell MEA.
     nSigMin: 0,       // minimum n_sig (count of significant contrasts in scope)
-    tcellMin: 0,      // 0 = Any (off, default); 1/2/5/10 = opt-in minimum within-cohort
-                      // specificity tier (× uniform). Specificity only — concordance is
-                      // never gated (docs/tcell_exhaustion_analysis_summary.md).
+    tcellMin: 0,      // 0 = Any (off, default); 1.5/2/3 = opt-in minimum state
+                      // enrichment (fold over the kinase's median state).
+                      // Specificity only — concordance is never gated
+                      // (docs/tcell_exhaustion_analysis_summary.md).
     sign: "",         // "" | "up" | "down" over selected day contrasts.
     pattern: "",      // TrendFilter value over ordered donor-day NES contrasts.
     fdr: 0.25, sortCol: "nes_profile", sortAsc: false,
@@ -681,7 +682,6 @@ Object.defineProperty(window, "_keFilters", {
 let _keRows = null;
 let _keSigFdr = null;
 let _kinaseIdxById = null;
-let _evidenceByKinase = null;
 let _decompByKey = null;
 let _decompByKinCtx = null;
 let _agreementByKey = null;

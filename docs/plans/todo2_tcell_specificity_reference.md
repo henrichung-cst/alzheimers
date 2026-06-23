@@ -1,5 +1,9 @@
 # Plan: T-cell Specificity Reference (10x NSCLC)
 
+> For the live T-cell Kinase Explorer Attribution tab contract, see
+> [`docs/foundation/kinase_explorer_attribution.md`](../foundation/kinase_explorer_attribution.md).
+> This file is retained as implementation history for the NSCLC reference.
+
 **Goal:** Add an external cell-type specificity reference for the T-cell cohort analogous to WMB (mouse Song) and SEA-AD/HBCA (human Mukesh). The reference is the 10x "Aggregate of 900k human NSCLC and normal-adjacent cells, multiplexed 16-probe barcodes" dataset. It answers: where is a kinase expressed across human T-cell and immune subpopulations? The motivating audit: which kinases predicted by T-cell MEA are absent from this reference (never expressed in any immune cell type)?
 
 ---

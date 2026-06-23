@@ -77,6 +77,9 @@ nsclc-ingest = "bash alz/runners/supporting/ingest_nsclc_10x.sh"
 nsclc-label = "python alz/reference/nsclc_expression.py --label-clusters"
 nsclc-projectils = "bash alz/runners/supporting/run_nsclc_projectils.sh"
 nsclc-expression = "python alz/reference/nsclc_expression.py --run"
+# Standard attribution metric (detection-gated concentration + effective number
+# of cell types) from the existing expression CSV — no matrix re-stream.
+nsclc-metrics = "python alz/reference/nsclc_expression.py --metrics"
 nsclc-audit = "python alz/reference/nsclc_expression.py --audit"
 tcell-viewer = { cmd = "python alz/build_tcell_viewer.py", depends-on = ["tcell-within-cohort"] }
 install-incytr = "R CMD INSTALL --no-multiarch ../incytr"

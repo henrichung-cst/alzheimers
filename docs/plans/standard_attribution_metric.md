@@ -53,24 +53,33 @@ Two corrections vs. the old share, both load-bearing:
    anomaly and the inverse-prediction finding).
 2. **Linear weights** → no log-compression inflating apparent breadth/concentration.
 
-**`concentration_tier`** — the familiar 2×/5×/10× bins, applied to `concentration_c`:
+**`concentration_of_total`** = `wᶜ / Σ_{all} w` — the cell type's share of the kinase's
+**total** linear expression across *all* cell types (denominator over every cell type, not just
+detected). This is the tier basis; `concentration_c` (detected-set, above) stays as the input to
+`effective_n` and the confidence pill.
+
+**`concentration_tier`** — the familiar 2×/5×/10× bins, applied to `concentration_of_total`
+over a fixed **`1 / N_total`** baseline (an even split across *all* cell types in the cohort):
 
 | tier | meaning |
 |---|---|
-| ≥10× | `concentration_c ≥ 10 / n_detected` |
-| ≥5× | `concentration_c ≥ 5 / n_detected` |
-| ≥2× | `concentration_c ≥ 2 / n_detected` |
-| ≥1× | at or above an even share among present cell types |
+| ≥10× | `concentration_of_total ≥ 10 / N_total` |
+| ≥5× | `concentration_of_total ≥ 5 / N_total` |
+| ≥2× | `concentration_of_total ≥ 2 / N_total` |
+| ≥1× | at or above the all-cell-types even share |
 
-The baseline is **`1 / n_detected`** — an even split among the cell types where the kinase is
-*actually present* — **not** `1/N_total` padded with empty cell types. That single change is
-what makes the bin honest: the old ladder's fold was inflated by the count of cell types the
-kinase isn't in. The tier is meaningful only when `n_detected ≥ 2`; when the kinase is present
-in one cell type, specificity is conveyed by `effective_n = 1` (the fold is trivially 1×).
+The baseline is **`1 / N_total`** — fixed per cohort (31 Levy clusters, 14 T-states, …) — so a
+10× pill means the *same bar* (≥10× the uniform share) for **every** kinase and is comparable at
+a glance. This deliberately supersedes the earlier `1/n_detected` baseline, whose fold depended
+on how many cell types each kinase happened to be detected in (a kinase present in one cell type
+read as a trivial 1×, the *least* concentrated pill, despite being maximally specific). The
+share-is-not-presence failure is still averted — the share is **linear** (no log inflation) and
+the tier is assigned only to **detected** cells — so the fold is honest without being relative to
+a per-kinase denominator.
 
-Non-misleading rule: `concentration_c` / its tier are shown only when `detected`, and always
-beside the effective-N below. A 100% concentration in a kinase present in one type then reads
-as "present in 1 type," not "10× enriched."
+Non-misleading rule: the tier is assigned only when `detected`, and shown beside both shares —
+`concentration_of_total` (what the pill is built from) and the detected-set `concentration_c`
+(what the confidence eff is built from) — so the two are never conflated.
 
 ## Q2 — overall cell-type specificity (per kinase)
 
@@ -116,7 +125,7 @@ effectively ~1 at "T cells" merged, ~13 across T-varieties; both true). Never pr
 |---|---|
 | `specificity_score` share as standalone localizer/tier (WMB, Song-within, NSCLC, T-cell) | detected-set `concentration_c`, always paired with `detected` + `effective_n` |
 | `confidence.py` `song_location_high` (`song_specificity ≥ 2/31`) and `wmb_crosscheck` (≥2/9) share gates | detection at the attributed cluster |
-| Viewer fold-over-uniform ladders `_wmbTier` / `_msTier` / `_tcellTier` / `_nsclcTier` — fold over `1/N_total` on the **ungated** share | same 2×/5×/10× bins, but on `concentration_c` (gated, linear) over `1/n_detected`; plus the per-cell-type detection column and `effective_n` |
+| Viewer fold-over-uniform ladders `_wmbTier` / `_msTier` / `_tcellTier` / `_nsclcTier` — fold over `1/N_total` on the **ungated, log** share | same 2×/5×/10× bins over `1/N_total`, but on the **linear** `concentration_of_total` assigned only to **detected** cells; plus the per-cell-type detection column and `effective_n` |
 | `song_tau` as the headline per-gene specificity | `effective_n_celltypes` (interpretable; Tau was rejected) |
 | Two-ladder split (2× pipeline gate vs 10/5/2/1 viewer) — finding D | one definition computed once in Python, rendered in JS |
 
@@ -156,7 +165,10 @@ it is the conceptual model the others move toward. Its OLS significance is the 5
    concentration / effective-N weights (correct base per cohort).
 3. **SEA-AD** — confirmed exempt. Labeled "ratio-only — no detection," remains a human
    corroborating reference, not gated on detection.
-4. **Bins** — retained on the fold metric (`concentration_tier`, baseline `1/n_detected`).
+4. **Bins** — retained on the fold metric (`concentration_tier`). **Revised 2026-06-22:**
+   baseline moved from `1/n_detected` to a fixed `1/N_total` over `concentration_of_total`
+   (share of total linear expression), so 10× is the same bar for every kinase — comparable at
+   a glance. Detected-set `concentration_c` is kept as the confidence-eff input.
 
 ## Phase 1 — T-cell prototype — DONE 2026-06-20
 
@@ -168,11 +180,15 @@ The standard is implemented end-to-end on the T-cell cohort:
   the helper at native + coarse resolution; `nsclc_kinase_specificity.csv` written.
   `pixi run nsclc-metrics` recomputes from the existing expression CSV (no matrix re-stream).
 - `alz/build_tcell_viewer.py` — state crosswalk + reference detection joined onto the
-  attribution index (`nsclc_frac`, `nsclc_detected`, `mea_false_positive`); `top_celltype`
-  gated to NSCLC-detected states.
+  attribution index (`nsclc_frac`, `nsclc_detected`); `top_celltype` gated to
+  NSCLC-detected states.
 - Viewer JS/CSS — per-state NSCLC **detection** column (✓/✗ + frac%) replaces the share tier;
-  ⚠ MEA false-positive badge overrides a high within-cohort tier; drawer strip shows per-lineage
-  detection + effective-N.
+  drawer strip shows per-lineage detection + effective-N.
+
+> **Superseded 2026-06-22:** the `mea_false_positive` flag/badge/column and its
+> row-dimming were removed entirely. NSCLC detection remains as the independent
+> corroborator; it is reported as detection evidence, not a derived verdict flag.
+> (The "Verified" run below predates this removal.)
 
 Verified: LCK/ZAP70 detected in all 14 states (0 FP, top cell retained); LRRK2 share-localizes
 to Treg at 10× but is detected in 0 T-states → flagged FP, top cell blanked; FGFR2/EGFR likewise
@@ -271,9 +287,14 @@ which is unchanged).
 ### Out-of-scope collateral surfaced (need a separate decision)
 - `alz/reference/wmb_expression.py --proteome` still emits a share `specificity_score` — a
   distinct proteome-wide surface, not the kinase attribution path. Left as-is.
-- `alz/supplementary/{aggregation_robustness,threshold_sensitivity}.py` test the *old*
-  share-confidence model (read `specificity_score` / `wmb_specificity`); they will break/degrade
-  and need porting to detection or retiring.
+- `alz/supplementary/{aggregation_robustness,threshold_sensitivity}.py` — **RETIRED 2026-06-21.**
+  Both probed the old share-confidence tier (`_assign_confidence` over `wmb_specificity` ≥ k×
+  even-split). Their only outputs (`conf_*`/`stable`, the WMB×LFC tier sweep) keyed entirely on the
+  retired tier, which `confidence.py` no longer produces; the aggregation/LFC axes existed only as
+  inputs to it, so nothing standalone survived. Deleted the two modules and pruned their Q1/Q2
+  invocations from `runners/supplementary/run_reviewer_diagnostics.sh` + the `docs/INDEX.md` and
+  `repo_retention_policy.md` listings. `config.wmb_specificity_uniform()` is kept — still used by
+  `build_unified_viewer.py` for the 5xFAD WMB cross-check.
 
 ## Phase 3 — 5xFAD within-cohort detection metric — DONE 2026-06-22
 

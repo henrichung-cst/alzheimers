@@ -1116,16 +1116,17 @@ function _kxRenderF5AttrMini(row, tissue) {
   if (!rows.length) return `<div class="muted">No matching 5xFAD attribution rows.</div>`;
   const body = rows.map(r => {
     const lfc = _kxF5Num(r.fivexfad_lfc);
+    const conf = r.confidence_tier || "none";
+    const confChip = `<span class="${_attrConfidenceClass(conf)}" title="${_escapeHtml(r.confidence_basis || conf)}">${_escapeHtml(conf.replace("_", " "))}</span>`;
     return `<tr>` +
-      `<td>${_escapeHtml(r.cell_type || "")}${r.age_months ? ` <span class="muted">${_escapeHtml(String(r.age_months))}mo</span>` : ""}</td>` +
-      `<td>${_escapeHtml((r.confidence_tier || "none").replace("_", " "))}</td>` +
+      `<td>${_escapeHtml(r.cell_type || "")} ${confChip}${r.age_months ? ` <span class="muted">${_escapeHtml(String(r.age_months))}mo</span>` : ""}</td>` +
       `<td class="kx-nes-num">${_detGateCell(r.fivexfad_detected, r.fivexfad_fraction_cells_expressing, "this 5xFAD cell type")}</td>` +
       `<td class="kx-nes-num">${_concTierCell(r.fivexfad_concentration_tier)}</td>` +
       `<td class="kx-nes-num">${lfc == null ? "–" : `${lfc >= 0 ? "+" : ""}${lfc.toFixed(2)}`}</td>` +
       `</tr>`;
   }).join("");
   return `<table class="data-table kx-f5-attr-table"><thead><tr>` +
-    `<th>Cell type</th><th>Conf</th><th>Detected</th><th>Conc</th><th>LFC</th>` +
+    `<th>Cell type</th><th>Detected</th><th>Conc</th><th>LFC</th>` +
     `</tr></thead><tbody>${body}</tbody></table>`;
 }
 

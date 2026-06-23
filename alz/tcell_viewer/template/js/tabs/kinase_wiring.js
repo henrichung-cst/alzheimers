@@ -99,7 +99,7 @@ function wireKinaseTable() {
   if (tcellSel) {
     tcellSel.value = String(KinaseFilter.get("tcellMin") || 0);
     tcellSel.addEventListener("change", () => {
-      KinaseFilter.set({tcellMin: parseInt(tcellSel.value, 10) || 0});
+      KinaseFilter.set({tcellMin: parseFloat(tcellSel.value) || 0});
       renderKinaseExplorer();
     });
   }

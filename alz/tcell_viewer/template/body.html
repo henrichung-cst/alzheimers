@@ -51,13 +51,12 @@
               <option value="trough">single trough</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Optional narrowing tool (defaults to Any/off — nothing is hidden unless you choose a minimum). A kinase passes if its transcript reaches ≥Nx the uniform share (1/N_states) in at least one cell type within the active scope. Specificity is the informative localizer; concordance is never filtered.">Specificity &geq;
-            <select id="ke-filter-tcell" aria-label="Minimum specificity tier">
+          <label class="ke-filter-label" title="Optional narrowing tool (defaults to Any/off — nothing is hidden unless you choose a minimum). A kinase passes if it is enriched ≥Nx over its median state in at least one state within the active scope. State enrichment is the within-T-cell-state specificity localizer; concordance is never filtered.">State specificity &geq;
+            <select id="ke-filter-tcell" aria-label="Minimum state-enrichment fold">
               <option value="0">Any</option>
-              <option value="1">&geq;1&times;</option>
+              <option value="1.5">&geq;1.5&times;</option>
               <option value="2">&geq;2&times;</option>
-              <option value="5">&geq;5&times;</option>
-              <option value="10">&geq;10&times;</option>
+              <option value="3">&geq;3&times;</option>
             </select>
           </label>
           <button id="ke-filter-reset" class="ke-filter-reset" title="Reset all kinase filters">Reset</button>
@@ -72,8 +71,10 @@
               <th data-col="nes_profile" data-metric="nesProfile" title="NES profile across day-vs-baseline (d2) contrasts. Color = direction (red up, blue down), saturation = |NES|, black outline = FDR < threshold. Click to sort by max |NES|.">NES Profile</th>
               <th data-col="peak_NES" data-metric="peakNes" title="Peak NES — signed NES at the contrast with the largest |NES| across timepoint contrasts. Click to sort by |NES|.">NES</th>
               <th data-col="n_sig" data-metric="nSig" title="n_sig — count of contrasts where FDR < threshold. Click to sort.">n_sig</th>
-              <th data-col="tcell_max_tier" data-metric="tcellMaxTier" title="Specificity — max within-cohort specificity tier (≥Nx the uniform 1/N_states transcript share) across cell types in scope. Shown for reading and sortable; never gated. Click to sort.">Specificity</th>
-              <th data-col="n_attributed_celltypes" data-metric="nAttributedCelltypes" title="Cell types this kinase is specific to (transcript ≥1x uniform share). Badge color = best tier. Concordance is shown in the Attribution tab but never filters. Click to sort by count.">Cell types</th>
+              <th data-col="tcell_celltype" data-metric="tcellCelltype" title="Cell type — within-cohort cell-type specificity. The dominant T-cell type (CD8 / CD4 / Treg) the kinase concentrates in, from the donor's own scRNA. A ✓ tier badge marks concentration ≥2× the even 1/3 share (cell-type specific); otherwise the kinase is broad across CD8/CD4/Treg. Distinct from State specificity (which activation state) and the NSCLC cross-lineage column (beyond-T breadth). Click to sort.">Cell type</th>
+              <th data-col="tcell_max_enrich" data-metric="tcellMaxEnrich" title="State specificity — peak within-cohort T-cell-state enrichment (fold of the most-enriched eligible state over the kinase's median state) across states in scope. Only detected states with ≥50 cells are eligible; an undetected kinase has no badge. Localizes a kinase among the ProjecTILs T-cell states; sortable, never gated. Click to sort.">State specificity</th>
+              <th data-col="n_attributed_celltypes" data-metric="nAttributedCelltypes" title="T-cell states this kinase is detected in (fraction expressing ≥1%), out of 14 — breadth of detection within the cohort, parallel to the Cross-lineage column. Enrichment is the State specificity column. Click to sort by count.">Cell states</th>
+              <th data-col="nsclc_lineages_detected" data-metric="nsclcLineages" title="Cross-lineage (NSCLC) — breadth from the independent NSCLC reference (10x 897k-cell): how many coarse cell-type lineages (T_NK + non-T: B_plasma, Myeloid, Epithelial, Endothelial, Fibroblast, Mast) detect this kinase (expressed in any cell — no minimum-fraction floor; the 897k-cell reference is deep enough that any nonzero fraction is real), out of those present, with the dominant lineage badged. Fewer = more cell-type-specific beyond T cells. n/a = outside the NSCLC probe panel. Click to sort.">Cross-lineage</th>
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -238,40 +239,6 @@
         = proteomics-significant gene
       </div>
       <div id="ip-table-wrap"></div>
-    </div>
-  </div>
-  <div id="tab-celltype" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-celltype" hidden>
-    <div class="card ct-assign-layout">
-      <div class="ct-assign-head">
-        <h2>Cell-Type Assignment</h2>
-        <span class="ct-context-chip" id="ct-context-label"></span>
-      </div>
-      <section>
-        <div class="ct-section-head">
-          <h3>Projection</h3>
-          <div class="ct-section-meta">
-            <label class="ke-filter-label">Reference
-              <select id="ct-embedding-ref" aria-label="Projection reference"></select>
-            </label>
-            <label class="ke-filter-label">Reduction
-              <select id="ct-embedding-reduction" aria-label="Embedding reduction"></select>
-            </label>
-          </div>
-        </div>
-        <div class="muted" id="ct-embedding-status"></div>
-        <div class="ct-embedding-wrap">
-          <canvas id="ct-embedding-canvas" width="920" height="420"></canvas>
-          <div class="ct-embedding-legend" id="ct-embedding-legend"></div>
-        </div>
-      </section>
-      <section style="margin-top:14px;">
-        <div class="ct-section-head"><h3>States</h3></div>
-        <div class="ct-bars" id="ct-state-bars"></div>
-      </section>
-      <section style="margin-top:14px;">
-        <div class="ct-section-head"><h3>Day Counts</h3></div>
-        <div class="ct-day-grid" id="ct-day-grid"></div>
-      </section>
     </div>
   </div>
 </main>

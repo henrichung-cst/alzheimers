@@ -115,10 +115,12 @@ from viewer.paths import (  # noqa: E402
     MEASUREMENT_TRACE_SCHEMA_VERSION,
     OMICS_TRACE_INDEX,
     OMICS_TRACE_SCHEMA_VERSION,
+    OMICS_TRACE_FIVEXFAD_SCHEMA_VERSION,
     OMICS_TRACE_NORMALIZED_INDEX,
     OMICS_TRACE_NORMALIZED_SCHEMA_VERSION,
     TRANSCRIPT_TRACE_INDEX,
     TRANSCRIPT_TRACE_SCHEMA_VERSION,
+    TRANSCRIPT_TRACE_FIVEXFAD_SCHEMA_VERSION,
     PAYLOAD_JSON,
     PAYLOAD_JSON_GZ,
     PIPELINE_OVERVIEW_DEST,
@@ -634,6 +636,48 @@ def ensure_omics_trace_normalized_sources() -> dict:
     }
 
 
+def ensure_5xfad_omics_trace_sources(tissue: str) -> dict:
+    """Build (or reuse) the per-sample 5xFAD protein + phospho deconvolution
+    shards for one tissue's Evidence panel. Asserts the per-sample mean
+    reconciles to the condition-level deconvoluted value (rel 1e-6) at build
+    time. Returns the per-context block for ``meta.omics_trace.by_context``."""
+    from integration import build_omics_trace_fivexfad as botf  # noqa: E402
+
+    index = botf.build_tissue(tissue)
+    return {
+        "schema_version": OMICS_TRACE_FIVEXFAD_SCHEMA_VERSION,
+        "relative_path": index.get("relative_path"),
+        "clusters": index.get("clusters", []),
+        "layers": index.get("layers", ["protein", "phospho_ps", "phospho_py"]),
+        "filename_template": index.get("filename_template", "{cluster}.parquet"),
+        "sanitize_rule": index.get("sanitize_rule",
+                                   "replace('/', '-'); replace(' ', '_')"),
+        "gene_scope": index.get("gene_scope",
+                                "routed_incytr_pathway_evidence_genes"),
+        "reconciliation_max_rel_err": index.get("reconciliation_max_rel_err"),
+    }
+
+
+def ensure_5xfad_transcript_trace_sources(tissue: str) -> dict:
+    """Build (or reuse) the per-cluster 5xFAD transcript pseudobulk shards for
+    one tissue's Evidence panel. Returns the per-context block for
+    ``meta.transcript_trace.by_context``."""
+    from integration import build_transcript_trace_fivexfad as bttf  # noqa: E402
+
+    index = bttf.build_tissue(tissue)
+    return {
+        "schema_version": TRANSCRIPT_TRACE_FIVEXFAD_SCHEMA_VERSION,
+        "relative_path": index.get("relative_path"),
+        "clusters": index.get("clusters", []),
+        "sample_groups": index.get("groups", []),
+        "n_libraries_per_arm": index.get("n_libraries_per_arm", 1),
+        "note": index.get("note", ""),
+        "filename_template": index.get("filename_template", "{cluster}.parquet"),
+        "sanitize_rule": index.get("sanitize_rule",
+                                   "replace('/', '-'); replace(' ', '_')"),
+    }
+
+
 def assert_pathway_fc_round_trips() -> None:
     """Default-mode round-trip assertion: spot-check ~100 rows per contrast.
 
@@ -827,19 +871,31 @@ def load_all_data() -> UnifiedData:
     _ua_full_cols = [
         "kinase", "contrast", "cell_type",
         "confidence_tier", "confidence_basis",
+        # Recalculated confidence = within-cohort cell-type exclusivity over the
+        # curated specificity units (config.load_specificity_unit_map: collapse
+        # over-split WMB classes, keep distinct cell types split). The dominant
+        # unit label names the pill, the home cluster is its top child, and
+        # specificity_collapsed flags an expandable parent. The prior
+        # disease-direction tier is kept as a secondary signal for the tooltip.
+        "specificity_unit", "specificity_unit_label",
+        "specificity_celltype", "specificity_collapsed",
+        "direction_tier", "direction_basis",
         "song_direction_support", "human_location_tier", "decomp_agrees_bulk",
-        # WMB detection metric (standard attribution): per-class detection +
-        # detected-set concentration / tier, replacing the share.
+        # WMB expression evidence: per-class detection plus all-class
+        # concentration / tier.
         "wmb_detected", "wmb_concentration", "wmb_concentration_tier",
         "wmb_mean_log2_expression", "wmb_fraction_cells_expressing",
         "wmb_binary_expressed",
         "sea_ad_lfc", "song_lfc", "concordance_source",
         "seaad_location_score", "hbca_location_score", "human_location_score",
         "decomp_nes", "decomp_fdr",
-        # Song detection metric (favored mouse signal): per-cluster detection +
-        # concentration / tier + per-gene effective number of cell types.
-        "song_detected", "song_concentration", "song_concentration_tier",
+        # Song expression evidence (favored mouse signal): per-cluster detection
+        # plus all-cluster concentration / tier + per-gene effective number of
+        # cell types.
+        "song_detected", "song_concentration", "song_concentration_of_total",
+        "song_concentration_tier",
         "song_fraction_cells_expressing", "song_effective_n",
+        "song_unit_effective_n",
         "song_top_celltype", "song_top_concentration",
         "song_pval", "song_fdr",
         "NES", "FDR",
@@ -1010,8 +1066,13 @@ def build_payload(data: UnifiedData) -> dict:
         "timepoints": list(config.TIMEPOINTS),
         "diseaseColors": dict(config.DISEASE_COLORS),
         "familyMap": fam,
-        "transcript_trace": ensure_transcript_trace_sources(),
-        "omics_trace": ensure_omics_trace_sources(),
+        # by_context so a 5xFAD context resolves its own shards — flat would
+        # return Song's index under a 5xFAD context and the overlapping cluster
+        # names would load the wrong shards. 5xFAD tissues are merged in below,
+        # after their pathway indices exist. omics_trace_normalized stays flat
+        # (build-time gate only; never read by the viewer).
+        "transcript_trace": {"by_context": {context_id: ensure_transcript_trace_sources()}},
+        "omics_trace": {"by_context": {context_id: ensure_omics_trace_sources()}},
         "omics_trace_normalized": ensure_omics_trace_normalized_sources(),
     }
 
@@ -1043,6 +1104,18 @@ def build_payload(data: UnifiedData) -> dict:
         contrasts = block.get("contrasts", [])
         groups = sorted({c.split("_")[0] for c in contrasts if "_" in c})
         timepoints = [c.split("_", 1)[1] for c in contrasts if "_" in c]
+        tissue = ctx_id.replace("fivexfad_", "")
+
+        # Per-sample evidence shards for this tissue (built now that the 5xFAD
+        # pathway index exists); merge into the by_context meta + flip caps.
+        ot_block = ensure_5xfad_omics_trace_sources(tissue)
+        tt_block = ensure_5xfad_transcript_trace_sources(tissue)
+        meta["omics_trace"]["by_context"][ctx_id] = ot_block
+        meta["transcript_trace"]["by_context"][ctx_id] = tt_block
+        caps = {**_5xfad_incytr_capabilities}
+        caps["omics_trace"] = bool(ot_block.get("clusters"))
+        caps["transcript_trace"] = bool(tt_block.get("clusters"))
+
         meta["contexts"].append({
             "id": ctx_id,
             "label": _5xfad_incytr_ctx_labels[ctx_id],
@@ -1055,7 +1128,7 @@ def build_payload(data: UnifiedData) -> dict:
                 "timepoints": timepoints,
                 "baseline": "WT",
             },
-            "capabilities": {**_5xfad_incytr_capabilities},
+            "capabilities": caps,
             "celltypes": block.get("celltypes", []),
             "notes": [],
         })
@@ -1161,6 +1234,8 @@ _SHARED_TEMPLATE_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "viewer_shared", "template"
 )
 _VIEWER_SPECIFIC_TAB_INCLUDES = [
+    "js/tabs/attribution_manifest_song.js",
+    "js/tabs/attribution_manifest_fivexfad.js",
     "js/tabs/kinase_human.js",
     "js/tabs/kinase_fivexfad.js",
     "js/tabs/kinase_crosstable.js",

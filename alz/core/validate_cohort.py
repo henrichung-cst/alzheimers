@@ -979,7 +979,7 @@ def validate_tcells(report: ValidationReport) -> None:
         ("tcell_concordance.csv", ["gene", "state", "tcell_lfc"]),
         # tcell_specificity: gene-level standard detection metric (not kinase-level)
         ("tcell_specificity.csv",
-         ["gene", "state", "tcell_detected", "tcell_concentration"]),
+         ["gene", "state", "tcell_detected", "tcell_state_enrichment"]),
         ("unified_attribution_tcells.csv",
          ["kinase", "residue_type", "contrast", "NES", "FDR"]),
     ]:

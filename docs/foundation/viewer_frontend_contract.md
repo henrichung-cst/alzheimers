@@ -30,6 +30,7 @@ js/03_filters_hash.js
 js/04_slice_cache.js
 js/05_header.js
 js/boot.js
+js/tabs/attribution_view.js
 js/tabs/incytr_state.js
 js/tabs/incytr_heatmap.js
 js/tabs/incytr_pathways.js
@@ -39,6 +40,29 @@ js/widgets/multiselect.js
 js/widgets/sequence_logo.js
 js/widgets/transcript_trace.js
 ```
+
+`attribution_view.js` is the shared Attribution verdict-table + inline-accordion
+engine (`AttributionView.render(hostId, ctx, manifest)`). It holds shared leaf
+renderers (`_detGateCell`, `_concTierCell`, `_attrLfcColor`,
+`_attrConfidenceClass`, `_attrSubGroupRow`, `_attrVerdictConfCell`,
+`_attrVerdictCmp`), shared section renderers (`_renderWMBDotPlot`,
+`_renderSEAADHeatmap`, `_renderWithinCohortOLSPanel`, `_renderDecompOlsTable`,
+`_refCrosswalkLine`), and the §0 verdict shell (`_renderSpecificityVerdictShell`
+plus helpers). Song's §0 adapter (`_renderSpecificityVerdict`) also lives here.
+
+Per-cohort manifests are **not** in `viewer_shared` — they live beside their
+respective host tabs and are included via `_VIEWER_SPECIFIC_TAB_INCLUDES`:
+
+```text
+alz/viewer/template/js/tabs/attribution_manifest_song.js       (unified viewer)
+alz/viewer/template/js/tabs/attribution_manifest_fivexfad.js   (unified viewer)
+alz/tcell_viewer/template/js/tabs/attribution_manifest_tcell.js (T-cell viewer)
+```
+
+Each manifest is a thin declaration (columns, superGroups, getRows, dedupCmp,
+defaultSort, rowVisible, bulkAnchor, sections). Field names stay per-cohort
+(`song_*` / `fivexfad_*` / `tcell_*`); the manifest maps them to the shared
+engine via `key` and `render(r)` accessors — payload schemas were not renamed.
 
 The payload adapter is the canonical read layer for `meta.contexts`, `selection.context`,
 `*.by_context`, and Incytr shard filenames. `SliceCache` is the canonical lazy parquet loader for
@@ -181,8 +205,13 @@ configuration or small view-specific hooks:
 ```text
 js/01_state.js
 js/02_ui_chrome.js
-js/tabs/kinase_audit.js
 ```
+
+Note: `kinase_audit.js` was previously listed here as a consolidation candidate.
+Its Attribution subtab has been consolidated — both viewers now call
+`AttributionView.render(..., MANIFEST)` from the shared engine. The remaining
+per-viewer divergence in `kinase_audit.js` (MEA-subtab structure, contrast
+pickers, trajectory filters) is intentional and is not a consolidation target.
 
 High-priority consolidation targets:
 

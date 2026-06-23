@@ -30,6 +30,12 @@ complementary annotators (see docs/plans/todo2_tcell_specificity_reference.md):
                      cell, else the coarse marker lineage), accumulate per
                      (gene, cell_type). Writes nsclc_kinase_expression.csv.
 
+  --metrics        : recompute the standard attribution metric (detection-gated
+                     concentration + effective number of cell types) from the
+                     existing expression CSV — no matrix re-stream. Writes
+                     nsclc_kinase_specificity.csv and refreshes the metric
+                     columns in nsclc_kinase_expression.csv.
+
   --audit          : cross MEA-predicted kinases (FDR<0.25) against the reference;
                      report panel-covered kinases expressed nowhere. Writes
                      nsclc_kinase_audit.csv.
@@ -37,6 +43,7 @@ complementary annotators (see docs/plans/todo2_tcell_specificity_reference.md):
 Usage:
     python alz/reference/nsclc_expression.py --label-clusters
     python alz/reference/nsclc_expression.py --run
+    python alz/reference/nsclc_expression.py --metrics
     python alz/reference/nsclc_expression.py --audit
 """
 
@@ -59,10 +66,17 @@ if _PROJECT_ROOT not in sys.path:
 
 from alz.shared import config
 from alz.reference.atlas import get_all_kinase_genes
+from alz.cross_reference import specificity
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+
+# NSCLC reference detection floor: ≥1% of a cell type's cells express the kinase.
+# Lower than the cross-cohort 10% gate — the 897k-cell reference is deep, so a 1%
+# floor still filters ambient/dropout noise without rejecting real low-copy
+# kinases. Scoped to this reference; the shallow within-cohort cohort keeps 10%.
+NSCLC_DETECTION_FRAC_MIN = 0.01
 
 CHUNK_CELLS = 5000
 
@@ -351,37 +365,21 @@ def compute_expression() -> pd.DataFrame:
                 "cell_type": ct,
                 "mean_log2_expression": round(float(mean_all[ci, k]), 6),
                 "fraction_cells_expressing": round(float(frac_all[ci, k]), 6),
-                "binary_expressed": bool(mean_all[ci, k] > 1
-                                         and frac_all[ci, k] > 0.10),
+                # NSCLC detection floor (recomputed in _write_attribution_metrics).
+                "binary_expressed": bool(frac_all[ci, k] >= NSCLC_DETECTION_FRAC_MIN),
                 "n_cells": int(n_cells_ct[ci]),
                 "probe_covered": True,
             })
     df = pd.DataFrame(rows)
 
-    # Guardrail 2: specificity at CONSISTENT resolution. The 14 ProjecTILs T
-    # states would otherwise each carry a fragmented share, biasing the score
-    # against T-cell kinases vs. monolithic non-T lineages. Collapse all T
-    # states (+ T_NK_other) into one "T_NK" group, compute the share over
-    # coarse groups with a CELL-WEIGHTED group mean, and assign every member
-    # cell_type its group's share. fraction_cells_expressing / binary_expressed
-    # stay at native 14-state resolution (within-cell-type, resolution-free).
+    # spec_group = coarse lineage grouping. The 14 ProjecTILs T-states (+
+    # T_NK_other) collapse to one "T_NK" group; the 6 non-T lineages stay
+    # separate. This is the coarse resolution for the standard attribution
+    # metric (the data answers "how specific" differently at native vs coarse
+    # resolution — both are reported). fraction_cells_expressing / detection
+    # stay at native cell-type resolution.
     df["spec_group"] = df["cell_type"].map(_spec_group)
-    # cell-weighted group mean per (gene, group): Σ(mean·n) / Σ(n)
-    df["_wexpr"] = df["mean_log2_expression"] * df["n_cells"]
-    grp = df.groupby(["gene_symbol", "spec_group"]).agg(
-        wexpr=("_wexpr", "sum"), ncell=("n_cells", "sum")).reset_index()
-    grp["group_mean"] = grp["wexpr"] / grp["ncell"].clip(lower=1)
-    gtot = grp.groupby("gene_symbol")["group_mean"].transform("sum")
-    grp["group_spec"] = np.where(gtot > 0, (grp["group_mean"] / gtot).round(6), 0.0)
-    spec_lookup = grp.set_index(["gene_symbol", "spec_group"])["group_spec"]
-    df["specificity_score"] = df.set_index(["gene_symbol", "spec_group"]).index.map(
-        spec_lookup).astype(float)
-
-    df = df[["kinase_id", "gene_symbol", "cell_type", "spec_group",
-             "mean_log2_expression", "fraction_cells_expressing",
-             "binary_expressed", "specificity_score", "n_cells", "probe_covered"]]
-    df.to_csv(config.NSCLC_KINASE_EXPRESSION_FILE, index=False)
-    print(f"\n  Wrote {len(df):,} rows -> {config.NSCLC_KINASE_EXPRESSION_FILE}")
+    _write_attribution_metrics(df)
 
     with open(config.NSCLC_KINASE_EXPRESSION_FILE.replace(".csv", ".scope.json"), "w") as fh:
         json.dump({"dataset": "16plex_900k_32_NSCLC_multiplex",
@@ -397,6 +395,95 @@ def compute_expression() -> pd.DataFrame:
         print(f"    {ct:<14} {int(n_cells_ct[ci]):>9,} cells  "
               f"{ne}/{len(kinase_genes)} kinases expressed")
     return df
+
+
+# ---------------------------------------------------------------------------
+# Standard attribution metric (detection-gated concentration + effective N)
+# ---------------------------------------------------------------------------
+
+
+def _write_attribution_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute the standard attribution metric and write the two reference
+    outputs. See alz/cross_reference/specificity.py and
+    docs/plans/standard_attribution_metric.md for the definition.
+
+      nsclc_kinase_expression.csv  — per (kinase, cell_type): raw facts (mean,
+        fraction, n_cells) + native metrics (detected, linear_expression,
+        concentration, concentration_tier). The share `specificity_score` is
+        removed; detection replaces it.
+      nsclc_kinase_specificity.csv — per (kinase, coarse lineage): group
+        detection + coarse concentration, plus the per-kinase breadth summary
+        (effective number of cell types, top cell type) at native and coarse
+        resolution, denormalized onto each lineage row.
+    """
+    df = df.copy()
+    if "spec_group" not in df.columns:
+        df["spec_group"] = df["cell_type"].map(_spec_group)
+
+    per_label, per_group, per_gene = specificity.compute(
+        df, gene_col="gene_symbol", label_col="cell_type",
+        mean_log2_col="mean_log2_expression",
+        frac_col="fraction_cells_expressing", ncells_col="n_cells",
+        group_col="spec_group")
+
+    # NSCLC reference detection has NO minimum-fraction floor. The 897k-cell
+    # reference (~5,500 cells per cell type) is deep enough that any nonzero
+    # fraction is a real detection, so "detected" = expressed in ≥1 cell
+    # (frac > 0), NOT frac ≥ 10%. (The shallow within-cohort cohort scRNA keeps
+    # the 10% gate; this floor-removal is scoped to the deep reference.) Override
+    # the shared metric's gated detection and recompute the reported counts so the
+    # breadth columns stay consistent — the specificity denominator is unaffected
+    # (detection never filters it).
+    per_label["detected"] = (
+        per_label["fraction_cells_expressing"].astype(float) >= NSCLC_DETECTION_FRAC_MIN)
+    per_label["binary_expressed"] = per_label["detected"]
+    per_group["group_detected"] = (
+        per_group["group_fraction"].astype(float) >= NSCLC_DETECTION_FRAC_MIN)
+    _nd_native = per_label.groupby("gene_symbol")["detected"].sum()
+    _nd_coarse = per_group.groupby("gene_symbol")["group_detected"].sum()
+    per_gene["n_detected_native"] = (
+        per_gene["gene_symbol"].map(_nd_native).fillna(0).astype(int))
+    per_gene["n_detected_coarse"] = (
+        per_gene["gene_symbol"].map(_nd_coarse).fillna(0).astype(int))
+
+    expr = per_label[[
+        "kinase_id", "gene_symbol", "cell_type", "spec_group",
+        "mean_log2_expression", "fraction_cells_expressing", "binary_expressed",
+        "n_cells", "probe_covered",
+        "linear_expression", "detected", "concentration",
+        "concentration_of_total", "concentration_tier"]]
+    expr.to_csv(config.NSCLC_KINASE_EXPRESSION_FILE, index=False)
+    print(f"\n  Wrote {len(expr):,} rows -> {config.NSCLC_KINASE_EXPRESSION_FILE}")
+
+    for c in ("effective_n_native", "top_concentration_native",
+              "effective_n_coarse", "top_concentration_coarse"):
+        per_gene[c] = per_gene[c].astype(float).round(6)
+    spec = per_group.merge(per_gene, on="gene_symbol", how="left")
+    spec.to_csv(config.NSCLC_KINASE_SPECIFICITY_FILE, index=False)
+    print(f"  Wrote {len(spec):,} rows -> {config.NSCLC_KINASE_SPECIFICITY_FILE}")
+
+    n_det_any = int((per_gene["n_detected_native"] > 0).sum())
+    print(f"  Kinases detected in ≥1 cell type: {n_det_any} / {len(per_gene)}; "
+          f"median effective # cell types (detected) = "
+          f"{per_gene.loc[per_gene['n_detected_native'] > 0, 'effective_n_native'].median():.2f}")
+    return expr
+
+
+def compute_metrics() -> pd.DataFrame:
+    """Recompute the standard attribution metric from the existing expression
+    CSV — no matrix re-stream. Buildable now from prior --run output."""
+    if not os.path.exists(config.NSCLC_KINASE_EXPRESSION_FILE):
+        raise FileNotFoundError(
+            f"{config.NSCLC_KINASE_EXPRESSION_FILE} missing — run --run first.")
+    df = pd.read_csv(config.NSCLC_KINASE_EXPRESSION_FILE)
+    needed = {"kinase_id", "gene_symbol", "cell_type", "mean_log2_expression",
+              "fraction_cells_expressing", "binary_expressed", "n_cells",
+              "probe_covered"}
+    missing = needed - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"{config.NSCLC_KINASE_EXPRESSION_FILE} missing columns {missing}")
+    return _write_attribution_metrics(df)
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +593,9 @@ def main():
                    help="Coarse marker-based lineage labeling of graphclust clusters")
     g.add_argument("--run", action="store_true",
                    help="Stream the 10x matrix and compute per-cell-type expression")
+    g.add_argument("--metrics", action="store_true",
+                   help="Recompute the standard attribution metric from the "
+                        "existing expression CSV (no matrix re-stream)")
     g.add_argument("--audit", action="store_true",
                    help="Cross MEA-predicted kinases against the reference")
     args = p.parse_args()
@@ -513,6 +603,8 @@ def main():
         label_clusters()
     elif args.run:
         compute_expression()
+    elif args.metrics:
+        compute_metrics()
     elif args.audit:
         audit()
 

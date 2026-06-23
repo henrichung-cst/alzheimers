@@ -36,9 +36,9 @@
                 data-key="celltype" data-label="Cell type"
                 title="Filter by attributed cell type. Multi-select: kinase must have ≥1 row in EVERY selected cell type."></span>
           <span class="ke-filter-label" id="ke-ms-confidence-wrap">
-            <label class="ke-filter-label">Confidence
-              <select id="ke-filter-confidence" aria-label="Minimum confidence tier"
-                      title="Minimum combined tier. Threshold (≥): very high = upgraded by decomp agreement only; high = high+very high; moderate = +moderate; low = +low.">
+            <label class="ke-filter-label">Location confidence
+              <select id="ke-filter-confidence" aria-label="Minimum location confidence tier"
+                      title="Minimum location-confidence tier. Threshold (≥): very high = upgraded by decomp agreement only; high = high+very high; moderate = +moderate; low = +low.">
                 <option value="">Any</option>
                 <option value="very_high">very high (only)</option>
                 <option value="high">high+</option>
@@ -88,10 +88,9 @@
               <th data-col="agreement_profile" data-metric="agreementProfile" title="Bulk-vs-decomp agreement across 9 contrasts. Green = both pipelines significant, same direction; orange = disagreement (decomp_only / bulk_only / mixed / pure disagreement); empty = neither significant. Click to sort by count of disagreement contrasts (in scope).">Agreement</th>
               <th data-col="peak_NES" data-metric="peakNes" title="Peak NES — signed NES at the contrast with the largest |NES| in the active disease/timepoint scope (or all 9 contrasts if no scope). Click to sort by |NES|.">NES</th>
               <th data-col="n_sig" data-metric="nSig" title="n_sig — count of contrasts where FDR < threshold, within the active disease/timepoint scope (or out of 9 if no scope). Click to sort.">n_sig</th>
-              <th data-col="n_attributed_celltypes" data-metric="nAttributed" title="Cell types attributed at high or moderate confidence in the active scope. Click to sort by count (matches the pill column).">Cell types</th>
+              <th data-col="n_attributed_celltypes" data-metric="nAttributed" title="The cell type this kinase is exclusively expressed in (from the recalculated confidence). Over-split Song clusters of one cell type are collapsed into an expandable parent; distinct cell types stay separate. Blank when broadly expressed. Click to sort by exclusivity.">Cell type</th>
               <th data-col="song_spec" data-metric="songTau" title="Song location evidence, shown as fold over the even-split baseline (1/31 ≈ 0.032): ≥10× / ≥5× / ≥2× / ≥1×. The fold is the kinase's peak cell-type share; the concentration index τ and the cell type are in the tooltip. Click to sort.">Song</th>
               <th data-col="wmb_max_tier" data-metric="wmbMaxTier" title="WMB cross-check — maximum WMB location tier reached by any attribution row in scope, as a multiple of the retained-class uniform (1/9 ≈ 0.111). Independent atlas check on the Song call. Click to sort by max tier.">WMB</th>
-              <th data-col="conf" data-metric="highConfAttr" title="Highest confidence tier reached in the active scope (high &gt; moderate &gt; low &gt; none). Click to sort by max tier — kinases with at least one HIGH-confidence row come first, ties broken by table order.">Conf</th>
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -125,8 +124,8 @@
               <option value="">Any</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Minimum human attribution confidence tier. High = human location evidence plus SEA-AD LFC support; moderate = either location evidence or SEA-AD LFC support.">Confidence
-            <select id="kh-filter-confidence" aria-label="Minimum human attribution confidence">
+          <label class="ke-filter-label" title="Minimum human location-confidence tier. High = human location evidence plus SEA-AD LFC support; moderate = either location evidence or SEA-AD LFC support.">Location confidence
+            <select id="kh-filter-confidence" aria-label="Minimum human location confidence">
               <option value="">Any</option>
               <option value="high">high+</option>
               <option value="moderate">moderate+</option>
@@ -196,7 +195,6 @@
               <th data-col="n_ctrl_sig" class="kh-ctrl-col" title="CTRL donors significant at the active FDR (LOO control deltas). Useful when investigating wash-out: if many controls are also significant in the same direction, the AD-vs-CTRL signal is not specific.">n_ctrl_sig</th>
               <th data-col="n_attributed_celltypes" class="kh-spec-col" title="Human reference cell types attributed at high or moderate confidence. Click to sort by count.">Cell types</th>
               <th data-col="max_specificity_tier" class="kh-spec-col" title="Maximum human reference location tier reached by any attribution row: ≥10× / ≥5× / ≥2× / ≥1×. Click to sort by tier.">Location</th>
-              <th data-col="conf" class="kh-spec-col" title="Highest human attribution confidence tier reached across SEA-AD MTG and cortex/hippocampus-scoped HBCA. Click to sort by confidence.">Conf</th>
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -504,8 +502,8 @@
               <option value="">Any</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Minimum mouse attribution confidence tier.">Confidence
-            <select id="f5-filter-confidence" aria-label="Minimum 5xFAD attribution confidence">
+          <label class="ke-filter-label" title="Minimum 5xFAD location-confidence tier.">Location confidence
+            <select id="f5-filter-confidence" aria-label="Minimum 5xFAD location confidence">
               <option value="">Any</option>
               <option value="very_high">very high (only)</option>
               <option value="high">high+</option>
@@ -563,7 +561,6 @@
               <th data-col="n_attributed_celltypes" title="Cell types attributed at high or moderate confidence.">Cell types</th>
               <th data-col="fivexfad_spec" title="5xFAD snRNA location evidence, shown as fold over the even-split baseline.">5xFAD snRNA</th>
               <th data-col="wmb_max_tier" title="WMB location cross-check tier.">WMB</th>
-              <th data-col="conf" title="Highest mouse attribution confidence tier.">Conf</th>
             </tr></thead>
             <tbody></tbody>
           </table>

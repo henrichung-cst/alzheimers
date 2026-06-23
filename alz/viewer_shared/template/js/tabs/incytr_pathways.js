@@ -73,6 +73,21 @@ const _IP_TRAJ_TIPS = {
   "monotonic-down": "PDS strictly decreasing across the ordered timepoints.",
   "mixed":          "Sign of PDS changes across timepoints.",
 };
+const _IP_TRAJ_ALL_GROUPS = "__all__";
+const _IP_TRAJ_METRIC_COLORS = {
+  "PDS": "#263238",
+  "TPDS": "#c8261c",
+  "PPDS": "#1f7a3a",
+  "PhPDS_ps": "#7c3aed",
+  "PhPDS_py": "#d97706",
+  "SiK_score": "#0f766e",
+};
+const _IP_TRAJ_GROUP_COLORS = {
+  "App": "#c8261c",
+  "Tau": "#1f5fa6",
+  "ApTt": "#5c2d91",
+  "TG": "#b45309",
+};
 // Score columns are advertised on the payload block but kept in a module-local
 // fallback so the JS stays usable against an older payload.
 const _IP_SCORE_COLS_FALLBACK = ["TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "SiK_score"];
@@ -121,6 +136,9 @@ const _ipRuntime = {
   loadError:      null,
   openKeys:       new Set(),    // keys of rows whose Evidence detail is expanded
   detailTab:      {},           // rk → "evidence" | "trajectory" (which sub-tab is active)
+  trajSettings:   {},           // rk → { group: "<axis group>"|"__all__", metrics: [...], view: "both"|"line"|"bar" }
+  trajRows:       {},           // rk → currently loaded sibling rows for drawer controls
+  trajPromises:   {},           // rk → in-flight sibling-row load promises
   recurFallback:  null,         // { sig, map } cache for fallback recurPathMap
   pathIndex:      null,         // Map<pathStr, rows[]> — built at shard-load
   pathLabels:     null,         // Map<pathStr, Map<disease, Set<label>>> — for trend filter
@@ -186,6 +204,63 @@ function _ipTrajEntriesForPath(pathStr) {
 function _ipHasTraj() {
   const block = _ipBlock();
   return !!(block && block.version >= 3);
+}
+
+function _ipScoreTrajectoryAxis() {
+  const groups = _ipDiseases();
+  const timepoints = _ipTimepoints();
+  if (timepoints.length >= 2) {
+    return {
+      xKind: "timepoint",
+      xLabel: "timepoint",
+      xValues: timepoints,
+      seriesKind: "group",
+      seriesLabel: "Group",
+      seriesValues: groups,
+    };
+  }
+  if (groups.length >= 2) {
+    return {
+      xKind: "group",
+      xLabel: "condition",
+      xValues: groups,
+      seriesKind: "timepoint",
+      seriesLabel: "Baseline",
+      seriesValues: timepoints.length ? timepoints : [""],
+    };
+  }
+  return {
+    xKind: "timepoint",
+    xLabel: "timepoint",
+    xValues: timepoints,
+    seriesKind: "group",
+    seriesLabel: "Group",
+    seriesValues: groups,
+  };
+}
+
+function _ipHasScoreTrajectory() {
+  return _ipScoreTrajectoryAxis().xValues.length >= 2;
+}
+
+function _ipContrastParts(contrast) {
+  const c = String(contrast || "");
+  const groups = _ipDiseases();
+  const timepoints = _ipTimepoints();
+  for (const g of groups) {
+    for (const t of timepoints) {
+      if (c === `${g}_${t}`) return { group: g, timepoint: t };
+    }
+  }
+  const i = c.indexOf("_");
+  return {
+    group: i < 0 ? c : c.substring(0, i),
+    timepoint: i < 0 ? "" : c.substring(i + 1),
+  };
+}
+
+function _ipMetricLabel(metric) {
+  return metric === "SiK_score" ? "SiK" : metric;
 }
 
 function _ipScoreCols() {
@@ -765,7 +840,7 @@ function _ipRenderTopTable() {
     if (isOpen) {
       html += `<tr class="ip-detail-row" data-ip-detail="${idx}"><td></td>`
         + `<td colspan="${cols.length}" style="padding:8px 12px;background:#fafafa;">`
-        + _ipRenderDetailPanel(r, rk, "evidence", false)
+        + _ipRenderDetailPanel(r, rk, "evidence")
         + `</td></tr>`;
     }
     return html;
@@ -796,7 +871,7 @@ function _ipRenderTopTable() {
         const clamped = Math.max(1, Math.min(nPages, n)) - 1;
         if (clamped !== _ipRuntime.page) {
           _ipRuntime.page = clamped;
-          _ipRuntime.openKeys = new Set();
+          _ipCloseOpenPanels();
           _ipRenderTopTable();
         }
       });
@@ -810,7 +885,7 @@ function _ipRenderTopTable() {
         else if (action === "last") next = nPages - 1;
         if (next !== _ipRuntime.page) {
           _ipRuntime.page = next;
-          _ipRuntime.openKeys = new Set();
+          _ipCloseOpenPanels();
           _ipRenderTopTable();
         }
       });
@@ -824,35 +899,65 @@ function _ipRenderTopTable() {
     if (f.sortKey === k) IncytrFilter.set({ sortDir: -1 * f.sortDir });
     else IncytrFilter.set({ sortKey: k, sortDir: (k === "rank" || k === "pvalue" ? 1 : -1) });
     _ipResetPage();
-    _ipRuntime.openKeys = new Set();
+    _ipCloseOpenPanels();
     _ipRenderTopTable();
   });
   const bodyEl = wrap.querySelector("#ip-table tbody");
   if (bodyEl) bodyEl.addEventListener("click", ev => {
     const cell = ev.target.closest("td[data-ip-toggle]");
-    if (!cell) return;
-    const idx = +cell.dataset.ipToggle;
-    const r = visible[idx];
-    if (!r) return;
-    _ipNormalizeTopRow(r);
-    const rk = _ipRowKey(r);
-    if (_ipRuntime.openKeys.has(rk)) {
-      _ipRuntime.openKeys.delete(rk);
-      delete _ipRuntime.detailTab[rk];
-    } else {
-      _ipRuntime.openKeys.add(rk);
-      _ipRuntime.detailTab[rk] = "evidence";
+    if (cell) {
+      const idx = +cell.dataset.ipToggle;
+      const r = visible[idx];
+      if (!r) return;
+      _ipNormalizeTopRow(r);
+      const rk = _ipRowKey(r);
+      if (_ipRuntime.openKeys.has(rk)) {
+        _ipRuntime.openKeys.delete(rk);
+        delete _ipRuntime.detailTab[rk];
+        delete _ipRuntime.trajSettings[rk];
+        delete _ipRuntime.trajRows[rk];
+        delete _ipRuntime.trajPromises[rk];
+      } else {
+        _ipRuntime.openKeys.add(rk);
+        _ipRuntime.detailTab[rk] = "evidence";
+      }
+      _ipRenderTopTable();
+      return;
     }
-    _ipRenderTopTable();
+    const tabBtn = ev.target.closest("button[data-ip-detail-tab]");
+    if (tabBtn) {
+      const rk = tabBtn.dataset.ipDetailRk;
+      const tab = tabBtn.dataset.ipDetailTab;
+      _ipRuntime.detailTab[rk] = tab;
+      const detailIdx = +tabBtn.closest("tr[data-ip-detail]").dataset.ipDetail;
+      const r = visible[detailIdx];
+      if (!r) { _ipRenderTopTable(); return; }
+      _ipNormalizeTopRow(r);
+      const tdEl = tabBtn.closest("td");
+      if (tdEl) tdEl.innerHTML = _ipRenderDetailPanel(r, rk, tab);
+      if (tab === "trajectory") _ipRenderTrajChart(rk, r);
+      if (tab === "evidence") _ipRenderEvidencePanel(rk, r);
+      return;
+    }
   });
   for (const rk of _ipRuntime.openKeys) {
     const idx = visible.findIndex(r => _ipRowKey(_ipNormalizeTopRow(r)) === rk);
-    if (idx >= 0) _ipRenderEvidencePanel(rk, visible[idx]);
+    const tab = _ipRuntime.detailTab[rk] || "evidence";
+    if (idx >= 0 && tab === "trajectory") _ipRenderTrajChart(rk, visible[idx]);
+    else if (idx >= 0) _ipRenderEvidencePanel(rk, visible[idx]);
   }
 }
 
 function _ipResetPage() {
   _ipRuntime.page = 0;
+}
+
+function _ipCloseOpenPanels() {
+  _ipRuntime.openKeys = new Set();
+  _ipRuntime.detailTab = {};
+  _ipRuntime.trajSettings = {};
+  _ipRuntime.trajRows = {};
+  _ipRuntime.trajPromises = {};
 }
 
 // Debounce helper. Returns a wrapped function that fires `fn` only after
@@ -870,11 +975,52 @@ const _ipRenderTableDebounced = _ipDebounce(() => _ipRenderTable(), 180);
 function _ipInvalidateScope() {
   _ipRuntime.rows = null;
   _ipRuntime.loadedKey = null;
-  _ipRuntime.openKeys = new Set();
+  _ipCloseOpenPanels();
   _ipRuntime.recurFallback = null;
   _ipRuntime.pathIndex = null;
   _ipRuntime.pathLabels = null;
   _ipRuntime._didDebugLog = false;
+}
+
+function _ipStampRowsForPair(rows, sender, receiver) {
+  const sPipe = sender + "||" + receiver + "||";
+  for (const r of (rows || [])) {
+    r._sender = sender;
+    r._receiver = receiver;
+    if (r.Path == null)
+      r.Path = (r.Ligand || "") + "|" + (r.Receptor || "") + "|"
+             + (r.EM || "") + "|" + (r.Target || "");
+    r._pathStr = sPipe + r.Path;
+    r._hay = (
+      sender + "\n" + receiver + "\n" +
+      (r.Ligand || "") + "\n" + (r.Receptor || "") + "\n" +
+      (r.EM || "") + "\n" + (r.Target || "") + "\n" +
+      r.Path + "\n" + (r.contrast || "")
+    ).toLowerCase();
+  }
+  return rows || [];
+}
+
+function _ipBuildPathIndexes(rows) {
+  const pathIndex  = new Map();
+  const pathLabels = new Map();
+  for (const r of (rows || [])) {
+    const pid = _ipPathStr(r);
+    let bucket = pathIndex.get(pid);
+    if (!bucket) { bucket = []; pathIndex.set(pid, bucket); }
+    bucket.push(r);
+    if (r.traj_labels) {
+      const c = r.contrast || "";
+      const ui = c.indexOf("_");
+      const dis = ui < 0 ? c : c.substring(0, ui);
+      let byDis = pathLabels.get(pid);
+      if (!byDis) { byDis = new Map(); pathLabels.set(pid, byDis); }
+      if (!byDis.has(dis)) {
+        byDis.set(dis, new Set(_ipDecodeLabels(r.traj_labels)));
+      }
+    }
+  }
+  return { pathIndex, pathLabels };
 }
 
 // ---- shard loading ----
@@ -912,25 +1058,10 @@ async function _ipEnsureShards() {
   _ipResetPage();
   _ipRenderTable();
   try {
-    const rows = await SliceCache.loadIncytrShard(p.sender, p.receiver);
-    // Stamp sender/receiver and reconstruct Path (dropped from the shard
-    // — it's just L|R|E|T concatenated) so the table column renders. Also
-    // precompute _pathStr and _hay so hot filter loops don't allocate.
-    const sPipe = p.sender + "||" + p.receiver + "||";
-    for (const r of rows) {
-      r._sender = p.sender;
-      r._receiver = p.receiver;
-      if (r.Path == null)
-        r.Path = (r.Ligand || "") + "|" + (r.Receptor || "") + "|"
-               + (r.EM || "") + "|" + (r.Target || "");
-      r._pathStr = sPipe + r.Path;
-      r._hay = (
-        p.sender + "\n" + p.receiver + "\n" +
-        (r.Ligand || "") + "\n" + (r.Receptor || "") + "\n" +
-        (r.EM || "") + "\n" + (r.Target || "") + "\n" +
-        r.Path + "\n" + (r.contrast || "")
-      ).toLowerCase();
-    }
+    const rows = _ipStampRowsForPair(
+      await SliceCache.loadIncytrShard(p.sender, p.receiver),
+      p.sender, p.receiver,
+    );
     // Resolve race: only commit if the scope hasn't changed mid-fetch.
     const newSig = _ipScopeSig(_ipPairsInScope(block));
     if (newSig !== sig) return;
@@ -939,24 +1070,7 @@ async function _ipEnsureShards() {
     // Build two indexes once so per-render filtering is O(1) lookups:
     //   pathIndex  : pathStr → rows[]   (chart, debug)
     //   pathLabels : pathStr → Map<disease, Set<label>>  (trend filter)
-    const pathIndex  = new Map();
-    const pathLabels = new Map();
-    for (const r of rows) {
-      const pid = _ipPathStr(r);
-      let bucket = pathIndex.get(pid);
-      if (!bucket) { bucket = []; pathIndex.set(pid, bucket); }
-      bucket.push(r);
-      if (r.traj_labels) {
-        const c = r.contrast || "";
-        const ui = c.indexOf("_");
-        const dis = ui < 0 ? c : c.substring(0, ui);
-        let byDis = pathLabels.get(pid);
-        if (!byDis) { byDis = new Map(); pathLabels.set(pid, byDis); }
-        if (!byDis.has(dis)) {
-          byDis.set(dis, new Set(_ipDecodeLabels(r.traj_labels)));
-        }
-      }
-    }
+    const { pathIndex, pathLabels } = _ipBuildPathIndexes(rows);
     _ipRuntime.pathIndex  = pathIndex;
     _ipRuntime.pathLabels = pathLabels;
   } catch (e) {
@@ -1262,7 +1376,7 @@ function _ipRenderTable() {
   ];
   // Leading expander column header is non-sortable.
   const thead =
-    `<th style="width:24px;" title="Toggle detail panel (Evidence: 4 nodes × 4 layers, + Trajectory chart)."></th>`
+    `<th style="width:24px;" title="Toggle detail panel (Evidence: 4 nodes × 4 layers, + score trajectories)."></th>`
     + cols.map(c => {
         if (c.isTraj) {
           const tip = c.tip ? ` title="${_escapeHtml(c.tip)}"` : "";
@@ -1337,7 +1451,7 @@ function _ipRenderTable() {
         const clamped = Math.max(1, Math.min(nPages, n)) - 1;
         if (clamped !== _ipRuntime.page) {
           _ipRuntime.page = clamped;
-          _ipRuntime.openKeys = new Set();
+          _ipCloseOpenPanels();
           _ipRenderTable();
         }
       });
@@ -1351,7 +1465,7 @@ function _ipRenderTable() {
         else if (action === "last") next = nPages - 1;
         if (next !== _ipRuntime.page) {
           _ipRuntime.page = next;
-          _ipRuntime.openKeys = new Set();
+          _ipCloseOpenPanels();
           _ipRenderTable();
         }
       });
@@ -1379,6 +1493,9 @@ function _ipRenderTable() {
       if (_ipRuntime.openKeys.has(rk)) {
         _ipRuntime.openKeys.delete(rk);
         delete _ipRuntime.detailTab[rk];
+        delete _ipRuntime.trajSettings[rk];
+        delete _ipRuntime.trajRows[rk];
+        delete _ipRuntime.trajPromises[rk];
       } else {
         _ipRuntime.openKeys.add(rk);
         if (!_ipRuntime.detailTab[rk]) _ipRuntime.detailTab[rk] = "evidence";
@@ -1426,7 +1543,7 @@ function _ipRenderTable() {
 // ---------------------------------------------------------------------------
 
 function _ipRenderDetailPanel(r, rk, activeTab, allowTrajectory = true) {
-  const hasTrajIdx = allowTrajectory && _ipHasTraj();
+  const hasTrajIdx = allowTrajectory && _ipHasScoreTrajectory();
   const btn = (tab, label) =>
     `<button type="button" data-ip-detail-tab="${tab}" data-ip-detail-rk="${_escapeHtml(rk)}"
        style="padding:2px 12px;border-radius:4px;font-size:12px;cursor:pointer;
@@ -1437,13 +1554,16 @@ function _ipRenderDetailPanel(r, rk, activeTab, allowTrajectory = true) {
   const tabBar = allowTrajectory
     ? (`<div style="display:flex;gap:6px;margin-bottom:8px;">`
       + btn("evidence", "Evidence")
-      + (hasTrajIdx ? btn("trajectory", "Trajectory") : "")
+      + (hasTrajIdx ? btn("trajectory", "Scores") : "")
       + `</div>`)
     : "";
   if (activeTab === "trajectory" && hasTrajIdx) {
-    const chartId = `ip-traj-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
+    const safe = rk.replace(/[^a-zA-Z0-9]/g, "_");
+    const chartId = `ip-traj-${safe}`;
+    const controlsId = `ip-traj-controls-${safe}`;
     return tabBar
-      + `<div id="${_escapeHtml(chartId)}" style="width:100%;min-height:220px;"></div>`;
+      + `<div id="${_escapeHtml(controlsId)}"></div>`
+      + `<div id="${_escapeHtml(chartId)}" style="width:100%;min-height:260px;"></div>`;
   }
   // Default: Evidence tab.
   const hostId = `ip-ev-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
@@ -1470,89 +1590,334 @@ function _ipRenderEvidencePanel(rk, r) {
   });
 }
 
-// Render the temporal PDS bar chart for a path in the trajectory sub-tab.
-// Reuses the grouped-bar pattern from kinase_audit.js _renderMeaTrajectory.
-// x = 2/4/6 mo timepoints, grouped by App / Tau / ApTt disease contrasts.
-// Bar color: red (positive PDS), blue (negative), grey (missing).
-function _ipRenderTrajChart(rk, r) {
-  const chartId = `ip-traj-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
+function _ipPathIdentity(r) {
+  const row = _ipNormalizeTopRow(Object.assign({}, r));
+  return {
+    sender: row._sender || row.sender || "",
+    receiver: row._receiver || row.receiver || "",
+    path: row.Path || [row.Ligand, row.Receptor, row.EM, row.Target].join("|"),
+  };
+}
+
+function _ipSamePathIdentity(row, ident) {
+  const ri = _ipPathIdentity(row);
+  return ri.sender === ident.sender && ri.receiver === ident.receiver && ri.path === ident.path;
+}
+
+async function _ipRowsForTrajectory(r, rk) {
+  if (rk && _ipRuntime.trajRows[rk]) return _ipRuntime.trajRows[rk];
+  if (rk && _ipRuntime.trajPromises[rk]) return _ipRuntime.trajPromises[rk];
+  const ident = _ipPathIdentity(r);
+  if (!ident.sender || !ident.receiver || !ident.path) return [];
+  const load = (async () => {
+    if ((IncytrFilter.get("ipMode") || "top") === "top"
+        && typeof IncytrGlobalIndex !== "undefined"
+        && IncytrGlobalIndex.available()) {
+      if (!IncytrGlobalIndex.loaded()) await IncytrGlobalIndex.ensureLoaded();
+      if (IncytrGlobalIndex.loaded() && typeof IncytrGlobalIndex.pathRows === "function") {
+        return IncytrGlobalIndex.pathRows(ident);
+      }
+    }
+    const pairSig = `${ident.sender}||${ident.receiver}`;
+    if (_ipRuntime.rows && _ipRuntime.loadedKey === pairSig) {
+      return _ipRuntime.rows.filter(row => _ipSamePathIdentity(row, ident));
+    }
+    const rows = _ipStampRowsForPair(
+      await SliceCache.loadIncytrShard(ident.sender, ident.receiver),
+      ident.sender, ident.receiver,
+    );
+    return rows.filter(row => _ipSamePathIdentity(row, ident));
+  })();
+  if (rk) {
+    _ipRuntime.trajPromises[rk] = load;
+    load.then(rows => {
+      if (_ipRuntime.openKeys.has(rk)) _ipRuntime.trajRows[rk] = rows;
+      return rows;
+    })
+      .finally(() => { delete _ipRuntime.trajPromises[rk]; });
+  }
+  return load;
+}
+
+function _ipAvailableTrajectoryMetrics(rows) {
+  const metrics = ["PDS", ..._ipScoreCols()];
+  return metrics.filter(m => (rows || []).some(r => {
+    const v = Number(r[m]);
+    return isFinite(v);
+  }));
+}
+
+function _ipTrajectorySettings(rk, r, metrics) {
+  const axis = _ipScoreTrajectoryAxis();
+  const clicked = _ipContrastParts(r.contrast || "");
+  const clickedSeries = axis.seriesKind === "group" ? clicked.group : clicked.timepoint;
+  const fallbackSeries = axis.seriesValues.indexOf(clickedSeries) >= 0
+    ? clickedSeries
+    : (axis.seriesValues[0] || clickedSeries || _IP_TRAJ_ALL_GROUPS);
+  const available = metrics.length ? metrics : ["PDS"];
+  let st = _ipRuntime.trajSettings[rk];
+  if (!st) st = _ipRuntime.trajSettings[rk] = { series: fallbackSeries, metrics: ["PDS"], view: "both" };
+  if (st.series == null && st.group != null) st.series = st.group;
+  if (st.series !== _IP_TRAJ_ALL_GROUPS && axis.seriesValues.indexOf(st.series) < 0) st.series = fallbackSeries;
+  st.metrics = (Array.isArray(st.metrics) ? st.metrics : ["PDS"]).filter(m => available.indexOf(m) >= 0);
+  if (!st.metrics.length) st.metrics = [available.indexOf("PDS") >= 0 ? "PDS" : available[0]];
+  if (st.series === _IP_TRAJ_ALL_GROUPS && st.metrics.length > 1) st.metrics = [st.metrics[0]];
+  if (!["both", "line", "bar"].includes(st.view || "")) st.view = "both";
+  return st;
+}
+
+function _ipBestRowByContrast(rows) {
+  const byContrast = new Map();
+  for (const row of (rows || [])) {
+    const c = row.contrast || "";
+    const cur = byContrast.get(c);
+    if (!cur || Math.abs(Number(row.PDS) || 0) > Math.abs(Number(cur.PDS) || 0)) {
+      byContrast.set(c, row);
+    }
+  }
+  return byContrast;
+}
+
+function _ipTrajectoryControlHtml(rk, state, metrics) {
+  const axis = _ipScoreTrajectoryAxis();
+  const viewButtons = [
+    { key: "both", label: "Both" },
+    { key: "line", label: "Line" },
+    { key: "bar", label: "Bars" },
+  ].map(v => {
+    const active = state.view === v.key;
+    return `<button type="button" data-ip-traj-rk="${_escapeHtml(rk)}" `
+      + `data-ip-traj-view="${_escapeHtml(v.key)}" `
+      + `style="padding:2px 9px;border-radius:4px;border:1px solid ${active ? "#1f4ea3" : "#c0c0c0"};`
+      + `background:${active ? "#1f4ea3" : "#f7f7f7"};color:${active ? "#fff" : "#37474f"};`
+      + `font-size:12px;cursor:pointer;">${_escapeHtml(v.label)}</button>`;
+  }).join("");
+  const seriesChoices = axis.seriesValues.length > 1
+    ? [...axis.seriesValues, _IP_TRAJ_ALL_GROUPS]
+    : [];
+  const seriesButtons = seriesChoices.map(s => {
+    const label = s === _IP_TRAJ_ALL_GROUPS ? "All" : s;
+    const active = state.series === s;
+    return `<button type="button" data-ip-traj-rk="${_escapeHtml(rk)}" `
+      + `data-ip-traj-series="${_escapeHtml(s)}" `
+      + `style="padding:2px 9px;border-radius:4px;border:1px solid ${active ? "#1f4ea3" : "#c0c0c0"};`
+      + `background:${active ? "#1f4ea3" : "#f7f7f7"};color:${active ? "#fff" : "#37474f"};`
+      + `font-size:12px;cursor:pointer;">${_escapeHtml(label)}</button>`;
+  }).join("");
+  const seriesControl = seriesButtons
+    ? `<span class="muted" style="font-size:11px;">${_escapeHtml(axis.seriesLabel)}</span>`
+      + `<span style="display:flex;gap:4px;">${seriesButtons}</span>`
+    : "";
+  const metricButtons = metrics.map(m => {
+    const active = state.metrics.indexOf(m) >= 0;
+    const color = _IP_TRAJ_METRIC_COLORS[m] || "#455a64";
+    return `<button type="button" data-ip-traj-rk="${_escapeHtml(rk)}" `
+      + `data-ip-traj-metric="${_escapeHtml(m)}" `
+      + `style="padding:2px 9px;border-radius:4px;border:1px solid ${active ? color : "#c0c0c0"};`
+      + `background:${active ? _ipHexAlpha(color, 0.12) : "#f7f7f7"};color:${active ? color : "#37474f"};`
+      + `font-size:12px;cursor:pointer;">${_escapeHtml(_ipMetricLabel(m))}</button>`;
+  }).join("");
+  const metricNote = state.series === _IP_TRAJ_ALL_GROUPS
+    ? `<span class="muted" style="font-size:11px;">All mode shows one metric across ${_escapeHtml(axis.seriesLabel.toLowerCase())}s.</span>`
+    : "";
+  return `<div style="display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-bottom:6px;">`
+    + `<span class="muted" style="font-size:11px;">View</span><span style="display:flex;gap:4px;">${viewButtons}</span>`
+    + seriesControl
+    + `<span class="muted" style="font-size:11px;">Score</span><span style="display:flex;gap:4px;flex-wrap:wrap;">${metricButtons}</span>`
+    + metricNote
+    + `</div>`;
+}
+
+function _ipWireTrajectoryControls(rk, r, controlEl) {
+  if (!controlEl) return;
+  controlEl.querySelectorAll("[data-ip-traj-series]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const metrics = _ipAvailableTrajectoryMetrics(_ipRuntime.trajRows[rk] || []);
+      const st = _ipTrajectorySettings(rk, r, metrics);
+      st.series = btn.dataset.ipTrajSeries || st.series;
+      if (st.series === _IP_TRAJ_ALL_GROUPS && st.metrics.length > 1) st.metrics = [st.metrics[0]];
+      _ipRenderTrajChart(rk, r);
+    });
+  });
+  controlEl.querySelectorAll("[data-ip-traj-metric]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const metrics = _ipAvailableTrajectoryMetrics(_ipRuntime.trajRows[rk] || []);
+      const metric = btn.dataset.ipTrajMetric;
+      const st = _ipTrajectorySettings(rk, r, metrics);
+      if (st.series === _IP_TRAJ_ALL_GROUPS) {
+        st.metrics = [metric];
+      } else if (st.metrics.indexOf(metric) >= 0) {
+        const next = st.metrics.filter(m => m !== metric);
+        st.metrics = next.length ? next : [metric];
+      } else {
+        st.metrics = [...st.metrics, metric];
+      }
+      _ipRenderTrajChart(rk, r);
+    });
+  });
+  controlEl.querySelectorAll("[data-ip-traj-view]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const metrics = _ipAvailableTrajectoryMetrics(_ipRuntime.trajRows[rk] || []);
+      const st = _ipTrajectorySettings(rk, r, metrics);
+      st.view = btn.dataset.ipTrajView || "both";
+      _ipRenderTrajChart(rk, r);
+    });
+  });
+}
+
+function _ipPointText(group, timepoint, metric, value, row) {
+  const pv = row && row.pvalue != null && isFinite(row.pvalue)
+    ? Number(row.pvalue).toExponential(2) : "—";
+  const v = value == null || !isFinite(value) ? "missing" : Number(value).toFixed(3);
+  return `${group} ${timepoint}<br>${_ipMetricLabel(metric)} ${v}<br>p ${pv}`;
+}
+
+function _ipTrajectoryContrast(axis, series, x) {
+  return axis.xKind === "timepoint" ? `${series}_${x}` : `${x}_${series}`;
+}
+
+function _ipTrajectoryPointParts(axis, series, x) {
+  return axis.xKind === "timepoint"
+    ? { group: series, timepoint: x }
+    : { group: x, timepoint: series };
+}
+
+function _ipTrajectorySeriesColor(axis, series) {
+  if (axis.seriesKind === "group") return _IP_TRAJ_GROUP_COLORS[series] || "#455a64";
+  return "#455a64";
+}
+
+function _ipTrajectoryTrace(kind, name, color, x, y, text, showLegend) {
+  if (kind === "bar") {
+    return {
+      type: "bar", name, x, y,
+      marker: { color: _ipHexAlpha(color, 0.42), line: { color, width: 1 } },
+      customdata: text,
+      hovertemplate: "%{customdata}<extra></extra>",
+      showlegend: !!showLegend,
+    };
+  }
+  return {
+    type: "scatter", mode: "lines+markers", name,
+    x, y, connectgaps: false,
+    line: { color, width: name === "PDS" ? 2.5 : 1.9 },
+    marker: { color, size: 6 },
+    customdata: text,
+    hovertemplate: "%{customdata}<extra></extra>",
+    showlegend: !!showLegend,
+  };
+}
+
+function _ipRenderTrajChartRows(rk, r, rows) {
+  const safe = rk.replace(/[^a-zA-Z0-9]/g, "_");
+  const chartId = `ip-traj-${safe}`;
+  const controlsId = `ip-traj-controls-${safe}`;
   const host = document.getElementById(chartId);
+  const controlEl = document.getElementById(controlsId);
   if (!host) return;
-  if (typeof Plotly === "undefined") {
-    host.innerHTML = `<div class="muted">Plotly not available for trajectory chart.</div>`;
+  const metrics = _ipAvailableTrajectoryMetrics(rows);
+  if (!rows.length || !metrics.length) {
+    if (controlEl) controlEl.innerHTML = "";
+    host.innerHTML = `<div class="muted">No sibling time-course rows found for this pathway.</div>`;
     return;
   }
-  const pathStr = _ipPathStr(r);
-  const entries = _ipTrajEntriesForPath(pathStr, _ipRuntime.rows);
-
-  // Load PDS values directly from the loaded rows (all contrasts present in
-  // the shard — one row per disease×timepoint). Keyed by contrast string.
-  const pdsByContrast = new Map();
-  const pvalByContrast = new Map();
-  for (const row of (_ipRuntime.rows || [])) {
-    if (_ipPathStr(row) === pathStr) {
-      const k = row.contrast || "";
-      pdsByContrast.set(k, row.PDS != null ? Number(row.PDS) : null);
-      pvalByContrast.set(k, row.pvalue != null ? Number(row.pvalue) : null);
+  const state = _ipTrajectorySettings(rk, r, metrics);
+  if (controlEl) {
+    controlEl.innerHTML = _ipTrajectoryControlHtml(rk, state, metrics);
+    _ipWireTrajectoryControls(rk, r, controlEl);
+  }
+  const byContrast = _ipBestRowByContrast(rows);
+  const axis = _ipScoreTrajectoryAxis();
+  const seriesValues = state.series === _IP_TRAJ_ALL_GROUPS ? axis.seriesValues : [state.series];
+  const traces = [];
+  const addSeries = (label, color, series, metric) => {
+    const ys = [], text = [];
+    for (const x of axis.xValues) {
+      const row = byContrast.get(_ipTrajectoryContrast(axis, series, x));
+      const v = row && isFinite(Number(row[metric])) ? Number(row[metric]) : null;
+      const parts = _ipTrajectoryPointParts(axis, series, x);
+      ys.push(v);
+      text.push(_ipPointText(parts.group, parts.timepoint, metric, v, row));
+    }
+    if (state.view === "bar" || state.view === "both") {
+      traces.push(_ipTrajectoryTrace("bar", label, color, axis.xValues, ys, text, state.view === "bar"));
+    }
+    if (state.view === "line" || state.view === "both") {
+      traces.push(_ipTrajectoryTrace("line", label, color, axis.xValues, ys, text, true));
+    }
+  };
+  if (state.series === _IP_TRAJ_ALL_GROUPS) {
+    const metric = state.metrics[0];
+    for (const series of seriesValues) {
+      addSeries(series || axis.seriesLabel, _ipTrajectorySeriesColor(axis, series), series, metric);
+    }
+  } else {
+    for (const metric of state.metrics) {
+      addSeries(_ipMetricLabel(metric), _IP_TRAJ_METRIC_COLORS[metric] || "#455a64", state.series, metric);
     }
   }
-
-  const timepoints = ["2mo", "4mo", "6mo"];
-  const diseaseOrder = ["App", "Tau", "ApTt"];
-  const diseaseColors = { App: "#c8261c", Tau: "#1f5fa6", ApTt: "#5c2d91" };
-
-  // No flat threshold — color by raw PDS sign. Missing rows are grey.
-  const traces = diseaseOrder.map(dis => {
-    const xs = [], ys = [], colors = [], hovers = [];
-    for (const tp of timepoints) {
-      const contrast = `${dis}_${tp}`;
-      const pds = pdsByContrast.get(contrast);
-      const pv  = pvalByContrast.get(contrast);
-      const missing = (pds == null);
-      const y = missing ? 0 : pds;
-      const base = diseaseColors[dis] || "#888";
-      const fillColor = missing ? "rgba(160,160,160,0.35)"
-        : (y >= 0 ? _ipHexAlpha(base, 0.85) : _ipHexAlpha(base, 0.55));
-      xs.push(tp);
-      ys.push(y);
-      colors.push(fillColor);
-      const pvStr = pv != null ? pv.toExponential(2) : "—";
-      hovers.push(`${dis} ${tp}<br>PDS ${y.toFixed(3)}<br>p ${pvStr}${missing ? " (missing)" : ""}`);
-    }
-    return {
-      type: "bar",
-      name: dis,
-      x: xs, y: ys,
-      marker: { color: colors, line: { color: "rgba(0,0,0,0.15)", width: 0.5 } },
-      hovertemplate: "%{customdata}<extra></extra>",
-      customdata: hovers,
-    };
-  });
-
-  // Show all three diseases' labels in the title — trajectory is per-disease,
-  // and the chart plots all three groups, so the title must reflect each.
-  const titleParts = entries.map(e => {
-    const lbls = (e.traj_labels && e.traj_labels.length)
-      ? e.traj_labels.join("+") : "—";
-    return `<b>${e.contrast}</b>: ${lbls} (${e.sign_vec || "—"})`;
-  });
-  const titleText = titleParts.length
-    ? `${titleParts.join(" · ")} — ${r.Path || ""}`
-    : `PDS over time · ${r.Path || ""}`;
-
+  const anyValue = traces.some(t => (t.y || []).some(v => v != null && isFinite(v)));
+  if (!anyValue) {
+    host.innerHTML = `<div class="muted">No finite score values for the selected group and metric.</div>`;
+    return;
+  }
+  const ident = _ipPathIdentity(r);
+  const titleSeries = state.series === _IP_TRAJ_ALL_GROUPS
+    ? `all ${axis.seriesLabel.toLowerCase()}s · ${_ipMetricLabel(state.metrics[0])}`
+    : `${state.series || axis.seriesLabel} · ${state.metrics.map(_ipMetricLabel).join(", ")}`;
   Plotly.react(chartId, traces, {
+    margin: { l: 54, r: 18, t: 36, b: 48 },
+    height: 320,
+    title: { text: `${titleSeries} · ${ident.path}`, font: { size: 12 } },
     barmode: "group",
-    margin: { l: 48, r: 12, t: 32, b: 48 },
-    height: 240,
-    title: { text: titleText, font: { size: 12 } },
-    yaxis: { zeroline: true, zerolinecolor: "#bbb", title: "PDS" },
-    xaxis: { title: "timepoint" },
+    bargap: 0.28,
+    yaxis: {
+      title: "score",
+      zeroline: true,
+      zerolinecolor: "#111",
+      zerolinewidth: 1,
+    },
+    xaxis: { title: axis.xLabel, type: "category", categoryorder: "array", categoryarray: axis.xValues },
     showlegend: true,
     legend: { orientation: "h", y: -0.25 },
+    plot_bgcolor: "#fff",
+    paper_bgcolor: "#fff",
   }, { displaylogo: false, responsive: true });
 }
 
-// Hex color to rgba with alpha (for the trajectory chart color generation).
+// Render score trajectories for the selected pathway. In Cell Type mode this
+// uses the already-loaded pair shard; in Top mode it resolves sibling rows from
+// the global typed-array index and avoids a full pair-shard fetch.
+function _ipRenderTrajChart(rk, r) {
+  const safe = rk.replace(/[^a-zA-Z0-9]/g, "_");
+  const chartId = `ip-traj-${safe}`;
+  const host = document.getElementById(chartId);
+  if (!host) return;
+  if (typeof Plotly === "undefined") {
+    host.innerHTML = `<div class="muted">Plotly not available for score trajectories.</div>`;
+    return;
+  }
+  if (!_ipHasScoreTrajectory()) {
+    host.innerHTML = `<div class="muted">Score trajectory unavailable for this context.</div>`;
+    return;
+  }
+  if (_ipRuntime.trajRows[rk]) {
+    _ipRenderTrajChartRows(rk, r, _ipRuntime.trajRows[rk]);
+    return;
+  }
+  if (!_ipRuntime.trajPromises[rk]) {
+    host.innerHTML = `<div class="muted" style="font-size:11px;padding:8px 0;">Loading score trajectory…</div>`;
+  }
+  _ipRowsForTrajectory(r, rk).then(rows => {
+    if (!document.getElementById(chartId)) return;
+    _ipRuntime.trajRows[rk] = rows;
+    _ipRenderTrajChartRows(rk, r, rows);
+  }).catch(err => {
+    host.innerHTML = `<div class="muted">Score trajectory load error: ${_escapeHtml(err.message || err)}</div>`;
+  });
+}
+
+// Hex color to rgba with alpha (for score-trajectory control styling).
 function _ipHexAlpha(hex, alpha) {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
   if (!m) return hex;
@@ -1700,7 +2065,7 @@ function wireIncytrPathways() {
     const n = Number(limitSel.value || 500);
     IncytrFilter.set({ topLimit: [500, 1000, 5000].includes(n) ? n : 500 });
     _ipResetPage();
-    _ipRuntime.openKeys = new Set();
+    _ipCloseOpenPanels();
     _ipRenderTable();
   });
 

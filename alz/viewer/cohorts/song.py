@@ -195,7 +195,6 @@ def _build_kinases_slice(data: UnifiedData) -> dict:
         "trajectory": [], "peak_contrast": [], "peak_NES": [],
         "n_sig_contrasts": [],
         "top_celltype_1": [], "top_celltype_2": [], "top_celltype_3": [],
-        "top_celltype_1_wmb_fold": [],
         "top_celltype_1_sea_ad_lfc": [],
         "top_celltype_1_song_lfc": [],
         "n_celltype_candidates": [],
@@ -225,7 +224,6 @@ def _build_kinases_slice(data: UnifiedData) -> dict:
         cols["top_celltype_1"].append(_get(hyp_row, "top_celltype_1", ""))
         cols["top_celltype_2"].append(_get(hyp_row, "top_celltype_2", ""))
         cols["top_celltype_3"].append(_get(hyp_row, "top_celltype_3", ""))
-        cols["top_celltype_1_wmb_fold"].append(_get(hyp_row, "top_celltype_1_wmb_fold"))
         cols["top_celltype_1_sea_ad_lfc"].append(_get(hyp_row, "top_celltype_1_sea_ad_lfc"))
         cols["top_celltype_1_song_lfc"].append(_get(hyp_row, "top_celltype_1_song_lfc"))
         cols["n_celltype_candidates"].append(_get(hyp_row, "n_celltype_candidates", 0))
@@ -1642,6 +1640,7 @@ def _build_kinase_celltype_evidence(data: "UnifiedData", kid: dict) -> dict:
     for _col, _default in [
         ("song_detected", False),
         ("song_concentration", float("nan")),
+        ("song_concentration_of_total", float("nan")),
         ("song_concentration_tier", 0),
         ("song_effective_n", float("nan")),
         ("song_top_celltype", ""),
@@ -1673,6 +1672,7 @@ def _build_kinase_celltype_evidence(data: "UnifiedData", kid: dict) -> dict:
         "decomp_agrees_bulk": [bool(v) for v in ev["decomp_agrees_bulk"].fillna(False)],
         "song_detected": [bool(v) for v in ev["song_detected"].fillna(False)],
         "song_concentration": ev["song_concentration"].astype(float).round(3).tolist(),
+        "song_concentration_of_total": ev["song_concentration_of_total"].astype(float).round(3).tolist(),
         "song_concentration_tier": ev["song_concentration_tier"].fillna(0).astype(int).tolist(),
         "song_effective_n": ev["song_effective_n"].astype(float).round(2).tolist(),
         "song_top_celltype": ev["song_top_celltype"].fillna("").astype(str).tolist(),
@@ -1702,6 +1702,12 @@ def _build_attribution_index(data: "UnifiedData", kid: dict, contrast_to_id: dic
     for _col, _default in [
         ("confidence_tier", "none"),
         ("confidence_basis", ""),
+        ("specificity_unit", ""),
+        ("specificity_unit_label", ""),
+        ("specificity_celltype", ""),
+        ("specificity_collapsed", False),
+        ("direction_tier", "none"),
+        ("direction_basis", ""),
         ("song_direction_support", False),
         ("human_location_tier", "none"),
         ("decomp_agrees_bulk", False),
@@ -1722,9 +1728,11 @@ def _build_attribution_index(data: "UnifiedData", kid: dict, contrast_to_id: dic
         ("song_fdr", float("nan")),
         ("song_detected", False),
         ("song_concentration", float("nan")),
+        ("song_concentration_of_total", float("nan")),
         ("song_concentration_tier", 0),
         ("song_fraction_cells_expressing", float("nan")),
         ("song_effective_n", float("nan")),
+        ("song_unit_effective_n", float("nan")),
         ("song_top_celltype", ""),
         ("song_top_concentration", float("nan")),
         ("concordance_source", ""),
@@ -1739,6 +1747,12 @@ def _build_attribution_index(data: "UnifiedData", kid: dict, contrast_to_id: dic
         "cell_type":   ua["cell_type"].astype(str).tolist(),
         "confidence_tier": ua["confidence_tier"].astype(str).tolist(),
         "confidence_basis": ua["confidence_basis"].fillna("").astype(str).tolist(),
+        "specificity_unit": ua["specificity_unit"].fillna("").astype(str).tolist(),
+        "specificity_unit_label": ua["specificity_unit_label"].fillna("").astype(str).tolist(),
+        "specificity_celltype": ua["specificity_celltype"].fillna("").astype(str).tolist(),
+        "specificity_collapsed": [bool(v) for v in ua["specificity_collapsed"].fillna(False)],
+        "direction_tier": ua["direction_tier"].fillna("none").astype(str).tolist(),
+        "direction_basis": ua["direction_basis"].fillna("").astype(str).tolist(),
         "song_direction_support": [bool(v) for v in ua["song_direction_support"].fillna(False)],
         "human_location_tier": ua["human_location_tier"].fillna("none").astype(str).tolist(),
         "decomp_agrees_bulk": [bool(v) for v in ua["decomp_agrees_bulk"].fillna(False)],
@@ -1750,9 +1764,11 @@ def _build_attribution_index(data: "UnifiedData", kid: dict, contrast_to_id: dic
         "wmb_binary_expressed": [bool(v) for v in ua["wmb_binary_expressed"].fillna(False)],
         "song_detected": [bool(v) for v in ua["song_detected"].fillna(False)],
         "song_concentration": ua["song_concentration"].astype(float).round(4).tolist(),
+        "song_concentration_of_total": ua["song_concentration_of_total"].astype(float).round(4).tolist(),
         "song_concentration_tier": ua["song_concentration_tier"].fillna(0).astype(int).tolist(),
         "song_fraction_cells_expressing": ua["song_fraction_cells_expressing"].astype(float).round(3).tolist(),
         "song_effective_n": ua["song_effective_n"].astype(float).round(2).tolist(),
+        "song_unit_effective_n": ua["song_unit_effective_n"].astype(float).round(2).tolist(),
         "song_top_celltype": ua["song_top_celltype"].fillna("").astype(str).tolist(),
         "song_top_concentration": ua["song_top_concentration"].astype(float).round(4).tolist(),
         "sea_ad_lfc": ua["sea_ad_lfc"].astype(float).round(4).tolist(),
@@ -1772,6 +1788,53 @@ def _build_attribution_index(data: "UnifiedData", kid: dict, contrast_to_id: dic
           f"({ua['confidence_tier'].value_counts().to_dict()})",
           flush=True)
     return attribution_index
+
+
+def _cluster_to_seaad_subclass() -> dict:
+    """Song cluster → sorted SEA-AD subclasses it maps to (via its supertypes).
+
+    Lets the audit SEA-AD heatmap outline the subclass row matching the clicked
+    Song cluster — the two vocabularies differ, so a string match would silently
+    fail. Authoritative supertype→subclass comes from sea_ad_supertype_lfc.csv
+    (only the two label columns are read). Returns {} cleanly if absent."""
+    sup_map = config.load_cluster_to_seaad_supertype_map()
+    lfc_path = os.path.join(
+        config.KINASE_ATTRIBUTION_OUTPUT_DIR, "sea_ad_supertype_lfc.csv")
+    if not os.path.exists(lfc_path):
+        return {}
+    st_df = pd.read_csv(
+        lfc_path, usecols=["supertype", "subclass"]).drop_duplicates()
+    st_to_sc = dict(zip(st_df["supertype"], st_df["subclass"]))
+    out: dict[str, list[str]] = {}
+    for cl, entries in sup_map.items():
+        scs = sorted({st_to_sc[st] for st, _w in entries if st in st_to_sc})
+        if scs:
+            out[cl] = scs
+    return out
+
+
+def _build_specificity_units() -> dict:
+    """Static cluster→unit grouping for the confidence pill (see
+    config.load_specificity_unit_map). Lets the viewer render a collapsed unit
+    as an expandable parent over its child Song clusters. Also carries the
+    cluster→WMB-class and cluster→SEA-AD-subclass crosswalks the audit detail
+    uses to outline the matching reference row (the vocabularies differ)."""
+    m = config.load_specificity_unit_map()
+    cluster_to_unit = {cl: info["unit"] for cl, info in m.items()}
+    cluster_to_wmb_class = {cl: info["wmb_class"] for cl, info in m.items()}
+    units: dict[str, dict] = {}
+    for cl, info in m.items():
+        units.setdefault(info["unit"], {
+            "label": info["label"],
+            "collapsed": bool(info["collapsed"]),
+            "children": info["children"],
+        })
+    return {
+        "cluster_to_unit": cluster_to_unit,
+        "cluster_to_wmb_class": cluster_to_wmb_class,
+        "cluster_to_seaad_subclass": _cluster_to_seaad_subclass(),
+        "units": units,
+    }
 
 
 def _build_mechanism_attribution_index() -> dict | None:
@@ -1859,6 +1922,7 @@ def build_song_viewer_slice(data: "UnifiedData") -> SongBuild:
             "celltypes": _as_single_context_block(celltypes_slice, context_id),
             "kinase_celltype_evidence": kinase_celltype_evidence,
             "attribution_index": attribution_index,
+            "specificity_units": _build_specificity_units(),
             "decomposition_index": decomposition_index,
             "agreement_index": agreement_index,
             "subclass_breakdown": subclass_breakdown,

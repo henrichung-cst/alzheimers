@@ -567,15 +567,19 @@ def _write_attribution_metrics(df: pd.DataFrame) -> pd.DataFrame:
     # denominator, so concentration/tier are undefined.
     other = df[~retained_mask].copy()
     if len(other):
-        other["linear_expression"] = other["mean_log2_expression"].map(specificity.delog2)
+        _oml = other["mean_log2_expression"].to_numpy(dtype=float)
+        other["linear_expression"] = np.where(
+            np.isfinite(_oml), np.maximum(np.exp2(_oml) - 1.0, 0.0), 0.0)
         other["detected"] = other["fraction_cells_expressing"].astype(float) >= specificity.DETECTION_FRAC_MIN
         other["concentration"] = np.nan
+        other["concentration_of_total"] = np.nan
         other["concentration_tier"] = 0
 
     expr_cols = ["kinase_id", "gene_symbol", "cell_type",
                  "mean_log2_expression", "fraction_cells_expressing",
                  "binary_expressed", "n_cells",
-                 "linear_expression", "detected", "concentration", "concentration_tier"]
+                 "linear_expression", "detected", "concentration",
+                 "concentration_of_total", "concentration_tier"]
     expr = pd.concat([per_label, other], ignore_index=True)[expr_cols]
     expr.to_csv(WMB_EXPR_FILE, index=False)
     print(f"\n  Saved {len(expr)} rows to {WMB_EXPR_FILE}")
@@ -681,7 +685,9 @@ def compute_wmb_expression(force: bool = False) -> pd.DataFrame:
                     "cell_type": ct,
                     "mean_log2_expression": round(float(mean_expr[i]), 6),
                     "fraction_cells_expressing": round(float(frac_expr[i]), 6),
-                    "binary_expressed": bool(mean_expr[i] > 1 and frac_expr[i] > 0.10),
+                    "binary_expressed": bool(
+                        mean_expr[i] > 1
+                        and frac_expr[i] > specificity.DETECTION_FRAC_MIN),
                     "n_cells": int(n_total),
                 })
 
@@ -821,7 +827,9 @@ def compute_wmb_proteome_expression(force: bool = False) -> pd.DataFrame:
                     "mean_log2_expression": round(float(mean_expr[i]), 6),
                     "fraction_cells_expressing": round(float(frac_expr[i]), 6),
                     "specificity_score": np.nan,
-                    "binary_expressed": bool(mean_expr[i] > 1 and frac_expr[i] > 0.10),
+                    "binary_expressed": bool(
+                        mean_expr[i] > 1
+                        and frac_expr[i] > specificity.DETECTION_FRAC_MIN),
                     "n_cells": n_total,
                 })
 

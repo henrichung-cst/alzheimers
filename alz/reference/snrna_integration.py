@@ -249,10 +249,11 @@ def step_specificity() -> None:
     Replaces the relative share localizer (proven inversely predictive of
     presence — the harder it localized, the likelier the call was a biological
     false positive) with the repo-wide standard
-    (``alz/cross_reference/specificity.py``): per-(gene, cluster) DETECTION
-    (``fraction_cells_expressing >= 0.10``, normalization-free) + detected-set
-    linear ``concentration`` + 2×/5×/10× ``concentration_tier`` over
-    ``1/n_detected`` + per-gene ``effective_n_celltypes``. Pools all animals.
+    (``alz/cross_reference/specificity.py``): per-(gene, cluster) detection
+    evidence (``fraction_cells_expressing >= 0.10``, normalization-free) plus
+    all-cluster linear ``concentration`` / ``concentration_of_total`` whose 2×/5×/10×
+    ``concentration_tier`` is the fold over the even ``1/N_total`` share — comparable
+    across kinases — + per-gene ``effective_n_celltypes``. Pools all animals.
 
     ``mean_log2_expression`` is the per-cluster mean over animals of the
     pseudobulk log2(CPM+1); ``fraction_cells_expressing`` comes from the
@@ -302,9 +303,9 @@ def step_specificity() -> None:
         "top_concentration_native": "top_concentration",
     })
     out = per_label.merge(per_gene, on="gene_symbol", how="left")
-    # Emit rows where the gene is expressed in the cluster (detected rows — frac
-    # ≥ 0.10 — are a strict subset). Genes undetected everywhere carry NaN
-    # breadth and contribute no attribution.
+    # Emit rows where the gene has measurable cluster expression. The >=10%
+    # cells-expressing marker is reported separately and does not change the
+    # specificity denominator.
     out = out[out["mean_log2_expression"] > 0].copy()
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)

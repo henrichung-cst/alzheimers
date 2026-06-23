@@ -8,8 +8,8 @@ within-cohort path (``alz/reference/snrna_integration.py:step_specificity``).
 
 This replaces 5xFAD's legacy share/τ localizer (``fivexfad_specificity`` /
 ``fivexfad_fold_over_uniform`` / ``fivexfad_tau``), which suffered the
-share-is-not-presence failure — no detection gate, so a near-zero kinase scored a
-high share wherever cross-cluster competition was lowest. One metric, every cohort.
+share-is-not-presence failure: a near-zero kinase could score a high share
+wherever cross-cluster competition was lowest. One metric, every cohort.
 
 Resolution is the 46-cluster ``new_clusters`` spine, computed per tissue (cortex /
 hippocampus) — 5xFAD's existing split, not a coarse rollup. Specificity is
@@ -24,6 +24,10 @@ import sys
 import pandas as pd
 
 from alz.cross_reference import specificity
+from alz.bulk_mea.specificity_class import (
+    unit_concentration_shares,
+    unit_effective_n,
+)
 from alz.viewer.paths import FIVEXFAD_KINASE_DIR
 
 EXPRESSION_FILE = os.path.join(FIVEXFAD_KINASE_DIR, "fivexfad_snrna_expression.csv")
@@ -71,6 +75,24 @@ def run() -> None:
     per_label = pd.concat(per_label_parts, ignore_index=True)
     per_gene = pd.concat(per_gene_parts, ignore_index=True)
 
+    # Unit-level effective_n (Song convention) — the value the confidence pill
+    # consumes. Collapse each gene's all-label concentration shares onto curated
+    # specificity units (config.load_specificity_unit_map, shared with Song) and
+    # measure exclusivity over units: eff = 1 / Σ unit_share². Computed here over the
+    # COMPLETE per-cell-type set (including unnamed cluster-NN, which the
+    # attribution view drops) so the share normalization is correct. The raw
+    # per-cluster effective_n (effective_n_native) is kept only as subtype spread.
+    ueff_rows = []
+    for (gene, tissue), grp in per_label.groupby(["matched_gene", "tissue"], sort=False):
+        shares = unit_concentration_shares(grp["cell_type"], grp["concentration"])
+        ueff_rows.append({
+            "matched_gene": gene,
+            "tissue": tissue,
+            "fivexfad_unit_effective_n": unit_effective_n(shares),
+        })
+    per_gene = per_gene.merge(
+        pd.DataFrame(ueff_rows), on=["matched_gene", "tissue"], how="left")
+
     per_label = per_label.rename(
         columns={
             "detected": "fivexfad_detected",
@@ -106,6 +128,7 @@ def run() -> None:
         "fivexfad_concentration_of_total",
         "fivexfad_concentration_tier",
         "fivexfad_effective_n",
+        "fivexfad_unit_effective_n",
         "fivexfad_top_celltype",
         "fivexfad_top_concentration",
         "fivexfad_n_celltypes_detected",

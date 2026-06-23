@@ -25,7 +25,7 @@ const _KHState = {
   ctrlDir: "",         // "" | "all_up" | "all_down" | "mixed" | "none"
   dirMode: "sig",      // "sig" = significant donors only · "tested" = any donor with a finite NES
   showCtrl: true,      // render side-by-side CTRL column group
-  sortCol: "conf",
+  sortCol: "n_attributed_celltypes",
   sortAsc: false,
   auditTab: "score",     // trace | prep | score
   auditDonor: null,      // donor selected for donor-scoped sub-tabs
@@ -359,6 +359,10 @@ function _khRenderProfile(r, fdrThresh, donors, donorMask, maxAbs) {
 
 function renderKinaseHuman() {
   if (!_KH_HAS) return;
+  if (_KHState.sortCol === "conf") {
+    _KHState.sortCol = "n_attributed_celltypes";
+    _KHState.sortAsc = false;
+  }
   const fdrThresh = Store.state.filters.fdr;
   const donors = _KH.donors;
   const donorMask = _KHState.donors.size ? _KHState.donors : null;
@@ -404,7 +408,6 @@ function renderKinaseHuman() {
       + `<td class="kh-ctrl-col" title="${r.n_ctrl_sig_up || 0} up / ${r.n_ctrl_sig_down || 0} down · CTRL spread ±${r.ctrl_sd == null ? "—" : r.ctrl_sd.toFixed(2)} NES">${r.n_ctrl_sig}</td>`
       + (hasSpec ? `<td class="kh-spec-col">${_khRenderCelltypePills(attrSummary)}</td>` : "")
       + (hasSpec ? `<td class="kh-spec-col">${_khSpecTierBadge(attrSummary.maxTierRank)}</td>` : "")
-      + (hasSpec ? `<td class="kh-spec-col">${_khConfBadge(attrSummary.conf, attrSummary)}</td>` : "")
       + `</tr>`;
   }).join("");
   tbody.innerHTML = html;
@@ -1041,7 +1044,7 @@ function _khTopCelltypeName(kinaseName, reference) {
 const KH_ATTR_COLS = [
   {key:"cell_type",            label:"Cell type",   type:"str", group:"id",
    title:"Levy T5 cluster. SEA-AD supertypes and HBCA superclusters are rolled up to this shared nomenclature before ranking."},
-  {key:"confidence_tier",      label:"Conf",        type:"conf", group:"attr",
+  {key:"confidence_tier",      label:"Location confidence", type:"conf", group:"attr", hidden:true,
    title:"Human mirror of the mouse confidence tier: high / moderate / low / none. High requires both human location evidence ≥ log2(2) and |SEA-AD LFC| ≥ 0.1."},
   {key:"specificity",          label:"Location",    type:"num", group:"attr",
    title:"Human expression location evidence: log2(cell-type mean / reference-wide mean). > 0 means enriched in this cell type."},
@@ -1225,21 +1228,6 @@ function _khRenderCelltypePills(summary) {
   return shown + overflow;
 }
 
-function _khConfBadge(conf, summary) {
-  const cls = conf === "high" ? "hi"
-            : conf === "moderate" ? "mid"
-            : "lo";
-  const label = conf === "high" ? "HIGH"
-              : conf === "moderate" ? "MOD"
-              : conf === "low" ? "low"
-              : "none";
-  const count = summary ? summary.count : 0;
-  const tip = conf === "none"
-    ? "No human attribution rows above low confidence."
-    : `${label} human attribution; ${count} high/moderate cell type${count === 1 ? "" : "s"}.`;
-  return `<span class="badge ${cls}" title="${_escapeHtml(tip)}">${label}</span>`;
-}
-
 function _khAttrCmp(a, b, key, type, asc) {
   let va, vb;
   if (type === "num") {
@@ -1374,7 +1362,7 @@ function _khRenderAttribution(body, r) {
   const num = (v, d=3) => (v == null || !isFinite(v)) ? "" : Number(v).toFixed(d);
   const tbody = rows.map((row, i) => {
     const tierChip =
-      `<span class="${_attrConfidenceClass(row.confidence_tier)}">${_escapeHtml(row.confidence_tier.replace('_', ' '))}</span>`;
+      `<span class="${_attrConfidenceClass(row.confidence_tier)}" title="${_escapeHtml(row.confidence_basis || row.confidence_tier)}">${_escapeHtml(row.confidence_tier.replace('_', ' '))}</span>`;
     // Location tier: uses the same ≥10× / ≥5× / ≥2× / ≥1× of uniform logic
     // as the mouse WMB tier, applied to the human log2-ratio score directly.
     const specTier = row.specificity == null || !isFinite(row.specificity)
@@ -1390,8 +1378,7 @@ function _khRenderAttribution(body, r) {
       : `<td class="attr-num"${donorFDR < 0.25 ? ' style="font-weight:600"' : ''}>${num(donorFDR, 3)}</td>`;
     const evidenceTitle = _khSourceEvidenceTitle(row);
     return `<tr class="attr-verdict-row${i === 0 ? ' attr-verdict-selected' : ''}">` +
-      `<td class="attr-celltype" title="${_escapeHtml(evidenceTitle)}">${_escapeHtml(row.cell_type)}</td>` +
-      `<td>${tierChip}</td>` +
+      `<td class="attr-celltype" title="${_escapeHtml(evidenceTitle)}">${_escapeHtml(row.cell_type)} ${tierChip}</td>` +
       `<td class="attr-num">${num(row.specificity, 3)}</td>` +
       `<td class="attr-num">${specTier}</td>` +
       `<td class="attr-num">${num(row.mean_log2_expression, 2)}</td>` +
@@ -1401,17 +1388,22 @@ function _khRenderAttribution(body, r) {
       `</tr>`;
   }).join("");
 
-  const headCells = KH_ATTR_COLS.map(c => {
+  const visibleCols = KH_ATTR_COLS.filter(c => !c.hidden);
+  const headCells = visibleCols.map(c => {
     const arrow = (c.key === sortCol.key) ? (sortAsc ? " ▲" : " ▼") : "";
     const title = c.title ? ` title="${_escapeHtml(c.title)}"` : "";
     return `<th class="attr-verdict-th" data-sort-key="${c.key}"${title}>${c.label}${arrow}</th>`;
   }).join("");
   const head = `<tr>${headCells}</tr>`;
+  const groupCounts = visibleCols.reduce((acc, c) => {
+    acc[c.group] = (acc[c.group] || 0) + 1;
+    return acc;
+  }, {});
   const superHead =
     `<tr class="attr-verdict-supergroup">` +
-      `<th class="attr-supergroup-spacer" colspan="1"></th>` +
-      `<th class="attr-supergroup-attr" colspan="6" title="Cell-type attribution evidence (human references — transcript-level location evidence + SEA-AD AD effect).">Attribution</th>` +
-      `<th class="attr-supergroup-decomp" colspan="2" title="Per-donor kinase activity from the human MEA. Broadcast per kinase; changes with the donor selector.">Donor kinase activity</th>` +
+      `<th class="attr-supergroup-spacer" colspan="${groupCounts.id || 0}"></th>` +
+      `<th class="attr-supergroup-attr" colspan="${groupCounts.attr || 0}" title="Cell-type attribution evidence (human references — transcript-level location evidence + SEA-AD AD effect).">Attribution</th>` +
+      `<th class="attr-supergroup-decomp" colspan="${groupCounts.activity || 0}" title="Per-donor kinase activity from the human MEA. Broadcast per kinase; changes with the donor selector.">Donor kinase activity</th>` +
     `</tr>`;
 
   body.innerHTML =

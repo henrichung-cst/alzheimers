@@ -118,3 +118,35 @@ OMICS_TRACE_NORMALIZED_INDEX = os.path.join(
     OMICS_TRACE_NORMALIZED_DIR, "index.json"
 )
 OMICS_TRACE_NORMALIZED_SCHEMA_VERSION = 1
+
+# 5xFAD evidence-panel shards (Incytr Pathways Evidence tab, fivexfad contexts).
+# Per-tissue dirs so Song's rmtree never clobbers them. Built read-only from the
+# already-on-disk per-sample matrices by build_{omics,transcript}_trace_fivexfad.py;
+# wired into PAYLOAD.meta.{omics,transcript}_trace.by_context.
+OMICS_TRACE_FIVEXFAD_SCHEMA_VERSION = 1
+OMICS_TRACE_FIVEXFAD_CORTEX_DIR = os.path.join(
+    AUDIT_SOURCES_DIR, "omics_trace_fivexfad_cortex"
+)
+OMICS_TRACE_FIVEXFAD_CORTEX_INDEX = os.path.join(
+    OMICS_TRACE_FIVEXFAD_CORTEX_DIR, "index.json"
+)
+OMICS_TRACE_FIVEXFAD_HIPPO_DIR = os.path.join(
+    AUDIT_SOURCES_DIR, "omics_trace_fivexfad_hippocampus"
+)
+OMICS_TRACE_FIVEXFAD_HIPPO_INDEX = os.path.join(
+    OMICS_TRACE_FIVEXFAD_HIPPO_DIR, "index.json"
+)
+
+TRANSCRIPT_TRACE_FIVEXFAD_SCHEMA_VERSION = 1
+TRANSCRIPT_TRACE_FIVEXFAD_CORTEX_DIR = os.path.join(
+    AUDIT_SOURCES_DIR, "transcript_trace_fivexfad_cortex"
+)
+TRANSCRIPT_TRACE_FIVEXFAD_CORTEX_INDEX = os.path.join(
+    TRANSCRIPT_TRACE_FIVEXFAD_CORTEX_DIR, "index.json"
+)
+TRANSCRIPT_TRACE_FIVEXFAD_HIPPO_DIR = os.path.join(
+    AUDIT_SOURCES_DIR, "transcript_trace_fivexfad_hippocampus"
+)
+TRANSCRIPT_TRACE_FIVEXFAD_HIPPO_INDEX = os.path.join(
+    TRANSCRIPT_TRACE_FIVEXFAD_HIPPO_DIR, "index.json"
+)

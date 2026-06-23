@@ -46,19 +46,50 @@ In brief: a cell type is **detected** when `fraction_cells_expressing ≥ 0.10`
 
 ---
 
-## The Song confidence pill
+## The exclusivity confidence pill
 
-The confidence pill (`none / low / moderate / high / very_high`) is a
-**per-kinase** property that answers:
+The confidence pill (`none / low / moderate / high / very_high`) answers:
 
-> **How exclusively is this kinase expressed in a single cell type, and do the
-> reference datasets agree?**
+> **How exclusively is this kinase expressed in a single cell type, and does an
+> independent reference agree?**
 
-Code: `alz/bulk_mea/specificity_class.py:assign_specificity_class`, run after
-`assign_confidence` in `alz/bulk_mea/attribute.py`. Design history:
+The pill now spans **all three kinase-explorer cohorts** (Song, 5xFAD, T-cell)
+using the same tier formula. The single shared implementation is:
+
+```text
+alz/bulk_mea/exclusivity_tier.py::exclusivity_tier(detected, eff, corroborated) → (tier, basis)
+```
+
+Constants: `EXCLUSIVE_EFF_MAX = 1.5`, `BROAD_EFF_MAX = 3.0`.
+
+Per-cohort wiring:
+
+| Cohort | Caller | `eff` reads | Corroborator |
+|---|---|---|---|
+| Song | `alz/bulk_mea/specificity_class.py::assign_specificity_class` | `song_unit_effective_n` | WMB class OR human SEA-AD/HBCA (`human_location_score ≥ 1.0`) |
+| 5xFAD | `alz/viewer/cohorts/fivexfad.py::_apply_fivexfad_exclusivity_confidence` | `fivexfad_effective_n` | WMB class OR SEA-AD at the home cell type |
+| T-cell | `alz/build_tcell_viewer.py::_build_tcell_attribution_index` | `tcell_effective_n` | NSCLC detection at the crosswalked home state (panel-absent → uncorroborated, caps at `moderate`) |
+
+Direction concordance — bulk-MEA significance, snRNA LFC direction, decomp
+agreement — is **info-only for all three cohorts**. For 5xFAD these are stored
+as row fields `bulk_mea_significant`, `direction_concordant`,
+`decomp_agrees_bulk` and shown in the detail section but do not gate the pill.
+T-cell concordance (`tcell_concordant`, `tcell_consistency`) is similarly
+info-only.
+
+Song's Song-specific wiring (`assign_specificity_class`) runs after
+`assign_confidence` in `alz/bulk_mea/attribute.py`. Design history of the Song
+model:
 [`docs/plans/cross_reference_exclusivity_regrouping.md`](../plans/cross_reference_exclusivity_regrouping.md).
 
 ---
+
+## Song-specific mechanics
+
+Sections 1–6 below describe the mechanics specific to the Song cohort (curated
+specificity units, corroboration logic, output columns). The tier formula in §4
+is identical for all three cohorts; the `eff` input and corroborator are
+per-cohort as shown above.
 
 ## 1. Resolution: curated specificity units
 
@@ -201,14 +232,26 @@ its child Song clusters. They drive the audit verdict and Kinase Explorer pills 
 
 ## 7. Relationship to direction concordance
 
-The pill's prior meaning — does the kinase's activity move in the **same disease
-direction** across bulk MEA, within-cohort Song, and the decomposition layer — is
-computed by `assign_confidence` (`alz/bulk_mea/confidence.py`) and is **not
-discarded**. It is snapshotted into `direction_tier` / `direction_basis` and shown
-in each pill's tooltip. So both questions remain answerable:
+Direction concordance — does the kinase's activity move in the **same disease
+direction** across bulk MEA, within-cohort expression, and the decomposition
+layer — is **info-only for all three cohorts**. It is never the pill.
+
+For **Song**: `assign_confidence` (`alz/bulk_mea/confidence.py`) computes the
+concordance tier and snapshots it into `direction_tier` / `direction_basis`,
+shown in the pill's tooltip. Both questions remain answerable:
 
 - **confidence_tier** → *where* the kinase is expressed (cell-type exclusivity).
 - **direction_tier** → *whether its activity moves with disease* (concordance).
+
+For **5xFAD**: bulk-MEA significance and snRNA direction gates that previously
+gated the pill are now stored as row fields (`bulk_mea_significant`,
+`direction_concordant`, `decomp_agrees_bulk`) shown in the accordion detail.
+They do not gate the confidence tier.
+
+For **T-cell**: `tcell_concordant` and `tcell_consistency` are displayed as
+info-only columns. The single-donor caveat (no reliable p-value) applies to
+direction only; the exclusivity pill uses pooled within-cohort detection, not
+p-values.
 
 > **Note:** [`concordance.md`](./concordance.md) still documents the older model in
 > which the confidence tier *was* the direction-concordance tier. That tier now
