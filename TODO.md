@@ -1,24 +1,144 @@
-Edit the |NES| column in the kinase viewer tab to use NES (no absolute value).
+# TODO
 
-Use the 10x Small Cell Lung Cancer Cells (https://www.10xgenomics.com/datasets/aggregate-of-900k-human-non-small-cell-lung-cancer-and-normal-adjacent-cells-multiplexed-samples-16-probe-barcodes-1-standard) as a cell type specificity reference for the tcell data, to be used in a similar way as WMB and SEA-AD is used for mouse AD and human AD datasets song and mukesh respectively. The goal is : We need a reference for the tcell data to show wehere kinases are being expressed (tcells, cancer cells)
-Other kinases are predicted, are they even present in the microenvironment? We seek to report at least two metrics: The cell type kinases are expressed in, and the percentage of those cell types that express the kinase. For example, ATK1 is expressed in CD8 cells, and 14% of CD8 cells express ATK1. We find that some of the kinase's reported by Kinase MEA are not found in tcell according to outside reference - a striking finding that needs to be audited.
+Open items grouped by theme. Add `[DONE <date>]` prefix when complete; move to archive at bottom.
 
-[DONE 2026-06-19 — NSCLC 10x reference built and wired. Plan: docs/plans/todo2_tcell_specificity_reference.md. The 10x Flex dataset (16plex_900k_32_NSCLC_multiplex, 897,733 cells × 18,082 genes) ships NO cell-type labels, only graphclust clusters. Annotation: full-cohort ProjecTILs — scGate (inside Run.ProjecTILs filter.cells) gates T cells over ALL cells (batched 25k at a time, hyperslab-read from the 10x CSC h5, never full-loading the 1.3B-nnz matrix); markers label the non-T TME compartment (which ProjecTILs cannot) and sanity-check the T calls. 77,760 cells gated to 14 ProjecTILs states; non-T → 7 marker lineages (Epithelial/Fibroblast/B_plasma/Myeloid/Endothelial/Mast + T_NK_other). Expression = per-cell log2(CPM+1) (Allen ABC / WMB-HBCA convention) so mean and the mean>1 binary threshold are on the SAME scale as the sibling references. Two metrics per (kinase, cell_type): mean_log2(CPM+1) + fraction_cells_expressing; plus a specificity share over coarse TME groups. AUDIT FINDING: of 351 MEA-predicted kinases (donor1, FDR<0.25), 339 panel-covered, 260 expressed in ≥1 TME cell type, 79 expressed NOWHERE despite being panel-covered — dominated by tissue-restricted families (testis TSSK1-4/SSTK, muscle SKMLCK/MYLK4, neuronal CAMK2A/B/CDK5, retinal GRK1/GRK7) = MEA motif false-positive candidates. Outputs: outputs/reports/nsclc_reference/nsclc_kinase_{expression,audit}.csv. Viewer: human_reference flipped True. NSCLC specificity is surfaced as an attribution metric paralleling the Song/WMB cross-check — an external-reference tier column ("NSCLC TME", T_NK-group share ÷ 1/N_groups uniform, binned ≥10×/≥5×/≥2×/≥1×) in the attribution verdict table, plus a per-lineage specificity strip in the drawer (all 7 coarse TME groups; flags "expressed in 0/7 → MEA false-positive candidate"). The earlier dot plot was replaced by this tier-metric form. meta.nsclc_attribution_uniform = 1/7. Commits 1f2fa8e (pipeline), dbae990 (viewer).]
+---
 
-In the viewer, we want to have export functionality on all tables. This is partially implemented. We need to make sure export functionality is standardized across all tables and ensure the output format is a CSV file. 
+## A. T-Cell Analysis & Viewer
 
-We seek to build an extension to all kinase MEA analyses. From the Phosphosite Kinase Library (An external tool we may or may not currently have access to in this repo - it may require fetching), that Kinases can themselves be regulated by upstream or downstream kinases. Since we have kinase activity data, it would be potentially beneficial to explore or visualize the hierarchical or network relationship between predicted Kinase activity, especially if we have supporting evidence that those kinases are expressed within the same type (as best estimated by whatever corroborating evidence we have per cohort). Furthermore, could we say that Kinase activity changes in response to disease (the upregulated or downregulated activity in Kinase MEA comparisons between control and treatment), can be corroborated with corresponding changes in the upstream or downstream kinases regulating the previous kinase? This requires understanding of two types of relationships, the reference relationship "this Kinaes, if upregulated, should cause downregulated of a downstream kinase", and the observed relationship "actually, both kinases appear upregulated in the disease phenotype". 
+**A1. T-cell specificity / enrichment terminology and metrics**
+Formalize language in the T-cell viewer: "specificity" = reference cell-type presence from NSCLC data (per-kinase: how many of the 7 NSCLC cell types express it at ≥10% detection); "enrichment" = concentration in a T-cell state via ProjecTILs. Both metrics must be surfaced and clearly labeled. The goal is to directly measure whether a kinase is assigned to a specific cell state and what substrates define that state.
+- Report per-kinase: (a) number of NSCLC cell types expressing it, (b) fraction of cells per type expressing it, (c) fraction of total expression in each type.
+- Report ProjecTILs state enrichment on both our scRNA and the NSCLC reference.
+- Add breakdown/sort by CD4, CD8, Treg.
 
+**A2. T-cell attribution: replace "vs bulk" with NES deconvoluted**
+In tcell attribution view, the current "vs bulk" label/calculation should be replaced with the NES deconvoluted value directly.
 
-We need to write a small rarely used script to export all kinases and substrates in the tcell data that are monotonically increasing or decreasing across timepoints. 
+**A3. Incytr trends over all 3 timepoints (T-cell)**
+Double-check that incytr trends are computed over all 3 T-cell timepoints, not a subset.
 
-We seek to run incytr on the 5xFAD cohort. The data shape is extremely similar to song, so conceptually the application should be the same. This statement is made explicitly because we want to avoid bespoke adaptors or data changes to 5xFAD in pursuit of running incytr. If a complication occurs that is not a simple data shape issue (a column name), then it should be raised. (For example, a difference in data range may indicate that one dataset was transformed while the other wasn't, this type of issue should not be glossed over.
+**A4. Verify T-cell data structure matches description**
+Confirm the pipeline's understanding of the T-cell data matches:
+- donor1 = IMAC data; donor2 = no IMAC data
+- Both have total proteome + pY data
+- Skip kinase MEA for donor2
+- Different timepoints (not directly comparable, same experiment parameters)
+- Both have scRNA; run incytr on both (on deconvoluted); run kinase MEA on bulk
 
-[DONE 2026-06-19 — all 8 contrasts (cortex/hippocampus × 3/6/9/12mo) complete in both wide/ (phospho) and wide_ptm/ (phospho+Ack+KGG). Plan: docs/plans/todo6_incytr_on_5xfad.md. One driver fix required: slice_omics returned a 1-col empty frame (not NULL) when an optional PTM assay had no samples for a given timepoint (hippocampus ACK is 6mo/12mo only); null_if_empty() added to incytr_commandline.R coerces those to NULL so Incytr skips the layer cleanly. Hippocampus 3mo/9mo wide_ptm/ has Ack_score=0 (no ACK data collected at those ages — data reality, not a pipeline gap). Significance filter (SigProb>0.1 AND |PDS|≥0.2) applied to all 16 parquets. Viewer integration DONE 2026-06-19: phospho-only (wide/) wired into unified viewer as fivexfad_cortex and fivexfad_hippocampus contexts (4 timepoints 3/6/9/12mo, disease=TG); cortex 944 shards/4.9M rows, hippocampus 723 shards/2.1M rows; trajectory annotated; payload 58.2 MB raw/5.93 MB gzip (exit 0). RAISE items still open: cross-cohort deconvoluted value comparison not meaningful (different absolute scales).]
+**A5. Script: monotonically increasing/decreasing kinases in T-cell data**
+Write a small, rarely-used export script for the T-cell data that outputs all kinases and substrates that are monotonically increasing or decreasing across timepoints.
 
-We seek to expand incytr to include acetylation and ubiquination data. These data should be handled in the same manner as other PTMs (phosphorylation), therefore the changes to incytr should be mininal - simply an extension to new types of data. We then want to generate new incytr results for compatible datasets (song, 5xfad, tcell) *without* overwriting the existing data. 
+---
 
+## B. Incytr Improvements
 
-The alzheimers repo has grown to house multiple data cohorts. These data are related, specifically around their method of analysis and neurological disorder (AD for at least 3). However. that means the unified viewer - an interactive application designed to surface the analysis outputs - has grown as well. The viewer requires an audit to ensure that as we continue to expand the viewer, it scales well with the underying data, remaining performant. In addition, the unified viewer is the primary producer for multiple important downstream consumers - chief scientific officers, executives, research collaborators, etc. Therefore, it is vital that during a refactor of the viewer, we maintain core functionality. That does not preclude making any changes, but changes must adhere to rigorous standards to make sure they are a strict improvement over the previous form and that very few to no features are outright lost.
+**B1. IncytrDB audit — database provenance and versioning**
+Locate the IncytrDB database backing incytr pathway calculations. Determine: (a) how Changhan maintains it, (b) how up to date it is, (c) confirm we are using the correct mouse vs. human version per dataset. (Email sent to Changhan — follow up.)
 
-[DONE 2026-06-19 — audit written and all identified levers implemented; see docs/plans/todo8_unified_viewer_scaling_audit.md. P1/P2 (5xFAD attribution-summary + celltype-MEA index sidecars; payload 105->69 MB raw, 10.1->8.49 MB gzip) browser-verified. P3 (crosstable lazy init), P5 (gene_node_index moved to per-context gzipped sidecar), P6 (LRU cap on 5xFAD fetch caches), P8 (T-cell viewer defaults to sidecar payload mode, --inline-payload for air-gapped) implemented and automated-validated (tests + verifiers + fetch/gunzip smoke). Full `pixi run viewer` + `pixi run tcell-viewer` rebuild completed 2026-06-19 under an 11G memory cap, both exit 0: unified payload 53.38 MB raw / 5.63 MB gzip (down from 69/8.49 after P1/P2, 105/10.1 pre-audit; P5 sidecar confirmed), pathway round-trip verifier passed; tcell payload 11.17 MB raw / 1.50 MB gzip emitted as sidecar (inline payload null, loader fetches tcell_viewer.payload.json.gz — P8 confirmed on the real fetch path). Remaining gate: browser click-through pass (needs a live browser). Deferred follow-up (out of scope): cap the persistent 5xFAD per-kinase in-memory indexes (audit section 2.10).]
+**B2. Incytr pathway visualization → sankey/chord diagram**
+Replace or supplement the current incytr pathway heatmap with a sankey or chord diagram that emphasizes cell-type connections over time. Collapse some excitatory neuron clusters to reduce visual complexity. (Also see B5 for backbone filtering before building this.)
+
+**B3. Incytr with acetylation and ubiquitination**
+Expand incytr to include acetylation and ubiquitination PTM data, handled identically to phosphorylation (minimal code changes — data extension, not new logic). Generate new results for song, 5xfad, and tcell **without overwriting** existing phospho-only outputs. Store in a parallel output directory (e.g., `wide_ptm/` pattern already used for 5xFAD).
+
+**B4. Kinase → incytr pathway integration**
+Insert kinase activity data into incytr pathways based on substrate activity. For the high-confidence substrates of each active kinase, identify which genes are those substrates, then link them into the pathway graph. Enrich with cell-type and timepoint information so pathway edges can be gated by expression and disease context.
+
+**B5. Incytr pathway backbone / reduction**
+Develop a pathway reduction strategy:
+- Collapse paths by what is common across all timepoints first, then conditions (Cholinergic is a priority anchor).
+- Rank by backbone (core L→R→EM→Target path, not just the widest enumeration).
+- Add a specificity filter on pathway genes (e.g., mean specificity of member genes).
+- Consider a min-cell-count weight on log fold changes.
+
+**B6. Compare incytr on mukesh vs SEA-AD**
+Run and compare incytr results on the mukesh human AD cohort and the Allen SEA-AD atlas. If the results are concordant, that would be a notable positive finding worth reporting.
+
+---
+
+## C. Cross-Cohort & Disease Interpretation
+
+**C1. Song viewer: split into 3 sub-cohorts (App, Tau, ApTt)**
+Song data contains 3 underlying AD genotypes. Expose them as separate sub-cohorts in the viewer where meaningful. Rule: cell-type specificity is NOT split (whole-cohort reference stays unified); NES and pathway results ARE split per genotype.
+
+**C2. Cohort naming convention**
+Standardize cohort display names away from researcher last names (Song, Mukesh) toward a biologically descriptive convention. Candidates: `MouseCohortApp / MouseCohortTau / MouseCohortApTt`, or `MouseAD1 / MouseAD2`, or similar. Decide and apply consistently across viewer labels, axis titles, and export filenames.
+
+**C3. Disease-direction focus: up/down ranking and early markers**
+Priority analytic lens for AD cohorts:
+- Show kinase/substrate changes as directional (up vs. down) per genotype column (App / Tau / ApTt), not only as agreement grids.
+- Ranking is critical — surface what has the biggest changes.
+- Identify phosphosites that change early ("suspicious" / early-change phosphosites).
+- Flag proteins that can be secreted into CSF or blood as potential early diagnostic markers.
+- For a given gene list: show which are also present in AD data (late-stage), with LFC column.
+
+**C4. Cross-species specificity guard**
+Operational constraint to enforce in review: never finalize a target where a kinase is assigned to a single mouse cell type but the human reference shows it expressed across multiple cell types. Check human cell-type specificity (SEA-AD or NSCLC) for every candidate before reporting.
+
+**C5. Compare mukesh 50-kinase overlap with 5xFAD (substrate direction)**
+Take the 50 kinases with agreement between mukesh human AD, human preclinical, and human controls. In the 5xFAD mouse dataset, check: (a) shared direction (up/down), (b) substrate composition overlap (Venn), (c) substrate-direction correlation. Flag kinases where substrate agreement breaks down between mouse and human — disagreements are biologically interesting.
+
+---
+
+## D. Substrate Analysis
+
+**D1. Cross-cohort substrate phosphosite comparator**
+Build a substrate comparator tool: select a pool of kinases from one cohort (e.g., most active in mukesh human AD), select another pool from a second cohort, and compare underlying substrate composition (overlap, direction). Initial use case: GRF1-5 family — what separates them in terms of substrate specificity?
+
+---
+
+## E. Kinase Hierarchy & Family Discrimination
+
+**E1. Kinase upstream/downstream regulation network**
+Using the PhosphoSite Kinase Library (check if access is already available in-repo; fetch if not), build a kinase regulation network. Two layers:
+1. Reference hierarchy: "if kinase A is upregulated, it should cause downregulation of downstream kinase B."
+2. Observed overlay: what actually happens in the disease phenotype (both A and B upregulated? concordant? discordant?).
+Viewer goal: click a kinase → show its reference regulation neighbors → overlay observed disease-direction arrows. Filter to kinases co-expressed in the same cell type.
+
+**E2. Discriminating kinases within the same family**
+Use snRNA cell-type specificity to separate kinases in the same family. Hypothesis: different members of a kinase family target different cell types — use that as a discriminator when MEA substrate overlap makes activity-level separation difficult.
+
+---
+
+## F. Viewer & UX
+
+**F1. Sort all tables by signed values (no absolute value)**
+Across all viewer tables (crosstable, kinase explorer, incytr pathways, and any others): sort by signed NES/PDS, not |NES|/|PDS|. Crosstable currently shows explicit sign but sorts by absolute value — fix to sort signed. End-user request; apply uniformly.
+
+**F2. Standardize CSV export across all tables**
+Audit all viewer tables and ensure export-to-CSV is available and consistent. Currently partially implemented; complete the remaining tables and standardize output format (CSV, sensible column names, no UI-only columns in the export).
+
+---
+
+## G. Documentation & Methods
+
+**G1. Methods and workflow documentation sweep**
+Update methods documentation for both the AD and T-cell pipelines. Add workflow diagrams (pictures / flowcharts) showing each step. This is a required deliverable for collaborators and publications — not a polish item.
+
+**G2. Positive controls list**
+Build and maintain a list of positive controls for each data cohort:
+- AD cohort: APOE (well-understood AD mechanisms).
+- Candidates to audit: PHKG1 (expected astrocyte-specific?), ATP9A (expected endothelial?).
+- T-cell exhaustion cohort: TBD.
+Use these to validate that specificity and enrichment metrics behave as expected.
+
+---
+
+## H. External Data & Extensions
+
+**H1. TMT paper replication / IMAC fetch**
+Identify the TMT-based paper that analyzed Song-like data with a different normalization strategy. Fetch their IMAC data and run kinase enrichment to compare results. Note whether their normalization removed heterogeneity relative to ours. This is an exploratory cancer extension.
+
+---
+
+## Archive — Completed
+
+**[DONE 2026-06-19] NSCLC 10x reference for T-cell data**
+10x Flex dataset (897,733 cells × 18,082 genes) annotated via ProjecTILs + marker lineages. 77,760 T cells in 14 states; non-T → 7 TME lineages. Two metrics per (kinase, cell_type): mean_log2(CPM+1) + fraction expressing. Audit: 79/339 covered kinases expressed nowhere in TME (tissue-restricted families = MEA false-positive candidates). Wired into viewer as NSCLC attribution tier. Commits: 1f2fa8e, dbae990. Plan: `docs/plans/todo2_tcell_specificity_reference.md`.
+
+**[DONE 2026-06-19] Incytr on 5xFAD**
+All 8 contrasts (cortex/hippocampus × 3/6/9/12mo) complete in `wide/` and `wide_ptm/`. One driver fix: `null_if_empty()` for optional PTM assays with no samples at a given timepoint. Viewer wired as `fivexfad_cortex` and `fivexfad_hippocampus` contexts. Plan: `docs/plans/todo6_incytr_on_5xfad.md`.
+
+**[DONE 2026-06-19] Unified viewer scaling audit**
+P1–P8 implemented: attribution-summary + celltype-MEA sidecars, payload 105→53 MB raw / 10.1→5.63 MB gzip. Crosstable lazy init, gene_node_index per-context sidecar, LRU cap on 5xFAD caches, T-cell viewer sidecar payload mode. Plan: `docs/plans/todo8_unified_viewer_scaling_audit.md`.
