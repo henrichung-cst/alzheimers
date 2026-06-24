@@ -13,12 +13,13 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 import alz.build_tcell_viewer as viewer
+import alz.tcell_viewer.slices_kinase as slices_kinase
 
 
 class ProjectedStateViewerPayloadTests(unittest.TestCase):
     def test_projected_state_payload_absent_when_files_absent(self) -> None:
         with TemporaryDirectory() as td:
-            with patch.object(viewer, "KINASE_ATTRIBUTION_TCELLS_DIR", td):
+            with patch.object(slices_kinase, "KINASE_ATTRIBUTION_TCELLS_DIR", td):
                 self.assertIsNone(viewer._load_projected_state_mea_payload())
 
     def test_projected_state_payload_reads_existing_optional_files(self) -> None:
@@ -58,7 +59,7 @@ class ProjectedStateViewerPayloadTests(unittest.TestCase):
                 }
             ).to_csv(out_dir / "mechanism_attribution_projected_state.csv", index=False)
 
-            with patch.object(viewer, "KINASE_ATTRIBUTION_TCELLS_DIR", str(root)):
+            with patch.object(slices_kinase, "KINASE_ATTRIBUTION_TCELLS_DIR", str(root)):
                 payload = viewer._load_projected_state_mea_payload()
 
         self.assertIsNotNone(payload)
