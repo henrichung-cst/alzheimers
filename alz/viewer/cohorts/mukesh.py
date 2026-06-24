@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 
 from alz.shared import config
 from alz.viewer.paths import EDGE_SLICES_HUMAN_PERDONOR_DIR, SCHEMA_VERSION
+from alz.viewer.shared.build_cache import _input_signature, _load_build_cache, _write_build_cache
 from alz.viewer.shared.cohort_slice import CohortViewerSlice, EdgeSliceContribution
 
 try:
@@ -56,6 +57,32 @@ def _write_human_perdonor_substrate_slices(
     with both fields empty are skipped — the JS treats a missing row as
     "no leading edge" the same way it used to treat an empty string.
     """
+    parent = os.path.dirname(HUMAN_PERDONOR_DIR)
+    _cache_source_files = [__file__]
+    for suffix, _residue in HUMAN_TRACK_SUFFIXES:
+        for fname in (
+            f"recurrence{suffix}.csv",
+            f"kinase_donor_nes{suffix}.csv",
+            f"kinase_donor_fdr{suffix}.csv",
+            f"mea_perdonor{suffix}.csv",
+            f"mea_substrate_sets{suffix}.csv",
+        ):
+            _cache_source_files.append(os.path.join(HUMAN_PERDONOR_DIR, fname))
+        for fname in (
+            f"stoichiometry_matrix{suffix}.csv",
+            f"stoichiometry_matrix_pY{suffix}.csv",
+        ):
+            _cache_source_files.append(os.path.join(parent, fname))
+
+    _cache_sig = _input_signature(
+        "human_perdonor",
+        _cache_source_files,
+        {"schema_version": SCHEMA_VERSION, "builder_version": 1},
+    )
+    _cached = _load_build_cache("human_perdonor", _cache_sig, EDGE_SLICES_HUMAN_PERDONOR_DIR)
+    if _cached is not None:
+        return _cached
+
     shutil.rmtree(EDGE_SLICES_HUMAN_PERDONOR_DIR, ignore_errors=True)
     os.makedirs(EDGE_SLICES_HUMAN_PERDONOR_DIR, exist_ok=True)
 
@@ -100,6 +127,9 @@ def _write_human_perdonor_substrate_slices(
         json.dump(index, f)
     print(f"  human_perdonor_substrate: wrote {len(present)} shards "
           f"({total_rows:,} total rows)", flush=True)
+    output_files = [template.format(kinase_id=k) for k in present] + ["index.json"]
+    _write_build_cache("human_perdonor", _cache_sig, EDGE_SLICES_HUMAN_PERDONOR_DIR,
+                       output_files, index)
     return index
 
 

@@ -29,6 +29,7 @@ from alz.viewer.paths import (
     SCHEMA_VERSION,
     UNIFIED_VIEWER_DIR,
 )
+from alz.viewer.shared.build_cache import _input_signature, _load_build_cache, _write_build_cache
 from alz.viewer.shared.cohort_slice import CohortViewerSlice
 from alz.viewer.shared.incytr_index import (
     _INCYTR_FC_COLS,
@@ -592,6 +593,18 @@ def _write_fivexfad_attribution_shards(rows: list[dict]) -> dict[str, str]:
     """Write full per-kinase 5xFAD cell-type attribution sidecars."""
     if not rows:
         return {}
+    _attr_src = os.path.join(FIVEXFAD_KINASE_DIR, "fivexfad_snrna_attribution.csv")
+    _attr_sig = _input_signature(
+        "fivexfad_attribution",
+        [__file__, _attr_src],
+        {"schema_version": 1, "builder_version": 1},
+    )
+    _attr_cached = _load_build_cache(
+        "fivexfad_attribution", _attr_sig, FIVEXFAD_ATTRIBUTION_DIR
+    )
+    if _attr_cached is not None:
+        return _attr_cached
+
     tmp_dir = f"{FIVEXFAD_ATTRIBUTION_DIR}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
     shutil.rmtree(tmp_dir, ignore_errors=True)
     os.makedirs(tmp_dir, exist_ok=True)
@@ -623,6 +636,9 @@ def _write_fivexfad_attribution_shards(rows: list[dict]) -> dict[str, str]:
             json.dump({"schema_version": 1, "shards": shard_index}, f, separators=(",", ":"))
         shutil.rmtree(FIVEXFAD_ATTRIBUTION_DIR, ignore_errors=True)
         shutil.move(tmp_dir, FIVEXFAD_ATTRIBUTION_DIR)
+        _attr_dir_rel = [_f5_shard_name(k) for k in shard_index] + ["index.json"]
+        _write_build_cache("fivexfad_attribution", _attr_sig, FIVEXFAD_ATTRIBUTION_DIR,
+                           _attr_dir_rel, shard_index)
     else:
         shutil.rmtree(tmp_dir, ignore_errors=True)
     print(f"  supporting_5xfad_attribution: {len(shard_index):,} shards", flush=True)
@@ -798,6 +814,18 @@ def _write_fivexfad_celltype_mea_shards(rows: list[dict]) -> dict[str, str]:
     """Write full per-kinase 5xFAD cell-type MEA sidecars for lazy detail views."""
     if not rows:
         return {}
+    _mea_src = os.path.join(FIVEXFAD_CELLTYPE_DIR, "fivexfad_celltype_mea.parquet")
+    _mea_sig = _input_signature(
+        "fivexfad_celltype_mea",
+        [__file__, _mea_src],
+        {"schema_version": 1, "builder_version": 1},
+    )
+    _mea_cached = _load_build_cache(
+        "fivexfad_celltype_mea", _mea_sig, FIVEXFAD_CELLTYPE_MEA_DIR
+    )
+    if _mea_cached is not None:
+        return _mea_cached
+
     tmp_dir = f"{FIVEXFAD_CELLTYPE_MEA_DIR}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
     shutil.rmtree(tmp_dir, ignore_errors=True)
     os.makedirs(tmp_dir, exist_ok=True)
@@ -828,6 +856,9 @@ def _write_fivexfad_celltype_mea_shards(rows: list[dict]) -> dict[str, str]:
             json.dump({"schema_version": 1, "shards": shard_index}, f, separators=(",", ":"))
         shutil.rmtree(FIVEXFAD_CELLTYPE_MEA_DIR, ignore_errors=True)
         shutil.move(tmp_dir, FIVEXFAD_CELLTYPE_MEA_DIR)
+        _mea_dir_rel = [_f5_shard_name(k) for k in shard_index] + ["index.json"]
+        _write_build_cache("fivexfad_celltype_mea", _mea_sig, FIVEXFAD_CELLTYPE_MEA_DIR,
+                           _mea_dir_rel, shard_index)
     else:
         shutil.rmtree(tmp_dir, ignore_errors=True)
     print(f"  supporting_5xfad_celltype_mea: {len(shard_index):,} shards", flush=True)
@@ -1104,21 +1135,28 @@ def _write_fivexfad_detail_shards(
     """Write per-kinase 5xFAD audit sidecars for the detail workbench."""
     if not rows:
         return {}
-    existing_index = os.path.join(FIVEXFAD_DETAIL_DIR, "index.json")
-    if os.path.exists(existing_index):
-        try:
-            with open(existing_index) as f:
-                existing = json.load(f)
-            shards = existing.get("shards", {})
-            if (
-                existing.get("layout") == "per_kinase_bundle_v2"
-                and isinstance(shards, dict)
-                and shards
-            ):
-                print(f"  supporting_5xfad_detail: {len(shards):,} shards (reused)", flush=True)
-                return shards
-        except (OSError, json.JSONDecodeError):
-            pass
+    _detail_source_files = [__file__, manifest_path]
+    for tissue, track, _assay, _residue in track_specs:
+        prefix = f"{tissue}_{track}"
+        for suffix in (
+            "_raw_phospho_normalized.csv",
+            "_matched_total_protein.csv",
+            "_stoichiometry_matrix.csv",
+            "_site_level_ols.csv",
+            "_mea_substrate_sets.csv",
+            "_winsorized_sites.csv",
+            "_mea_global_shift.csv",
+        ):
+            _detail_source_files.append(os.path.join(FIVEXFAD_KINASE_DIR, f"{prefix}{suffix}"))
+    _detail_sig = _input_signature(
+        "fivexfad_detail",
+        _detail_source_files,
+        {"schema_version": 2, "builder_version": 1},
+    )
+    _detail_cached = _load_build_cache("fivexfad_detail", _detail_sig, FIVEXFAD_DETAIL_DIR)
+    if _detail_cached is not None:
+        return _detail_cached
+
     tmp_dir = f"{FIVEXFAD_DETAIL_DIR}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
     shutil.rmtree(tmp_dir, ignore_errors=True)
     os.makedirs(tmp_dir, exist_ok=True)
@@ -1381,6 +1419,11 @@ def _write_fivexfad_detail_shards(
             )
         shutil.rmtree(FIVEXFAD_DETAIL_DIR, ignore_errors=True)
         shutil.move(tmp_dir, FIVEXFAD_DETAIL_DIR)
+        _detail_dir_rel = [
+            os.path.basename(v) for v in detail_index.values()
+        ] + ["index.json"]
+        _write_build_cache("fivexfad_detail", _detail_sig, FIVEXFAD_DETAIL_DIR,
+                           _detail_dir_rel, detail_index)
     else:
         shutil.rmtree(tmp_dir, ignore_errors=True)
     print(f"  supporting_5xfad_detail: {len(detail_index):,} shards", flush=True)

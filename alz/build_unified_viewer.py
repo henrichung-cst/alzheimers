@@ -1096,8 +1096,6 @@ def write_payload(payload: dict) -> dict:
     os.makedirs(UNIFIED_VIEWER_DIR, exist_ok=True)
     json_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     raw = json_str.encode("utf-8")
-    with open(PAYLOAD_JSON, "wb") as f:
-        f.write(raw)
     gz = gzip.compress(raw, compresslevel=6)
     with open(PAYLOAD_JSON_GZ, "wb") as f:
         f.write(gz)
@@ -1106,12 +1104,12 @@ def write_payload(payload: dict) -> dict:
 
 def refresh_supporting_5xfad_payload() -> dict:
     """Refresh only the 5xFAD supporting block in an existing viewer payload."""
-    if not os.path.exists(PAYLOAD_JSON):
+    if not os.path.exists(PAYLOAD_JSON_GZ):
         raise SystemExit(
-            f"payload missing at {PAYLOAD_JSON}; run the full viewer build once before "
+            f"payload missing at {PAYLOAD_JSON_GZ}; run the full viewer build once before "
             "using --supporting-5xfad-only"
         )
-    with open(PAYLOAD_JSON) as f:
+    with gzip.open(PAYLOAD_JSON_GZ, "rt", encoding="utf-8") as f:
         payload = json.load(f)
 
     _fivexfad_slice = build_fivexfad_viewer_slice(data=None)
@@ -1249,15 +1247,16 @@ def validate(data: UnifiedData) -> str:
     n_contrasts = len(md["contrasts"])
 
     # Payload size
-    if not os.path.exists(PAYLOAD_JSON):
-        errors.append(f"payload JSON missing: {PAYLOAD_JSON}")
+    if not os.path.exists(PAYLOAD_JSON_GZ):
+        errors.append(f"payload JSON missing: {PAYLOAD_JSON_GZ}")
         raw_bytes = gzip_bytes = 0
         payload = None
     else:
-        raw_bytes = os.path.getsize(PAYLOAD_JSON)
-        gzip_bytes = os.path.getsize(PAYLOAD_JSON_GZ) if os.path.exists(PAYLOAD_JSON_GZ) else 0
-        with open(PAYLOAD_JSON) as f:
-            payload = json.load(f)
+        gzip_bytes = os.path.getsize(PAYLOAD_JSON_GZ)
+        with gzip.open(PAYLOAD_JSON_GZ, "rt", encoding="utf-8") as f:
+            payload_str = f.read()
+        raw_bytes = len(payload_str.encode("utf-8"))
+        payload = json.loads(payload_str)
 
     if raw_bytes >= 100 * 1024 * 1024:
         errors.append(f"payload raw {raw_bytes/1e6:.1f} MB exceeds 100 MB cap")
@@ -1506,22 +1505,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.html:
         if args.inline_payload and payload is None:
-            if not os.path.exists(PAYLOAD_JSON):
+            if not os.path.exists(PAYLOAD_JSON_GZ):
                 raise SystemExit(
-                    f"payload missing at {PAYLOAD_JSON}; run --payload first"
+                    f"payload missing at {PAYLOAD_JSON_GZ}; run --payload first"
                 )
-            with open(PAYLOAD_JSON) as f:
+            with gzip.open(PAYLOAD_JSON_GZ, "rt", encoding="utf-8") as f:
                 json_str = f.read()
             payload = json.loads(json_str)
         elif not args.inline_payload:
-            missing = [
-                path for path in (PAYLOAD_JSON_GZ, PAYLOAD_JSON)
-                if not os.path.exists(path)
-            ]
-            if missing:
+            if not os.path.exists(PAYLOAD_JSON_GZ):
                 raise SystemExit(
-                    "payload sidecar missing; run --payload first: "
-                    + ", ".join(missing)
+                    f"payload sidecar missing; run --payload first: {PAYLOAD_JSON_GZ}"
                 )
             json_str = None
         info = write_html(

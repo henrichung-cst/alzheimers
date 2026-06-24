@@ -230,6 +230,43 @@ pixi run rclone-ingest fetch tcells donor1/proteomics/x.csv --dest /tmp   # grab
 pixi run rclone-ingest ls --folder-id <ID> --remote gdrive_shared        # ad-hoc, undeclared folder
 ```
 
+### Viewer deployment (S3)
+
+After building a viewer, sync only changed files to S3:
+
+```bash
+pixi run deploy-viewer          # unified viewer → s3://voila-buc-00-prod/pocs/incytr/unified_viewer_human/
+pixi run deploy-tcell-viewer    # T-cell viewer  → s3://voila-buc-00-prod/pocs/incytr/tcell_viewer/
+pixi run deploy-all-viewers     # both
+```
+
+Uses `aws s3 sync --profile bioplat` — skips files whose ETag matches S3. The uncompressed
+`*.payload.json` is excluded from upload; the browser loads the `.gz` sidecar.
+
+### 5xFAD cohort
+
+```bash
+pixi run 5xfad-ingest                  # ingest raw proteomics
+pixi run 5xfad-export-bulk             # build linear bulk matrices
+pixi run 5xfad-mea                     # 5xFAD kinase MEA
+pixi run 5xfad-snrna-attribution       # snRNA cell-type attribution (Rscript)
+pixi run 5xfad-snrna-decomp-pseudobulk # per-cluster pseudobulk for decomposition
+pixi run 5xfad-celltype-mea            # per-cluster MEA
+pixi run 5xfad-build-incytr-seurat     # build Seurat object for Incytr inputs
+pixi run 5xfad-build-incytr-gene-list  # allmarkers for both tissues (cortex + hippocampus)
+pixi run 5xfad-incytr                  # run pair-mode Incytr on 5xFAD
+pixi run 5xfad-incytr-decompose        # decomposition substrate for Incytr inputs
+pixi run 5xfad-viewer                  # build unified viewer including 5xFAD block
+pixi run 5xfad-viewer-package          # refresh only the 5xFAD block in an existing payload
+```
+
+### Verification
+
+```bash
+pixi run verify-incytr-sce4       # regression check: sce4 parity (≥599/600 recall)
+pixi run verify-incytr-sce4-full  # full sce4 verification in R
+```
+
 ### Supplementary diagnostics
 
 Reviewer-response analyses that validate pipeline choices:
@@ -237,6 +274,80 @@ Reviewer-response analyses that validate pipeline choices:
 ```bash
 bash alz/runners/supplementary/run_reviewer_diagnostics.sh
 ```
+
+### All pixi tasks — quick reference
+
+| Task | What it does |
+|---|---|
+| **Bulk pipeline** | |
+| `ingest` | Song proteomics ingestion, channel mapping, QC |
+| `normalize` | IRS normalization, stoichiometry matrix |
+| `enrich` | MEA kinase enrichment on stoichiometry β values |
+| `attribute` | Cell-type attribution (Song + SEA-AD + WMB) |
+| `mechanism` | Merge mechanism annotations into `unified_attribution.csv` |
+| `recover` | Attribution recovery, `kinase_hypothesis_table.csv` |
+| `live` | `ingest → normalize → enrich → attribute → mechanism → recover` |
+| `dual` | Males-only (primary) + full-cohort (sensitivity) |
+| `all` | Full end-to-end build via `run_all.sh` (resumable) |
+| `bubbles` | Plot attribution bubble charts |
+| **Reference prerequisites** | |
+| `atlas` | SEA-AD + WMB atlas downloads (~95 GB for WMB) |
+| `wmb-export` | WMB per-class kinase/phosphatase expression |
+| `snrna` | Song within-cohort snRNA-seq pseudobulk + concordance |
+| **Human cohort (NBB / Mukesh)** | |
+| `human` | `human-ingest → human-perdonor → human-seaad` |
+| `human-ingest` | NBB → Song-shaped tables |
+| `human-perdonor` | Per-donor MEA (ST + pY tracks) |
+| `human-seaad` | SEA-AD human agreement chain |
+| **T-cell cohort** | |
+| `ingest-tcells` | Pull T-cell proteomics from Drive |
+| `ingest-tcells-scrna` | Pull T-cell scRNA RDS (~10 GB) |
+| `tcells-reshape` | Reshape raw T-cell tables |
+| `tcells-projectils-map` | ProjecTILs cell-state projection |
+| `tcells-scrna-extract` | State-keyed aggexp + markers (after projectils-map) |
+| `tcells-export-bulk` | Per-day bulk matrices (pr/py/ps) |
+| `tcells-decompose` | Per-(state, day) substrate |
+| `tcells-perdonor` | Per-donor MEA |
+| `tcells-build-kldata` | Build kinase-library scoring input |
+| `tcells-build-incytr-seurat` | Seurat objects for both donors |
+| `tcells-build-input-gene-list` | allmarkers for both donors |
+| `tcells-incytr` | Run pair-mode Incytr on T-cells |
+| `tcell-within-cohort` | Within-cohort concordance (donor1) |
+| `tcell-viewer` | Build T-cell viewer |
+| **5xFAD cohort** | |
+| `5xfad-ingest` | Ingest 5xFAD proteomics |
+| `5xfad-export-bulk` | Build 5xFAD bulk matrices |
+| `5xfad-mea` | 5xFAD kinase MEA |
+| `5xfad-snrna-attribution` | snRNA cell-type attribution |
+| `5xfad-snrna-decomp-pseudobulk` | Per-cluster pseudobulk |
+| `5xfad-celltype-mea` | Per-cluster MEA |
+| `5xfad-build-incytr-seurat` | Seurat object for Incytr |
+| `5xfad-build-incytr-gene-list` | allmarkers (cortex + hippocampus) |
+| `5xfad-incytr` | Pair-mode Incytr on 5xFAD |
+| `5xfad-incytr-decompose` | Decomposition substrate for Incytr |
+| `5xfad-viewer` | Build unified viewer with 5xFAD |
+| `5xfad-viewer-package` | Refresh only 5xFAD block in existing payload |
+| **Unified viewer** | |
+| `viewer` | Build unified viewer (Song + Mukesh + 5xFAD) |
+| `deploy-viewer` | Sync unified viewer to S3 (incremental) |
+| `deploy-tcell-viewer` | Sync T-cell viewer to S3 (incremental) |
+| `deploy-all-viewers` | Sync both viewers to S3 |
+| **Verification** | |
+| `verify-incytr-sce4` | sce4 parity regression check (≥599/600 recall) |
+| `verify-incytr-sce4-full` | Full sce4 verification in R |
+| **Setup** | |
+| `install-incytr` | Install local Incytr R package |
+| `install-projectils` | Install ProjecTILs + cache atlases (one-time) |
+| **Data ingest (Drive → local)** | |
+| `ingest-gdrive-shared` | `data/external/gdrive_shared/` |
+| `ingest-lucie-proteomics` | `data/external/lucie_proteomics/` |
+| `ingest-5xfad-reports` | 5xFAD parsed PTM tables |
+| `ingest-5xfad-raw-sne` | ~28 GB raw 5xFAD .sne files |
+| `ingest-5xfad-snrna` | 5xFAD snRNA metadata |
+| `ingest-5xfad-snrna-rds` | 5xFAD 2025 reclustering RDS |
+| `ingest-deconvolution-bulk` | Song proteomics source tables |
+| `ingest-sce4-canonical` | sce4 parity provenance |
+| `ingest-sce4-source` | Full 7.5 GiB sce4 working dir |
 
 ## Repository Layout
 
