@@ -1,8 +1,15 @@
 # Viewer Builder Audit — todo9b
 
 **Date:** 2026-06-24
-**Status:** Planning document — no code changes here.
+**Status:** B1–B10 implemented. B6, B11–B13 remain.
 **Feeds:** `todo9_viewer_aws_deployment.md` (Option B implementation)
+
+### Implementation log
+
+| Item | Commit | Notes |
+|---|---|---|
+| B1–B7 | `f562413` | Shared `build_cache.py` extracted; human_perdonor, fivexfad_attribution, fivexfad_celltype_mea, fivexfad_detail all caching; raw payload write eliminated; fast-path mtime+size check added |
+| B8–B10 | `472664d`... | 5xFAD incytr cache; parts_dir eliminated in detail shards; measurement_trace content-hash gate |
 
 ---
 
@@ -601,57 +608,57 @@ Song.py then imports from there. Mukesh.py and fivexfad.py import from the same 
 
 ## 5. Prioritized Improvement List
 
-### Tier 1 — High impact, low risk, low effort
+### Tier 1 — High impact, low risk, low effort ✅ DONE
 
-**B1. Eliminate `PAYLOAD_JSON` raw write** (§3.1)
+**B1. Eliminate `PAYLOAD_JSON` raw write** (§3.1) ✅
 - Save: 40 MB disk, 40 MB S3 upload per build
 - Change: `write_payload` to write only `.gz`; `validate()` and `refresh_supporting_5xfad_payload()` to read `.gz` via `gzip.open`
 - Risk: Zero JS impact (JS only loads `.gz`). Validate reads the raw for inspection — reading `.gz` is equally valid.
 - Effort: 1 hour
 
-**B2. Fast-path cache check for `incytr_pathways` (mtime+size, skip SHA-256 on hit)** (§4.2)
+**B2. Fast-path cache check for `incytr_pathways` (mtime+size, skip SHA-256 on hit)** (§4.2) ✅
 - Save: ~1 GB I/O per build when incytr inputs haven't changed
 - Change: `_load_build_cache` two-phase comparison
 - Risk: Zero — mtime+size is sufficient for this pipeline's atomically-replaced files
 - Effort: 2 hours
 
-**B3. Add content-hash build cache to `human_perdonor`** (§4.3, §4.4)
+**B3. Add content-hash build cache to `human_perdonor`** (§4.3, §4.4) ✅
 - Save: 390 parquets / 12 MB regeneration on every build → once per human pipeline run
 - Change: Extract `build_cache.py` module; add cache to `_write_human_perdonor_substrate_slices`
 - Risk: Zero JS impact (output format unchanged)
 - Effort: 2 hours (including `build_cache.py` extraction)
 
-**B4. Add content-hash build cache to `fivexfad_attribution`** (§4.3)
+**B4. Add content-hash build cache to `fivexfad_attribution`** (§4.3) ✅
 - Save: 383 JSON files / 70 MB regeneration on every build → once per 5xFAD pipeline run
 - Change: `_write_fivexfad_attribution_shards` — add cache check
 - Risk: Zero
 - Effort: 2 hours (after B3's `build_cache.py` is in place)
 
-**B5. Add content-hash build cache to `fivexfad_celltype_mea`** (§4.3)
+**B5. Add content-hash build cache to `fivexfad_celltype_mea`** (§4.3) ✅
 - Save: 390 JSON files / 22 MB
 - Change: `_write_fivexfad_celltype_mea_shards` — add cache check
 - Effort: 1 hour
 
 ### Tier 2 — Moderate impact, moderate effort
 
-**B6. Compress `fivexfad_attribution/` and `fivexfad_celltype_mea/` to `.json.gz`** (§3.2)
+**B6. Compress `fivexfad_attribution/` and `fivexfad_celltype_mea/` to `.json.gz`** (§3.2) — REMAINING
 - Save: ~60 MB on disk and S3 (estimated 65% compression ratio on JSON)
 - Change: Python side — add `gzip.open`; JS side — update URL pattern and fetch handling for these families
 - Risk: JS contract change — needs coordinated update in the attribution shard fetcher
 - Effort: 3 hours (JS + Python)
 
-**B7. Replace shallow `fivexfad_detail` cache with content-hash check** (§1.5, §4.3)
+**B7. Replace shallow `fivexfad_detail` cache with content-hash check** (§1.5, §4.3) ✅
 - Save: 194 MB regeneration when 5xFAD inputs haven't changed; currently the shallow guard protects correctly only when index.json exists
 - Change: Add `_input_signature` to `_write_fivexfad_detail_shards`; inputs are the 7 CSV files per (tissue, track) spec — list them in the signature
 - Risk: Zero output format change; the shallow guard currently over-protects (never rebuilds even when CSVs changed)
 - Effort: 3 hours
 
-**B8. Add content-hash build cache to `_write_5xfad_incytr_pair_pathways`** (§1.4)
+**B8. Add content-hash build cache to `_write_5xfad_incytr_pair_pathways`** (§1.4) ✅
 - Save: 5xFAD incytr shards not regenerated on Incytr-AD-only reruns
 - Change: Port the Song incytr build cache pattern to fivexfad.py (the DuckDB streaming code is already there; just add the cache wrapper)
 - Effort: 3 hours
 
-**B9. Eliminate parts_dir double-write in `_write_fivexfad_detail_shards`** (§3.8)
+**B9. Eliminate parts_dir double-write in `_write_fivexfad_detail_shards`** (§3.8) ✅
 - Save: ~2× file I/O in detail shard building (eliminated read-back of JSON parts)
 - Change: Accumulate `dict[str, dict]` in memory instead of writing/reading JSON parts
 - Risk: Higher peak RAM for the detail builder (all kinase detail payloads in memory simultaneously). Probably fine — current behavior also holds them via `json.load`
@@ -659,24 +666,24 @@ Song.py then imports from there. Mukesh.py and fivexfad.py import from the same 
 
 ### Tier 3 — Lower impact or higher risk
 
-**B10. Schema-version cache replacement for `measurement_trace`** (§1.12, §3.9)
+**B10. Schema-version cache replacement for `measurement_trace`** (§1.12, §3.9) ✅
 - Replace the schema-version gate with a content-hash gate keyed on `TOTAL_PROTEOME_FILE` mtime+size
 - Prevents stale trace CSVs when the workbook changes without a schema version bump
 - Risk: None (more correct than current behavior)
 - Effort: 1 hour
 
-**B11. Per-contrast incytr shard caching** (§1.3 structural note)
+**B11. Per-contrast incytr shard caching** (§1.3 structural note) — REMAINING
 - The current all-or-nothing cache for `incytr_pathways` means any single contrast parquet change regenerates all 655 shards. A per-contrast granularity would allow unchanged contrasts to be skipped.
 - This requires restructuring `_write_incytr_pair_pathways` to process contrasts independently and merge shards — significant refactor since the streaming pass currently interleaves all contrasts.
 - Effort: 2 days; Depends on whether the global filter index (which is built across all contrasts) can be rebuilt incrementally
 - Risk: Medium — global filter index and trajectory annotation span all contrasts simultaneously
 
-**B12. Deduplicate `_annotate_trajectory_columns` / `_5xfad_annotate_trajectory_columns`** (§3.6)
+**B12. Deduplicate `_annotate_trajectory_columns` / `_5xfad_annotate_trajectory_columns`** (§3.6) — REMAINING
 - Extract common pivot logic to `alz/viewer/shared/trajectory.py`, parameterized on timepoint set and disease set
 - No performance impact; maintenance/correctness benefit only
 - Effort: 2 hours
 
-**B13. Parquet consolidation for `decomp_ols/`** (Option C from todo9)
+**B13. Parquet consolidation for `decomp_ols/`** (Option C from todo9) — REMAINING
 - Merge 390 per-kinase parquets into 5 per-contrast parquets with row-group indexing
 - Drops file count 390 → 5; upload surface from 311 MB → only changed contrast files
 - Risk: High — JS `SliceCache` fetch path changes; requires either a precomputed shard index JSON or a Parquet footer parser in JS
@@ -688,8 +695,8 @@ Song.py then imports from there. Mukesh.py and fivexfad.py import from the same 
 
 | todo9 Option | Relation to this audit |
 |---|---|
-| A — `aws s3 sync` | Already merged — independent of this audit. Spurious mtime changes from full shard regeneration remain until B2–B8 are in place. |
-| B — Builder shard cache | Partially implemented (song.py `decomp_ols`, `song_concordance`, `incytr_pathways`). This audit finds 5 uncached families (B3–B5, B7, B8) and a slow-path issue (B2). |
+| A — `aws s3 sync` | ✅ Merged. |
+| B — Builder shard cache | ✅ B1–B10 complete. B6 (gzip contract change) and B11 (per-contrast granularity) remain. |
 | C — Parquet consolidation | B13. Appropriate after A+B are stable and the file count is still a bottleneck. |
 | D — DuckDB-Wasm | Not covered here; requires C first. |
 
@@ -702,15 +709,15 @@ From todo9 audit numbers, cross-referenced with shard writer inventory:
 | Edge shard family | Writer | Files | Size | Has cache | Cache type |
 |---|---|---|---|---|---|
 | `decomp_ols/` | `_write_decomp_ols_slices` | 390 | 311 MB | Yes | SHA-256 content hash |
-| `fivexfad_detail/` | `_write_fivexfad_detail_shards` | 390 | 194 MB | Partial | Shallow layout-string check only |
+| `fivexfad_detail/` | `_write_fivexfad_detail_shards` | 390 | 194 MB | Yes ✅ | Content-hash (B7); parts_dir eliminated (B9) |
 | `incytr_pathways/` | `_write_incytr_pair_pathways` | 655 | 197 MB | Yes | SHA-256 content hash (expensive) |
-| `fivexfad_attribution/` | `_write_fivexfad_attribution_shards` | 383 | 70 MB | No | — |
-| `fivexfad_celltype_mea/` | `_write_fivexfad_celltype_mea_shards` | 390 | 22 MB | No | — |
-| `human_perdonor/` | `_write_human_perdonor_substrate_slices` | 390 | 12 MB | No | — |
+| `fivexfad_attribution/` | `_write_fivexfad_attribution_shards` | 383 | 70 MB | Yes ✅ | Content-hash (B4); uncompressed JSON (B6 pending) |
+| `fivexfad_celltype_mea/` | `_write_fivexfad_celltype_mea_shards` | 390 | 22 MB | Yes ✅ | Content-hash (B5); uncompressed JSON (B6 pending) |
+| `human_perdonor/` | `_write_human_perdonor_substrate_slices` | 390 | 12 MB | Yes ✅ | Content-hash (B3) |
 | `song_concordance/` | `_write_song_concordance_slices` | 368 | 3 MB | Yes | SHA-256 content hash |
 | `audit_sources/` | `_copy_audit_source` × 18 | ~200 | ~50 MB | Yes | mtime+size+content equality |
-| `measurement_trace/` | `ensure_measurement_trace_sources` | ~144 | ~30 MB | Yes | Schema version only |
-| Payload | `write_payload` | 2 | ~46 MB | No | — |
+| `measurement_trace/` | `ensure_measurement_trace_sources` | ~144 | ~30 MB | Yes ✅ | Content-hash (B10) |
+| Payload | `write_payload` | 1 | ~6 MB | — | Raw .json eliminated (B1); .gz only |
 | HTML | `write_html` | 1–2 | ~1 MB | No | — |
 | **Total** | | **~2,900** | **~936 MB** | | |
 

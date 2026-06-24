@@ -618,14 +618,15 @@ def _write_fivexfad_attribution_shards(rows: list[dict]) -> dict[str, str]:
 
     for kinase, kinase_rows in sorted(by_kinase.items()):
         kinase_rows = sorted(kinase_rows, key=cmp_to_key(_f5_attr_record_cmp))
-        fname = _f5_shard_name(kinase)
+        fname = _f5_shard_name(kinase) + ".gz"
         payload = {
             "schema_version": 1,
             "kinase": kinase,
             "rows": kinase_rows,
         }
-        with open(os.path.join(tmp_dir, fname), "w") as f:
-            json.dump(_sanitize(payload), f, allow_nan=False, separators=(",", ":"))
+        raw = json.dumps(_sanitize(payload), allow_nan=False, separators=(",", ":")).encode("utf-8")
+        with gzip.open(os.path.join(tmp_dir, fname), "wb", compresslevel=6) as f:
+            f.write(raw)
         shard_index[kinase] = os.path.relpath(
             os.path.join(FIVEXFAD_ATTRIBUTION_DIR, fname),
             UNIFIED_VIEWER_DIR,
@@ -636,7 +637,7 @@ def _write_fivexfad_attribution_shards(rows: list[dict]) -> dict[str, str]:
             json.dump({"schema_version": 1, "shards": shard_index}, f, separators=(",", ":"))
         shutil.rmtree(FIVEXFAD_ATTRIBUTION_DIR, ignore_errors=True)
         shutil.move(tmp_dir, FIVEXFAD_ATTRIBUTION_DIR)
-        _attr_dir_rel = [_f5_shard_name(k) for k in shard_index] + ["index.json"]
+        _attr_dir_rel = [_f5_shard_name(k) + ".gz" for k in shard_index] + ["index.json"]
         _write_build_cache("fivexfad_attribution", _attr_sig, FIVEXFAD_ATTRIBUTION_DIR,
                            _attr_dir_rel, shard_index)
     else:
@@ -838,14 +839,15 @@ def _write_fivexfad_celltype_mea_shards(rows: list[dict]) -> dict[str, str]:
             by_kinase.setdefault(kinase, []).append(row)
 
     for kinase, kinase_rows in sorted(by_kinase.items()):
-        fname = _f5_shard_name(kinase)
+        fname = _f5_shard_name(kinase) + ".gz"
         payload = {
             "schema_version": 1,
             "kinase": kinase,
             "rows": kinase_rows,
         }
-        with open(os.path.join(tmp_dir, fname), "w") as f:
-            json.dump(_sanitize(payload), f, allow_nan=False, separators=(",", ":"))
+        raw = json.dumps(_sanitize(payload), allow_nan=False, separators=(",", ":")).encode("utf-8")
+        with gzip.open(os.path.join(tmp_dir, fname), "wb", compresslevel=6) as f:
+            f.write(raw)
         shard_index[kinase] = os.path.relpath(
             os.path.join(FIVEXFAD_CELLTYPE_MEA_DIR, fname),
             UNIFIED_VIEWER_DIR,
@@ -856,7 +858,7 @@ def _write_fivexfad_celltype_mea_shards(rows: list[dict]) -> dict[str, str]:
             json.dump({"schema_version": 1, "shards": shard_index}, f, separators=(",", ":"))
         shutil.rmtree(FIVEXFAD_CELLTYPE_MEA_DIR, ignore_errors=True)
         shutil.move(tmp_dir, FIVEXFAD_CELLTYPE_MEA_DIR)
-        _mea_dir_rel = [_f5_shard_name(k) for k in shard_index] + ["index.json"]
+        _mea_dir_rel = [_f5_shard_name(k) + ".gz" for k in shard_index] + ["index.json"]
         _write_build_cache("fivexfad_celltype_mea", _mea_sig, FIVEXFAD_CELLTYPE_MEA_DIR,
                            _mea_dir_rel, shard_index)
     else:
@@ -1613,6 +1615,7 @@ def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None
 # ---------------------------------------------------------------------------
 _5XFAD_INCYTR_CONTRASTS = ("TG_3mo", "TG_6mo", "TG_9mo", "TG_12mo")
 _5XFAD_TRAJ_TIMEPOINTS = ("3mo", "6mo", "9mo", "12mo")
+_5XFAD_TRAJ_VALID_DISEASES = {"TG"}
 
 _5XFAD_INCYTR_TISSUE = {
     "cortex": {
@@ -1644,114 +1647,18 @@ def _5xfad_annotate_trajectory_columns(
     df: "pd.DataFrame",
     source_label: str = "pair_mode",
 ) -> "tuple[pd.DataFrame, dict, dict]":
-    """Trajectory annotation for 5xFAD: 4 timepoints (3/6/9/12mo), disease=TG."""
-    df = df.copy()
-    df["_path_str"] = (
-        df["sender"].astype(str) + "||"
-        + df["receiver"].astype(str) + "||"
-        + df["Path"].astype(str)
+    """Trajectory annotation for 5xFAD: 4 timepoints (3/6/9/12mo), disease=TG.
+
+    Delegates to the shared ``annotate_trajectory_columns`` helper parameterised
+    on 5xFAD's timepoints (3mo, 6mo, 9mo, 12mo) and disease labels (TG).
+    """
+    from alz.viewer.shared.trajectory import annotate_trajectory_columns
+    return annotate_trajectory_columns(
+        df,
+        timepoints=_5XFAD_TRAJ_TIMEPOINTS,
+        valid_diseases=_5XFAD_TRAJ_VALID_DISEASES,
+        source_label=source_label,
     )
-    split = df["contrast"].str.split("_", n=1, expand=True)
-    df["_disease"] = split[0].fillna("")
-    df["_timepoint"] = split[1].fillna("")
-
-    if df.empty:
-        df["traj_labels"] = ""
-        df["sign_vec"] = ""
-        return df, {}, {}
-
-    pds_col = df["PDS"].astype(float)
-    sign_ser = pd.Series("", index=df.index, dtype="str")
-    sign_ser.loc[pds_col > 0] = "u"
-    sign_ser.loc[pds_col < 0] = "d"
-    df["_sign"] = sign_ser
-    df["_pds"] = pds_col
-
-    valid_tp = set(_5XFAD_TRAJ_TIMEPOINTS)
-    valid_dis = {"TG"}
-    pivot_mask = (
-        df["_disease"].isin(valid_dis)
-        & df["_timepoint"].isin(valid_tp)
-        & df["_sign"].isin(["u", "d"])
-    )
-    sub = df.loc[pivot_mask, ["_path_str", "_disease", "_timepoint", "_sign", "_pds"]]
-
-    if sub.empty:
-        print(f"  trajectory ({source_label}): no canonical contrasts; skipping",
-              flush=True)
-        df["traj_labels"] = ""
-        df["sign_vec"] = ""
-        return df, {}, {}
-
-    sign_pivot = sub.pivot_table(
-        index=["_path_str", "_disease"],
-        columns="_timepoint",
-        values="_sign",
-        aggfunc="first",
-    )
-    pds_pivot = sub.pivot_table(
-        index=["_path_str", "_disease"],
-        columns="_timepoint",
-        values="_pds",
-        aggfunc="first",
-    )
-    for tp in _5XFAD_TRAJ_TIMEPOINTS:
-        if tp not in sign_pivot.columns: sign_pivot[tp] = pd.NA
-        if tp not in pds_pivot.columns:  pds_pivot[tp] = pd.NA
-    sign_pivot = sign_pivot[list(_5XFAD_TRAJ_TIMEPOINTS)]
-    pds_pivot = pds_pivot[list(_5XFAD_TRAJ_TIMEPOINTS)]
-    complete_mask = sign_pivot.notna().all(axis=1) & pds_pivot.notna().all(axis=1)
-    sign_pivot = sign_pivot.loc[complete_mask]
-    pds_pivot = pds_pivot.loc[complete_mask]
-
-    if sign_pivot.empty:
-        df["traj_labels"] = ""
-        df["sign_vec"] = ""
-        return df, {}, {}
-
-    s3, s6, s9, s12 = (sign_pivot[tp] for tp in _5XFAD_TRAJ_TIMEPOINTS)
-    v3, v6, v9, v12 = (pds_pivot[tp] for tp in _5XFAD_TRAJ_TIMEPOINTS)
-    out = pd.DataFrame(index=sign_pivot.index)
-    out["sign_vec"] = s3 + s6 + s9 + s12
-    out["always_up"] = (s3 == "u") & (s6 == "u") & (s9 == "u") & (s12 == "u")
-    out["always_down"] = (s3 == "d") & (s6 == "d") & (s9 == "d") & (s12 == "d")
-    out["monotonic_up"] = (v3 < v6) & (v6 < v9) & (v9 < v12)
-    out["monotonic_down"] = (v3 > v6) & (v6 > v9) & (v9 > v12)
-    out["mixed"] = ~(out["always_up"] | out["always_down"])
-
-    def _join_labels(row):
-        names = []
-        if row["always_up"]:      names.append("always-up")
-        if row["always_down"]:    names.append("always-down")
-        if row["monotonic_up"]:   names.append("monotonic-up")
-        if row["monotonic_down"]: names.append("monotonic-down")
-        if row["mixed"]:          names.append("mixed")
-        return ";".join(names)
-
-    out["traj_labels"] = out.apply(_join_labels, axis=1)
-
-    traj_map = out[["sign_vec", "traj_labels"]].reset_index()
-    df = df.merge(traj_map, on=["_path_str", "_disease"], how="left")
-    df["traj_labels"] = df["traj_labels"].fillna("")
-    df["sign_vec"] = df["sign_vec"].fillna("")
-
-    sig_pivot = out.reset_index()[["_path_str", "_disease"]]
-    recur_index: dict = {}
-    if len(sig_pivot):
-        recur_series = sig_pivot.groupby("_path_str", sort=False)["_disease"].agg(list)
-        recur_index = {str(pid): dis for pid, dis in recur_series.items()}
-
-    traj_summary: dict = {lbl: int(out[lbl.replace("-", "_")].sum())
-                          for lbl in _SIGN_VEC_LABELS}
-
-    n_paths = len(out.index.get_level_values("_path_str").unique())
-    print(f"  trajectory ({source_label}): {n_paths:,} unique paths annotated; "
-          f"{len(recur_index):,} recur in ≥1 disease; "
-          f"label dist = {dict(sorted(traj_summary.items()))}", flush=True)
-
-    df.drop(columns=["_path_str", "_disease", "_timepoint", "_sign", "_pds"],
-            inplace=True, errors="ignore")
-    return df, recur_index, traj_summary
 
 
 def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
