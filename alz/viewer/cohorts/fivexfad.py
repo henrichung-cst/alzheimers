@@ -1181,9 +1181,8 @@ def _write_fivexfad_detail_shards(
         )
         rows_by_group.setdefault(key, []).append(row)
 
-    parts_dir = os.path.join(tmp_dir, "_parts")
-    os.makedirs(parts_dir, exist_ok=True)
-    detail_parts_by_kinase: dict[str, list[tuple[str, str]]] = {}
+    # In-memory accumulator: kinase → {key: payload_dict}
+    detail_parts_by_kinase: dict[str, dict[str, dict]] = {}
     for tissue, track, assay, residue in track_specs:
         prefix = f"{tissue}_{track}"
         paths = {
@@ -1380,19 +1379,11 @@ def _write_fivexfad_detail_shards(
                     "substrate_summary": _f5_records(substrate_summary),
                     "source_files": [os.path.basename(paths[k]) for k in paths if os.path.exists(paths[k])],
                 }
-                kinase_parts_dir = os.path.join(parts_dir, _f5_shard_name(kinase).removesuffix(".json"))
-                os.makedirs(kinase_parts_dir, exist_ok=True)
-                part_path = os.path.join(kinase_parts_dir, _f5_shard_name(key))
-                with open(part_path, "w") as f:
-                    json.dump(_sanitize(payload), f, allow_nan=False, separators=(",", ":"))
-                detail_parts_by_kinase.setdefault(kinase, []).append((key, part_path))
+                detail_parts_by_kinase.setdefault(kinase, {})[key] = _sanitize(payload)
 
     detail_index: dict[str, str] = {}
     for kinase, parts in sorted(detail_parts_by_kinase.items()):
-        details: dict[str, dict] = {}
-        for key, part_path in sorted(parts):
-            with open(part_path) as f:
-                details[key] = json.load(f)
+        details: dict[str, dict] = {key: parts[key] for key in sorted(parts)}
         fname = _f5_shard_name(kinase) + ".gz"
         bundle = {
             "schema_version": 2,
@@ -1405,7 +1396,6 @@ def _write_fivexfad_detail_shards(
             f.write(raw)
         detail_index[kinase] = os.path.relpath(os.path.join(FIVEXFAD_DETAIL_DIR, fname), UNIFIED_VIEWER_DIR)
 
-    shutil.rmtree(parts_dir, ignore_errors=True)
     if detail_index:
         with open(os.path.join(tmp_dir, "index.json"), "w") as f:
             json.dump(
@@ -1802,6 +1792,17 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
         print(f"  (warn) no parseable 5xFAD parquets in {input_dir}; "
               f"skipping {tissue}", flush=True)
         return None
+
+    _incytr_5xfad_sig = _input_signature(
+        f"fivexfad_incytr_{tissue}",
+        [__file__] + [fp for fp, _ in file_to_contrast],
+        {"tissue": tissue, "builder_version": 1},
+    )
+    _incytr_5xfad_cached = _load_build_cache(
+        f"fivexfad_incytr_{tissue}", _incytr_5xfad_sig, out_dir
+    )
+    if _incytr_5xfad_cached is not None:
+        return _incytr_5xfad_cached
 
     present_contrasts = [c for c in _5XFAD_INCYTR_CONTRASTS
                          if c in {c2 for _, c2 in file_to_contrast}]
@@ -2264,7 +2265,7 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
               flush=True)
 
     celltypes = sorted(set(senders_canonical) | set(receivers_canonical))
-    return {
+    block = {
         "schema_version": SCHEMA_VERSION,
         "version": 3,
         "source": f"pair_mode (5xfad/{tissue}/wide)",
@@ -2295,6 +2296,15 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
         ),
         "trajectory_summary": traj_summary,
     }
+    _incytr_5xfad_output_files = (
+        [os.path.basename(p) for p in os.listdir(out_dir) if p.endswith(".parquet")]
+        + [_INCYTR_INDEX_FILENAME, _INCYTR_GENE_NODE_INDEX_FILENAME, "index.json"]
+    )
+    _write_build_cache(
+        f"fivexfad_incytr_{tissue}", _incytr_5xfad_sig, out_dir,
+        _incytr_5xfad_output_files, block,
+    )
+    return block
 
 
 def build_5xfad_incytr_blocks() -> dict[str, dict]:

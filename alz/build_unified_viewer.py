@@ -63,6 +63,7 @@ import config_integration as icfg  # noqa: E402
 import normalize as kattr  # noqa: E402  (alz.bulk_mea.normalize — Stage 1 phospho-track + IRS helpers)
 from alz.viewer.shared.payload_helpers import (_sanitize, _configure_duckdb_tempdir, _json_clean_value, _INCYTR_FC_NODES, _build_incytr_gene_node_index, _build_kinase_motifs)  # noqa: E402
 from alz.viewer.shared.incytr_index import (_INCYTR_LABEL_NODES, _INCYTR_LABEL_COLS, _INCYTR_LABEL_VOCAB, _INCYTR_SCORE_COLS, _SIGN_VEC_LABELS, _idx_label_bits, _idx_traj_bits)  # noqa: E402
+from alz.viewer.shared.build_cache import _input_signature, _load_build_cache, _write_build_cache  # noqa: E402
 try:
     from human_celltype_attribution import build_celltype_specificity_payload  # noqa: E402
     _HAS_HUMAN_CELLTYPE = True
@@ -383,13 +384,21 @@ def _measurement_trace_columns() -> list[str]:
 
 def ensure_measurement_trace_sources() -> dict:
     """Create per-sample sidecar receipts for raw→IRS→stoichiometry auditing."""
-    if os.path.exists(MEASUREMENT_TRACE_INDEX):
-        with open(MEASUREMENT_TRACE_INDEX) as f:
-            existing = json.load(f)
-        if existing.get("trace_schema_version") == MEASUREMENT_TRACE_SCHEMA_VERSION:
-            return existing
-        shutil.rmtree(MEASUREMENT_TRACE_DIR)
+    _trace_source_files = [kattr.TOTAL_PROTEOME_FILE] + [
+        config.resolve_track(tk)["input_file"]
+        for tk in config.PHOSPHO_TRACKS
+    ]
+    _trace_sig = _input_signature(
+        "measurement_trace",
+        _trace_source_files,
+        {"builder_version": 1},
+    )
+    _trace_cached = _load_build_cache("measurement_trace", _trace_sig, MEASUREMENT_TRACE_DIR)
+    if _trace_cached is not None:
+        return _trace_cached
 
+    if os.path.exists(MEASUREMENT_TRACE_DIR):
+        shutil.rmtree(MEASUREMENT_TRACE_DIR)
     os.makedirs(MEASUREMENT_TRACE_DIR, exist_ok=True)
     mapping = config.load_sample_mapping()
     sample_to_plex = dict(zip(mapping["column_name"], mapping["plex"]))
@@ -424,6 +433,7 @@ def ensure_measurement_trace_sources() -> dict:
     columns = _measurement_trace_columns()
     tracks_index: dict[str, dict] = {}
     first_preview: list[dict] = []
+    _trace_written_files: list[str] = []  # paths relative to MEASUREMENT_TRACE_DIR
 
     # Per-track: load that track's phospho workbook, IRS-normalize, write per-sample
     # measurement-trace CSVs into a track subdir. ST keeps the legacy unsuffixed
@@ -501,6 +511,7 @@ def ensure_measurement_trace_sources() -> dict:
             dest = os.path.join(track_subdir, f"{sample}.csv")
             trace.to_csv(dest, index=False)
             sample_files[sample] = os.path.relpath(dest, UNIFIED_VIEWER_DIR)
+            _trace_written_files.append(os.path.relpath(dest, MEASUREMENT_TRACE_DIR))
             if not preview:
                 preview = trace.head(AUDIT_PREVIEW_ROWS).where(
                     pd.notna(trace.head(AUDIT_PREVIEW_ROWS)), None
@@ -541,6 +552,11 @@ def ensure_measurement_trace_sources() -> dict:
     }
     with open(MEASUREMENT_TRACE_INDEX, "w") as f:
         json.dump(index, f)
+    _trace_index_rel = os.path.relpath(MEASUREMENT_TRACE_INDEX, MEASUREMENT_TRACE_DIR)
+    _write_build_cache(
+        "measurement_trace", _trace_sig, MEASUREMENT_TRACE_DIR,
+        [_trace_index_rel] + _trace_written_files, index,
+    )
     return index
 
 
