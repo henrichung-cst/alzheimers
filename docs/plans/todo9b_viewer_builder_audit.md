@@ -1,15 +1,18 @@
 # Viewer Builder Audit — todo9b
 
 **Date:** 2026-06-24
-**Status:** B1–B10 implemented. B6, B11–B13 remain.
+**Status:** ✅ Complete. All shard families cached; compression added; trajectory logic deduped. B11, B13 deliberately closed.
 **Feeds:** `todo9_viewer_aws_deployment.md` (Option B implementation)
 
-### Implementation log
+### Implementation log and closure summary
 
-| Item | Commit | Notes |
-|---|---|---|
-| B1–B7 | `f562413` | Shared `build_cache.py` extracted; human_perdonor, fivexfad_attribution, fivexfad_celltype_mea, fivexfad_detail all caching; raw payload write eliminated; fast-path mtime+size check added |
-| B8–B10 | `472664d`... | 5xFAD incytr cache; parts_dir eliminated in detail shards; measurement_trace content-hash gate |
+| Item | Status | Commit | Notes |
+|---|---|---|---|
+| B1–B7 | ✅ | `f562413` | Shared `build_cache.py` extracted; human_perdonor, fivexfad_attribution, fivexfad_celltype_mea, fivexfad_detail all caching; raw payload write eliminated; fast-path mtime+size check added |
+| B8–B10 | ✅ | `472664d`... | 5xFAD incytr cache; parts_dir eliminated in detail shards; measurement_trace content-hash gate |
+| B6, B12 | ✅ | Latest | fivexfad attribution/celltype_mea gzipped (.json.gz); shared trajectory helper extracted |
+| B11 | ❌ Closed | — | Per-contrast caching not justified: Incytr runs all-or-nothing; cache correctly mirrors this. Medium refactor cost is prohibitive. |
+| B13 | ❌ Closed | — | Per-contrast parquet consolidation worsens fetch latency (1 → 5 requests). Option A resolved deploy bottleneck. Per-kinase structure matches UX. |
 
 ---
 
@@ -672,33 +675,32 @@ Song.py then imports from there. Mukesh.py and fivexfad.py import from the same 
 - Risk: None (more correct than current behavior)
 - Effort: 1 hour
 
-**B11. Per-contrast incytr shard caching** (§1.3 structural note) — REMAINING
-- The current all-or-nothing cache for `incytr_pathways` means any single contrast parquet change regenerates all 655 shards. A per-contrast granularity would allow unchanged contrasts to be skipped.
-- This requires restructuring `_write_incytr_pair_pathways` to process contrasts independently and merge shards — significant refactor since the streaming pass currently interleaves all contrasts.
-- Effort: 2 days; Depends on whether the global filter index (which is built across all contrasts) can be rebuilt incrementally
-- Risk: Medium — global filter index and trajectory annotation span all contrasts simultaneously
+**B11. Per-contrast incytr shard caching** (§1.3 structural note) — ❌ CLOSED
+- **Decision:** Not pursuing. Incytr is run all-or-nothing at the pipeline level, so the all-or-nothing cache correctly mirrors pipeline behavior. The case for partial caching (single contrast changes) never occurs in practice.
+- The medium refactor cost (restructure DuckDB streaming pass, incremental global filter index rebuild) is not justified for a never-occurring scenario.
+- **Captured behavior:** Current cache is correct as-is.
 
 **B12. Deduplicate `_annotate_trajectory_columns` / `_5xfad_annotate_trajectory_columns`** (§3.6) — REMAINING
 - Extract common pivot logic to `alz/viewer/shared/trajectory.py`, parameterized on timepoint set and disease set
 - No performance impact; maintenance/correctness benefit only
 - Effort: 2 hours
 
-**B13. Parquet consolidation for `decomp_ols/`** (Option C from todo9) — REMAINING
-- Merge 390 per-kinase parquets into 5 per-contrast parquets with row-group indexing
-- Drops file count 390 → 5; upload surface from 311 MB → only changed contrast files
-- Risk: High — JS `SliceCache` fetch path changes; requires either a precomputed shard index JSON or a Parquet footer parser in JS
-- Effort: 3–5 days
+**B13. Parquet consolidation for `decomp_ols/`** (Option C from todo9) — ❌ CLOSED
+- **Decision:** Not pursuing as designed. The per-contrast partitioning worsens the access pattern: one kinase now requires 5 Range requests (one per contrast file) instead of 1 fetch of the current per-kinase file.
+- **Upload bottleneck resolved:** Option A (`aws s3 sync` with ETag caching) eliminated the deploy pain. MEA changes are rare; 390 ETag checks at sync time cost nothing.
+- **Better alternative if latency becomes an issue:** Repartition by kinase (one large file, row groups by kinase) — a single Range request fetches all contrasts for one kinase. Requires JS Parquet footer parser, but improves latency vs. current state. Not worth the complexity now.
+- **Current state acceptable:** Per-kinase parquets match the viewer's click-a-kinase→see-all-contrasts UX; file count is not a bottleneck post-Option A.
 
 ---
 
 ## Cross-reference to todo9 Options
 
-| todo9 Option | Relation to this audit |
-|---|---|
-| A — `aws s3 sync` | ✅ Merged. |
-| B — Builder shard cache | ✅ B1–B10 complete. B6 (gzip contract change) and B11 (per-contrast granularity) remain. |
-| C — Parquet consolidation | B13. Appropriate after A+B are stable and the file count is still a bottleneck. |
-| D — DuckDB-Wasm | Not covered here; requires C first. |
+| todo9 Option | Relation to this audit | Status |
+|---|---|---|
+| A — `aws s3 sync` | Incremental sync with cache-header passes. | ✅ Complete |
+| B — Builder shard cache | Caching for all shard families. | ✅ Complete (B1–B10, B12) |
+| C — Parquet consolidation | Per-contrast consolidation (`decomp_ols/`). | ❌ Closed: access pattern worsens (1 fetch → 5 requests); Option A resolved upload bottleneck; per-kinase structure matches UX. |
+| D — DuckDB-Wasm | Requires C; architecture rethink. | Not applicable. |
 
 ---
 
