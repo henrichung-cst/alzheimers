@@ -1,5 +1,6 @@
 import os
 import re
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -112,7 +113,8 @@ def _load_analysis_mode() -> str:
     return params["analysis_mode"]
 
 
-ANALYSIS_MODE = _load_analysis_mode()  # "males_only" or "full_cohort"
+if TYPE_CHECKING:
+    ANALYSIS_MODE: str
 
 # Allen WMB published taxonomy (34 classes). Used by atlas helpers
 # (wmb_expression.py) that emit per-class expression for the WMB specificity
@@ -148,7 +150,7 @@ def provenance_stamp(**extras) -> dict:
     import datetime as _dt
 
     stamp = {
-        "analysis_mode": ANALYSIS_MODE,
+        "analysis_mode": _lazy("ANALYSIS_MODE"),
         "spine": CLUSTER_SPINE_NAME,
         "produced_at": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
@@ -178,7 +180,8 @@ def _load_cluster_spine() -> list[str]:
     return sorted(out)
 
 
-CLUSTER_SPINE = _load_cluster_spine()  # 31 named clusters (levy_t5)
+if TYPE_CHECKING:
+    CLUSTER_SPINE: "list[str]"
 
 # Coarse-level (cell-level) labels as carried by Seurat `obj@meta.data`.
 # Does NOT nest deterministically under CLUSTER_SPINE (per-cell labels, not
@@ -202,7 +205,28 @@ SEA_AD_PATHWAY_MAP = {
     "Tau":  "late",    # tau-driven → late/high-CPS human donors
     "ApTt": "full",    # combined pathology → full CPS range
 }
-N_CELL_TYPES = len(CLUSTER_SPINE)        # 31 — Levy levy_t5 spine
+if TYPE_CHECKING:
+    N_CELL_TYPES: int
+
+_LAZY = {
+    "ANALYSIS_MODE": _load_analysis_mode,
+    "CLUSTER_SPINE": _load_cluster_spine,
+    "N_CELL_TYPES": lambda: len(_lazy("CLUSTER_SPINE")),
+}
+_LAZY_CACHE: dict[str, object] = {}
+
+
+def _lazy(name):
+    if name not in _LAZY_CACHE:
+        _LAZY_CACHE[name] = _LAZY[name]()
+    return _LAZY_CACHE[name]
+
+
+def __getattr__(name):                 # PEP 562
+    if name in _LAZY:
+        return _lazy(name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 # WMB specificity even-split baseline — see wmb_specificity_uniform(). The share
 # is normalized over the retained WMB classes the spine maps onto (N≈9), so the
 # honest "above even-split" threshold is 1/N, NOT 1/N_CELL_TYPES. One ruler for
