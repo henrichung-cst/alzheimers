@@ -15,10 +15,6 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if HERE not in sys.path:
-    sys.path.insert(0, HERE)
-
 from alz.shared import config  # noqa: E402
 from alz.viewer.shared.payload_helpers import (  # noqa: E402
     _sanitize,
@@ -62,8 +58,6 @@ _INCYTR_LOW_SIGNAL_MEDIAN_N_THRESHOLD = 3
 
 _PAIR_FILE_RE = re.compile(r"(d\d+_d\d+)_incytr_output\.parquet$")
 
-_TCELL_CONTRAST_RE = re.compile(r"^D\d+_(d\d+)_vs_d2$")
-
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -87,18 +81,6 @@ def _contrast_from_filename(fname: str) -> str | None:
 def _timepoint_label(contrast: str) -> str:
     """`d13_d2` → `d13` (the disease timepoint; d2 is the baseline)."""
     return contrast.split("_", 1)[0] if "_" in contrast else contrast
-
-
-def _short_contrast(s: object) -> str:
-    """Rewrite `D1_d13_vs_d2` -> `d13` (the viewer's CONTRASTS token).
-
-    Pass-through for already-short tokens. Strict regex so a typo in the
-    pipeline output surfaces as an unchanged value, not a silent shim.
-    """
-    if s is None:
-        return ""
-    m = _TCELL_CONTRAST_RE.match(str(s))
-    return m.group(1) if m else str(s)
 
 
 # ---------------------------------------------------------------------------

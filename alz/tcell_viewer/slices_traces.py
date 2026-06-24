@@ -5,16 +5,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 
 import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-
-HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if HERE not in sys.path:
-    sys.path.insert(0, HERE)
 
 from alz.shared import config  # noqa: E402
 from alz.viewer.shared.payload_helpers import _sanitize  # noqa: E402

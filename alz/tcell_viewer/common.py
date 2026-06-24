@@ -6,6 +6,8 @@ alz.viewer.shared.*). Imported by both the builder and all four slice modules.
 
 from __future__ import annotations
 
+import re
+
 # ---------------------------------------------------------------------------
 # T-cell cohort constants
 # ---------------------------------------------------------------------------
@@ -64,3 +66,18 @@ PROJECTILS_LABEL_MAP = {
 def _incytr_sanitize(name: str) -> str:
     """Match the upstream sanitize in alz/integration/load.R:sanitize_celltype."""
     return name.replace("/", "-").replace(" ", "_").replace(".", "")
+
+
+_TCELL_CONTRAST_RE = re.compile(r"^D\d+_(d\d+)_vs_d2$")
+
+
+def _short_contrast(s: object) -> str:
+    """Rewrite `D1_d13_vs_d2` -> `d13` (the viewer's CONTRASTS token).
+
+    Pass-through for already-short tokens. Strict regex so a typo in the
+    pipeline output surfaces as an unchanged value, not a silent shim.
+    """
+    if s is None:
+        return ""
+    m = _TCELL_CONTRAST_RE.match(str(s))
+    return m.group(1) if m else str(s)

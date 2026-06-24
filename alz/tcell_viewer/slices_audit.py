@@ -5,13 +5,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import sys
 
 import pandas as pd
-
-HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if HERE not in sys.path:
-    sys.path.insert(0, HERE)
 
 from alz.shared import config  # noqa: E402
 from alz.viewer.shared.payload_helpers import _sanitize  # noqa: E402
@@ -22,8 +17,7 @@ from alz.tcell_viewer.paths import (  # noqa: E402
     TCELLS_INCYTR_INPUTS_DIR,
     UNIFIED_VIEWER_DIR,
 )
-from alz.tcell_viewer.common import DONORS  # noqa: E402
-from alz.tcell_viewer.slices_incytr import _short_contrast  # noqa: E402
+from alz.tcell_viewer.common import DONORS, _short_contrast  # noqa: E402
 from alz.tcell_viewer.slices_traces import _build_tcell_measurement_trace  # noqa: E402
 
 # ---------------------------------------------------------------------------
