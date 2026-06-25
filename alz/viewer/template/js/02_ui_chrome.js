@@ -14,7 +14,7 @@ function wireViewerSplitters() {
 // Toggle: 5xFAD Incytr results (Heatmap + Pathways) are not yet ready for
 // sharing. While false, both Incytr tabs are dropped from the 5xFAD view; they
 // stay visible in mouse/Song mode. Flip to true to surface them in 5xFAD.
-const SHOW_FIVEXFAD_INCYTR = false;
+const SHOW_FIVEXFAD_INCYTR = true;
 const _INCYTR_MODES = SHOW_FIVEXFAD_INCYTR ? ["mouse", "fivexfad"] : ["mouse"];
 
 const TAB_MANIFEST = {
