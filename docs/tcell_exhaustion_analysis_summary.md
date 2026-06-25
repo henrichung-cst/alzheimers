@@ -55,14 +55,17 @@ expected cohort limitation, not a missing-data bug.
 Within-cohort T-cell attribution localizes Donor 1 bulk kinase activity to
 ProjecTILs states using this cohort's own scRNA:
 
-- Specificity: the kinase transcript share in each state, binned as multiples
-  of the uniform state share.
+- Detection evidence: whether the kinase transcript is present in each state
+  (fraction of cells expressing >= 10%, normalization-free). Detection is shown
+  separately and does not change the specificity denominator. State enrichment
+  is computed against the median ProjecTILs state across the full state set, and
+  effective number of states uses the same all-state expression distribution.
 - Transcript change: pseudobulk expression change versus d2.
 - Concordance: the sign of bulk kinase NES times the transcript change.
 - Time-course consistency: how often concordance is positive across the
   attribution days.
 
-Important interpretation rule: specificity is the informative localizer.
+Important interpretation rule: detection is the informative localizer.
 Concordance is shown as context only and must not be treated as a score or gate,
 because kinase activity is inferred from substrate phosphorylation and can be
 post-translationally decoupled from the kinase's own mRNA. The current

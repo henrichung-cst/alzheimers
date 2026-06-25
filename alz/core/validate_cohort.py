@@ -977,8 +977,9 @@ def validate_tcells(report: ValidationReport) -> None:
     for fname, required in [
         # tcell_concordance: gene-level DEG concordance table (not site-level)
         ("tcell_concordance.csv", ["gene", "state", "tcell_lfc"]),
-        # tcell_specificity: gene-level specificity (not kinase-level)
-        ("tcell_specificity.csv", ["gene", "state", "tcell_specificity"]),
+        # tcell_specificity: gene-level standard detection metric (not kinase-level)
+        ("tcell_specificity.csv",
+         ["gene", "state", "tcell_detected", "tcell_state_enrichment"]),
         ("unified_attribution_tcells.csv",
          ["kinase", "residue_type", "contrast", "NES", "FDR"]),
     ]:

@@ -45,7 +45,7 @@ per-tab branches to `boot.js`.
 | `js/tabs/kinase_audit.js` | 1329 | T-cell kinase audit/detail support |
 | `js/tabs/kinase_wiring.js` | 134 | wireKinaseTable, filter UI |
 | `js/tabs/temporal_v2.js` | 696 | Temporal series builder |
-| `js/tabs/celltype_assignment.js` | 224 | ProjecTILs assignment summary |
+| `js/tabs/attribution_manifest_tcell.js` | 386 | Within-cohort attribution manifest/wiring |
 
 ## Shared fallback
 

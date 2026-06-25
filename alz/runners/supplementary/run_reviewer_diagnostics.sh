@@ -34,14 +34,6 @@ fi
 note "Running Q4: Stringent FDR analysis"
 $PYTHON alz/supplementary/fdr_stringent.py --run 2>&1 | tee -a "$LOG"
 
-# --- Q1: Threshold sensitivity ---
-note "Running Q1: Threshold sensitivity analysis"
-$PYTHON alz/supplementary/threshold_sensitivity.py --run 2>&1 | tee -a "$LOG"
-
-# --- Q2: Aggregation robustness ---
-note "Running Q2: Aggregation robustness analysis"
-$PYTHON alz/supplementary/aggregation_robustness.py --run 2>&1 | tee -a "$LOG"
-
 # --- Q5: Parent protein QC ---
 note "Running Q5: Parent protein QC"
 $PYTHON alz/supplementary/parent_protein_qc.py --run 2>&1 | tee -a "$LOG"
@@ -55,7 +47,5 @@ note "Reviewer diagnostics finished"
 echo ""
 echo "=== Summaries ==="
 $PYTHON alz/supplementary/fdr_stringent.py --summary
-$PYTHON alz/supplementary/threshold_sensitivity.py --summary
-$PYTHON alz/supplementary/aggregation_robustness.py --summary
 $PYTHON alz/supplementary/parent_protein_qc.py --summary
 $PYTHON alz/supplementary/deconvolution_feasibility.py --summary

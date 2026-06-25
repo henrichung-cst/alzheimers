@@ -14,6 +14,8 @@
 window.IncytrGlobalIndex = (function() {
   let _data = null;          // { nrows, cols, gi, lc, rank, scratch }
   let _loadPromise = null;
+  const _pathRowsCache = new Map();
+  const _PATH_ROWS_CACHE_MAX = 128;
 
   function _block() {
     return (window.ViewerPayload && ViewerPayload.incytr)
@@ -109,6 +111,7 @@ window.IncytrGlobalIndex = (function() {
   function reset() {
     _data = null;
     _loadPromise = null;
+    _pathRowsCache.clear();
   }
 
   // Build a Uint8 membership mask of `vocab` ids whose lowercased name includes
@@ -372,5 +375,52 @@ window.IncytrGlobalIndex = (function() {
     return row;
   }
 
-  return { available, loaded, manifest, ensureLoaded, filterRank, materialize, reset };
+  function _cachePathRows(key, rows) {
+    if (_pathRowsCache.has(key)) _pathRowsCache.delete(key);
+    _pathRowsCache.set(key, rows);
+    while (_pathRowsCache.size > _PATH_ROWS_CACHE_MAX) {
+      _pathRowsCache.delete(_pathRowsCache.keys().next().value);
+    }
+    return rows;
+  }
+
+  // Fast path for the Incytr drawer score plot in Top mode. It avoids fetching
+  // a full sender/receiver parquet shard when the global typed-array index is
+  // already mapped for the table.
+  function pathRows(ident) {
+    const d = _data;
+    if (!d || !ident) return [];
+    const { cols, gi } = d;
+    const sender = String(ident.sender || "");
+    const receiver = String(ident.receiver || "");
+    const parts = String(ident.path || "").split("|");
+    if (!sender || !receiver || parts.length !== 4) return [];
+    const key = `${sender}||${receiver}||${parts.join("|")}`;
+    if (_pathRowsCache.has(key)) {
+      const rows = _pathRowsCache.get(key);
+      _pathRowsCache.delete(key);
+      _pathRowsCache.set(key, rows);
+      return rows;
+    }
+    const sidWant = gi.sender_vocab.indexOf(sender);
+    const ridWant = gi.receiver_vocab.indexOf(receiver);
+    const ligWant = gi.gene_vocab.indexOf(parts[0]);
+    const recWant = gi.gene_vocab.indexOf(parts[1]);
+    const emWant  = gi.gene_vocab.indexOf(parts[2]);
+    const tgtWant = gi.gene_vocab.indexOf(parts[3]);
+    if (sidWant < 0 || ridWant < 0 || ligWant < 0 || recWant < 0 || emWant < 0 || tgtWant < 0) {
+      return _cachePathRows(key, []);
+    }
+    const out = [];
+    const sid = cols.senderId, rid = cols.receiverId;
+    const lig = cols.ligandId, rec = cols.receptorId, em = cols.emId, tgt = cols.targetId;
+    for (let i = 0; i < d.nrows; i++) {
+      if (sid[i] !== sidWant || rid[i] !== ridWant) continue;
+      if (lig[i] !== ligWant || rec[i] !== recWant || em[i] !== emWant || tgt[i] !== tgtWant) continue;
+      out.push(materialize(i));
+    }
+    return _cachePathRows(key, out);
+  }
+
+  return { available, loaded, manifest, ensureLoaded, filterRank, materialize, pathRows, reset };
 })();

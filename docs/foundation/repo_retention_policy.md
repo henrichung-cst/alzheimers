@@ -106,8 +106,6 @@ Generated caches (`alz/__pycache__/`, etc.) are excluded from this index.
 | Path | Reason |
 |:---|:---|
 | `alz/supplementary/fdr_stringent.py` | Q4: MEA at FDR < 0.10 vs < 0.25 |
-| `alz/supplementary/threshold_sensitivity.py` | Q1: Confidence tier threshold sweep |
-| `alz/supplementary/aggregation_robustness.py` | Q2: Supertype-to-subclass aggregation comparison |
 | `alz/supplementary/parent_protein_qc.py` | Q5: Parent protein QC for activity-driven kinases |
 | `alz/supplementary/deconvolution_feasibility.py` | Q6: Marker→composition concordance via factorial OLS — closes the deconvolution-feasibility question with disease/age/sex correction and a specificity-threshold sweep |
 | `alz/runners/supplementary/run_reviewer_diagnostics.sh` | Bundled reviewer diagnostics runner |

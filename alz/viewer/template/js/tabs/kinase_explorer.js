@@ -68,29 +68,31 @@ function _wmbTierBadge(t) {
          '× uniform (' + (t * _WMB_UNIFORM).toFixed(3) + ')">' + _wmbTierLabel(t) + '</span>';
 }
 
-// Song location evidence. Shown as
-// fold over the even-split baseline (1/31 ≈ 0.032, meta.song_uniform) in the same
-// vocabulary as the WMB cross-check and the detail pane: ≥10× / ≥5× / ≥2× / ≥1×.
-// The fold is the kinase's peak cell-type share (song_top_share); τ — the
-// count-normalized concentration index — rides in the tooltip. Resolves below WMB
-// class (e.g. Ntrk1/Cholinergic top-share ≫ uniform where WMB lumps cholinergic
-// into a broad class). Tier/badge helpers (_msTier/_msTierBadge) are canonical in
-// kinase_audit.js; reused here so the pill reads identically across tabs.
+// Song detection evidence. Shown as the precomputed concentration tier
+// (≥2×/5×/10× the even 1/N share of total expression across all cell types) at
+// the kinase's dominant cluster. The tier is read straight from
+// `song_concentration_tier`; it must NOT be recomputed from the 0–1 share, which
+// can never reach the fold thresholds and clamps every kinase to ≤1×.
 function _keSongBadge(song) {
-  if (!song || song.topShare == null || !isFinite(song.topShare)) return '<span class="muted">—</span>';
-  return _msTierBadge(_msTier(song.topShare), song.topShare, song.topCluster, song.tau);
+  if (!song || song.topConcentration == null) return '<span class="muted">—</span>';
+  const tier = song.topTier || 0;
+  const top = song.topCelltype || "";
+  const tip = `Concentration ≥${tier}× the even 1/N share of total expression across all cell types, in ${_escapeHtml(top)}`;
+  return tier > 0
+    ? `<span class="badge ${tier >= 10 ? 'vhi' : tier >= 5 ? 'hi' : tier >= 2 ? 'mid' : 'lo'}" title="${tip}">≥${tier}×</span>`
+    : `<span class="muted" title="Top cell type: ${_escapeHtml(top)}">&lt;1×</span>`;
 }
 
 function _rowSongLocationRank(r) {
-  const share = r && r.song ? Number(r.song.topShare) : null;
-  if (share == null || !isFinite(share)) return -1;
-  return share;
+  const conc = r && r.song ? Number(r.song.topConcentration) : null;
+  if (conc == null || !isFinite(conc)) return -1;
+  return conc;
 }
 
 function _songSpecificityRank(e) {
-  const share = e ? Number(e.song_specificity) : null;
-  if (share == null || !isFinite(share)) return -1;
-  return share;
+  const conc = e ? Number(e.song_concentration) : null;
+  if (conc == null || !isFinite(conc)) return -1;
+  return conc;
 }
 
 function _cmpCanonicalAttribution(a, b) {
@@ -151,15 +153,27 @@ function getScopedAttribution(kinaseId, filter) {
       cell_type:                 AI.cell_type[j],
       confidence_tier:           _tier,
       confidence_basis:          AI.confidence_basis ? AI.confidence_basis[j] : "",
+      specificity_unit:          AI.specificity_unit ? AI.specificity_unit[j] : "",
+      specificity_unit_label:    AI.specificity_unit_label ? AI.specificity_unit_label[j] : "",
+      specificity_celltype:      AI.specificity_celltype ? AI.specificity_celltype[j] : "",
+      specificity_collapsed:     AI.specificity_collapsed ? AI.specificity_collapsed[j] : false,
+      direction_tier:            AI.direction_tier ? AI.direction_tier[j] : "none",
+      direction_basis:           AI.direction_basis ? AI.direction_basis[j] : "",
       song_direction_support:    AI.song_direction_support ? AI.song_direction_support[j] : false,
-      song_location_tier:        AI.song_location_tier ? AI.song_location_tier[j] : "none",
-      wmb_crosscheck_tier:       AI.wmb_crosscheck_tier ? AI.wmb_crosscheck_tier[j] : "none",
       human_location_tier:       AI.human_location_tier ? AI.human_location_tier[j] : "none",
       decomp_agrees_bulk:        AI.decomp_agrees_bulk ? AI.decomp_agrees_bulk[j] : false,
-      wmb_specificity:           AI.wmb_specificity            ? AI.wmb_specificity[j]            : null,
-      song_specificity:          AI.song_specificity           ? AI.song_specificity[j]           : null,
-      song_tau:                  AI.song_tau                   ? AI.song_tau[j]                   : null,
-      song_top_cluster:          AI.song_top_cluster           ? AI.song_top_cluster[j]           : "",
+      song_detected:             AI.song_detected              ? AI.song_detected[j]              : false,
+      song_concentration:        AI.song_concentration         ? AI.song_concentration[j]         : null,
+      song_concentration_of_total: AI.song_concentration_of_total ? AI.song_concentration_of_total[j] : null,
+      song_concentration_tier:   AI.song_concentration_tier    ? AI.song_concentration_tier[j]    : 0,
+      song_effective_n:          AI.song_effective_n           ? AI.song_effective_n[j]           : null,
+      song_unit_effective_n:     AI.song_unit_effective_n      ? AI.song_unit_effective_n[j]      : null,
+      song_fraction_cells_expressing: AI.song_fraction_cells_expressing ? AI.song_fraction_cells_expressing[j] : null,
+      song_top_celltype:         AI.song_top_celltype          ? AI.song_top_celltype[j]          : "",
+      song_top_concentration:    AI.song_top_concentration     ? AI.song_top_concentration[j]     : null,
+      wmb_detected:              AI.wmb_detected               ? AI.wmb_detected[j]               : false,
+      wmb_concentration:         AI.wmb_concentration          ? AI.wmb_concentration[j]          : null,
+      wmb_concentration_tier:    AI.wmb_concentration_tier     ? AI.wmb_concentration_tier[j]     : 0,
       wmb_mean_log2_expression:  AI.wmb_mean_log2_expression   ? AI.wmb_mean_log2_expression[j]   : null,
       wmb_fraction_cells_expressing: AI.wmb_fraction_cells_expressing ? AI.wmb_fraction_cells_expressing[j] : null,
       wmb_binary_expressed:      AI.wmb_binary_expressed       ? AI.wmb_binary_expressed[j]       : false,
@@ -226,23 +240,31 @@ function _buildKinaseRowModel() {
   const famMap = META.familyMap || {};
   const idxById = new Map();
   const out = [];
-  // Per-kinase Song location evidence (constant across a kid's attribution
-  // rows) — stamped once so the Song column, filter, and sort can read it.
+  // Per-kinase Song detection evidence (per-gene fields, constant across a kid's
+  // attribution rows) — stamped once so the Song column, filter, and sort can read it.
   const songByKid = new Map();
+  const songMaxTier = new Map();
   const A = PAYLOAD.attribution_index;
-  if (A && A.kinase_id && A.song_tau) {
+  if (A && A.kinase_id && A.song_top_concentration) {
     for (let i = 0; i < A.kinase_id.length; i++) {
       const kid = A.kinase_id[i];
+      // Per-kinase peak Song concentration tier. The tier is precomputed
+      // (fold over the all-cell-types even share 1/N, 0/1/2/5/10); it is monotonic
+      // in share, so its max across the kid's rows is the tier at the dominant cluster.
+      if (A.song_concentration_tier) {
+        const t = Number(A.song_concentration_tier[i]) || 0;
+        if (t > (songMaxTier.get(kid) || 0)) songMaxTier.set(kid, t);
+      }
       if (songByKid.has(kid)) continue;
-      const t = A.song_tau[i];
-      if (t != null && isFinite(t)) {
+      const topConc = isFinite(A.song_top_concentration[i]) ? A.song_top_concentration[i] : null;
+      if (topConc != null) {
         songByKid.set(kid, {
-          tau: t,
-          topCluster: (A.song_top_cluster && A.song_top_cluster[i]) || "",
-          topShare: (A.song_top_share && isFinite(A.song_top_share[i])) ? A.song_top_share[i] : null,
+          topCelltype: (A.song_top_celltype && A.song_top_celltype[i]) || "",
+          topConcentration: topConc,
         });
       }
     }
+    for (const [kid, obj] of songByKid) obj.topTier = songMaxTier.get(kid) || 0;
   }
   for (let i = 0; i < K.id.length; i++) {
     idxById.set(K.id[i], i);
@@ -358,12 +380,12 @@ function _kineMaxAbsNesScoped(r, scopedCtxIds) {
   return best;
 }
 
-// Max WMB specificity tier across attribution rows for this kinase under the
-// active filter scope. Returns 0 when no qualifying rows have wmb_specificity.
+// Max WMB concentration tier across attribution rows for this kinase under the
+// active filter scope. Returns 0 when no qualifying rows have wmb_concentration_tier.
 function _kineMaxWmbTierScoped(kinaseId, filter) {
   let best = 0;
   for (const e of getScopedAttribution(kinaseId, filter)) {
-    const t = _wmbTier(Number(e.wmb_specificity));
+    const t = Number(e.wmb_concentration_tier) || 0;
     if (t > best) best = t;
   }
   return best;
@@ -480,21 +502,14 @@ function _makeKeCompare(scopedCtxIds) {
       if (vb == null) vb = -Infinity;
     }
     else if (col === "n_attributed_celltypes") {
-      // Match what the Cell types pill column displays: dedup by cell_type
-      // keeping best tier, then count rows at moderate-or-better. Song location
-      // breaks count ties so the own-cohort cell-specific signal is favored.
-      const _bestTierByCT = (kid) => {
-        const m = new Map();
-        for (const e of getScopedAttribution(kid, kf)) {
-          const r = _CONF_RANK[e.confidence_tier] || 0;
-          if (r > (m.get(e.cell_type) || 0)) m.set(e.cell_type, r);
-        }
-        let n = 0;
-        for (const r of m.values()) if (r >= 2) n++;
-        return n;
+      // The Cell type column shows the kinase's single dominant Song cluster, so
+      // rank by the (kinase-level) exclusivity tier, Song location breaking ties.
+      const _kinTier = (kid) => {
+        const rows = getScopedAttribution(kid, kf);
+        return rows.length ? (_CONF_RANK[rows[0].confidence_tier] || 0) : 0;
       };
-      const ca = _bestTierByCT(a.id);
-      const cb = _bestTierByCT(b.id);
+      const ca = _kinTier(a.id);
+      const cb = _kinTier(b.id);
       if (ca !== cb) return asc ? (ca - cb) : (cb - ca);
       va = _rowSongLocationRank(a);
       vb = _rowSongLocationRank(b);
@@ -520,7 +535,11 @@ function _makeKeCompare(scopedCtxIds) {
       vb = _kineSigCountScoped(b, fdr, scopedCtxIds);
     }
     else if (col === "song_spec") {
-      // Rank by the displayed Song tier, then the fold driver (peak share), not τ.
+      // Rank by the displayed Song tier, then the peak share as a tiebreaker.
+      // (Tier is not monotonic in share across kinases — different n_detected.)
+      const ta = a.song ? (a.song.topTier || 0) : 0;
+      const tb = b.song ? (b.song.topTier || 0) : 0;
+      if (ta !== tb) return asc ? (ta - tb) : (tb - ta);
       va = _rowSongLocationRank(a);
       vb = _rowSongLocationRank(b);
     }
@@ -640,32 +659,41 @@ function _renderAgreementProfile(r) {
 }
 
 function _renderCellTypesCell(r, filter) {
-  // Reflect rows in the active filter scope; if filter is empty, scope = all 9 contrasts.
-  const rows = getScopedAttribution(r.id, filter || {}).filter(e =>
-    e.confidence_tier === "very_high" || e.confidence_tier === "high" || e.confidence_tier === "moderate");
-  const byCell = new Map();
-  for (const e of rows) {
-    const prev = byCell.get(e.cell_type);
-    if (!prev || _cmpCanonicalAttribution(e, prev) < 0) byCell.set(e.cell_type, e);
+  // Confidence is a kinase-level cell-type-exclusivity tier over curated
+  // specificity units (config.load_specificity_unit_map). The attributed "cell
+  // type" is the kinase's dominant unit (specificity_unit_label). A collapsed
+  // unit (several over-split Song clusters of one cell type) renders as an
+  // expandable parent revealing its child clusters — never a silent grouping.
+  const rows = getScopedAttribution(r.id, filter || {});
+  if (!rows.length) return `<span class="muted">—</span>`;
+  const k = rows[0];
+  const tier = k.confidence_tier;
+  const label = k.specificity_unit_label || k.specificity_celltype;
+  if (tier === "none" || tier === "low" || !label) {
+    return `<span class="muted" title="${_escapeHtml(k.confidence_basis || 'not cell-type-specific')}">—</span>`;
   }
-  const displayRows = Array.from(byCell.values());
-  displayRows.sort(_cmpCanonicalAttribution);
-  const n = displayRows.length;
-  if (n === 0) return `<span class="muted">—</span>`;
-  const top = displayRows.slice(0, 3);
-  const tip = displayRows.map(e => {
-    const song = (e.song_specificity != null && isFinite(e.song_specificity))
-      ? `Song ${(Number(e.song_specificity) / _MS_UNIFORM).toFixed(1)}×`
-      : "Song n/a";
-    return `${e.cell_type} (${song}, ${(e.confidence_tier || '').replace('_', ' ')})`;
-  }).join("\n");
-  const topNames = top.map(e => {
-    const cls = e.confidence_tier === "very_high" ? "vhi"
-              : e.confidence_tier === "high"      ? "hi"
-              : "mid";
-    return `<span class="badge ${cls}">${_escapeHtml(e.cell_type)}</span>`;
-  }).join(" ");
-  return `<span title="${_escapeHtml(tip)}"><strong>${n}</strong> ${topNames}${displayRows.length > 3 ? ` <span class="muted">+${displayRows.length - 3}</span>` : ""}</span>`;
+  const cls = tier === "very_high" ? "vhi" : tier === "high" ? "hi" : "mid";
+  const badge = `<span class="badge ${cls}">${_escapeHtml(label)}</span>`;
+  if (!k.specificity_collapsed) {
+    return `<span title="${_escapeHtml(k.confidence_basis || "")}">${badge}</span>`;
+  }
+  // Collapsed parent: reveal the child Song clusters + the kinase's detection there.
+  const SU = (PAYLOAD.specificity_units && PAYLOAD.specificity_units.units) || {};
+  const children = (SU[k.specificity_unit] && SU[k.specificity_unit].children) || [];
+  const detByCt = {};
+  for (const row of rows) detByCt[row.cell_type] = row;
+  const items = children.map(c => {
+    const cr = detByCt[c];
+    const det = cr && cr.song_detected;
+    const frac = cr ? cr.song_fraction_cells_expressing : null;
+    const pct = (frac != null && isFinite(frac)) ? ` ${(Number(frac) * 100).toFixed(0)}%` : "";
+    const top = (c === k.specificity_celltype) ? ` <em>top</em>` : "";
+    const mark = det ? `<span class="song-det-yes">✓${pct}</span>` : `<span class="muted">·</span>`;
+    return `<li class="${det ? "" : "muted"}">${_escapeHtml(c)}${top} ${mark}</li>`;
+  }).join("");
+  return `<details class="spec-unit"><summary title="${_escapeHtml(k.confidence_basis || "")}">${badge}` +
+    ` <span class="spec-unit-n">▾ ${children.length} clusters</span></summary>` +
+    `<ul class="spec-unit-children">${items}</ul></details>`;
 }
 
 function _renderKinaseWhitelistBanner(wl) {
@@ -713,6 +741,9 @@ function renderKinaseExplorer() {
   const tbody = document.querySelector("#ke-table tbody");
   if (!tbody) return;
   _ensureKinaseIndexes();
+  if (KinaseFilter.get("sortCol") === "conf") {
+    KinaseFilter.set({sortCol: "n_attributed_celltypes", sortAsc: false});
+  }
   const kf = KinaseFilter.get();
   const fdr = kf.fdr || Store.state.filters.fdr || 0.25;
   const selKid = Store.state.selection.kinase;
@@ -733,8 +764,7 @@ function renderKinaseExplorer() {
   const cSet = _filterSet(kf.celltype);
   const gridActive = dSet.size > 0 || tSet.size > 0 || cSet.size > 0 || !!kf.confidence;
   const nSigMin = Math.max(0, parseInt(kf.nSigMin, 10) || 0);
-  // Song location specificity floor as a fold over even-split (1/31): 0 = any,
-  // 2/5/10 = ≥2×/≥5×/≥10×. The favored mouse specificity; WMB stays a column.
+  // Song concentration tier floor: 0 = any, 2/5/10 = ≥2×/≥5×/≥10× the all-cell-types even share.
   const songMin = Math.max(0, parseFloat(kf.songMin) || 0);
 
   // Whitelist mode (cross-tab handoff) has two sub-modes:
@@ -765,9 +795,9 @@ function renderKinaseExplorer() {
     // active so a targeted lookup (e.g. "EGFR") still surfaces the kinase even
     // if persisted localStorage filters would otherwise disqualify it.
     if (!q && gridActive && !kinaseQualifies(r.id, kf)) continue;
-    // Song location specificity floor (× even-split). Per-kinase, pivot-independent.
+    // Song concentration tier floor. Per-kinase, pivot-independent.
     if (!q && songMin > 0) {
-      if (!r.song || r.song.topShare == null || !(r.song.topShare >= songMin * _MS_UNIFORM)) continue;
+      if (!r.song || (r.song.topTier || 0) < songMin) continue;
     }
     if (!q && kf.pattern && !_kineTrendMatches(r, kf)) continue;
     visible.push(r);
@@ -803,8 +833,6 @@ function renderKinaseExplorer() {
   // active, fall back to all-9-contrasts scope for those columns.
   const colFilter = gridActive ? kf
     : {disease:[], timepoint:[], celltype:[], confidence:""};
-  const shortContrast = c => c.replace(/_(\d+)mo$/, "·$1").replace(/^ApTt/, "AT");
-
   const parts = [];
   const drvSet = _highlightKinaseIds;
   const sigDenom = scopedCtxIds.size > 0 ? scopedCtxIds.size : CONTRASTS.length;
@@ -816,35 +844,25 @@ function renderKinaseExplorer() {
     const subCls = scopedSig === 0 ? " sub-thresh" : "";
     const drvCls = (drvSet && drvSet.has(r.id)) ? " driver" : "";
 
-    // Conf pill: highest tier present in scope, with contributing contrasts as chips.
+    // Highest location-confidence tier in scope. Kept for CSV/export and
+    // filtering, but not rendered as a separate top-level table column because
+    // the Cell type badge already carries this tier visually.
     const scopedRows = getScopedAttribution(r.id, colFilter);
     const ctxByTier = {very_high: new Set(), high: new Set(), moderate: new Set()};
     for (const e of scopedRows) {
       if (ctxByTier[e.confidence_tier]) ctxByTier[e.confidence_tier].add(e.contrast_id);
     }
     const tierSpec = [
-      {tier:"very_high", cls:"vhi", label:"VERY HIGH", suffix:" (attribution + decomp agreement)"},
-      {tier:"high",      cls:"hi",  label:"HIGH",      suffix:""},
-      {tier:"moderate",  cls:"mid", label:"MOD",       suffix:""},
+      {tier:"very_high"},
+      {tier:"high"},
+      {tier:"moderate"},
     ];
-    let confBadge;
     const hit = tierSpec.find(s => ctxByTier[s.tier].size > 0);
-    if (hit) {
-      const ctxs = Array.from(ctxByTier[hit.tier]).map(ci => CONTRASTS[ci]);
-      const shown = ctxs.slice(0, 3).map(c => `<span class="ctx-chip ${hit.cls}">${shortContrast(c)}</span>`).join("");
-      const overflow = ctxs.length > 3 ? `<span class="ctx-overflow">+${ctxs.length - 3}</span>` : "";
-      const tip = `${hit.label} in ${ctxs.length} contrast${ctxs.length===1?"":"s"}${hit.suffix}: ${ctxs.join(", ")}`;
-      confBadge = `<span class="badge ${hit.cls}" title="${_escapeHtml(tip)}">${hit.label}</span>${shown}${overflow}`;
-    } else {
-      const tipScope = gridActive ? "in active filter scope" : "across all 9 contrasts";
-      confBadge = `<span class="badge lo" title="No HIGH or MODERATE attribution ${tipScope}.">low</span>`;
-    }
 
     // Stamp export-friendly computed values onto the row for csvSerialize.
     r._exportScopedSig = scopedSig;
     r._exportPeakAbsNes = peakAbsNes;
-    r._exportSongTopShare = r.song ? r.song.topShare : null;
-    r._exportSongTopCell = r.song ? r.song.topCluster : null;
+    r._exportSongTopCelltype = r.song ? r.song.topCelltype : null;
     r._exportWmbMaxTier = _kineMaxWmbTierScoped(r.id, colFilter);
     r._exportConf = hit ? hit.tier : "low";
 
@@ -866,7 +884,6 @@ function renderKinaseExplorer() {
       `<td>${_renderCellTypesCell(r, colFilter)}</td>` +
       `<td style="text-align:center;">${_keSongBadge(r.song)}</td>` +
       `<td style="text-align:center;">${_wmbTierBadge(r._exportWmbMaxTier)}</td>` +
-      `<td>${confBadge}</td>` +
       `</tr>`
     );
   }
@@ -878,8 +895,8 @@ function renderKinaseExplorer() {
 
 function exportKinaseCsv() {
   const stamp = new Date().toISOString().slice(0, 10);
-  const headers = ["Kinase","Gene","Family","Residue","n_sig","peak_NES","song_topShare","song_topCell","wmb_max_tier","conf"];
-  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportPeakAbsNes","_exportSongTopShare","_exportSongTopCell","_exportWmbMaxTier","_exportConf"];
+  const headers = ["Kinase","Gene","Family","Residue","n_sig","peak_NES","song_topCelltype","wmb_max_tier","conf"];
+  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportPeakAbsNes","_exportSongTopCelltype","_exportWmbMaxTier","_exportConf"];
   csvDownload(csvSerialize(headers, keys, _keVisible), `kinase_${stamp}.csv`);
 }
 

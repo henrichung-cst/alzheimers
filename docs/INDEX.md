@@ -15,6 +15,7 @@ Read by analytical role, not creation order.
 | [`foundation/analysis_charter.md`](./foundation/analysis_charter.md) | Single source of truth for the live 72-sample analysis program |
 | [`foundation/live_pipeline_contract.md`](./foundation/live_pipeline_contract.md) | Stage-by-stage runner contract: prerequisites, outputs, failure modes |
 | [`foundation/concordance.md`](./foundation/concordance.md) | SEA-AD + Song concordance model: evidence sources, weights, confidence tiers |
+| [`foundation/specificity_confidence.md`](./foundation/specificity_confidence.md) | Recalculated confidence pill = within-cohort cell-type exclusivity over curated specificity units (collapse over-split Song clusters, keep distinct cell types split; references corroborate at WMB-class level; viewer shows collapsed units as expandable parents) |
 | [`foundation/analysis_rationale.md`](./foundation/analysis_rationale.md) | Why the project pivoted from deconvolution to stoichiometry |
 | [`foundation/statistical_constraints.md`](./foundation/statistical_constraints.md) | Governing identifiability and interpretation limits |
 | [`foundation/multiple_testing.md`](./foundation/multiple_testing.md) | Multiple-testing policy across the pipeline |
@@ -22,6 +23,7 @@ Read by analytical role, not creation order.
 | [`foundation/cohort_contract.md`](./foundation/cohort_contract.md) | Canonical input/output schemas for the four shared analysis modes; per-cohort parameter knobs |
 | [`foundation/viewer_payload_contract.md`](./foundation/viewer_payload_contract.md) | Shared frontend payload schema for current and future viewers; builders stay separate but emit a common context/capability contract |
 | [`foundation/viewer_frontend_contract.md`](./foundation/viewer_frontend_contract.md) | Frontend sharing policy for AD/Song and T-cell viewers; documents shared modules, intentional forks, and consolidation targets |
+| [`foundation/kinase_explorer_attribution.md`](./foundation/kinase_explorer_attribution.md) | Authoritative live contract for Kinase Explorer Attribution views across Song AD, human/Mukesh, 5xFAD, and T-cell viewer surfaces |
 | [`foundation/mukesh_ingest_policies.yml`](./foundation/mukesh_ingest_policies.yml) | Mukesh / NBB human ingest edge-case policies (consumed by `alz/cohorts/mukesh/ingest.py`) |
 
 ## Reference Guides
@@ -156,7 +158,7 @@ Paths relative to repo root. Authoritative script docs live in [`CLAUDE.md`](../
 | `alz/reference/wmb_expression.py` | `alz/runners/supporting/run_wmb_expression.sh` | `outputs/reports/wmb_expression/` |
 
 ### Supplementary diagnostics (`alz/supplementary/`)
-`fdr_stringent.py`, `threshold_sensitivity.py`, `aggregation_robustness.py`, `parent_protein_qc.py`, `deconvolution_feasibility.py` — run via `runners/supplementary/run_reviewer_diagnostics.sh`. Output: `outputs/reports/supplementary/`.
+`fdr_stringent.py`, `parent_protein_qc.py`, `deconvolution_feasibility.py` — run via `runners/supplementary/run_reviewer_diagnostics.sh`. Output: `outputs/reports/supplementary/`.
 
 ### Standalone utilities (`alz/`)
 | Script | Purpose |

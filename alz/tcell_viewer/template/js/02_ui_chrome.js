@@ -57,11 +57,4 @@ const TAB_MANIFEST = {
     render: () => renderIncytrPathways(),
     rerenderOn: { filters: false, selection: [] },
   },
-  celltype: {
-    group: "reference", label: "Cell Types",
-    filters: [], requires: [], modes: ["mouse"],
-    wire: () => wireCellTypeAssignment(),
-    render: () => renderCellTypeAssignment(),
-    rerenderOn: { filters: false, selection: [] },
-  },
 };

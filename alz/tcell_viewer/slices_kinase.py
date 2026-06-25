@@ -257,51 +257,226 @@ def _load_kinase_to_gene_map() -> dict[str, str]:
         if pd.notna(k) and pd.notna(g)
     }
 
-
-# ---------------------------------------------------------------------------
-# Attribution uniform baselines
-# ---------------------------------------------------------------------------
-
-def _tcell_attribution_uniform(donor: str) -> float | None:
-    """Uniform specificity baseline 1/N_states for the badge tooltip."""
-    cc = os.path.join(TCELLS_INCYTR_INPUTS_DIR, donor, "scrna", "cell_counts.csv")
-    if not os.path.exists(cc):
-        return None
-    n_states = pd.read_csv(cc, usecols=["state"])["state"].nunique()
-    return (1.0 / n_states) if n_states else None
+def _upper_gene_map(gene_map: dict) -> dict[str, str]:
+    """Kinase -> upper-cased gene symbol, for case-insensitive gene lookups."""
+    return {str(k): str(v).upper() for k, v in gene_map.items()}
 
 
-def _nsclc_attribution_uniform() -> float | None:
-    """Uniform baseline 1/N_coarse_groups for the external-reference NSCLC tier.
+# Crosswalk: within-cohort sanitized ProjecTILs state → NSCLC reference cell
+# type (raw ProjecTILs `functional.cluster`). Both derive from the SAME
+# ProjecTILs vocabulary, so this is a 1:1 relabeling — the exact inverse of
+# PROJECTILS_LABEL_MAP, derived so a state rename is made in only one place.
+_TCELL_STATE_TO_NSCLC = {v: k for k, v in PROJECTILS_LABEL_MAP.items()}
 
-    The external 10x NSCLC reference is the human cohort's analog of the mouse
-    viewer's WMB cross-check: a kinase's transcript share across the coarse TME
-    groups (the 14 ProjecTILs T-states collapse to one T_NK group; the non-T
-    lineages stay separate). The fold-over-uniform tier in the attribution
-    verdict table is share / (1/N_groups), so we ship N_groups here.
-    """
+
+def _load_nsclc_detection() -> dict:
+    """Per-(gene, NSCLC cell type) detection from the reference, the independent
+    corroborator for within-cohort T-state attribution.
+    Returns {(GENE_UPPER, nsclc_cell_type): (frac, detected)}.
+    NSCLC detection = expressed in ≥1 cell (frac > 0); no minimum-fraction floor
+    (the 897k-cell reference is deep enough that any nonzero fraction is real).
+    Computed in alz/reference/nsclc_expression.py."""
     src = config.NSCLC_KINASE_EXPRESSION_FILE
     if not os.path.exists(src):
-        return None
-    n_groups = pd.read_csv(src, usecols=["spec_group"])["spec_group"].nunique()
-    return (1.0 / n_groups) if n_groups else None
+        return {}
+    df = pd.read_csv(src, usecols=["gene_symbol", "cell_type",
+                                   "fraction_cells_expressing", "detected"])
+    out: dict = {}
+    for r in df.itertuples(index=False):
+        out[(str(r.gene_symbol).upper(), str(r.cell_type))] = (
+            float(r.fraction_cells_expressing),
+            bool(r.detected) if pd.notna(r.detected) else False)
+    return out
 
 
-# ---------------------------------------------------------------------------
-# Attribution index
-# ---------------------------------------------------------------------------
+def _tcell_celltype_pill(tier: int, corroborated: bool) -> str:
+    """Confidence pill for the cell-type axis (CD8 / CD4 / Treg), driven by the
+    N-normalized concentration tier rather than effective_n.
 
-def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list) -> dict:
+    The cell-type axis has only 3 units, so effective_n is bounded by 3 and the
+    brain pill's absolute thresholds (1.5/3.0) make "broad" unreachable. The
+    concentration tier (fold of the dominant type's share over the even 1/N) is
+    the cardinality-independent exclusivity signal, so the pill reads it directly:
+
+        tier 0  → none      no measurable cell-type expression distribution
+        tier 1  → low       broad across CD8/CD4/Treg (not cell-type specific)
+        tier ≥2 → moderate  concentrated in one cell type, uncorroborated
+                  high      concentrated + NSCLC detects the kinase in T_NK
+
+    (For N=3 the tier saturates at 2 — a share ≥5/3 is impossible — so very_high,
+    which would need a stronger fold, is not reachable on this axis.)
+    """
+    if tier <= 0:
+        return "none"
+    if tier == 1:
+        return "low"
+    return "high" if corroborated else "moderate"
+
+
+def _load_nsclc_tnk_detection() -> dict:
+    """Per-gene NSCLC detection in the T_NK lineage — the cell-type-axis
+    corroborator ("does the independent reference agree this is a T-cell kinase?").
+
+    Reads ``group_detected`` for ``spec_group == 'T_NK'`` from the coarse NSCLC
+    specificity file. Returns {GENE_UPPER: bool}; a gene absent from the dict is
+    outside the NSCLC probe panel (treated as uncorroborated, not disconfirming).
+    """
+    src = config.NSCLC_KINASE_SPECIFICITY_FILE
+    if not os.path.exists(src):
+        return {}
+    df = pd.read_csv(src, usecols=["gene_symbol", "spec_group", "group_detected"])
+    df = df[df["spec_group"] == "T_NK"]
+    return {str(r.gene_symbol).upper(): bool(r.group_detected)
+            for r in df.itertuples(index=False)}
+
+
+def _load_nsclc_coarse_breadth() -> dict:
+    """Per-gene NSCLC cross-lineage breadth from the coarse specificity file.
+
+    The independent reference's answer to "is this kinase specific to a cell
+    TYPE, beyond T cells?" — how many of the coarse lineages (T_NK + the non-T
+    lineages B_plasma / Myeloid / Epithelial / Endothelial / Fibroblast / Mast)
+    detect the kinase (expressed in any cell — no minimum-fraction floor), out of how many present, and which lineage
+    dominates. All values precomputed in alz/reference/nsclc_expression.py and
+    denormalized onto every (gene, spec_group) row of the coarse file.
+    Returns {GENE_UPPER: (n_detected, n_lineages, top_lineage)}.
+    """
+    src = config.NSCLC_KINASE_SPECIFICITY_FILE
+    if not os.path.exists(src):
+        return {}
+    df = pd.read_csv(src, usecols=["gene_symbol", "spec_group", "group_detected",
+                                   "n_detected_coarse", "top_group_coarse"])
+    out: dict = {}
+    for gene, grp in df.groupby("gene_symbol"):
+        first = grp.iloc[0]
+        n_det = first["n_detected_coarse"]
+        top = first["top_group_coarse"]
+        members = sorted(grp.loc[grp["group_detected"].astype(bool), "spec_group"]
+                         .astype(str).tolist())
+        out[str(gene).upper()] = (
+            int(n_det) if pd.notna(n_det) else None,
+            int(len(grp)),
+            str(top) if pd.notna(top) else "",
+            members)
+    return out
+
+
+def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list,
+                                   gene_map: dict, nsclc_det: dict,
+                                   nsclc_tnk: dict) -> dict:
     """Columnar attribution_index consumed by the viewer JS getScopedAttribution.
 
     Maps kinase→kinase_id (the slice's kid map) and contrast day→contrast_id
     (index into the slice's short_contrasts). Rows whose kinase or day aren't in
-    the MEA slice are dropped (shouldn't happen — same MEA source)."""
+    the MEA slice are dropped (shouldn't happen — same MEA source).
+
+    Each (kinase, within-cohort state) row is joined to the NSCLC reference's
+    detection at the crosswalked state (`nsclc_frac`, `nsclc_detected`) as an
+    independent corroborator of the within-cohort attribution.
+
+    Confidence tier (cell-type axis — CD8 / CD4 / Treg; see _tcell_celltype_pill):
+        tier         = tcell_celltype_concentration_tier (fold of the dominant cell
+                       type's share over the even 1/3; per-kinase). N-normalized,
+                       so it reads correctly on a 3-unit axis where effective_n
+                       (bounded by 3) cannot.
+        corroborated = NSCLC reference detects the kinase in its T_NK lineage
+                       (`nsclc_tnk`; detection = expressed in any cell, no floor). Kinase outside the NSCLC probe
+                       panel → uncorroborated (not disconfirming).
+        tier 0 → none; tier 1 → low (broad); tier ≥2 → high if corroborated else
+        moderate.
+
+    The per-(kinase, within-cohort STATE) NSCLC detection (`nsclc_frac`,
+    `nsclc_detected`, via the fine state crosswalk `nsclc_det`) is still shown per
+    row in the attribution detail — distinct from the T_NK corroboration above.
+
+    Direction concordance (tcell_concordant / tcell_lfc) is info-only — never gates
+    the tier (see TCELL_ATTRIBUTION_CAVEAT: OR≈1 for kinases).
+    """
     c_idx = {c: i for i, c in enumerate(short_contrasts)}
+    # Normalize the kinase→gene map to upper-case once; the loop below is over the
+    # full kinase × state × contrast grid.
+    gene_upper_map = _upper_gene_map(gene_map)
+
+    # Pre-compute per-(kinase, residue_type) confidence tier on the CELL-TYPE axis
+    # (CD8 / CD4 / Treg). tcell_top_celltype + tcell_celltype_concentration_tier are
+    # per-kinase (same across all state×contrast rows). The cell-type axis has only
+    # N=3 units, so the brain pill's absolute effective_n thresholds (1.5/3.0) don't
+    # apply (eff is bounded by 3, "broad" would be unreachable); the N-normalized
+    # concentration tier (fold of the dominant type's share over the even 1/N) IS
+    # the right exclusivity signal at any cardinality. Detection fractions are shown
+    # separately and never gate the specificity denominator or the tier.
+    kinase_meta: dict[tuple[str, str], dict] = {}
+    for r in attr_df.itertuples(index=False):
+        residue_type = str(getattr(r, "residue_type", "") or "")
+        kk_key = (str(r.kinase), residue_type)
+        if kk_key not in kinase_meta:
+            kinase_meta[kk_key] = {
+                "tier": (int(r.tcell_celltype_concentration_tier)
+                         if pd.notna(r.tcell_celltype_concentration_tier) else 0),
+                "top_ct": str(r.tcell_top_celltype) if pd.notna(r.tcell_top_celltype) else "",
+                "gene_upper": gene_upper_map.get(str(r.kinase), str(r.kinase).upper()),
+            }
+
+    # corroborated = the independent NSCLC reference detects the kinase in its T_NK
+    # lineage (detection = expressed in any cell, no minimum-fraction floor). Absence from the NSCLC probe panel → uncorroborated (not
+    # disconfirming). Pill: tier 0 (no cell-type expression) → none; tier 1 (broad
+    # across cell types) → low; tier ≥2 (concentrated in one cell type) → high if
+    # corroborated else moderate (uncorroborated caps at moderate, as in the brain
+    # model). very_high is reserved for concentrated + corroborated AND broadly
+    # T_NK-detected — see _tcell_celltype_pill.
+    kinase_tier: dict[tuple[str, str], tuple[str, str]] = {}
+    for kk_key, meta in kinase_meta.items():
+        corroborated = bool(nsclc_tnk.get(meta["gene_upper"], False))
+        in_panel = meta["gene_upper"] in nsclc_tnk
+        tier_name = _tcell_celltype_pill(meta["tier"], corroborated)
+        top_ct = meta["top_ct"]
+        if tier_name == "none":
+            basis = "No measurable cell-type (CD8/CD4/Treg) expression distribution"
+        elif tier_name == "low":
+            corr_s = ("NSCLC detects kinase in T_NK" if corroborated
+                      else "not in NSCLC probe panel" if not in_panel
+                      else "NSCLC does not detect kinase in T_NK")
+            basis = (f"broadly expressed across CD8/CD4/Treg (not cell-type "
+                     f"specific); {corr_s}")
+        else:
+            if corroborated:
+                corr_note = "NSCLC detects kinase in T_NK (corroborated)"
+            elif not in_panel:
+                corr_note = ("NSCLC probe panel does not include this kinase; "
+                             "uncorroborated (caps at moderate)")
+            else:
+                corr_note = ("NSCLC does not detect kinase in T_NK; "
+                             "uncorroborated (caps at moderate)")
+            basis = f"concentrated in {top_ct} (≥2× the even 1/3 share); {corr_note}"
+        kinase_tier[kk_key] = (tier_name, basis)
+
+    # Per-(kinase, residue) headline STATE = the most state-enriched ELIGIBLE state
+    # (NaN enrichment never wins); fall back to the first state seen when a kinase
+    # has no eligible state. The cell-type confidence pill is rendered once, on this
+    # state's row, in the attribution table (the rows are states, not cell types).
+    home_state: dict[tuple[str, str], tuple[str, float]] = {}
+    seen_first: dict[tuple[str, str], str] = {}
+    for r in attr_df.itertuples(index=False):
+        rt = str(getattr(r, "residue_type", "") or "")
+        key = (str(r.kinase), rt)
+        seen_first.setdefault(key, str(r.cell_type))
+        e = r.tcell_state_enrichment
+        if pd.isna(e):
+            continue
+        if key not in home_state or float(e) > home_state[key][1]:
+            home_state[key] = (str(r.cell_type), float(e))
+
+    def _home(key: tuple[str, str]) -> str:
+        return home_state[key][0] if key in home_state else seen_first.get(key, "")
+
     cols: dict[str, list] = {k: [] for k in (
-        "kinase_id", "contrast_id", "cell_type", "tcell_specificity",
-        "tcell_tier", "tcell_lfc", "tcell_concordance", "tcell_concordant",
-        "tcell_consistency", "nes", "fdr")}
+        "kinase_id", "contrast_id", "cell_type",
+        "tcell_detected", "tcell_fraction_expressing", "tcell_state_enrichment",
+        "tcell_effective_n", "tcell_top_celltype", "home_state",
+        "tcell_lfc", "tcell_concordance", "tcell_concordant",
+        "tcell_consistency", "nes", "fdr",
+        "nsclc_frac", "nsclc_detected",
+        "confidence_tier", "confidence_basis")}
 
     def _f(v):  # NaN/None → null (the full grid carries NaN for genes absent in scRNA)
         return float(v) if pd.notna(v) else None
@@ -314,23 +489,37 @@ def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list) ->
         cc = c_idx.get(str(r.contrast))
         if kk is None or cc is None:
             continue
+        _kn = str(r.kinase)
+        gene_upper = gene_upper_map.get(_kn, _kn.upper())
+        nsclc_ct = _TCELL_STATE_TO_NSCLC.get(str(r.cell_type))
+        det_entry = nsclc_det.get((gene_upper, nsclc_ct)) if nsclc_ct else None
+        nsclc_frac = det_entry[0] if det_entry else None
+        nsclc_detected = det_entry[1] if det_entry else None
+        detected = bool(r.tcell_detected)
+        kk_key = (str(r.kinase), residue_type)
+        conf_tier, conf_basis = kinase_tier.get(kk_key, ("none", "no tier computed"))
         cols["kinase_id"].append(kk)
         cols["contrast_id"].append(cc)
         cols["cell_type"].append(str(r.cell_type))
-        cols["tcell_specificity"].append(_f(r.tcell_specificity))
-        cols["tcell_tier"].append(int(r.tcell_tier))
+        cols["tcell_detected"].append(detected)
+        cols["tcell_fraction_expressing"].append(_f(r.tcell_fraction_expressing))
+        cols["tcell_effective_n"].append(_f(r.tcell_effective_n))
+        cols["tcell_top_celltype"].append(
+            str(r.tcell_top_celltype) if pd.notna(r.tcell_top_celltype) else "")
+        cols["home_state"].append(_home(kk_key))
+        cols["tcell_state_enrichment"].append(_f(r.tcell_state_enrichment))
         cols["tcell_lfc"].append(_f(r.tcell_lfc))
         cols["tcell_concordance"].append(_f(r.tcell_concordance))
         cols["tcell_concordant"].append(bool(r.tcell_concordant))
         cols["tcell_consistency"].append(int(r.tcell_consistency))
         cols["nes"].append(_f(r.NES))
         cols["fdr"].append(_f(r.FDR))
+        cols["nsclc_frac"].append(round(nsclc_frac, 4) if nsclc_frac is not None else None)
+        cols["nsclc_detected"].append(nsclc_detected)
+        cols["confidence_tier"].append(conf_tier)
+        cols["confidence_basis"].append(conf_basis)
     return cols
 
-
-# ---------------------------------------------------------------------------
-# Donor kinase slice
-# ---------------------------------------------------------------------------
 
 def _build_donor_kinases_slice(donor: str) -> dict | None:
     """Columnar kinases table for one donor.
@@ -396,6 +585,12 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
         "peak_NES": [],
         "n_sig_contrasts": [],
         "top_celltype_1": [""] * len(rows),
+        "tcell_celltype": [""] * len(rows),
+        "tcell_celltype_tier": [0] * len(rows),
+        "nsclc_lineages_detected": [None] * len(rows),
+        "nsclc_lineages_total": [None] * len(rows),
+        "nsclc_top_lineage": [""] * len(rows),
+        "nsclc_lineage_list": [None] * len(rows),
     }
     for sc in short_contrasts:
         cols[f"NES_{sc}"] = []
@@ -439,27 +634,61 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
             cols["peak_NES"].append(float("nan"))
             cols["n_sig_contrasts"].append(0)
 
+    gene_upper_map = _upper_gene_map(gene_map)
+
+    # NSCLC cross-lineage breadth (independent reference): per-kinase count of
+    # coarse cell-TYPE lineages the kinase is detected in, out of those present,
+    # + the dominant lineage. Gene-keyed and cohort-independent — answers the
+    # cell-type-specificity question the within-cohort T-STATE columns cannot.
+    # Absent gene (outside the NSCLC probe panel) → left null ("n/a" in the UI).
+    nsclc_breadth = _load_nsclc_coarse_breadth()
+    for i, (k, _residue_type) in enumerate(rows):
+        entry = nsclc_breadth.get(gene_upper_map.get(k, k.upper()))
+        if entry is not None:
+            cols["nsclc_lineages_detected"][i] = entry[0]
+            cols["nsclc_lineages_total"][i] = entry[1]
+            cols["nsclc_top_lineage"][i] = entry[2]
+            cols["nsclc_lineage_list"][i] = entry[3]
+
     # Within-cohort attribution: columnar index for the viewer + per-kinase
-    # top attributed cell type (highest specificity tier, then concordance).
+    # headline STATE (most state-enriched eligible state) and cell-TYPE home.
     attr_df = _load_tcell_attribution(donor)
     attribution_index = None
-    attribution_uniform = None
     if attr_df is not None:
+        nsclc_det = _load_nsclc_detection()
+        nsclc_tnk = _load_nsclc_tnk_detection()
         attribution_index = _build_tcell_attribution_index(
-            attr_df, kid, short_contrasts)
-        attribution_uniform = _tcell_attribution_uniform(donor)
+            attr_df, kid, short_contrasts, gene_map, nsclc_det, nsclc_tnk)
+        # Headline STATE: the most state-enriched ELIGIBLE state (guarded
+        # tcell_state_enrichment; ineligible/undetected states are NaN). A kinase
+        # with no eligible state gets "" — no state headline (e.g. SYK).
         top = attr_df.sort_values(
-            ["tcell_tier", "tcell_concordance"], ascending=False)
+            ["tcell_state_enrichment", "tcell_concordance"], ascending=False)
         top_by_key = {}
         for r in top.itertuples(index=False):
             residue_type = str(getattr(r, "residue_type", "") or "")
             key = (str(r.kinase), residue_type)
-            if key not in top_by_key:
-                top_by_key[key] = str(r.cell_type)
+            if key in top_by_key or pd.isna(r.tcell_state_enrichment):
+                continue
+            top_by_key[key] = str(r.cell_type)
         cols["top_celltype_1"] = [
             top_by_key.get((k, residue_type), "")
             for k, residue_type in rows
         ]
+        # Cell-TYPE home (CD8/CD4/Treg) + concentration tier — per-kinase, the
+        # within-cohort cell-type-specificity column. Distinct from top_celltype_1
+        # (a STATE) and from the NSCLC cross-lineage breadth columns.
+        ct_by_key: dict = {}
+        for r in attr_df.drop_duplicates(["kinase", "residue_type"]).itertuples(index=False):
+            rt = str(getattr(r, "residue_type", "") or "")
+            ct_by_key[(str(r.kinase), rt)] = (
+                str(r.tcell_top_celltype) if pd.notna(r.tcell_top_celltype) else "",
+                int(r.tcell_celltype_concentration_tier)
+                if pd.notna(r.tcell_celltype_concentration_tier) else 0)
+        cols["tcell_celltype"] = [ct_by_key.get((k, rt), ("", 0))[0]
+                                  for k, rt in rows]
+        cols["tcell_celltype_tier"] = [ct_by_key.get((k, rt), ("", 0))[1]
+                                       for k, rt in rows]
 
     return {
         "kinases_slice": cols,
@@ -468,7 +697,6 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
         "kid": kid,
         "fdr_threshold": fdr_thresh,
         "attribution_index": attribution_index,
-        "attribution_uniform": attribution_uniform,
     }
 
 
@@ -508,122 +736,4 @@ def _build_celltypes_slice(donor_clusters: dict[str, list[str]]) -> dict:
         "name": ordered,
         "tissue_category": ["T-cell"] * len(ordered),
         "available_donors": [sorted(seen[c]) for c in ordered],
-    }
-
-
-def _build_celltype_assignment() -> dict:
-    """Compact ProjecTILs cell-type count summary for the T-cell viewer."""
-    from typing import Any
-    by_context: dict[str, dict] = {}
-    all_states: set[str] = set()
-    for donor in DONORS:
-        scrna_dir = os.path.join(TCELLS_INCYTR_INPUTS_DIR, donor, "scrna")
-        audit_path = os.path.join(scrna_dir, "state_audit.json")
-        pred_path = os.path.join(scrna_dir, "projectils_predictions.csv")
-        counts_path = os.path.join(scrna_dir, "cell_counts.csv")
-        embedding_path = os.path.join(scrna_dir, "projectils_embeddings.csv")
-
-        audit: dict[str, Any] = {}
-        if os.path.exists(audit_path):
-            with open(audit_path) as f:
-                audit = json.load(f)
-
-        confidence_by_state: dict[str, float | None] = {}
-        if os.path.exists(pred_path):
-            pred = pd.read_csv(
-                pred_path,
-                usecols=["functional.cluster", "functional.cluster.conf"],
-            )
-            resolved = pred.dropna(subset=["functional.cluster"]).copy()
-            if not resolved.empty:
-                conf = (
-                    resolved.groupby("functional.cluster")["functional.cluster.conf"]
-                    .median()
-                    .dropna()
-                )
-                confidence_by_state = {
-                    PROJECTILS_LABEL_MAP.get(str(k), _incytr_sanitize(str(k))): float(v)
-                    for k, v in conf.items()
-                }
-
-        state_by_day: list[dict[str, Any]] = []
-        if os.path.exists(counts_path):
-            cc = pd.read_csv(counts_path)
-            if {"state", "day", "n_cells"}.issubset(cc.columns):
-                for r in cc.itertuples(index=False):
-                    state = str(r.state)
-                    all_states.add(state)
-                    state_by_day.append({
-                        "state": state,
-                        "day": f"d{int(r.day)}",
-                        "n_cells": int(r.n_cells),
-                    })
-
-        state_totals = {
-            str(k): int(v) for k, v in (audit.get("state_totals") or {}).items()
-        }
-        all_states.update(state_totals.keys())
-        embedding = {
-            "available": False,
-            "projection_references": [],
-            "reductions": [],
-            "points": {
-                "x": [], "y": [], "state": [], "day": [],
-                "projection_reference": [], "reduction": [], "confidence": [],
-            },
-        }
-        if os.path.exists(embedding_path):
-            emb = pd.read_csv(embedding_path)
-            required = {
-                "axis_1", "axis_2", "projection_reference", "reduction",
-                "functional.cluster",
-            }
-            if required.issubset(emb.columns) and not emb.empty:
-                emb = emb.dropna(subset=["axis_1", "axis_2", "functional.cluster"]).copy()
-                if not emb.empty:
-                    emb["state"] = [
-                        PROJECTILS_LABEL_MAP.get(str(x), _incytr_sanitize(str(x)))
-                        for x in emb["functional.cluster"]
-                    ]
-                    day_col = emb["day"] if "day" in emb.columns else pd.Series([pd.NA] * len(emb))
-                    conf_col = (
-                        emb["functional.cluster.conf"]
-                        if "functional.cluster.conf" in emb.columns
-                        else pd.Series([pd.NA] * len(emb))
-                    )
-                    embedding = {
-                        "available": True,
-                        "projection_references": sorted(
-                            emb["projection_reference"].dropna().astype(str).unique().tolist()
-                        ),
-                        "reductions": sorted(
-                            emb["reduction"].dropna().astype(str).unique().tolist()
-                        ),
-                        "points": {
-                            "x": emb["axis_1"].astype(float).tolist(),
-                            "y": emb["axis_2"].astype(float).tolist(),
-                            "state": emb["state"].astype(str).tolist(),
-                            "day": [
-                                f"d{int(x)}" if pd.notna(x) else ""
-                                for x in day_col
-                            ],
-                            "projection_reference": emb["projection_reference"].astype(str).tolist(),
-                            "reduction": emb["reduction"].astype(str).tolist(),
-                            "confidence": [
-                                float(x) if pd.notna(x) else None
-                                for x in conf_col
-                            ],
-                        },
-                    }
-        by_context[donor] = {
-            "n_kept": int(audit.get("n_kept", 0) or 0),
-            "state_totals": state_totals,
-            "confidence_by_state": confidence_by_state,
-            "state_by_day": state_by_day,
-            "embedding": embedding,
-        }
-
-    return {
-        "states": sorted(all_states),
-        "by_context": by_context,
     }

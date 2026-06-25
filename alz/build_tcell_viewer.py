@@ -64,10 +64,8 @@ from alz.tcell_viewer.slices_incytr import (  # noqa: E402
 from alz.tcell_viewer.slices_kinase import (  # noqa: E402
     _build_donor_kinases_slice,
     _build_celltypes_slice,
-    _build_celltype_assignment,
     _load_donor_clusters,
     _load_projected_state_mea_payload,
-    _nsclc_attribution_uniform,
 )
 from alz.tcell_viewer.slices_traces import (  # noqa: E402
     _write_tcell_transcript_trace,
@@ -96,7 +94,7 @@ from jinja2 import Environment, FileSystemLoader  # noqa: E402
 _TEMPLATE_DIR = os.path.join(HERE, "tcell_viewer", "template")
 _SHARED_TEMPLATE_DIR = os.path.join(HERE, "viewer_shared", "template")
 _VIEWER_SPECIFIC_TAB_INCLUDES = [
-    "js/tabs/celltype_assignment.js",
+    "js/tabs/attribution_manifest_tcell.js",
 ]
 
 
@@ -165,7 +163,6 @@ def build_tcell_payload() -> dict:
     contrast_union: list[str] = []
     fdr_thresh = 0.25
     attribution_index: dict | None = None
-    attribution_uniform: float | None = None
     for donor in DONORS:
         block = _build_donor_kinases_slice(donor)
         if block is None:
@@ -181,7 +178,6 @@ def build_tcell_payload() -> dict:
         # donor, which getScopedAttribution reads globally.
         if block.get("attribution_index") and attribution_index is None:
             attribution_index = block["attribution_index"]
-            attribution_uniform = block.get("attribution_uniform")
             n_attr = len(attribution_index["kinase_id"])
             print(f"  {donor}: within-cohort attribution rows: {n_attr}",
                   flush=True)
@@ -203,7 +199,6 @@ def build_tcell_payload() -> dict:
     print("[build_tcell_payload] celltypes slice:", flush=True)
     donor_clusters = {d: _load_donor_clusters(d) for d in DONORS}
     celltypes_slice = _build_celltypes_slice(donor_clusters)
-    celltype_assignment = _build_celltype_assignment()
     celltype_id_by_name = {
         name: idx for idx, name in zip(celltypes_slice["id"], celltypes_slice["name"])
     }
@@ -367,8 +362,6 @@ def build_tcell_payload() -> dict:
         "familyMap": family_map,
         "fdr_threshold": fdr_thresh,
         "mea_kinase_donor": "donor1",
-        "tcell_attribution_uniform": attribution_uniform,
-        "nsclc_attribution_uniform": _nsclc_attribution_uniform(),
         "tcell_attribution_caveat": TCELL_ATTRIBUTION_CAVEAT,
         "transcript_trace": transcript_trace_meta,
         "omics_trace": omics_trace_meta,
@@ -381,7 +374,6 @@ def build_tcell_payload() -> dict:
         "kinases": kinases_slice,
         "kinase_motifs": kinase_motifs,
         "celltypes": celltypes_slice,
-        "celltype_assignment": celltype_assignment,
         "audit_tables": audit_tables,
         "edge_slice_ref": {
             "schema_version": SCHEMA_VERSION,

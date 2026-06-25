@@ -1,5 +1,9 @@
 # 5xFAD Kinase MEA and Viewer Notes
 
+> For the live Kinase Explorer Attribution tab contract, see
+> [`docs/foundation/kinase_explorer_attribution.md`](../foundation/kinase_explorer_attribution.md).
+> This note remains the 5xFAD integration/provenance reference.
+
 This note records the 5xFAD kinase enrichment conventions used by
 `alz/cohorts/fivexfad/ingest.py` and the unified viewer 5xFAD kinase tab.
 
@@ -94,24 +98,31 @@ integration.
 
 Generated attribution artifacts:
 
-- `outputs/reports/kinase_attribution_5xfad/fivexfad_snrna_attribution.csv`
+- `outputs/reports/kinase_attribution_5xfad/fivexfad_snrna_attribution.csv` (direction: LFC + cell support)
+- `outputs/reports/kinase_attribution_5xfad/fivexfad_snrna_expression.csv` (detection + mean log2 expression)
+- `outputs/reports/kinase_attribution_5xfad/fivexfad_expression_specificity.csv` (standard detection metric)
 - `outputs/reports/kinase_attribution_5xfad/fivexfad_snrna_cell_counts.csv`
 
-The viewer payload exposes 5xFAD-native fields including
-`fivexfad_specificity`, `fivexfad_fold_over_uniform`, `fivexfad_tau`,
-`fivexfad_top_cluster`, `fivexfad_lfc`, snRNA sample/cell counts, and
-`cluster_source == "new_clusters"`. WMB and SEA-AD remain reference layers
-joined by kinase and shared 46-cluster label; they are not the primary 5xFAD
-attribution source.
+The viewer payload exposes 5xFAD-native fields from the repo-wide standard
+detection metric (`alz/cross_reference/specificity.py`): `fivexfad_detected`,
+`fivexfad_fraction_cells_expressing`, `fivexfad_concentration`,
+`fivexfad_concentration_of_total`, `fivexfad_concentration_tier`,
+`fivexfad_effective_n`, `fivexfad_top_celltype`, plus `fivexfad_lfc`, snRNA
+sample/cell counts, and `cluster_source == "new_clusters"`. The WMB cross-check
+likewise uses detection (`wmb_detected`, `wmb_concentration`,
+`wmb_concentration_tier`); WMB and SEA-AD remain reference layers joined by
+kinase and shared 46-cluster label, not the primary 5xFAD attribution source.
 
-The native 5xFAD snRNA location fields are tissue-specific. For each kinase,
-the attribution builder computes expression share, fold-over-uniform, tau, and
-top cluster separately within cortex and hippocampus, pooling ages, genotypes,
-and samples inside the tissue. TG-vs-WT LFC, p-values, sample counts, and cell
-counts remain scoped to tissue x age x cell type. If a tissue x age x cell-type
-row has fewer than 3 local snRNA cells across the contrast, the categorical
-location confidence is set to `none` for that row rather than applying the
-tissue-pooled location tier. The same local cell-count gate is applied to
+The native 5xFAD snRNA location is the standard detection metric, computed per
+tissue. For each kinase, `specificity.compute` runs separately within cortex and
+hippocampus over the 46-cluster `new_clusters` spine, pooling ages, genotypes,
+and samples inside the tissue: a cell type is detected when the kinase transcript
+is present in ≥10% of its cells, and concentration / effective-N are computed on
+linear expression over the detected set. TG-vs-WT LFC, p-values, sample counts,
+and cell counts remain scoped to tissue x age x cell type. If a tissue x age x
+cell-type row has fewer than 3 local snRNA cells across the contrast, the
+categorical location confidence is set to `none` for that row. The same local
+cell-count gate is applied to
 packaged per-cell-type decomposition MEA rows, so sparse cell-type rows do not
 drive agreement calls, decomp bars, or `very_high` promotion.
 

@@ -295,6 +295,35 @@ CLASS_TO_TISSUE_CATEGORY = {
     "Other": "Other",
 }
 
+# --- Specificity unit grouping (confidence-pill resolution) ---------------
+# The confidence pill measures how exclusively a kinase is expressed in one cell
+# type. The native 31 Song clusters over-split some cell types (e.g. excitatory
+# neurons → 6 pyramidal subtypes), which dilutes a pan-class kinase's signal and
+# makes it look non-specific. For those WMB classes we collapse the Song clusters
+# into the WMB-class parent and compute specificity there. For WMB classes whose
+# Song clusters are genuinely *distinct* cell types (e.g. vascular = endothelial
+# + pericyte + choroid + leptomeningeal), we do NOT collapse — the native cluster
+# is the correct unit. 1:1 classes keep their single cluster with a combined
+# label. The collapse never happens silently: the viewer shows a collapsed unit
+# as an expandable parent revealing its child clusters.
+#
+# Listed = collapse (member Song clusters are subtypes of ONE cell type).
+# Unlisted multi-cluster classes stay split; 1:1 classes get a combined label.
+SPECIFICITY_COLLAPSE_WMB_CLASSES = {
+    "01 IT-ET Glut",      # cortical excitatory pyramidal subtypes
+    "06 CTX-CGE GABA",    # CGE-derived interneuron subtypes
+    "09 CNU-LGE GABA",    # striatal GABAergic (basal-ganglia GABA + MSN)
+    "02 NP-CT-L6b Glut",  # deep/transient excitatory (Cajal-Retzius + Foxp2 L6)
+}
+
+# Friendly display labels for collapsed WMB-class parents.
+WMB_CLASS_DISPLAY = {
+    "01 IT-ET Glut":     "Excitatory neurons (IT/ET)",
+    "06 CTX-CGE GABA":   "Interneurons (CGE)",
+    "09 CNU-LGE GABA":   "Striatal GABAergic",
+    "02 NP-CT-L6b Glut": "Deep excitatory (NP/CT/L6b)",
+}
+
 DISEASE_GROUPS = ["App", "Tau", "ApTt"]
 TIMEPOINTS = ["2mo", "4mo", "6mo"]
 DISEASE_COLORS = {"App": "#c62828", "Tau": "#1565c0", "ApTt": "#6a1b9a"}
@@ -549,6 +578,10 @@ HBCA_TAXONOMY_TERM_SET = "CCN202210140_SUPC"
 
 WMB_EXPRESSION_OUTPUT_DIR = os.path.join("outputs", "reports", "wmb_expression")
 WMB_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_kinase_expression.csv")
+# Per-kinase standard attribution breadth summary (effective number of cell
+# types / top class) over the retained WMB classes. Detection-gated; the share
+# `specificity_score` it replaces is removed from wmb_kinase_expression.csv.
+WMB_KINASE_SPECIFICITY_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_kinase_specificity.csv")
 WMB_EXPRESSION_SUBCLASS_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_kinase_expression_subclass.csv")
 WMB_SUBCLASS_TO_CLASS_FILE = os.path.join(DERIVED_BRIDGES_DIR, "wmb_subclass_to_class.csv")
 WMB_REGIONAL_EXPRESSION_FILE = os.path.join(WMB_EXPRESSION_OUTPUT_DIR, "wmb_regional_kinase_expression.csv")
@@ -578,6 +611,9 @@ NSCLC_CELL_LABELS_FILE = os.path.join(NSCLC_10X_CACHE_DIR, "nsclc_cell_labels.cs
 # Outputs.
 NSCLC_REFERENCE_OUTPUT_DIR = os.path.join("outputs", "reports", "nsclc_reference")
 NSCLC_KINASE_EXPRESSION_FILE = os.path.join(NSCLC_REFERENCE_OUTPUT_DIR, "nsclc_kinase_expression.csv")
+# Per-(kinase, coarse lineage) standard attribution metrics + per-kinase breadth
+# summary (detection-gated concentration / effective number of cell types).
+NSCLC_KINASE_SPECIFICITY_FILE = os.path.join(NSCLC_REFERENCE_OUTPUT_DIR, "nsclc_kinase_specificity.csv")
 NSCLC_KINASE_AUDIT_FILE = os.path.join(NSCLC_REFERENCE_OUTPUT_DIR, "nsclc_kinase_audit.csv")
 
 SONG_H5AD_FILE = os.path.join(SONG_TRANSCRIPTOMICS_DIR, "170_gex_celltypes_00.h5ad")
@@ -586,6 +622,11 @@ SNRNA_INTEGRATION_OUTPUT_DIR = os.path.join("outputs", "reports", "snrna_integra
 SONG_PSEUDOBULK_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "pseudobulk_cpm.csv")
 SONG_CELL_COUNTS_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "pseudobulk_cell_counts.csv")
 SONG_EXPRESSION_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "song_expression_specificity.csv")
+# Per-(gene, cluster) detection: fraction of spine nuclei with a non-zero raw
+# count, pooled across animals. Count-based → normalization-free; the single
+# presence gate of the standard attribution metric. Written by --pseudobulk
+# (needs per-cell counts), consumed by --specificity.
+SONG_DETECTION_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "song_detection.csv")
 SONG_CONCORDANCE_FILE = os.path.join(SNRNA_INTEGRATION_OUTPUT_DIR, "song_concordance.csv")
 
 SONG_LFC_MIN = 0.1       # minimum |song_lfc| for concordance (same as SEA_AD_LFC_MIN)
@@ -632,6 +673,52 @@ def load_cluster_to_wmb_class_map() -> dict[str, str]:
     with open(CLUSTER_TO_WMB_CLASS_FILE, newline="") as f:
         for row in csv.DictReader(f):
             out[row["cluster_name"]] = row["wmb_class_label"].strip()
+    return out
+
+
+def load_specificity_unit_map() -> dict[str, dict]:
+    """Song cluster → its specificity unit (the resolution the pill is scored at).
+
+    One curated mechanism for the three cases (see SPECIFICITY_COLLAPSE_WMB_CLASSES):
+
+    * collapse  — WMB class is in the collapse set: unit = the WMB-class parent,
+                  ``collapsed=True`` (member clusters are subtypes of one cell type).
+    * combined  — WMB class maps 1:1 to a single Song cluster: unit = that cluster,
+                  with a combined "cluster · class" label, ``collapsed=False``.
+    * split     — WMB class has several genuinely distinct clusters but is not in
+                  the collapse set: unit = the bare Song cluster, ``collapsed=False``.
+
+    Returns ``{cluster: {"unit": id, "label": str, "collapsed": bool,
+    "wmb_class": str, "children": [clusters in the same unit]}}``.
+    """
+    from collections import Counter
+    cluster_to_wmb = load_cluster_to_wmb_class_map()
+    n_per_class = Counter(cluster_to_wmb.values())
+
+    # First pass: assign each cluster a unit id.
+    unit_of: dict[str, str] = {}
+    for cluster, wmb in cluster_to_wmb.items():
+        unit_of[cluster] = wmb if wmb in SPECIFICITY_COLLAPSE_WMB_CLASSES else cluster
+
+    children: dict[str, list[str]] = {}
+    for cluster, unit in unit_of.items():
+        children.setdefault(unit, []).append(cluster)
+    for unit in children:
+        children[unit].sort()
+
+    out: dict[str, dict] = {}
+    for cluster, wmb in cluster_to_wmb.items():
+        unit = unit_of[cluster]
+        if wmb in SPECIFICITY_COLLAPSE_WMB_CLASSES:
+            label, collapsed = WMB_CLASS_DISPLAY.get(wmb, wmb), True
+        elif n_per_class[wmb] == 1:
+            label, collapsed = f"{cluster} · {wmb}", False
+        else:
+            label, collapsed = cluster, False
+        out[cluster] = {
+            "unit": unit, "label": label, "collapsed": collapsed,
+            "wmb_class": wmb, "children": children[unit],
+        }
     return out
 
 

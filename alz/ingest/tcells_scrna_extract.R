@@ -168,6 +168,24 @@ write.csv(agg_df, file.path(outdir, "aggexp_data.csv"), row.names = FALSE)
 cat("aggexp_data:", nrow(agg), "genes x", ncol(agg), "state__day cols\n")
 memline("after aggexp")
 
+# --- 2b. pct_expressing per (state, day) --------------------------------
+# Fraction of cells in each (state, day) group with a non-zero count — the
+# DETECTION foundation of the standard attribution metric (frac >= 0.10). It is
+# count-based / normalization-free (count > 0 == data > 0, since log-norm
+# preserves zeros), so it means the same thing as the NSCLC-reference detection
+# and lets the within-cohort share tier be retired. Same sparse indicator
+# product as the sum above, on a binarized copy of the data layer.
+bin <- dat
+bin@x <- rep(1.0, length(bin@x))           # mark every stored (expressed) entry
+nz <- as.matrix(bin %*% ind)               # genes x groups: # cells expressing
+ncells_per_group <- Matrix::colSums(ind)   # cells per (state, day) group
+pct <- sweep(nz, 2, ncells_per_group, "/") # fraction of cells expressing
+pct_df <- data.frame(gene = rownames(pct), pct, check.names = FALSE,
+                     row.names = NULL)
+write.csv(pct_df, file.path(outdir, "pct_expressing.csv"), row.names = FALSE)
+cat("pct_expressing:", nrow(pct), "genes x", ncol(pct), "state__day cols\n")
+memline("after pct_expressing")
+
 # --- 3. FindAllMarkers on state ----------------------------------------
 Idents(obj) <- "state"
 mk <- FindAllMarkers(obj, only.pos = TRUE, min.pct = 0.1,

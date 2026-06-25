@@ -27,6 +27,7 @@ spine_path <- file.path(
 out_dir <- file.path(repo_root, "outputs", "reports", "kinase_attribution_5xfad")
 out_path <- file.path(out_dir, "fivexfad_snrna_attribution.csv")
 counts_path <- file.path(out_dir, "fivexfad_snrna_cell_counts.csv")
+expr_path <- file.path(out_dir, "fivexfad_snrna_expression.csv")
 mapping_path <- file.path(repo_root, "data", "derived", "caches", "kinase_to_gene_mapping.csv")
 
 stopifnot(file.exists(rds_path), file.exists(join_path), file.exists(spine_path))
@@ -73,23 +74,6 @@ safe_get_data <- function(obj, assay) {
   )
 }
 
-specificity_tau <- function(x) {
-  x <- as.numeric(x)
-  if (length(x) <= 1 || all(!is.finite(x))) return(NA_real_)
-  mx <- max(x, na.rm = TRUE)
-  if (!is.finite(mx) || mx <= 0) return(NA_real_)
-  sum(1 - (x / mx), na.rm = TRUE) / (length(x) - 1)
-}
-
-location_tier <- function(fold) {
-  if (!is.finite(fold)) return("none")
-  if (fold >= 2) return("high")
-  if (fold >= 1) return("moderate")
-  "low"
-}
-
-min_cells_per_contrast <- 3L
-
 obj <- readRDS(rds_path)
 md <- obj@meta.data
 required <- c("sample", "new_clusters")
@@ -135,6 +119,14 @@ if (!nrow(kin)) stop("No kinase symbols matched Seurat expression rownames.")
 expr <- expr[unique(kin$matched_gene), md$cell_barcode, drop = FALSE]
 colnames(expr) <- md$cell_barcode
 
+# Raw counts for the detection gate (fraction_cells_expressing is count-based and
+# normalization-free, so it means the same thing in every cohort's pipeline).
+counts <- tryCatch(
+  GetAssayData(obj, assay = DefaultAssay(obj), layer = "counts"),
+  error = function(e) GetAssayData(obj, assay = DefaultAssay(obj), slot = "counts")
+)
+counts <- counts[unique(kin$matched_gene), md$cell_barcode, drop = FALSE]
+
 group <- paste(
   md$tissue,
   md$age_months,
@@ -166,24 +158,74 @@ write.csv(
   row.names = FALSE
 )
 
-uniform <- 1 / length(clusters)
+# --- Within-cohort detection + expression for the standard attribution metric ---
+# Pool cells by (tissue, new_clusters) and emit, per (gene, tissue, cell_type):
+#   fraction_cells_expressing  count-based detection gate (# cells with count > 0)
+#   mean_log2_expression       mean over cells of log2(x+1) = mean_ln / log(2)
+# specificity.compute (Python, alz/cross_reference/specificity.py) turns these into
+# the standard detection/concentration columns — one definition, every cohort.
+det_group <- paste(md$tissue, md$new_clusters, sep = "|")
+det_fac <- factor(det_group, levels = unique(det_group))
+det_design <- sparseMatrix(
+  i = seq_along(det_fac),
+  j = as.integer(det_fac),
+  x = 1,
+  dims = c(length(det_fac), nlevels(det_fac)),
+  dimnames = list(md$cell_barcode, levels(det_fac))
+)
+det_ncell <- Matrix::colSums(det_design)
+sum_ln_tc <- as.matrix(expr %*% det_design)        # genes x groups, Σ ln(1 + x)
+nnz_tc <- as.matrix((counts > 0) %*% det_design)    # genes x groups, # expressing cells
+mean_ln_tc <- t(t(sum_ln_tc) / pmax(det_ncell, 1))
+frac_tc <- t(t(nnz_tc) / pmax(det_ncell, 1))
+det_tissue <- sub("\\|.*$", "", colnames(det_design))
+det_ct <- sub("^[^|]*\\|", "", colnames(det_design))
+genes_u <- rownames(mean_ln_tc)
+expr_long <- data.frame(
+  matched_gene = rep(genes_u, times = ncol(mean_ln_tc)),
+  tissue = rep(det_tissue, each = nrow(mean_ln_tc)),
+  cell_type = rep(det_ct, each = nrow(mean_ln_tc)),
+  mean_log2_expression = as.numeric(mean_ln_tc) / log(2),
+  fraction_cells_expressing = as.numeric(frac_tc),
+  n_cells = rep(det_ncell, each = nrow(mean_ln_tc)),
+  stringsAsFactors = FALSE
+)
+# Complete to the full cluster x tissue grid so N_total (the tier baseline) is the
+# whole cohort, not just observed combos; absent combos are zero (undetected).
+full_grid <- expand.grid(
+  matched_gene = genes_u,
+  tissue = c("cortex", "hippocampus"),
+  cell_type = clusters,
+  stringsAsFactors = FALSE
+)
+expr_long <- merge(full_grid, expr_long, by = c("matched_gene", "tissue", "cell_type"), all.x = TRUE)
+expr_long$mean_log2_expression[is.na(expr_long$mean_log2_expression)] <- 0
+expr_long$fraction_cells_expressing[is.na(expr_long$fraction_cells_expressing)] <- 0
+expr_long$n_cells[is.na(expr_long$n_cells)] <- 0
+# Denormalize per kinase (a gene can back several kinases); specificity.compute
+# dedups on matched_gene before computing the per-gene metric.
+expr_long <- merge(
+  unique(kin[, c("kinase", "gene_symbol", "matched_gene")]),
+  expr_long, by = "matched_gene", all.x = FALSE
+)
+write.csv(
+  expr_long[, c(
+    "kinase", "gene_symbol", "matched_gene", "tissue", "cell_type",
+    "mean_log2_expression", "fraction_cells_expressing", "n_cells"
+  )],
+  expr_path,
+  row.names = FALSE
+)
+
+# Disease-direction LFC per (kinase, tissue, age, cell_type): TG - WT mean pseudobulk
+# log-expression. Specificity (above) is contrast-invariant and lives in expr_path;
+# this CSV carries only the direction signal + cell support.
 out <- list()
 idx <- 0L
 for (i in seq_len(nrow(kin))) {
   gene <- kin$matched_gene[[i]]
   vals <- as.numeric(pb[gene, ])
   for (tissue in c("cortex", "hippocampus")) {
-    tissue_mask <- group_meta$tissue == tissue
-    tissue_linear <- expm1(vals[tissue_mask])
-    tissue_meta <- group_meta[tissue_mask, , drop = FALSE]
-    spec_by_cluster <- tapply(tissue_linear, tissue_meta$cell_type, mean, na.rm = TRUE)
-    spec_by_cluster <- spec_by_cluster[clusters]
-    spec_by_cluster[!is.finite(spec_by_cluster)] <- 0
-    total <- sum(spec_by_cluster)
-    share <- if (is.finite(total) && total > 0) spec_by_cluster / total else rep(NA_real_, length(clusters))
-    tau <- specificity_tau(spec_by_cluster)
-    top_cluster <- if (any(is.finite(share))) names(which.max(share)) else ""
-
     for (age in c(3L, 6L, 9L, 12L)) {
       for (cell_type in clusters) {
         mask <- group_meta$tissue == tissue & group_meta$age_months == age & group_meta$cell_type == cell_type
@@ -200,20 +242,6 @@ for (i in seq_len(nrow(kin))) {
         if (n_wt >= 2 && n_tg >= 2 && stats::sd(c(wt_vals, tg_vals), na.rm = TRUE) > 0) {
           pval <- tryCatch(stats::t.test(tg_vals, wt_vals)$p.value, error = function(e) NA_real_)
         }
-        spec <- unname(share[cell_type])
-        fold <- spec / uniform
-        tier <- location_tier(fold)
-        basis <- paste0("5xFAD snRNA tissue-specific new_clusters location tier: ", tier)
-        if ((n_cells_wt + n_cells_tg) < min_cells_per_contrast) {
-          spec <- NA_real_
-          fold <- NA_real_
-          tier <- "none"
-          basis <- paste0(
-            "Fewer than ", min_cells_per_contrast,
-            " 5xFAD snRNA cells for this tissue, age, and new_clusters label; ",
-            "tissue-specific location tier not applied"
-          )
-        }
         idx <- idx + 1L
         out[[idx]] <- data.frame(
           kinase = kin$kinase[[i]],
@@ -222,12 +250,6 @@ for (i in seq_len(nrow(kin))) {
           tissue = tissue,
           age_months = age,
           cell_type = cell_type,
-          confidence_tier = tier,
-          confidence_basis = basis,
-          fivexfad_specificity = spec,
-          fivexfad_fold_over_uniform = fold,
-          fivexfad_tau = tau,
-          fivexfad_top_cluster = top_cluster,
           fivexfad_lfc = lfc,
           fivexfad_pval = pval,
           n_snrna_samples_wt = n_wt,
@@ -251,8 +273,6 @@ df$fivexfad_fdr <- ave(df$fivexfad_pval, df$tissue, df$age_months, FUN = functio
 })
 df <- df[, c(
   "kinase", "gene_symbol", "matched_gene", "tissue", "age_months", "cell_type",
-  "confidence_tier", "confidence_basis", "fivexfad_specificity",
-  "fivexfad_fold_over_uniform", "fivexfad_tau", "fivexfad_top_cluster",
   "fivexfad_lfc", "fivexfad_pval", "fivexfad_fdr",
   "n_snrna_samples_wt", "n_snrna_samples_tg", "n_cells_wt", "n_cells_tg",
   "cluster_source"
@@ -261,3 +281,4 @@ write.csv(df, out_path, row.names = FALSE)
 
 cat("[5xfad-snrna-attribution] wrote ", out_path, " rows=", nrow(df), "\n", sep = "")
 cat("[5xfad-snrna-attribution] wrote ", counts_path, "\n", sep = "")
+cat("[5xfad-snrna-attribution] wrote ", expr_path, " rows=", nrow(expr_long), "\n", sep = "")
