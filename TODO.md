@@ -52,9 +52,6 @@ Develop a pathway reduction strategy:
 - Add a specificity filter on pathway genes (e.g., mean specificity of member genes).
 - Consider a min-cell-count weight on log fold changes.
 
-**B6. Compare incytr on mukesh vs SEA-AD**
-Run and compare incytr results on the mukesh human AD cohort and the Allen SEA-AD atlas. If the results are concordant, that would be a notable positive finding worth reporting.
-
 ---
 
 ## C. Cross-Cohort & Disease Interpretation
@@ -129,6 +126,71 @@ Use these to validate that specificity and enrichment metrics behave as expected
 
 **H1. TMT paper replication / IMAC fetch**
 Identify the TMT-based paper that analyzed Song-like data with a different normalization strategy. Fetch their IMAC data and run kinase enrichment to compare results. Note whether their normalization removed heterogeneity relative to ours. This is an exploratory cancer extension.
+
+---
+
+## Parallelization Strategy
+
+Items that share no data dependency can be handed to parallel agents. The key constraint is output artifacts: two agents must not write to the same file or produce upstream inputs the other reads mid-run.
+
+### Dependency graph (abbreviated)
+
+```
+A4 (data verification) ──► A1 (specificity metrics + terminology)
+                                    │
+                                    ▼
+                             A1 viewer changes
+                             A2 (attribution label)     ◄── independent
+                             F1 (signed sort)            ◄── independent
+                             F2 (CSV export)             ◄── independent
+
+B1 (IncytrDB audit) ──► B3 (acet/ubiq extension) ──► B4 (kinase→pathway insert)
+
+B5 (backbone filter) ──► B2 (sankey visualization)
+
+C1 (Song genotype split) ──► C3 (disease direction view)
+
+PhosphoSite access check ──► E1 (kinase hierarchy) ──► E2 (family discrimination)
+
+A5, G1, G2, H1 ── no upstream dependencies (leaf nodes)
+```
+
+### Parallel batches
+
+**Batch 1 — Viewer UX (no analysis dependency, touch disjoint viewer subsystems)**
+Run these in parallel once the Theme A audit (currently in-flight) lands:
+- F1: signed sort in crosstable + kinase explorer + incytr pathways
+- F2: CSV export audit and standardization
+- A2: relabel attribution "vs bulk" → NES deconvoluted
+
+**Batch 2 — New analyses (no shared output files)**
+- A5: monotonic trend export script (T-cell only, standalone)
+- G2: positive controls list (research/documentation only)
+- H1: fetch TMT paper IMAC data, run MEA
+
+**Batch 3 — Gated on A4 verification first, then parallel**
+Run A4 (data structure check) solo first; if donor2 data shape is confirmed, spawn in parallel:
+- A1 pipeline changes (compute specificity + enrichment metrics, emit to payload)
+- A3 incytr trend fix (check timepoint coverage, patch driver if needed)
+
+**Batch 4 — Gated on B1 audit, then parallel**
+Run B1 (IncytrDB audit) solo first; confirm correct mouse/human DB version; then spawn:
+- B3 acet/ubiq incytr extension (song + 5xfad + tcell)
+- C5 50-kinase mukesh vs 5xFAD substrate comparison (read-only analysis)
+
+**Batch 5 — Sequential pairs (order enforced)**
+These must run in order and cannot be parallelized with each other:
+- B5 (backbone filter logic) → B2 (sankey diagram)
+- C1 (Song genotype split in payload) → C3 (disease direction viewer panel)
+- E1 (kinase hierarchy, needs PhosphoSite access confirmed) → E2 (family discrimination)
+
+### Items safe to run solo at any time (no blocking dependencies)
+A5, G1, G2, H1, D1 (substrate comparator design/scaffolding).
+
+### Agents that must NOT run in parallel
+- Any two agents writing to the same viewer payload (`build_unified_viewer.py` or `build_tcell_viewer.py`). Serialize viewer rebuilds or assign disjoint payload sections.
+- B3 and B4: B4 consumes B3's new PTM output files.
+- A1 pipeline changes and A1 viewer changes: pipeline must emit the new columns before the viewer can surface them.
 
 ---
 
