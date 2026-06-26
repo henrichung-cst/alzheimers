@@ -291,11 +291,10 @@ def _register_kinase_audit_tables(tables: dict) -> None:
         tables[key] = _audit_csv_meta(dest, label, key)
     # NSCLC 10x cell-type reference — the human cohort's independent detector.
     # Per-(kinase, cell_type) mean_log2(CPM+1) + fraction_cells_expressing +
-    # detection. The standard attribution metric (detection-gated concentration +
-    # effective number of cell types) is in nsclc_kinase_specificity.csv: the
-    # drawer's per-lineage strip reads its coarse-group detection + breadth, and
-    # the verdict table's per-state NSCLC detection comes from the
-    # attribution_index (joined to this reference in Python).
+    # detection + specificity_score (concentration of expression in type) +
+    # specificity_count (N-of-7 coarse groups at ≥10% prevalence floor) +
+    # nsclc_enrichment_<state> (ProjecTILs 14-state share, post Stage-1 regen).
+    # The NSCLC lineage strip and verdict table read from this single canonical CSV.
     nsclc_src = config.NSCLC_KINASE_EXPRESSION_FILE
     if os.path.exists(nsclc_src):
         os.makedirs(AUDIT_SOURCES_DIR, exist_ok=True)
@@ -307,19 +306,6 @@ def _register_kinase_audit_tables(tables: dict) -> None:
         tables["nsclc_kinase_expression"] = _shim_audit_entry(
             "nsclc_kinase_expression", "NSCLC 10x cell-type expression reference",
             "run pixi run nsclc-expression first")
-    nsclc_spec_src = config.NSCLC_KINASE_SPECIFICITY_FILE
-    if os.path.exists(nsclc_spec_src):
-        os.makedirs(AUDIT_SOURCES_DIR, exist_ok=True)
-        dest = os.path.join(AUDIT_SOURCES_DIR, "nsclc_kinase_specificity.csv")
-        shutil.copyfile(nsclc_spec_src, dest)
-        tables["nsclc_kinase_specificity"] = _audit_csv_meta(
-            dest, "NSCLC standard attribution metric (detection + effective N)",
-            "nsclc_kinase_specificity")
-    else:
-        tables["nsclc_kinase_specificity"] = _shim_audit_entry(
-            "nsclc_kinase_specificity",
-            "NSCLC standard attribution metric (detection + effective N)",
-            "run alz/reference/nsclc_expression.py --metrics first")
     for key, reason in _KINASE_AUDIT_SHIMS:
         # Use a stable label even for shims so the drawer's "source: ..." text
         # reads coherently when the panel renders empty.

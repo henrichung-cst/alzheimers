@@ -2,6 +2,24 @@
 
 No intra-package imports (only stdlib / external / alz.shared.config /
 alz.viewer.shared.*). Imported by both the builder and all four slice modules.
+
+Vocabulary note — T-cell specificity vs enrichment
+---------------------------------------------------
+The T-cell cohort uses two metrics that **diverge** from the AD cohorts:
+
+- **Enrichment** (within-cohort): concentration of expression in a ProjecTILs
+  T-state, computed as fold over the kinase's median state (the same
+  computational method the AD cohorts call "specificity" / WMB-tier share, but
+  named enrichment here to reflect the T-state activation-continuum reading).
+
+- **Specificity** (NSCLC reference): N-of-7 coarse-lineage prevalence count —
+  how many of the 7 TME cell-type lineages express the kinase at ≥10% of cells.
+  This is a DIFFERENT kind of metric than human-AD "specificity"
+  (log2(celltype_mean/brain_mean) ratio with no detection gate).
+
+Do NOT harmonize these two names with the AD cohorts — the collision is
+intentional to fit each cohort's data structure, and is documented here to
+prevent future agents from re-introducing it.
 """
 
 from __future__ import annotations
@@ -44,6 +62,11 @@ TIMEPOINT_COLOR_MAP = {
     "d19": "#b4de2c",
     "d20": "#fde725",
 }
+
+# Metric vocabulary constants — use these in payload keys and UI labels so
+# changes are made in one place.
+ENRICHMENT = "enrichment"   # within-cohort ProjecTILs T-state concentration
+SPECIFICITY = "specificity"  # NSCLC N-of-7 coarse-lineage breadth
 
 PROJECTILS_LABEL_MAP = {
     "CD8.CM": "CD8CM",
