@@ -66,6 +66,7 @@ from alz.tcell_viewer.slices_kinase import (  # noqa: E402
     _build_celltypes_slice,
     _load_donor_clusters,
     _load_projected_state_mea_payload,
+    _build_decomposition_index_from_state_mea,
 )
 from alz.tcell_viewer.slices_traces import (  # noqa: E402
     _write_tcell_transcript_trace,
@@ -387,6 +388,10 @@ def build_tcell_payload() -> dict:
         payload["attribution_index"] = attribution_index
     if projected_state_mea is not None:
         payload["projected_state_mea"] = projected_state_mea
+        decomposition_index = _build_decomposition_index_from_state_mea(
+            projected_state_mea, kinases_slice, meta)
+        if decomposition_index is not None:
+            payload["decomposition_index"] = decomposition_index
     return _sanitize(payload)
 
 

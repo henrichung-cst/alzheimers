@@ -31,10 +31,10 @@ complementary annotators (see docs/plans/todo2_tcell_specificity_reference.md):
                      (gene, cell_type). Writes nsclc_kinase_expression.csv.
 
   --metrics        : recompute the standard attribution metric (detection-gated
-                     concentration + effective number of cell types) from the
-                     existing expression CSV — no matrix re-stream. Writes
-                     nsclc_kinase_specificity.csv and refreshes the metric
-                     columns in nsclc_kinase_expression.csv.
+                     concentration + enrichment breadth) from the existing
+                     expression CSV — no matrix re-stream. Refreshes the metric
+                     columns in nsclc_kinase_expression.csv (single canonical
+                     output; nsclc_kinase_specificity.csv is no longer written).
 
   --audit          : cross MEA-predicted kinases (FDR<0.25) against the reference;
                      report panel-covered kinases expressed nowhere. Writes
@@ -403,18 +403,18 @@ def compute_expression() -> pd.DataFrame:
 
 
 def _write_attribution_metrics(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute the standard attribution metric and write the two reference
-    outputs. See alz/cross_reference/specificity.py and
+    """Compute the standard attribution metric and write the canonical reference
+    output. See alz/cross_reference/specificity.py and
     docs/plans/standard_attribution_metric.md for the definition.
 
       nsclc_kinase_expression.csv  — per (kinase, cell_type): raw facts (mean,
         fraction, n_cells) + native metrics (detected, linear_expression,
-        concentration, concentration_tier). The share `specificity_score` is
-        removed; detection replaces it.
-      nsclc_kinase_specificity.csv — per (kinase, coarse lineage): group
-        detection + coarse concentration, plus the per-kinase breadth summary
-        (effective number of cell types, top cell type) at native and coarse
-        resolution, denormalized onto each lineage row.
+        specificity_score, concentration_tier) + per-kinase breadth columns:
+          specificity_count  — N of 7 coarse groups with group_fraction ≥ 0.10
+          expressing_groups  — comma-separated list of those groups
+          nsclc_enrichment_<state>  — per-ProjecTILs-state share of the kinase's
+            total T_NK expression (14 states; non-T types are NaN)
+          nsclc_enrichment_tier_<state>  — tier binned at multiples of 1/14
     """
     df = df.copy()
     if "spec_group" not in df.columns:
@@ -446,26 +446,71 @@ def _write_attribution_metrics(df: pd.DataFrame) -> pd.DataFrame:
     per_gene["n_detected_coarse"] = (
         per_gene["gene_symbol"].map(_nd_coarse).fillna(0).astype(int))
 
+    # Rename concentration → specificity_score (the JS reads this column).
+    # The coarse group columns are derived in-memory below; only the native-type
+    # rows are written to the canonical CSV.
+    per_label = per_label.rename(columns={"concentration": "specificity_score"})
+
+    # --- Per-kinase NSCLC specificity (N-of-7 breadth at group_fraction ≥ 0.10) ---
+    # group_fraction = cell-weighted average fraction_cells_expressing across the
+    # native types in each coarse group. Specificity = pure prevalence count at
+    # ≥10% floor (distinct from the 1% detection floor used for `detected`).
+    spec_grp = per_label.copy()
+    spec_grp["_wt"] = spec_grp["n_cells"] * spec_grp["fraction_cells_expressing"]
+    _grp = spec_grp.groupby(["gene_symbol", "spec_group"]).agg(
+        _wt_sum=("_wt", "sum"), _nc=("n_cells", "sum")).reset_index()
+    _grp["group_fraction"] = _grp["_wt_sum"] / _grp["_nc"].clip(lower=1)
+    _spec_count = (
+        _grp[_grp["group_fraction"] >= 0.10]
+        .groupby("gene_symbol")
+        .agg(specificity_count=("spec_group", "count"),
+             expressing_groups=("spec_group", lambda s: ",".join(sorted(s))))
+        .reset_index())
+    per_label = per_label.merge(_spec_count, on="gene_symbol", how="left")
+    per_label["specificity_count"] = per_label["specificity_count"].fillna(0).astype(int)
+    per_label["expressing_groups"] = per_label["expressing_groups"].fillna("")
+
+    # --- Per-kinase NSCLC enrichment (14-state ProjecTILs share) ---------------
+    # Subset T_NK rows → per-state share across 14 ProjecTILs states.
+    # Non-T native types get no enrichment columns (NaN).
+    t_rows = per_label[per_label["spec_group"] == "T_NK"].copy()
+    _gene_total = (t_rows.groupby("gene_symbol")["linear_expression"]
+                   .sum().rename("_t_total"))
+    t_rows = t_rows.join(_gene_total, on="gene_symbol")
+    t_rows["_share"] = np.where(
+        t_rows["_t_total"] > 0,
+        t_rows["linear_expression"] / t_rows["_t_total"], 0.0)
+    n_t_states = int(t_rows["cell_type"].nunique()) or 14
+    _uniform = 1.0 / max(n_t_states, 1)
+    t_rows["_tier"] = np.floor(t_rows["_share"] / _uniform).clip(upper=n_t_states).astype(int)
+    # Pivot: one column per T-state.
+    _share_wide = t_rows.pivot_table(
+        index="gene_symbol", columns="cell_type",
+        values=["_share", "_tier"], aggfunc="first")
+    _share_wide.columns = [
+        f"nsclc_enrichment_{col}" if lvl == "_share"
+        else f"nsclc_enrichment_tier_{col}"
+        for lvl, col in _share_wide.columns]
+    per_label = per_label.merge(
+        _share_wide.reset_index(), on="gene_symbol", how="left")
+
     expr = per_label[[
         "kinase_id", "gene_symbol", "cell_type", "spec_group",
         "mean_log2_expression", "fraction_cells_expressing", "binary_expressed",
         "n_cells", "probe_covered",
-        "linear_expression", "detected", "concentration",
-        "concentration_of_total", "concentration_tier"]]
+        "linear_expression", "detected", "specificity_score",
+        "concentration_of_total", "concentration_tier",
+        "specificity_count", "expressing_groups",
+        *[c for c in per_label.columns if c.startswith("nsclc_enrichment_")]]]
     expr.to_csv(config.NSCLC_KINASE_EXPRESSION_FILE, index=False)
     print(f"\n  Wrote {len(expr):,} rows -> {config.NSCLC_KINASE_EXPRESSION_FILE}")
-
-    for c in ("effective_n_native", "top_concentration_native",
-              "effective_n_coarse", "top_concentration_coarse"):
-        per_gene[c] = per_gene[c].astype(float).round(6)
-    spec = per_group.merge(per_gene, on="gene_symbol", how="left")
-    spec.to_csv(config.NSCLC_KINASE_SPECIFICITY_FILE, index=False)
-    print(f"  Wrote {len(spec):,} rows -> {config.NSCLC_KINASE_SPECIFICITY_FILE}")
 
     n_det_any = int((per_gene["n_detected_native"] > 0).sum())
     print(f"  Kinases detected in ≥1 cell type: {n_det_any} / {len(per_gene)}; "
           f"median effective # cell types (detected) = "
           f"{per_gene.loc[per_gene['n_detected_native'] > 0, 'effective_n_native'].median():.2f}")
+    n_spec = int((_spec_count["specificity_count"] > 0).sum())
+    print(f"  Kinases with specificity_count ≥ 1 (group_fraction ≥ 0.10): {n_spec} / {len(per_gene)}")
     return expr
 
 

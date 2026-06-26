@@ -67,7 +67,7 @@ const TCELL_MANIFEST = (() => {
       },
     },
     {
-      key: "tcell_state_enrichment", label: "State specificity", type: "num", group: "attr",
+      key: "tcell_state_enrichment", label: "Enrichment", type: "num", group: "attr",
       sub: "within", subLabel: "Within-cohort attribution (vs bulk direction)",
       subTitle: "Within-cohort detection + state enrichment, pooled across all scRNA days. Computed in alz/cross_reference/tcell_within_cohort.py.",
       title: "State enrichment — this state's transcript level as a fold over the kinase's median ELIGIBLE state (detected, ≥50 cells). An undetected state shows no badge (—): a fold built on near-zero expression is not state enrichment. ≥3× strong / ≥2× moderate / ≥1.5× mild; <1.5× = broadly expressed (not state-enriched). Sorts by fold.",
@@ -89,15 +89,34 @@ const TCELL_MANIFEST = (() => {
       },
     },
     {
-      key: "tcell_concordance", label: "vs Bulk", type: "num", group: "attr",
+      key: "_decomp_state_nes", label: "Decomp NES", type: "num", group: "attr",
       sub: "within", subLabel: "Within-cohort attribution (vs bulk direction)",
-      subTitle: "Within-cohort standard detection metric, pooled across all scRNA days. Computed in alz/cross_reference/tcell_within_cohort.py.",
-      title: "sign(bulk NES) · transcript Δ vs d2. Positive = transcript moves with the bulk kinase activity. INFO ONLY — never filters: kinase activity is post-translationally decoupled from its own mRNA, so sign-agreement is at chance (OR≈1, same in the mouse Song reference).",
-      render(r, _numFmt, _ctx) {
-        const v = r.tcell_concordance;
-        return v == null || !isFinite(v)
-          ? `<td class="attr-num attr-empty" title="No transcript fold-change at this state/day (transcript absent), so there is nothing to compare against the bulk direction.">—</td>`
-          : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(v)}">${_num(v, 3)}</td>`;
+      subTitle: "Per-state deconvoluted kinase NES from projected-state MEA (mea_projected_state.csv). Available after the state_mea gate run.",
+      title: "Deconvoluted per-state NES: the kinase MEA NES for this T-cell state from the projected-state ssGSEA decomposition. Empty until the state_mea gate run completes and produces mea_projected_state.csv.",
+      render(r, _numFmt, ctx) {
+        // Read from the decomposition_index via _decompByKey, keyed by
+        // (kinase_id | contrast_id | cell_type) where cell_type is the
+        // ProjecTILs state label matching this row's state column.
+        if (typeof _decompByKey === "undefined" || !_decompByKey) {
+          return `<td class="attr-num attr-empty" title="No projected-state MEA data (gate dependency).">—</td>`;
+        }
+        if (typeof _ensureKinaseIndexes === "function") _ensureKinaseIndexes();
+        const kinase_id = r._kinase_id;
+        const CONTRASTS_ARR = (typeof CONTRASTS !== "undefined") ? CONTRASTS : [];
+        const cid = CONTRASTS_ARR.indexOf(ctx && ctx.contrast);
+        const state = r.state || r.cell_type || "";
+        if (kinase_id == null || cid < 0 || !state) {
+          return `<td class="attr-num attr-empty" title="No decomp data for this kinase/contrast/state.">—</td>`;
+        }
+        const key = `${kinase_id}|${cid}|${state}`;
+        const entry = _decompByKey.get(key);
+        if (!entry || entry.nes == null || !isFinite(entry.nes)) {
+          return `<td class="attr-num attr-empty" title="No decomp NES for ${state} (state MEA pending).">—</td>`;
+        }
+        const fdrStr = (entry.fdr != null && isFinite(entry.fdr))
+          ? ` FDR ${entry.fdr.toExponential(1)}` : "";
+        return `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(entry.nes)}"
+          title="Decomp NES ${entry.nes.toFixed(2)}${fdrStr}">${_num(entry.nes, 2)}</td>`;
       },
     },
     {
@@ -349,7 +368,7 @@ const TCELL_MANIFEST = (() => {
     },
     {
       id: "nsclc-strip",
-      title: `§2 · NSCLC reference detection by lineage <span class="muted">(nsclc_kinase_specificity.csv)</span>`,
+      title: `§2 · NSCLC reference detection by lineage <span class="muted">(nsclc_kinase_expression.csv)</span>`,
       caption: null,
       wide: true,
       render(secHostId, ctx, _row, _kstats) {

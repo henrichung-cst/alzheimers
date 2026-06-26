@@ -257,7 +257,7 @@ def _build_protected_files() -> dict[str, list[dict]]:
         "raw_phospho_normalized.csv", "raw_phospho_normalized_pY.csv",
         "stoichiometry_matrix.csv", "stoichiometry_matrix_pY.csv",
         "total_proteome_normalized.csv",
-        "tcell_concordance.csv", "tcell_specificity.csv",
+        "tcell_concordance.csv", "tcell_enrichment.csv",
         "unified_attribution_tcells.csv",
     ]:
         tcell_files.append(_p(f"{d1}/{name}", "donor1 normalized/attribution"))

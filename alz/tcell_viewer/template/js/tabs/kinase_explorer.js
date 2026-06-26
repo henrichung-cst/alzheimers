@@ -166,6 +166,9 @@ function _buildKinaseRowModel() {
         ? K.nsclc_lineages_total[i] : null,
       nsclc_top_lineage: (K.nsclc_top_lineage && K.nsclc_top_lineage[i]) || "",
       nsclc_lineage_list: (K.nsclc_lineage_list && K.nsclc_lineage_list[i]) || null,
+      nsclc_specificity_count: (K.nsclc_specificity_count && K.nsclc_specificity_count[i] != null)
+        ? K.nsclc_specificity_count[i] : null,
+      nsclc_expressing_groups: (K.nsclc_expressing_groups && K.nsclc_expressing_groups[i]) || null,
       _fdr: CONTRASTS.map(c => K["FDR_" + c][i]),
       _nes: CONTRASTS.map(c => K["NES_" + c][i]),
     });
@@ -509,12 +512,27 @@ function _renderCellTypeCell(r) {
   return `<span class="muted" title="Broad across CD8 / CD4 / Treg — not concentrated in any single T-cell type (≤2× the even 1/3 share)">broad</span>`;
 }
 
+// NSCLC specificity count — N of 7 coarse lineages where the kinase is
+// expressed in ≥10% of cells (cell-weighted group_fraction, pure prevalence).
+// Distinct from the 1% detection floor used for breadth. Precomputed in Python
+// from nsclc_kinase_expression.csv (nsclc_specificity_count slice column).
+function _renderNSCLCSpecificityCountCell(r) {
+  const cnt = r.nsclc_specificity_count;
+  if (cnt == null) {
+    return `<span class="muted" title="Outside the NSCLC Flex probe panel.">n/a</span>`;
+  }
+  const groups = Array.isArray(r.nsclc_expressing_groups) ? r.nsclc_expressing_groups : [];
+  const groupStr = groups.length ? groups.join(", ") : "none";
+  const tip = `Expressed in ≥10% of cells in ${cnt} of 7 coarse lineages (NSCLC reference, 10% prevalence floor): ${groupStr}. Lower = more lineage-restricted.`;
+  const cls = cnt <= 1 ? "hi" : (cnt <= 2 ? "mid" : "lo");
+  return `<span class="badge ${cls}" title="${_escapeHtml(tip)}">${cnt} / 7</span>`;
+}
+
 // Cell-TYPE breadth from the independent NSCLC reference (not the within-cohort
 // T-states): how many coarse lineages (T_NK + non-T) detect the kinase
-// (expressed in any cell — no minimum-fraction floor), out of those present, +
-// the dominant lineage. Fewer = more
-// cell-type-specific. n/a = the kinase is outside the NSCLC probe panel.
-// All values precomputed in Python (nsclc_lineages_* slice columns).
+// (expressed in any cell — binary_expressed, 1% floor), out of those present, +
+// the dominant lineage. Fewer = more cell-type-specific. n/a = outside probe
+// panel. All values precomputed in Python (nsclc_lineages_* slice columns).
 function _renderNSCLCBreadthCell(r) {
   const total = r.nsclc_lineages_total;
   if (total == null) {
@@ -712,11 +730,12 @@ function renderKinaseExplorer() {
     const drvCls = (drvSet && drvSet.has(r.id)) ? " driver" : "";
 
     // Within-cohort cell-type badge + state-enrichment badge + cell-states pill +
-    // NSCLC cross-lineage breadth.
+    // NSCLC cross-lineage breadth + NSCLC specificity (N/7 at ≥10% prevalence).
     const cellTypeCell = _renderCellTypeCell(r);
     const specBadge = _tcellEnrichBadge(_kineMaxTcellEnrichScoped(r.id, colFilter));
     const cellStatesCell = _renderCellTypesCell(r, colFilter);
     const nsclcBreadthCell = _renderNSCLCBreadthCell(r);
+    const nsclcSpecCell = _renderNSCLCSpecificityCountCell(r);
 
     const residueBadge = r.residue_type === "Y"
       ? ' <span class="track-badge track-y" title="Tyrosine kinase (pY track)">pY</span>'
@@ -735,6 +754,7 @@ function renderKinaseExplorer() {
       `<td>${specBadge}</td>` +
       `<td>${cellStatesCell}</td>` +
       `<td>${nsclcBreadthCell}</td>` +
+      `<td>${nsclcSpecCell}</td>` +
       `</tr>`
     );
   }

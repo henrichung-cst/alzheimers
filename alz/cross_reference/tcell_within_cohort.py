@@ -52,8 +52,11 @@ detection input `pct_expressing.csv` is already a fraction, not a sum — it is
 pooled across days cell-weighted, no per-state division needed.)
 
 Outputs (donor1) under outputs/reports/kinase_attribution_tcells/donor1/:
-  tcell_specificity.csv          (gene, state, tcell_detected, tcell_fraction_expressing,
+  tcell_enrichment.csv           (gene, state, tcell_detected, tcell_fraction_expressing,
                                   tcell_state_enrichment, tcell_mean_log2_expression)
+                                  — renamed from tcell_specificity.csv; "enrichment" is
+                                  the correct term for this within-cohort activation-state
+                                  concentration metric (see common.py vocabulary note).
   tcell_concordance.csv          (gene, state, day, tcell_lfc)
   unified_attribution_tcells.csv full kinase-track × state × day grid — EVERY row ships
                                  (no gate). `tcell_concordant` is a shown label,
@@ -365,9 +368,9 @@ def build(donor: str = "donor1") -> dict:
     spec_cols = ["gene", "state", "tcell_detected", "tcell_fraction_expressing",
                  "tcell_state_enrichment", "tcell_mean_log2_expression"]
     spec[spec_cols].to_csv(
-        os.path.join(out_dir, "tcell_specificity.csv"), index=False)
+        os.path.join(out_dir, "tcell_enrichment.csv"), index=False)
     conc.to_csv(os.path.join(out_dir, "tcell_concordance.csv"), index=False)
-    print(f"  tcell_specificity.csv: {len(spec)} (gene × state) rows, "
+    print(f"  tcell_enrichment.csv: {len(spec)} (gene × state) rows, "
           f"{int(spec['tcell_detected'].sum())} detected "
           f"(>= {DETECTION_FRAC_MIN:.0%} cells expressing)")
     print(f"  tcell_concordance.csv: {len(conc)} (gene × state × day) rows")

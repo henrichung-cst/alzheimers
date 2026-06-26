@@ -611,9 +611,6 @@ NSCLC_CELL_LABELS_FILE = os.path.join(NSCLC_10X_CACHE_DIR, "nsclc_cell_labels.cs
 # Outputs.
 NSCLC_REFERENCE_OUTPUT_DIR = os.path.join("outputs", "reports", "nsclc_reference")
 NSCLC_KINASE_EXPRESSION_FILE = os.path.join(NSCLC_REFERENCE_OUTPUT_DIR, "nsclc_kinase_expression.csv")
-# Per-(kinase, coarse lineage) standard attribution metrics + per-kinase breadth
-# summary (detection-gated concentration / effective number of cell types).
-NSCLC_KINASE_SPECIFICITY_FILE = os.path.join(NSCLC_REFERENCE_OUTPUT_DIR, "nsclc_kinase_specificity.csv")
 NSCLC_KINASE_AUDIT_FILE = os.path.join(NSCLC_REFERENCE_OUTPUT_DIR, "nsclc_kinase_audit.csv")
 
 SONG_H5AD_FILE = os.path.join(SONG_TRANSCRIPTOMICS_DIR, "170_gex_celltypes_00.h5ad")
