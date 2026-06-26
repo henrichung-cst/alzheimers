@@ -65,7 +65,7 @@ PLANNED_KEYS=(A B C D-st D-py)
 if [[ $SKIP_INCYTR -eq 0 ]]; then PLANNED_KEYS+=(E1 E2 E3 E4); fi
 PLANNED_KEYS+=(F1 F2)
 if [[ $SKIP_ATLAS -eq 0 ]]; then PLANNED_KEYS+=(G1 G2); fi
-PLANNED_KEYS+=(H1 H2 I V)
+PLANNED_KEYS+=(H1 H2 J I V)
 N_STEPS=${#PLANNED_KEYS[@]}
 
 fmt_elapsed() {
@@ -181,6 +181,9 @@ run_step H1 "human reference expression (CR03)" \
 
 run_step H2 "human cell-type attribution (CR03)" \
   pixi run python alz/cross_reference/human_celltype_attribution.py --force
+
+run_step J "backbone reduction (incytr-backbone)" \
+  pixi run python alz/incytr_pair/backbone_reduction.py --verify
 
 run_step I "rebuild unified viewer" \
   pixi run python alz/build_unified_viewer.py
