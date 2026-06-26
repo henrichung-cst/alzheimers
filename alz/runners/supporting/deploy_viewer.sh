@@ -65,7 +65,8 @@ deploy_viewer() {
 
     echo ""
     echo "  Done. Files not listed above were skipped (already up to date)."
-    echo "  S3 URL: ${s3_prefix/s3:\/\//https://voila-buc-00-prod.s3.amazonaws.com/}"
+    local _rest="${s3_prefix#s3://}"          # <bucket>/<key...>
+    echo "  S3 URL: https://${_rest%%/*}.s3.amazonaws.com/${_rest#*/}"
 }
 
 UNIFIED_LOCAL="$REPO_ROOT/outputs/reports/unified_viewer"

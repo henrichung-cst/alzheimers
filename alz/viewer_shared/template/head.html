@@ -2,6 +2,10 @@
 <head>
 <meta charset="utf-8">
 <title>Kinase + Pathway Viewer</title>
+<!-- Inline SVG favicon: L->R->EM->T signaling chain in the viewer's track colors
+     on the header blue-grey. Data URI (not a file) so it rides inside index.html
+     and survives the S3 deploy, which only syncs *.html / edge_slices / payload. -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2032%2032%27%3E%3Crect%20width%3D%2732%27%20height%3D%2732%27%20rx%3D%276%27%20fill%3D%27%23455a64%27%2F%3E%3Cpath%20d%3D%27M7%2023%20L13%2011%20L20%2021%20L25%208%27%20fill%3D%27none%27%20stroke%3D%27%23cfd8dc%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%20opacity%3D%270.85%27%2F%3E%3Ccircle%20cx%3D%277%27%20cy%3D%2723%27%20r%3D%273.4%27%20fill%3D%27%231976d2%27%20stroke%3D%27%23fff%27%20stroke-width%3D%271.1%27%2F%3E%3Ccircle%20cx%3D%2713%27%20cy%3D%2711%27%20r%3D%273.4%27%20fill%3D%27%231b5e20%27%20stroke%3D%27%23fff%27%20stroke-width%3D%271.1%27%2F%3E%3Ccircle%20cx%3D%2720%27%20cy%3D%2721%27%20r%3D%273.4%27%20fill%3D%27%23e65100%27%20stroke%3D%27%23fff%27%20stroke-width%3D%271.1%27%2F%3E%3Ccircle%20cx%3D%2725%27%20cy%3D%278%27%20r%3D%273.4%27%20fill%3D%27%234a148c%27%20stroke%3D%27%23fff%27%20stroke-width%3D%271.1%27%2F%3E%3C%2Fsvg%3E">
 <script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
 <script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
