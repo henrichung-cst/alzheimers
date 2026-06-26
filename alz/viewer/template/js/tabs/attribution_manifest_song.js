@@ -27,21 +27,21 @@ const SONG_MANIFEST = (() => {
     },
     {
       key: "confidence_tier", label: "Location confidence", type: "conf", group: "attr", hidden: true,
-      title: "Kinase-level confidence: how exclusively this kinase is expressed in one cell type (curated specificity units — over-split Song clusters collapsed, distinct cell types kept separate), from within-cohort Song (primary) corroborated by the WMB atlas (at its class level) and human references. Shown on the kinase's dominant cell type only — it is a per-kinase property, not per cell type.",
+      title: `Kinase-level confidence: how exclusively this kinase is expressed in one cell type (curated specificity units — over-split ${COHORT_LABELS.song} clusters collapsed, distinct cell types kept separate), from within-cohort ${COHORT_LABELS.song} (primary) corroborated by the WMB atlas (at its class level) and human references. Shown on the kinase's dominant cell type only — it is a per-kinase property, not per cell type.`,
       render(r, _numFmt, _ctx) { return `<td>${_attrVerdictConfCell(r)}</td>`; },
     },
     {
       key: "song_detected", label: "Detected", type: "num", group: "attr",
-      sub: "song", subLabel: "Song",
-      subTitle: "Within-cohort 5xFAD snRNA (Song). Standard detection metric for this cell type.",
-      title: "Song: is the kinase expressed in ≥10% of cells in this cell type? ✓ = detected (% of cells shown), ✗ = not detected. Normalization-free presence gate. Sorts by detection.",
+      sub: "song", subLabel: COHORT_LABELS.song,
+      subTitle: `Within-cohort ${COHORT_LABELS.song} snRNA. Standard detection metric for this cell type.`,
+      title: `${COHORT_LABELS.song}: is the kinase expressed in ≥10% of cells in this cell type? ✓ = detected (% of cells shown), ✗ = not detected. Normalization-free presence gate. Sorts by detection.`,
       render(r, _n, _c) { return `<td class="attr-num">${_detGateCell(r.song_detected, r.song_fraction_cells_expressing, "this cell type")}</td>`; },
     },
     {
       key: "song_concentration_tier", label: "Conc", type: "num", group: "attr",
-      sub: "song", subLabel: "Song",
-      subTitle: "Within-cohort 5xFAD snRNA (Song). Standard detection metric for this cell type.",
-      title: "Song concentration tier: ≥2×/5×/10× the even 1/N share of total expression across all cell types (comparable across kinases). — = at or below even share. Sorts by tier.",
+      sub: "song", subLabel: COHORT_LABELS.song,
+      subTitle: `Within-cohort ${COHORT_LABELS.song} snRNA. Standard detection metric for this cell type.`,
+      title: `${COHORT_LABELS.song} concentration tier: ≥2×/5×/10× the even 1/N share of total expression across all cell types (comparable across kinases). — = at or below even share. Sorts by tier.`,
       render(r, _n, _c) { return `<td class="attr-num">${_concTierCell(r.song_concentration_tier)}</td>`; },
     },
     {
@@ -68,8 +68,8 @@ const SONG_MANIFEST = (() => {
       },
     },
     {
-      key: "song_lfc", label: "Song LFC", type: "num", group: "attr",
-      title: "Song log2 fold change from within-cohort snRNA-seq factorial OLS (β at this contrast — 10-param design, time-resolved). Color: red = up in disease genotype, blue = down.",
+      key: "song_lfc", label: `${COHORT_LABELS.song} LFC`, type: "num", group: "attr",
+      title: `${COHORT_LABELS.song} log2 fold change from within-cohort snRNA-seq factorial OLS (β at this contrast — 10-param design, time-resolved). Color: red = up in disease genotype, blue = down.`,
       render(r, _n, _c) {
         return r.song_lfc == null || !isFinite(r.song_lfc)
           ? `<td class="attr-num attr-empty">—</td>`
@@ -78,7 +78,7 @@ const SONG_MANIFEST = (() => {
     },
     {
       key: "decomp_nes", label: "Decomp NES", type: "num", group: "decomp",
-      title: "Decomposition NES from the CTM-native proportional decomposition (per-cell-type kinase MEA on bulk phospho ranking weighted by snRNA share for the kinase's substrate set). Same join key as Song LFC. Hypothesis-strength signal — see Methods.",
+      title: `Decomposition NES from the CTM-native proportional decomposition (per-cell-type kinase MEA on bulk phospho ranking weighted by snRNA share for the kinase's substrate set). Same join key as ${COHORT_LABELS.song} LFC. Hypothesis-strength signal — see Methods.`,
       render(r, _n, _c) {
         return r.decomp_nes == null || !isFinite(r.decomp_nes)
           ? `<td class="attr-num attr-empty">—</td>`
@@ -199,7 +199,7 @@ const SONG_MANIFEST = (() => {
     if (_kt.specificity_collapsed) {
       const SU = (PAYLOAD.specificity_units && PAYLOAD.specificity_units.units) || {};
       const kids = (SU[_kt.specificity_unit] && SU[_kt.specificity_unit].children) || [];
-      _collapseNote = ` <span class="muted">(collapsed from ${kids.length} Song clusters — `
+      _collapseNote = ` <span class="muted">(collapsed from ${kids.length} ${COHORT_LABELS.song} clusters — `
         + `top: ${_escapeHtml(_kt.specificity_celltype || "")}; see rows below)</span>`;
     }
     return `<div class="attr-excl-summary">Cell-type exclusivity (kinase-level): ` +
@@ -232,21 +232,21 @@ const SONG_MANIFEST = (() => {
   // Explainer collapsible.
   const explainerHtml = `<details class="attr-explainer"><summary>How to read attribution confidence</summary>` +
     `<div class="attr-explainer-body">` +
-    `<p>Confidence is a <strong>kinase-level</strong> label: how <em>exclusively</em> the kinase is expressed in a single cell type, scored over <strong>curated specificity units</strong>. Song over-splits some cell types into many clusters (e.g. excitatory neurons → 6 pyramidal subtypes); those are <strong>collapsed</strong> into one unit (shown as an expandable parent) so a pan-class kinase is not penalized. Cell types that are genuinely distinct (e.g. endothelial vs. pericyte) stay separate. It prioritizes the <strong>within-cohort Song snRNA</strong> and treats the reference atlases as corroboration:</p>` +
+    `<p>Confidence is a <strong>kinase-level</strong> label: how <em>exclusively</em> the kinase is expressed in a single cell type, scored over <strong>curated specificity units</strong>. ${COHORT_LABELS.song} over-splits some cell types into many clusters (e.g. excitatory neurons → 6 pyramidal subtypes); those are <strong>collapsed</strong> into one unit (shown as an expandable parent) so a pan-class kinase is not penalized. Cell types that are genuinely distinct (e.g. endothelial vs. pericyte) stay separate. It prioritizes the <strong>within-cohort ${COHORT_LABELS.song} snRNA</strong> and treats the reference atlases as corroboration:</p>` +
     `<table class="attr-explainer-table" style="margin-bottom:8px;">` +
       `<thead><tr><th>Source</th><th>Role</th></tr></thead><tbody>` +
-      `<tr><td><strong>Song</strong></td><td><strong>Primary.</strong> Within-cohort snRNA from the same animals. Sets the tier from how concentrated the kinase's expression is in one unit (effective number of cell types = 1 / Σ&nbsp;share² over the units).</td></tr>` +
+      `<tr><td><strong>${COHORT_LABELS.song}</strong></td><td><strong>Primary.</strong> Within-cohort snRNA from the same animals. Sets the tier from how concentrated the kinase's expression is in one unit (effective number of cell types = 1 / Σ&nbsp;share² over the units).</td></tr>` +
       `<tr><td><strong>WMB</strong></td><td>Corroborates: does the healthy mouse atlas place the kinase in the same cell class? Promotes the tier, never required.</td></tr>` +
       `<tr><td><strong>SEA-AD / HBCA</strong></td><td>Corroborates: does the human brain reference (when its location signal is strong) point to the same class? Promotes the tier, never vetoes.</td></tr>` +
       `</tbody></table>` +
     `<ul>` +
-      `<li><strong><span class="attr-conf attr-conf-very-high">very high</span></strong> — Song localizes the kinase to essentially one cell type (≲1.5 effective units) <em>and</em> a reference (WMB or human) agrees on that cell class.</li>` +
-      `<li><strong><span class="badge hi">high</span></strong> — Song concentrates the kinase in one cell type and a reference agrees; or Song places it very tightly (≲1.5) on its own, not yet corroborated.</li>` +
-      `<li><strong><span class="badge mid">moderate</span></strong> — Song concentrates the kinase in one cell type, but no reference corroborates that cell class.</li>` +
+      `<li><strong><span class="attr-conf attr-conf-very-high">very high</span></strong> — ${COHORT_LABELS.song} localizes the kinase to essentially one cell type (≲1.5 effective units) <em>and</em> a reference (WMB or human) agrees on that cell class.</li>` +
+      `<li><strong><span class="badge hi">high</span></strong> — ${COHORT_LABELS.song} concentrates the kinase in one cell type and a reference agrees; or ${COHORT_LABELS.song} places it very tightly (≲1.5) on its own, not yet corroborated.</li>` +
+      `<li><strong><span class="badge mid">moderate</span></strong> — ${COHORT_LABELS.song} concentrates the kinase in one cell type, but no reference corroborates that cell class.</li>` +
       `<li><strong><span class="badge lo">low</span></strong> — expressed broadly across cell types (not cell-type-specific).</li>` +
-      `<li><strong>none</strong> — no measurable within-cohort Song expression distribution.</li>` +
+      `<li><strong>none</strong> — no measurable within-cohort ${COHORT_LABELS.song} expression distribution.</li>` +
     `</ul>` +
-    `<p class="muted">Confidence is per kinase, so in the table above the pill is shown on the kinase's <em>dominant</em> cell type. A collapsed unit lists the Song clusters it covers (its child rows appear below). The prior disease-direction concordance is preserved in each pill's tooltip.</p>` +
+    `<p class="muted">Confidence is per kinase, so in the table above the pill is shown on the kinase's <em>dominant</em> cell type. A collapsed unit lists the ${COHORT_LABELS.song} clusters it covers (its child rows appear below). The prior disease-direction concordance is preserved in each pill's tooltip.</p>` +
     `</div></details>`;
 
   // ---- Detail sections in Song's exact order --------------------------------
@@ -300,7 +300,7 @@ const SONG_MANIFEST = (() => {
     },
     {
       id: "song-ols",
-      title: `§2 · Disease direction — Song OLS <span class="muted">(song_concordance)</span>`,
+      title: `§2 · Disease direction — ${COHORT_LABELS.song} OLS <span class="muted">(song_concordance)</span>`,
       caption: null,
       wide: false,
       render(secHostId, ctx, row, _kstats) {

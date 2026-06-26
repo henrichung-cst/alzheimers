@@ -69,7 +69,7 @@ const TAB_MANIFEST = {
     group: "drilldown", label: "Kinase",
     modes: ["fivexfad"],
     filters: ["fdr"], requires: [{type:"payload", key:"supporting_5xfad",
-      message:"5xFAD payload data are not available in this viewer build.",
+      message:"MouseC2 payload data are not available in this viewer build.",
       cta:"Use another tab"}],
     wire: () => { if (typeof wireFiveXFADKinase === "function") wireFiveXFADKinase(); },
     render: () => { if (typeof renderFiveXFADKinase === "function") renderFiveXFADKinase(); },
@@ -149,7 +149,7 @@ function _applyModeContext(mode) {
 
 function _tissueLabel(ctx) {
   const lbl = String(ctx.label || ctx.id);
-  return lbl.replace(/^5xFAD\s+/i, "") || lbl;
+  return lbl.replace(/^MouseC2\s+/i, "") || lbl;
 }
 
 // The 5xFAD tissue selector is an in-tab filter: a Tissue <select> at the head

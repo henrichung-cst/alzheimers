@@ -134,6 +134,16 @@ from viewer.paths import (  # noqa: E402
     UNIFIED_VIEWER_OUTPUT_DIR,
 )
 
+# ---------------------------------------------------------------------------
+# Cohort display names — single source of truth for context/audit labels.
+# JS counterpart: COHORT_LABELS in 01_state.js.
+# ---------------------------------------------------------------------------
+COHORT_DISPLAY = {
+    "song": "MouseC1",
+    "fivexfad": "MouseC2",
+    "mukesh": "HumanC1",
+}
+
 
 # Per-track audit tables: identical schema, separate files per analysis track.
 # ST (serine/threonine) is the default suffix (none); pY tables carry the
@@ -170,9 +180,9 @@ def _audit_specs() -> list[tuple[str, str, str]]:
                 os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, f"{base}{suffix}.csv"),
             ))
     specs.extend([
-        ("5xfad_sample_manifest", "5xFAD sample manifest",
+        ("5xfad_sample_manifest", f'{COHORT_DISPLAY["fivexfad"]} sample manifest',
          os.path.join(FIVEXFAD_KINASE_DIR, "sample_manifest.csv")),
-        ("5xfad_dataset_index", "5xFAD dataset index",
+        ("5xfad_dataset_index", f'{COHORT_DISPLAY["fivexfad"]} dataset index',
          os.path.join(FIVEXFAD_KINASE_DIR, "dataset_index.csv")),
         ("unified_attribution", "Unified attribution",
          os.path.join(config.KINASE_ATTRIBUTION_OUTPUT_DIR, "unified_attribution.csv")),
@@ -1037,7 +1047,7 @@ def build_payload(data: UnifiedData) -> dict:
         "contexts": [
             {
                 "id": context_id,
-                "label": "Song AD",
+                "label": COHORT_DISPLAY["song"],
                 "cohort": "song_ad",
                 "axis_kind": "cohort",
                 "contrasts": list(contrasts),
@@ -1106,8 +1116,8 @@ def build_payload(data: UnifiedData) -> dict:
     # AFTER composition, since Song already owns the incytr_pathways owned section.
     fivexfad_incytr_blocks = build_5xfad_incytr_blocks()
     _5xfad_incytr_ctx_labels = {
-        "fivexfad_cortex": "5xFAD Cortex",
-        "fivexfad_hippocampus": "5xFAD Hippocampus",
+        "fivexfad_cortex": f'{COHORT_DISPLAY["fivexfad"]} Cortex',
+        "fivexfad_hippocampus": f'{COHORT_DISPLAY["fivexfad"]} Hippocampus',
     }
     _5xfad_incytr_capabilities = {
         "kinases": False, "celltypes": False, "incytr": True,

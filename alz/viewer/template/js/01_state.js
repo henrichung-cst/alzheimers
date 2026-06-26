@@ -1,6 +1,12 @@
 "use strict";
 
 // ---------------------------------------------------------------------------
+// Cohort display names — single source of truth for structural JS labels.
+// Python counterpart: COHORT_DISPLAY in build_unified_viewer.py.
+// ---------------------------------------------------------------------------
+const COHORT_LABELS = { song: "MouseC1", fivexfad: "MouseC2", mukesh: "HumanC1" };
+
+// ---------------------------------------------------------------------------
 // Payload — fetched lazily from payload.json.gz at boot. PAYLOAD and the
 // derived globals start as `null` / `undefined` and are populated by
 // `_loadPayload()` (called from boot.js) before any tab is rendered. All
@@ -263,21 +269,21 @@ const TAB_GUIDE = {
     ],
   },
   crosstable: {
-    preamble: "A cross-dataset kinase comparison table for Song mouse, Mukesh human AD, and supporting 5xFAD mouse evidence. Each row is one kinase/residue pair. Song and Mukesh keep their existing activity strips; 5xFAD adds separate cortex and hippocampus 3/6/9/12 month tile rows beside the Mukesh data.",
+    preamble: "A cross-dataset kinase comparison table for MouseC1 mouse, HumanC1 human AD, and supporting MouseC2 mouse evidence. Each row is one kinase/residue pair. MouseC1 and HumanC1 keep their existing activity strips; MouseC2 adds separate cortex and hippocampus 3/6/9/12 month tile rows beside the HumanC1 data.",
     method: [
-      "Song status is derived from disease-contrast kinase MEA NES/FDR. Mukesh status uses AD donors only; CTRL donors remain a visual reference strip and do not participate in agreement filters. 5xFAD status is derived separately for cortex and hippocampus from TG-vs-WT age-specific MEA evidence.",
-      "The aggregate 5xFAD call is categorical. If cortex and hippocampus significantly agree, the aggregate takes that direction. If only one tissue is significant, that tissue supplies the aggregate direction. If cortex and hippocampus are significant in opposite directions, the aggregate is mixed_sig.",
+      "MouseC1 status is derived from disease-contrast kinase MEA NES/FDR. HumanC1 status uses AD donors only; CTRL donors remain a visual reference strip and do not participate in agreement filters. MouseC2 status is derived separately for cortex and hippocampus from TG-vs-WT age-specific MEA evidence.",
+      "The aggregate MouseC2 call is categorical. If cortex and hippocampus significantly agree, the aggregate takes that direction. If only one tissue is significant, that tissue supplies the aggregate direction. If cortex and hippocampus are significant in opposite directions, the aggregate is mixed_sig.",
     ],
     shows: {
-      lead: "The Crossplay column reports categorical agreement under the selected comparison scope: 3-way, Song vs Mukesh, Song vs 5xFAD, Mukesh vs 5xFAD, or 5xFAD tissue split. No numeric crossplay score is exported.",
+      lead: "The Crossplay column reports categorical agreement under the selected comparison scope: 3-way, MouseC1 vs HumanC1, MouseC1 vs MouseC2, HumanC1 vs MouseC2, or MouseC2 tissue split. No numeric crossplay score is exported.",
       bullets: [
-        "5xFAD cortex and hippocampus are not pooled visually; each tissue remains a separate 1x4 age tile row.",
+        "MouseC2 cortex and hippocampus are not pooled visually; each tissue remains a separate 1x4 age tile row.",
         "Significant agree requires active-FDR support in the compared datasets.",
         "Agree includes significant agreement plus measured same-direction evidence that is not significant in every compared source.",
-        "mixed_sig means 5xFAD cortex and hippocampus carry significant evidence in opposing directions.",
+        "mixed_sig means MouseC2 cortex and hippocampus carry significant evidence in opposing directions.",
       ],
     },
-    howTo: "Start with the 3-way scope to find kinase/residue pairs that align across Song, Mukesh AD, and 5xFAD. Switch to pairwise scopes to diagnose which dataset drives a disagreement. Use the 5xFAD cell-type, confidence, snRNA, and WMB filters only when the question is specifically about 5xFAD attribution support.",
+    howTo: "Start with the 3-way scope to find kinase/residue pairs that align across MouseC1, HumanC1 AD, and MouseC2. Switch to pairwise scopes to diagnose which dataset drives a disagreement. Use the MouseC2 cell-type, confidence, snRNA, and WMB filters only when the question is specifically about MouseC2 attribution support.",
     toggles: [
       { name: "Compare", desc: "chooses the dataset relationship used by the Crossplay category." },
       { name: "State", desc: "filters rows by simple agreement groups: significant agree, agree, significant disagree, or disagree." },
@@ -290,10 +296,10 @@ const TAB_GUIDE = {
     primary: "Start with the Key viewer concepts and Stage 6 Incytr integration sections when a term in another tab needs more context. Stage 7 covers cross-pair aggregation and the backbone permutation tests.",
   },
   fivexfadkinase: {
-    preamble: "A first-class 5xFAD kinase activity section. Rows summarize kinase-library MEA over cortex and hippocampus, modeled independently by tissue and shown together through filters.",
+    preamble: "A first-class MouseC2 kinase activity section. Rows summarize kinase-library MEA over cortex and hippocampus, modeled independently by tissue and shown together through filters.",
     method: [
-      "5xFAD cortex and hippocampus reports are parsed into a sample manifest, excluding explicit pool runs and collapsing hippocampus IMAC technical duplicates after log2 transform. For IMAC/ST and pY, age-aware TG-vs-WT contrasts are estimated separately within each tissue.",
-      "The primary track is stoichiometry-corrected kinase enrichment where matched total proteome is available. Raw phosphosite enrichment is retained as a sensitivity track. MEA uses the same kinase-library runner as the Song and Mukesh workflows so NES, FDR, winsorization, and substrate-set handling are aligned.",
+      "MouseC2 cortex and hippocampus reports are parsed into a sample manifest, excluding explicit pool runs and collapsing hippocampus IMAC technical duplicates after log2 transform. For IMAC/ST and pY, age-aware TG-vs-WT contrasts are estimated separately within each tissue.",
+      "The primary track is stoichiometry-corrected kinase enrichment where matched total proteome is available. Raw phosphosite enrichment is retained as a sensitivity track. MEA uses the same kinase-library runner as the MouseC1 and HumanC1 workflows so NES, FDR, winsorization, and substrate-set handling are aligned.",
     ],
     shows: {
       lead: "Each row is one kinase within a tissue, assay, and analysis track. The age profile shows the four TG-vs-WT contrasts at 3, 6, 9, and 12 months; under-replicated contrast cells are marked categorically instead of converted into scores.",
@@ -303,7 +309,7 @@ const TAB_GUIDE = {
         "Use stoichiometry as the primary readout and raw phospho as a sensitivity readout.",
       ],
     },
-    howTo: "Use tissue, assay, track, age, FDR, and significant-age filters to inspect kinase calls in each 5xFAD slice. Select a row to inspect MEA scores, preparation/QC, site-level details, and measurement-trace availability in the audit workbench.",
+    howTo: "Use tissue, assay, track, age, FDR, and significant-age filters to inspect kinase calls in each MouseC2 slice. Select a row to inspect MEA scores, preparation/QC, site-level details, and measurement-trace availability in the audit workbench.",
   },
 };
 
