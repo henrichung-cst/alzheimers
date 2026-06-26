@@ -327,7 +327,7 @@ function _f5CellTypesCell(group) {
       ? `detected${frac == null ? "" : ` ${(frac * 100).toFixed(0)}%`}`
       : "not detected";
     const concTxt = tier ? `, ≥${tier}× conc` : "";
-    return `${r.cell_type} (5xFAD ${detTxt}${concTxt}, ${String(r.confidence_tier || "").replace("_", " ")})`;
+    return `${r.cell_type} (${COHORT_LABELS.fivexfad} ${detTxt}${concTxt}, ${String(r.confidence_tier || "").replace("_", " ")})`;
   }).join("\n");
   const pills = displayRows.slice(0, 3).map(r => {
     const cls = r.confidence_tier === "very_high" ? "vhi"
@@ -753,15 +753,15 @@ function renderFiveXFADKinase() {
   if (!block || !Array.isArray(block.rows) || block.rows.length === 0) {
     const detail = document.getElementById("f5-detail");
     const count = document.getElementById("f5-count");
-    if (count) count.textContent = "5xFAD payload unavailable";
-    if (detail) detail.innerHTML = '<div class="muted">5xFAD payload data are not available in this viewer build.</div>';
+    if (count) count.textContent = `${COHORT_LABELS.fivexfad} payload unavailable`;
+    if (detail) detail.innerHTML = `<div class="muted">${COHORT_LABELS.fivexfad} payload data are not available in this viewer build.</div>`;
     return;
   }
   if (!_F5ShardDataReady) {
     const count = document.getElementById("f5-count");
-    if (count) count.textContent = "Loading 5xFAD data…";
+    if (count) count.textContent = `Loading ${COHORT_LABELS.fivexfad} data…`;
     const detail = document.getElementById("f5-detail");
-    if (detail) detail.innerHTML = '<div class="muted" style="padding:1em">Loading 5xFAD index shards…</div>';
+    if (detail) detail.innerHTML = `<div class="muted" style="padding:1em">Loading ${COHORT_LABELS.fivexfad} index shards…</div>`;
     _f5EnsureShardData().then(() => renderFiveXFADKinase());
     return;
   }
@@ -799,7 +799,7 @@ function renderFiveXFADKinase() {
     const residueBadge = r.residue_type === "Y"
       ? ' <span class="track-badge track-y" title="Tyrosine kinase (pY track)">pY</span>'
       : "";
-    return `<tr data-f5-key="${_f5Esc(r.key)}" tabindex="0" class="ke-row${sel}${sub}" aria-label="5xFAD kinase ${_f5Esc(r.kinase)} in ${_f5Esc(r.tissue || "unknown tissue")}; ${r.sigCount} significant ages">
+    return `<tr data-f5-key="${_f5Esc(r.key)}" tabindex="0" class="ke-row${sel}${sub}" aria-label="${COHORT_LABELS.fivexfad} kinase ${_f5Esc(r.kinase)} in ${_f5Esc(r.tissue || "unknown tissue")}; ${r.sigCount} significant ages">
       <td>${_f5Esc(r.kinase)}${residueBadge}</td>
       <td>${_f5Esc(r.gene_symbol || "")}</td>
       <td>${_f5Esc(r.family || "")}</td>
@@ -814,7 +814,7 @@ function renderFiveXFADKinase() {
       <td style="text-align:center;">${_f5WmbBadge(r)}</td>
     </tr>`;
   }).join("");
-  tbody.innerHTML = html || '<tr><td colspan="12" class="muted">No 5xFAD rows match the active filters.</td></tr>';
+  tbody.innerHTML = html || `<tr><td colspan="12" class="muted">No ${COHORT_LABELS.fivexfad} rows match the active filters.</td></tr>`;
   _f5SyncSortIndicators();
   renderFiveXFADKinaseDetail();
 }
@@ -903,7 +903,7 @@ function renderFiveXFADKinaseDetail() {
         <label>Age <select id="f5-audit-age">${ageOptions}</select></label>
       </div>
     </div>
-    <div class="kinase-audit-tabs" role="tablist" aria-label="5xFAD kinase audit walkthrough">${tabButtons}</div>
+    <div class="kinase-audit-tabs" role="tablist" aria-label="${COHORT_LABELS.fivexfad} kinase audit walkthrough">${tabButtons}</div>
     <div class="kinase-audit-tab-body" id="f5-audit-body"></div>
   `;
 
@@ -1159,7 +1159,7 @@ function _f5RenderScore(body, group) {
     </section>
     <section class="audit-panel audit-wide" style="margin-top:10px;">
       <h4>Per-cell-type decomposition for TG_vs_WT_${age}mo</h4>
-      <p class="kinase-stage-note">Per-cell-type 5xFAD decomposition MEA NES for this kinase, tissue, assay, and age, using matched snRNA <code>new_clusters</code> weights. Bars use the same convention as Song/Mukesh: filled when FDR is below the active threshold, faded otherwise, with the bulk NES shown as a vertical reference line.</p>
+      <p class="kinase-stage-note">Per-cell-type ${COHORT_LABELS.fivexfad} decomposition MEA NES for this kinase, tissue, assay, and age, using matched snRNA <code>new_clusters</code> weights. Bars use the same convention as ${COHORT_LABELS.song}/${COHORT_LABELS.mukesh}: filled when FDR is below the active threshold, faded otherwise, with the bulk NES shown as a vertical reference line.</p>
       <div id="f5-mea-decomp" style="min-height:220px"></div>
     </section>`;
   _f5RenderRunningEnrichment("f5-mea-running", group, age);
@@ -1372,15 +1372,15 @@ function _f5ContrastForAge(age) {
 
 function _f5DetailMissing(group) {
   const shard = _f5DetailShard(group);
-  if (!shard) return '<div class="muted">No 5xFAD detail shard is listed for this kinase surface.</div>';
+  if (!shard) return `<div class="muted">No ${COHORT_LABELS.fivexfad} detail shard is listed for this kinase surface.</div>`;
   if (window.location && window.location.protocol === "file:") {
     return '<div class="muted">Detail sidecars are blocked under file://. Serve the unified viewer directory over HTTP to inspect this tab.</div>';
   }
-  return '<div class="muted">5xFAD detail sidecar could not be loaded.</div>';
+  return `<div class="muted">${COHORT_LABELS.fivexfad} detail sidecar could not be loaded.</div>`;
 }
 
 function _f5RenderAsyncPanel(body, group, renderer) {
-  body.innerHTML = '<div class="muted" style="padding:1em">Loading 5xFAD detail shard…</div>';
+  body.innerHTML = `<div class="muted" style="padding:1em">Loading ${COHORT_LABELS.fivexfad} detail shard…</div>`;
   _f5LoadDetail(group).then(detail => {
     if (!_f5StillSelected(group)) return;
     if (!detail) {
@@ -1467,7 +1467,7 @@ function _f5RenderOls(body, group) {
     body.innerHTML = `
       <section class="audit-panel">
         <h4>OLS Details <span class="muted">(${age}mo TG vs WT)</span></h4>
-        <p class="kinase-stage-note">Substrate-site rows for this kinase and contrast. LFC, p-value, FDR, and group counts come from the 5xFAD site-level OLS output used upstream of MEA.</p>
+        <p class="kinase-stage-note">Substrate-site rows for this kinase and contrast. LFC, p-value, FDR, and group counts come from the ${COHORT_LABELS.fivexfad} site-level OLS output used upstream of MEA.</p>
         ${_f5SmallTable(rows, [
           {key: "rank_in_contrast", label: "Rank"},
           {key: "site_id", label: "Site", fmt: _f5SiteCell, html: true},
@@ -1523,7 +1523,7 @@ function _f5RenderTrace(body, group) {
 // (shared with the Song audit tab via AuditDataStore), builds ctx, and renders.
 function _f5RenderAttributionTab(body, group) {
   if (!_f5AttributionReady(group) || !_f5CelltypeMeaReady(group)) {
-    body.innerHTML = '<div class="muted" style="padding:1em">Loading 5xFAD attribution and decomposition shards...</div>';
+    body.innerHTML = `<div class="muted" style="padding:1em">Loading ${COHORT_LABELS.fivexfad} attribution and decomposition shards...</div>`;
     Promise.all([
       _f5LoadAttribution(group),
       _f5LoadCelltypeMea(group),
@@ -1537,7 +1537,7 @@ function _f5RenderAttributionTab(body, group) {
   if (!hasNativeAttribution) {
     const notice = document.createElement("div");
     notice.className = "notice show";
-    notice.textContent = "No native 5xFAD snRNA attribution row is available for this kinase in the packaged attribution artifact. Showing decomposition MEA rows only.";
+    notice.textContent = `No native ${COHORT_LABELS.fivexfad} snRNA attribution row is available for this kinase in the packaged attribution artifact. Showing decomposition MEA rows only.`;
     body.innerHTML = "";
     body.appendChild(notice);
   } else {

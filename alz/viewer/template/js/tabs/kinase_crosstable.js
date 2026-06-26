@@ -81,10 +81,10 @@ const _KX_STATUS_META = {
 };
 const _KX_COMPARE_LABELS = {
   three_way: "3-way",
-  song_mukesh: "Song vs Mukesh",
-  song_f5: "Song vs 5xFAD",
-  mukesh_f5: "Mukesh vs 5xFAD",
-  f5_tissue: "5xFAD tissue split",
+  song_mukesh: `${COHORT_LABELS.song} vs ${COHORT_LABELS.mukesh}`,
+  song_f5: `${COHORT_LABELS.song} vs ${COHORT_LABELS.fivexfad}`,
+  mukesh_f5: `${COHORT_LABELS.mukesh} vs ${COHORT_LABELS.fivexfad}`,
+  f5_tissue: `${COHORT_LABELS.fivexfad} tissue split`,
 };
 const _KX_STATE_FILTER_LABELS = {
   sig_agree: "significant agree",
@@ -442,7 +442,7 @@ function _kxSongTierBadge(song, pinned) {
   if (pinned) mark = (pinned === top)
     ? ` <span title="this pinned cell type IS where it concentrates">★</span>`
     : ` <span class="muted" title="concentrates in ${_escapeHtml(top)}, not the pinned ${_escapeHtml(pinned)}">·</span>`;
-  const tip = `Song: concentrates in ${top} · ≥${tier}× the even 1/N share of total expression across all cell types`;
+  const tip = `${COHORT_LABELS.song}: concentrates in ${top} · ≥${tier}× the even 1/N share of total expression across all cell types`;
   if (!tier) return `<td class="muted" title="${_escapeHtml(tip)}">&lt;1×</td>`;
   const cls = tier >= 10 ? "badge vhi" : tier >= 5 ? "badge hi" : tier >= 2 ? "badge mid" : "badge lo";
   return `<td style="text-align:center;padding:2px 4px;"><span class="${cls}" title="${_escapeHtml(tip)}">≥${tier}×</span>${mark}</td>`;
@@ -542,28 +542,28 @@ function _kxRenderSpecAligned(hostEl, row) {
   const body = rows.map(o => {
     const t = o._t;
     const songTip = o.song != null
-      ? `Song: ≥${t.song}× the even 1/N share of total expression across all cell types${o.songDetected ? '' : ' (not detected in this cell type)'}`
-      : "Not measured in mouse (Song)";
+      ? `${COHORT_LABELS.song}: ≥${t.song}× the even 1/N share of total expression across all cell types${o.songDetected ? '' : ' (not detected in this cell type)'}`
+      : `Not measured in mouse (${COHORT_LABELS.song})`;
     const wmbTip = o.wmbTier > 0 ? `WMB: ≥${o.wmbTier}× the even 1/N share of total expression across all WMB classes` : "Not detected in this WMB class (< 10% cells)";
     const seaTip = o.seaad != null
       ? `SEA-AD expr ${Math.pow(2, o.seaad).toFixed(1)}× brain mean (log2 ${o.seaad.toFixed(2)}). Location evidence only; SEA-AD LFC is shown in the NES tab.`
       : "No SEA-AD cross-check at this cluster";
     const hbcaTip = o.hbca != null ? `HBCA ${Math.pow(2, o.hbca).toFixed(1)}× brain mean (log2 ${o.hbca.toFixed(2)})` : "No HBCA cross-check at this cluster";
-    const songCell = kid == null ? `<td class="muted" title="Not measured in mouse (Song)">–</td>` : _kxRefPill(t.song, songTip);
+    const songCell = kid == null ? `<td class="muted" title="Not measured in mouse (${COHORT_LABELS.song})">–</td>` : _kxRefPill(t.song, songTip);
     const wmbCell = kid == null ? `<td class="muted" title="Not measured in mouse (WMB)">–</td>` : _kxRefPill(t.wmb, wmbTip);
     return `<tr><td>${_escapeHtml(o.cluster)}</td>${songCell}${wmbCell}${_kxRefPill(t.seaad, seaTip)}${_kxRefPill(t.hbca, hbcaTip)}</tr>`;
   }).join("");
 
   const head = `<thead><tr>` +
     `<th title="Levy-T5 cluster — the shared axis: WMB classes, SEA-AD supertypes, and HBCA superclusters are all rolled up to this nomenclature before ranking.">Cell type</th>` +
-    `<th title="Song detection evidence — the primary mouse call. Whether this kinase is concentrated in this cell type: concentration tier (×2/5/10 the even 1/N share of total expression across all cell types).">Song</th>` +
+    `<th title="${COHORT_LABELS.song} location evidence — the primary mouse call. Whether this kinase is concentrated in this cell type: concentration tier (×2/5/10 the even 1/N share of total expression across all cell types).">${COHORT_LABELS.song}</th>` +
     `<th title="WMB (Allen Whole Mouse Brain) atlas cross-check — concentration tier (×2/5/10 the even 1/N share of total expression across all WMB classes). Detection gate: ≥10% cells expressing.">WMB</th>` +
     `<th title="SEA-AD MTG human expression reference — 2^log2(cell-type mean / brain-wide mean). Location evidence only; SEA-AD LFC is shown in the NES tab.">SEA-AD expr</th>` +
     `<th title="Allen HBCA human atlas cross-check — 2^log2(cell-type mean / brain-wide mean).">HBCA</th>` +
     `</tr></thead>`;
   hostEl.innerHTML =
     `<p class="kx-spec-note muted">Cell-type localization of <b>${_escapeHtml(row.gene || row.name)}</b> across reference atlases, on the shared Levy-T5 axis. ` +
-    `<b>Song</b> is the primary mouse call (concentration tier over detected cell types); <b>WMB</b> (mouse), <b>SEA-AD expr</b> and <b>HBCA</b> (human) are independent cross-checks. ` +
+    `<b>${COHORT_LABELS.song}</b> is the primary mouse call (concentration tier over detected cell types); <b>WMB</b> (mouse), <b>SEA-AD expr</b> and <b>HBCA</b> (human) are independent cross-checks. ` +
     `Pills show ≥10× / ≥5× / ≥2× / ≥1× concentration over the atlas average.</p>` +
     `<div class="kx-spec-table-wrap"><table class="data-table kx-spec-table">${head}<tbody>${body}</tbody></table></div>`;
 }
@@ -575,8 +575,8 @@ const _KX_AGREE_META = {
   "concordant-up":   {cls: "badge vhi", glyph: "↑ same",     label: "Same direction — up",     tip: "Significant in BOTH datasets, both up in disease."},
   "concordant-down": {cls: "badge hi",  glyph: "↓ same",     label: "Same direction — down",   tip: "Significant in BOTH datasets, both down in disease."},
   "discordant":      {cls: "badge mix", glyph: "opposite",   label: "Opposite direction",      tip: "Significant in both datasets but opposite direction."},
-  "mouse-only":      {cls: "badge mid", glyph: "M only",    label: "Mouse-only",        tip: "Significant in mouse (Song) only."},
-  "human-only":      {cls: "badge imp", glyph: "H only",    label: "Human-only",        tip: "Significant in human (Mukesh) only."},
+  "mouse-only":      {cls: "badge mid", glyph: "M only",    label: "Mouse-only",        tip: `Significant in mouse (${COHORT_LABELS.song}) only.`},
+  "human-only":      {cls: "badge imp", glyph: "H only",    label: "Human-only",        tip: `Significant in human (${COHORT_LABELS.mukesh}) only.`},
   "neither":         {cls: "badge lo",  glyph: "–",         label: "Neither",           tip: "Not significant in either dataset at this FDR."},
 };
 
@@ -787,9 +787,9 @@ function _kxComparisonMeta(scope, state) {
     sig_opposite: {cls: "badge mix", glyph: "opposite", label: "Opposite significant direction", tip: `${scopeLabel}: significant sources oppose each other.`},
     directional_opposite: {cls: "badge mix", glyph: "dir opp", label: "Directional opposition", tip: `${scopeLabel}: measured sources point opposite directions without all sides significant.`},
     source_only: {cls: "badge mid", glyph: "one side", label: "Source-only", tip: `${scopeLabel}: only one side is significant at the active FDR.`},
-    cortex_only: {cls: "badge mid", glyph: "ctx only", label: "Cortex-only", tip: "5xFAD cortex is significant and hippocampus is not."},
-    hippocampus_only: {cls: "badge mid", glyph: "hip only", label: "Hippocampus-only", tip: "5xFAD hippocampus is significant and cortex is not."},
-    mixed_sig: {cls: "badge mix", glyph: "mixed_sig", label: "5xFAD mixed_sig", tip: "5xFAD cortex and hippocampus contain significant opposing evidence."},
+    cortex_only: {cls: "badge mid", glyph: "ctx only", label: "Cortex-only", tip: `${COHORT_LABELS.fivexfad} cortex is significant and hippocampus is not.`},
+    hippocampus_only: {cls: "badge mid", glyph: "hip only", label: "Hippocampus-only", tip: `${COHORT_LABELS.fivexfad} hippocampus is significant and cortex is not.`},
+    mixed_sig: {cls: "badge mix", glyph: "mixed_sig", label: `${COHORT_LABELS.fivexfad} mixed_sig`, tip: `${COHORT_LABELS.fivexfad} cortex and hippocampus contain significant opposing evidence.`},
     missing_one: {cls: "badge imp", glyph: "missing", label: "Missing one side", tip: `${scopeLabel}: at least one required source is missing.`},
     missing: {cls: "badge lo", glyph: "n/a", label: "Missing", tip: `${scopeLabel}: no comparable evidence is measured.`},
     measured: {cls: "badge lo", glyph: "measured", label: "Measured", tip: `${scopeLabel}: evidence is measured but does not meet a stronger agreement category.`},
@@ -910,7 +910,7 @@ function _kxHumanGlyphCell(r, fdrGate) {
 function _kxF5Tile(row, tissue, age, fdrGate) {
   const rec = _kxF5Rec(row, tissue);
   const entry = rec ? rec.rows.get(age) : null;
-  if (!entry) return `<div class="npc" title="${_escapeHtml(`5xFAD ${tissue} ${age}mo: not measured`)}"></div>`;
+  if (!entry) return `<div class="npc" title="${_escapeHtml(`${COHORT_LABELS.fivexfad} ${tissue} ${age}mo: not measured`)}"></div>`;
   const nes = _kxF5Num(entry.NES);
   const fdr = _kxF5Num(entry.FDR);
   const sig = fdr != null && fdr < fdrGate;
@@ -920,18 +920,18 @@ function _kxF5Tile(row, tissue, age, fdrGate) {
     const rgb = nes >= 0 ? [197, 48, 48] : [43, 108, 176];
     bg = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${(0.15 + 0.85 * a).toFixed(3)})`;
   }
-  const title = `5xFAD ${tissue} ${age}mo TG vs WT: NES ${nes == null ? "n/a" : nes.toFixed(2)}, FDR ${fdr == null ? "n/a" : fdr.toExponential(1)}${sig ? " (sig)" : ""}`;
+  const title = `${COHORT_LABELS.fivexfad} ${tissue} ${age}mo TG vs WT: NES ${nes == null ? "n/a" : nes.toFixed(2)}, FDR ${fdr == null ? "n/a" : fdr.toExponential(1)}${sig ? " (sig)" : ""}`;
   return `<div class="npc${sig ? " sig" : ""}" style="background:${bg};" title="${_escapeHtml(title)}"></div>`;
 }
 
 function _kxF5GlyphCell(row, tissue, fdrGate) {
   const rec = _kxF5Rec(row, tissue);
-  if (!rec) return `<td class="kx-f5glyph muted" title="5xFAD ${_escapeHtml(tissue)} not measured">–</td>`;
+  if (!rec) return `<td class="kx-f5glyph muted" title="${COHORT_LABELS.fivexfad} ${_escapeHtml(tissue)} not measured">–</td>`;
   const labels = _KX_F5_AGES.map(age => `<span>${age}</span>`).join("");
   const cells = _KX_F5_AGES.map(age => _kxF5Tile(row, tissue, age, fdrGate)).join("");
   const source = row._f5Tissues && row._f5Tissues[tissue] ? row._f5Tissues[tissue] : null;
   const meta = _KX_STATUS_META[source ? source.status : "missing"] || _KX_STATUS_META.missing;
-  return `<td class="kx-f5glyph" title="${_escapeHtml(`5xFAD ${tissue}: ${meta.label}`)}">` +
+  return `<td class="kx-f5glyph" title="${_escapeHtml(`${COHORT_LABELS.fivexfad} ${tissue}: ${meta.label}`)}">` +
     `<div class="nes-profile-wrap kx-f5-wrap">` +
     `<span class="kx-f5-tissue">${_escapeHtml(tissue === "hippocampus" ? "Hip" : "Ctx")}</span>` +
     `<div class="nes-profile-age-stack">` +
@@ -986,7 +986,7 @@ function _kxBestSongLfcEvidence(row, cluster, useTopCluster = true) {
     const nes = (AI.nes && _kxFinite(AI.nes[j])) ? AI.nes[j]
       : (contrast && row._nes ? row._nes[contrast] : null);
     candidates.push({
-      source: "Song LFC",
+      source: `${COHORT_LABELS.song} LFC`,
       scope: `${cell || "cell type n/a"}${contrast ? ` · ${contrast}` : ""}`,
       lfc: Number(lfc),
       nes: _kxFinite(nes) ? Number(nes) : null,
@@ -996,7 +996,7 @@ function _kxBestSongLfcEvidence(row, cluster, useTopCluster = true) {
   }
   if (!candidates.length && preferredCell) {
     // If the top/pinned cell type has no LFC row, fall back to the strongest
-    // available Song LFC for the kinase so the NES tab still surfaces the evidence.
+    // available MouseC1 LFC for the kinase so the NES tab still surfaces the evidence.
     return _kxBestSongLfcEvidence(row, "", false);
   }
   candidates.sort((a, b) => Math.abs(b.lfc) - Math.abs(a.lfc));
@@ -1028,7 +1028,7 @@ function _kxRenderDirectionSupport(hostEl, row) {
     const best = f5Attrs[0];
     if (best) {
       rows.push({
-        source: "5xFAD snRNA LFC",
+        source: `${COHORT_LABELS.fivexfad} snRNA LFC`,
         scope: `${best._tissue} · ${best.cell_type || "cell type n/a"}`,
         lfc: Number(best.fivexfad_lfc),
         nes: row._f5Source.nes || row._f5Source.measuredNes,
@@ -1039,7 +1039,7 @@ function _kxRenderDirectionSupport(hostEl, row) {
   }
 
   if (!rows.length) {
-    hostEl.innerHTML = `<div class="kx-direction-support muted">No Song LFC or SEA-AD LFC direction evidence for this kinase.</div>`;
+    hostEl.innerHTML = `<div class="kx-direction-support muted">No ${COHORT_LABELS.song} LFC or SEA-AD LFC direction evidence for this kinase.</div>`;
     return;
   }
   const body = rows.map(r => {
@@ -1064,7 +1064,7 @@ function _kxRenderDirectionSupport(hostEl, row) {
     `<th title="Cell type / contrast or human summary scope used for this direction check.">Scope</th>` +
     `<th title="NES activity direction used as the reference sign.">NES</th>` +
     `<th title="Disease-vs-control transcript log2 fold change.">LFC</th>` +
-    `<th title="FDR for the matching Song attribution row, when available.">FDR</th>` +
+    `<th title="FDR for the matching ${COHORT_LABELS.song} attribution row, when available.">FDR</th>` +
     `<th title="Whether the LFC sign supports the NES activity direction.">Support</th>` +
     `</tr></thead><tbody>${body}</tbody></table>` +
     `</section>`;
@@ -1082,7 +1082,7 @@ function _kxF5AgreementFor(row, tissue, age) {
 
 function _kxRenderF5AgeTable(row, tissue, fdrGate) {
   const rec = _kxF5Rec(row, tissue);
-  if (!rec) return `<div class="kx-detail-placeholder muted">5xFAD ${_escapeHtml(tissue)} not measured.</div>`;
+  if (!rec) return `<div class="kx-detail-placeholder muted">${COHORT_LABELS.fivexfad} ${_escapeHtml(tissue)} not measured.</div>`;
   const body = _KX_F5_AGES.map(age => {
     const r = rec.rows.get(age);
     const agr = _kxF5AgreementFor(row, tissue, age);
@@ -1113,14 +1113,14 @@ function _kxRenderF5AttrMini(row, tissue) {
     .sort((a, b) => (_kxConfRank(b.confidence_tier) - _kxConfRank(a.confidence_tier)) ||
       (_kxF5NativeTier(b) - _kxF5NativeTier(a)))
     .slice(0, 4);
-  if (!rows.length) return `<div class="muted">No matching 5xFAD attribution rows.</div>`;
+  if (!rows.length) return `<div class="muted">No matching ${COHORT_LABELS.fivexfad} attribution rows.</div>`;
   const body = rows.map(r => {
     const lfc = _kxF5Num(r.fivexfad_lfc);
     const conf = r.confidence_tier || "none";
     const confChip = `<span class="${_attrConfidenceClass(conf)}" title="${_escapeHtml(r.confidence_basis || conf)}">${_escapeHtml(conf.replace("_", " "))}</span>`;
     return `<tr>` +
       `<td>${_escapeHtml(r.cell_type || "")} ${confChip}${r.age_months ? ` <span class="muted">${_escapeHtml(String(r.age_months))}mo</span>` : ""}</td>` +
-      `<td class="kx-nes-num">${_detGateCell(r.fivexfad_detected, r.fivexfad_fraction_cells_expressing, "this 5xFAD cell type")}</td>` +
+      `<td class="kx-nes-num">${_detGateCell(r.fivexfad_detected, r.fivexfad_fraction_cells_expressing, `this ${COHORT_LABELS.fivexfad} cell type`)}</td>` +
       `<td class="kx-nes-num">${_concTierCell(r.fivexfad_concentration_tier)}</td>` +
       `<td class="kx-nes-num">${lfc == null ? "–" : `${lfc >= 0 ? "+" : ""}${lfc.toFixed(2)}`}</td>` +
       `</tr>`;
@@ -1140,11 +1140,11 @@ function _kxRenderF5Detail(hostEl, row, fdrGate) {
   const cortex = row._f5Tissues ? row._f5Tissues.cortex : null;
   const hip = row._f5Tissues ? row._f5Tissues.hippocampus : null;
   const mixedNote = f5.status === "mixed_sig"
-    ? `<div class="notice show">5xFAD aggregate is <strong>mixed_sig</strong>: cortex and hippocampus contain significant opposing evidence.</div>`
+    ? `<div class="notice show">${COHORT_LABELS.fivexfad} aggregate is <strong>mixed_sig</strong>: cortex and hippocampus contain significant opposing evidence.</div>`
     : "";
   hostEl.innerHTML = `<section class="kx-f5-detail">` +
-    `<div class="kx-detail-col-head">5xFAD · cortex and hippocampus</div>` +
-    `<p class="muted">Aggregate ${_kxStatusBadge(f5.status, "Aggregate 5xFAD cortex+hippocampus status")} · ` +
+    `<div class="kx-detail-col-head">${COHORT_LABELS.fivexfad} · cortex and hippocampus</div>` +
+    `<p class="muted">Aggregate ${_kxStatusBadge(f5.status, `Aggregate ${COHORT_LABELS.fivexfad} cortex+hippocampus status`)} · ` +
     `cortex ${_kxStatusBadge(cortex ? cortex.status : "missing")} · hippocampus ${_kxStatusBadge(hip ? hip.status : "missing")}</p>` +
     mixedNote +
     `<h5>Cortex</h5>${_kxRenderF5AgeTable(row, "cortex", fdrGate)}${_kxRenderF5AttrMini(row, "cortex")}` +
@@ -1165,16 +1165,16 @@ function _kxBuildHeader(s) {
   cells.push(TH("gene", "Gene", "Gene symbol. Click to sort."));
   cells.push(TH("residue", "Res", "Phospho-residue track (ST or Y). Click to sort."));
   cells.push(TH("family", "Family", "Kinase family. Click to sort."));
-  cells.push(TH(null, "Mouse", "Mouse (Song) bulk MEA NES across 3 diseases × 3 timepoints (red=up, blue=down; outlined=FDR<header).", "kx-mglyph"));
-  cells.push(TH(null, "Human", "Human (Mukesh) per-donor MEA NES: AD donors, then a muted CTRL reference group (red=up, blue=down; outlined=FDR<header).", "kx-hglyph"));
-  cells.push(TH(null, "5xFAD cortex", "5xFAD cortex TG-vs-WT kinase MEA across 3/6/9/12 months. Red=up, blue=down, outline=FDR<header.", "kx-f5glyph"));
-  cells.push(TH(null, "5xFAD hip", "5xFAD hippocampus TG-vs-WT kinase MEA across 3/6/9/12 months. Red=up, blue=down, outline=FDR<header.", "kx-f5glyph"));
+  cells.push(TH(null, COHORT_LABELS.song, `${COHORT_LABELS.song} bulk MEA NES across 3 diseases × 3 timepoints (red=up, blue=down; outlined=FDR<header).`, "kx-mglyph"));
+  cells.push(TH(null, COHORT_LABELS.mukesh, `${COHORT_LABELS.mukesh} per-donor MEA NES: AD donors, then a muted CTRL reference group (red=up, blue=down; outlined=FDR<header).`, "kx-hglyph"));
+  cells.push(TH(null, `${COHORT_LABELS.fivexfad} cortex`, `${COHORT_LABELS.fivexfad} cortex TG-vs-WT kinase MEA across 3/6/9/12 months. Red=up, blue=down, outline=FDR<header.`, "kx-f5glyph"));
+  cells.push(TH(null, `${COHORT_LABELS.fivexfad} hip`, `${COHORT_LABELS.fivexfad} hippocampus TG-vs-WT kinase MEA across 3/6/9/12 months. Red=up, blue=down, outline=FDR<header.`, "kx-f5glyph"));
   cells.push(TH("m_med", "M med", "Mouse median NES over the contrasts feeding the direction call (FDR-significant, or all when 'All samples' is on). – = none. Sort by magnitude.", "kx-nes-num"));
   cells.push(TH("h_med", "H med", "Human median NES over the AD donors feeding the direction call (FDR-significant, or all when 'All samples' is on). – = none. Sort by magnitude.", "kx-nes-num"));
-  cells.push(TH("f5_med", "5xFAD med", "5xFAD median NES over cortex and hippocampus age units feeding the direction call (FDR-significant, or all when 'All samples' is on). – = none. Sort by magnitude.", "kx-nes-num"));
-  cells.push(TH("agree_score", "Crossplay", "Categorical comparison under the active scope: Song, Mukesh AD, and/or 5xFAD aggregate cortex+hippocampus. CTRL donors are visual reference only.", "kx-agree-col"));
+  cells.push(TH("f5_med", `${COHORT_LABELS.fivexfad} med`, `${COHORT_LABELS.fivexfad} median NES over cortex and hippocampus age units feeding the direction call (FDR-significant, or all when 'All samples' is on). – = none. Sort by magnitude.`, "kx-nes-num"));
+  cells.push(TH("agree_score", "Crossplay", `Categorical comparison under the active scope: ${COHORT_LABELS.song}, ${COHORT_LABELS.mukesh} AD, and/or ${COHORT_LABELS.fivexfad} aggregate cortex+hippocampus. CTRL donors are visual reference only.`, "kx-agree-col"));
   const specScope = s.cluster ? `at ${s.cluster}` : "— peak across all clusters (hover for the cluster)";
-  cells.push(TH("m_spec", "Song", `Song detection evidence — concentration tier (×2/5/10 the even 1/N share of total expression across all cell types) at the kinase's top cell type. ★ = the pinned cluster IS that cell type.`, "kx-spec"));
+  cells.push(TH("m_spec", COHORT_LABELS.song, `${COHORT_LABELS.song} location evidence — concentration tier (×2/5/10 the even 1/N share of total expression across all cell types) at the kinase's top cell type. ★ = the pinned cluster IS that cell type.`, "kx-spec"));
   cells.push(TH("wmb", "WMB", `WMB atlas cross-check: concentration tier (×2/5/10 the even 1/N share of total expression across all WMB classes) ${specScope}. Detection gate: ≥10% of cells expressing.`, "kx-spec"));
   cells.push(TH("h_spec", "SEA-AD expr", `Human SEA-AD MTG expression location tier ${specScope}. This is expression enrichment, not SEA-AD LFC.`, "kx-spec"));
   return `<thead><tr>${cells.join("")}</tr></thead>`;
@@ -1391,7 +1391,7 @@ function _kxRenderTable() {
 // ---------- cross-dataset detail panel ----------
 
 function _kxNotMeasured(species) {
-  const lbl = species === "mouse" ? "mouse (Song)" : "human (Mukesh)";
+  const lbl = species === "mouse" ? `mouse (${COHORT_LABELS.song})` : `human (${COHORT_LABELS.mukesh})`;
   return `<div class="kx-detail-placeholder muted">Not measured in ${lbl}.</div>`;
 }
 
@@ -1457,10 +1457,10 @@ function _kxRenderDetail() {
         <span class="${meta.cls}" title="${_escapeHtml(meta.tip)}">${meta.glyph} ${_escapeHtml(meta.label)}</span>
       </div>
       <div class="kx-detail-verdict muted">
-        Mouse (Song) ${nesLbl} <b>${mNesTxt}</b> (${mCntTxt}) ·
-        Human (Mukesh AD) ${nesLbl} <b>${hNesTxt}</b> (${hCntTxt}) ·
-        5xFAD ${nesLbl} <b>${f5NesTxt}</b> (${f5CntTxt}) ·
-        5xFAD aggregate ${_kxStatusBadge(row._f5Source ? row._f5Source.status : "missing")}
+        ${COHORT_LABELS.song} ${nesLbl} <b>${mNesTxt}</b> (${mCntTxt}) ·
+        ${COHORT_LABELS.mukesh} AD ${nesLbl} <b>${hNesTxt}</b> (${hCntTxt}) ·
+        ${COHORT_LABELS.fivexfad} ${nesLbl} <b>${f5NesTxt}</b> (${f5CntTxt}) ·
+        ${COHORT_LABELS.fivexfad} aggregate ${_kxStatusBadge(row._f5Source ? row._f5Source.status : "missing")}
       </div>
     </div>
     <nav class="kx-detail-tabs">
@@ -1470,8 +1470,8 @@ function _kxRenderDetail() {
     ${tab === "specificity"
       ? `<div id="kx-detail-spec" class="kx-detail-spec"></div>`
       : `<div id="kx-detail-direction"></div><div class="kx-detail-grid">
-      <div class="kx-detail-col"><div class="kx-detail-col-head">Mouse · Song</div><div id="kx-detail-m"></div></div>
-      <div class="kx-detail-col"><div class="kx-detail-col-head">Human · Mukesh</div><div id="kx-detail-h"></div></div>
+      <div class="kx-detail-col"><div class="kx-detail-col-head">Mouse · ${COHORT_LABELS.song}</div><div id="kx-detail-m"></div></div>
+      <div class="kx-detail-col"><div class="kx-detail-col-head">Human · ${COHORT_LABELS.mukesh}</div><div id="kx-detail-h"></div></div>
       <div class="kx-detail-col"><div id="kx-detail-f5"></div></div>
     </div>`}`;
 

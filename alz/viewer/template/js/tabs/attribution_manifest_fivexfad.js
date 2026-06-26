@@ -31,20 +31,20 @@ const FIVEXFAD_MANIFEST = (() => {
   const columns = [
     {
       key: "cell_type", label: "Cell type", type: "str", group: "id",
-      title: "5xFAD new_clusters cell type on the shared 46-cluster mouse spine.",
+      title: `${COHORT_LABELS.fivexfad} new_clusters cell type on the shared 46-cluster mouse spine.`,
       render(r, _numFmt, _ctx) {
         const conf = r.confidence_tier || "none";
         const tip = _escapeHtml(r.confidence_basis || conf);
         const isHome = r.fivexfad_top_celltype && r.cell_type === r.fivexfad_top_celltype;
         const chip = isHome
           ? `<span class="${_attrConfidenceClass(conf)}" title="${tip}">${_escapeHtml(conf.replace("_", " "))}</span>`
-          : `<span class="muted" title="Location confidence is a kinase/tissue-level property, shown on this kinase's dominant 5xFAD cell type${r.fivexfad_top_celltype ? ': ' + _escapeHtml(r.fivexfad_top_celltype) : ''}.">·</span>`;
+          : `<span class="muted" title="Location confidence is a kinase/tissue-level property, shown on this kinase's dominant ${COHORT_LABELS.fivexfad} cell type${r.fivexfad_top_celltype ? ': ' + _escapeHtml(r.fivexfad_top_celltype) : ''}.">·</span>`;
         return `<td class="attr-celltype"><span class="attr-chevron" aria-hidden="true">▸</span> ${_escapeHtml(r.cell_type || "")} ${chip}</td>`;
       },
     },
     {
       key: "confidence_tier", label: "Location confidence", type: "conf", group: "attr", hidden: true,
-      title: "5xFAD snRNA cell-type exclusivity confidence tier. Hover the chip for the evidence basis. Shown for all rows (5xFAD has no collapsed-unit hierarchy).",
+      title: `${COHORT_LABELS.fivexfad} snRNA cell-type exclusivity confidence tier. Hover the chip for the evidence basis. Shown for all rows (${COHORT_LABELS.fivexfad} has no collapsed-unit hierarchy).`,
       render(r, _numFmt, _ctx) {
         const conf = r.confidence_tier || "none";
         const tip = _escapeHtml(r.confidence_basis || conf);
@@ -53,23 +53,23 @@ const FIVEXFAD_MANIFEST = (() => {
     },
     {
       key: "fivexfad_detected", label: "Detected", type: "num", group: "attr",
-      sub: "f5", subLabel: "5xFAD",
-      subTitle: "Within-cohort 5xFAD snRNA (new_clusters). Standard detection metric for this cell type.",
-      title: "5xFAD snRNA: is the kinase transcript detected in ≥10% of cells in this cell type? ✓ = detected (% of cells shown), ✗ = not detected.",
+      sub: "f5", subLabel: COHORT_LABELS.fivexfad,
+      subTitle: `Within-cohort ${COHORT_LABELS.fivexfad} snRNA (new_clusters). Standard detection metric for this cell type.`,
+      title: `${COHORT_LABELS.fivexfad} snRNA: is the kinase transcript detected in ≥10% of cells in this cell type? ✓ = detected (% of cells shown), ✗ = not detected.`,
       render(r, _n, _c) {
-        return `<td class="attr-num">${_detGateCell(r.fivexfad_detected, r.fivexfad_fraction_cells_expressing, "this 5xFAD cell type")}</td>`;
+        return `<td class="attr-num">${_detGateCell(r.fivexfad_detected, r.fivexfad_fraction_cells_expressing, `this ${COHORT_LABELS.fivexfad} cell type`)}</td>`;
       },
     },
     {
       key: "fivexfad_concentration_tier", label: "Conc", type: "num", group: "attr",
-      sub: "f5", subLabel: "5xFAD",
-      subTitle: "Within-cohort 5xFAD snRNA (new_clusters). Standard detection metric for this cell type.",
-      title: "5xFAD concentration tier: ≥2×/5×/10× the even 1/N share of total expression across all cell types. — = at or below even share.",
+      sub: "f5", subLabel: COHORT_LABELS.fivexfad,
+      subTitle: `Within-cohort ${COHORT_LABELS.fivexfad} snRNA (new_clusters). Standard detection metric for this cell type.`,
+      title: `${COHORT_LABELS.fivexfad} concentration tier: ≥2×/5×/10× the even 1/N share of total expression across all cell types. — = at or below even share.`,
       render(r, _n, _c) { return `<td class="attr-num">${_concTierCell(r.fivexfad_concentration_tier)}</td>`; },
     },
     {
       key: "fivexfad_lfc", label: "snRNA LFC", type: "num", group: "attr",
-      title: "5xFAD snRNA TG-vs-WT log-expression difference for the selected tissue and age. Color: red = up in TG, blue = down. Info-only — not the confidence gate.",
+      title: `${COHORT_LABELS.fivexfad} snRNA TG-vs-WT log-expression difference for the selected tissue and age. Color: red = up in TG, blue = down. Info-only — not the confidence gate.`,
       render(r, _n, _c) {
         const v = _f5num(r.fivexfad_lfc);
         return v == null
@@ -105,7 +105,7 @@ const FIVEXFAD_MANIFEST = (() => {
     },
     {
       key: "decomp_nes", label: "Decomp NES", type: "num", group: "decomp",
-      title: "5xFAD per-cell-type decomposition MEA NES for this kinase, tissue, age, and cell type.",
+      title: `${COHORT_LABELS.fivexfad} per-cell-type decomposition MEA NES for this kinase, tissue, age, and cell type.`,
       render(r, _n, _c) {
         const v = _f5num(r.decomp_nes);
         return v == null
@@ -115,7 +115,7 @@ const FIVEXFAD_MANIFEST = (() => {
     },
     {
       key: "decomp_fdr", label: "Decomp FDR", type: "num", group: "decomp",
-      title: "5xFAD per-cell-type decomposition MEA FDR for this kinase, tissue, age, and cell type. < 0.25 is the standard MEA gate.",
+      title: `${COHORT_LABELS.fivexfad} per-cell-type decomposition MEA FDR for this kinase, tissue, age, and cell type. < 0.25 is the standard MEA gate.`,
       render(r, _n, _c) {
         const v = _f5num(r.decomp_fdr);
         const sig = v != null && v < 0.25;
@@ -126,7 +126,7 @@ const FIVEXFAD_MANIFEST = (() => {
     },
     {
       key: "decomp_agrees_bulk", label: "Bulk match", type: "str", group: "decomp",
-      title: "Whether significant per-cell decomposition MEA has the same NES sign as the bulk 5xFAD anchor. Bold = significant decomp FDR < 0.25.",
+      title: `Whether significant per-cell decomposition MEA has the same NES sign as the bulk ${COHORT_LABELS.fivexfad} anchor. Bold = significant decomp FDR < 0.25.`,
       render(r, _n, _c) {
         if (r.decomp_agrees_bulk === "yes") {
           return `<td><span class="badge hi" title="Decomp FDR passes the gate and NES sign matches bulk.">match</span></td>`;
@@ -145,8 +145,8 @@ const FIVEXFAD_MANIFEST = (() => {
     const _grpCounts = cols.reduce((acc, c) => { acc[c.group] = (acc[c.group]||0)+1; return acc; }, {});
     return `<tr class="attr-verdict-supergroup">` +
       `<th class="attr-supergroup-spacer" colspan="${_grpCounts.id || 0}"></th>` +
-      `<th class="attr-supergroup-attr" colspan="${_grpCounts.attr || 0}" title="Cell-type attribution evidence from 5xFAD snRNA, WMB, and SEA-AD reference layers.">Attribution (vs bulk direction)</th>` +
-      `<th class="attr-supergroup-decomp" colspan="${_grpCounts.decomp || 0}" title="Per-cell-type 5xFAD decomposition MEA using matched snRNA new_clusters weights.">Decomposition cross-check</th>` +
+      `<th class="attr-supergroup-attr" colspan="${_grpCounts.attr || 0}" title="Cell-type attribution evidence from ${COHORT_LABELS.fivexfad} snRNA, WMB, and SEA-AD reference layers.">Attribution (vs bulk direction)</th>` +
+      `<th class="attr-supergroup-decomp" colspan="${_grpCounts.decomp || 0}" title="Per-cell-type ${COHORT_LABELS.fivexfad} decomposition MEA using matched snRNA new_clusters weights.">Decomposition cross-check</th>` +
     `</tr>`;
   }
 
@@ -173,7 +173,7 @@ const FIVEXFAD_MANIFEST = (() => {
       : decompRows.map(d => ({
           cell_type: d.cell_type,
           confidence_tier: "none",
-          confidence_basis: "No native 5xFAD snRNA attribution row available for this kinase; showing decomposition MEA only.",
+          confidence_basis: `No native ${COHORT_LABELS.fivexfad} snRNA attribution row available for this kinase; showing decomposition MEA only.`,
           tissue: group.tissue,
           age_months: age,
           kinase: group.kinase,
@@ -237,7 +237,7 @@ const FIVEXFAD_MANIFEST = (() => {
       contrast: `TG_vs_WT_${age}mo`,
       nes,
       fdr,
-      signNote: "sign of the bulk NES is the reference direction for decomposition agreement. <strong>Positive NES = kinase more active in 5xFAD TG; negative = more active in WT.</strong>",
+      signNote: `sign of the bulk NES is the reference direction for decomposition agreement. <strong>Positive NES = kinase more active in ${COHORT_LABELS.fivexfad} TG; negative = more active in WT.</strong>`,
     };
   }
 
@@ -247,10 +247,10 @@ const FIVEXFAD_MANIFEST = (() => {
 
   const explainerHtml = `<details class="attr-explainer"><summary>How to read attribution confidence</summary>` +
     `<div class="attr-explainer-body">` +
-    `<p>Confidence is a <strong>per-row</strong> label: how exclusively the kinase is expressed in this cell type (effective number of cell types computed from 5xFAD <code>new_clusters</code> within the selected tissue), corroborated by WMB and SEA-AD references.</p>` +
+    `<p>Confidence is a <strong>per-row</strong> label: how exclusively the kinase is expressed in this cell type (effective number of cell types computed from ${COHORT_LABELS.fivexfad} <code>new_clusters</code> within the selected tissue), corroborated by WMB and SEA-AD references.</p>` +
     `<table class="attr-explainer-table" style="margin-bottom:8px;">` +
       `<thead><tr><th>Source</th><th>Role</th></tr></thead><tbody>` +
-      `<tr><td><strong>5xFAD snRNA</strong></td><td><strong>Primary.</strong> Tissue-specific matched 5xFAD location evidence using <code>new_clusters</code> on the shared 46-label mouse spine.</td></tr>` +
+      `<tr><td><strong>${COHORT_LABELS.fivexfad} snRNA</strong></td><td><strong>Primary.</strong> Tissue-specific matched ${COHORT_LABELS.fivexfad} location evidence using <code>new_clusters</code> on the shared 46-label mouse spine.</td></tr>` +
       `<tr><td><strong>WMB</strong></td><td>Corroborates: does the healthy mouse atlas place the kinase in the same cell class?</td></tr>` +
       `<tr><td><strong>SEA-AD</strong></td><td>Human Alzheimer's disease direction where a mapped cell-type effect is available. Info-only — not the confidence gate.</td></tr>` +
       `<tr><td><strong>Decomp NES / FDR</strong></td><td>Per-cell-type kinase MEA cross-check after projecting raw phosphosite signal with matched snRNA weights.</td></tr>` +
@@ -260,7 +260,7 @@ const FIVEXFAD_MANIFEST = (() => {
       `<li><strong><span class="badge hi">high</span></strong> — concentrated in one cell type with reference corroboration; or very tight on its own (≲1.5), not yet corroborated.</li>` +
       `<li><strong><span class="badge mid">moderate</span></strong> — concentrated in one cell type (eff ≤ 3), but not corroborated by a reference.</li>` +
       `<li><strong><span class="badge lo">low</span></strong> — broadly expressed (eff > 3).</li>` +
-      `<li><strong>none</strong> — no measurable 5xFAD snRNA expression distribution for this tissue and age.</li>` +
+      `<li><strong>none</strong> — no measurable ${COHORT_LABELS.fivexfad} snRNA expression distribution for this tissue and age.</li>` +
     `</ul>` +
     `<p class="muted">Disease direction (snRNA LFC) is an info-only axis — it is never the confidence gate. A significant bulk MEA does not gate the pill; those gate values appear as info fields on each row.</p>` +
     `</div></details>`;
@@ -295,7 +295,7 @@ const FIVEXFAD_MANIFEST = (() => {
       : `<span class="muted">— (at or below the all-cell-types even share)</span>`;
 
     const thisCellDlHtml =
-      `<dt>5xFAD cells expressing</dt><dd>${_specPct(frac)}${detected ? "" : ' <span class="muted">(below 10%; specificity denominator still uses all units)</span>'}</dd>` +
+      `<dt>${COHORT_LABELS.fivexfad} cells expressing</dt><dd>${_specPct(frac)}${detected ? "" : ' <span class="muted">(below 10%; specificity denominator still uses all units)</span>'}</dd>` +
       `<dt>Share of total expr</dt><dd>${_specPct(concOfTotal)}</dd>` +
       `<dt>Concentration</dt><dd>${tierBadge}</dd>` +
       `<dt>snRNA samples</dt><dd>${_escapeHtml(snrnaSamples)}</dd>` +
@@ -423,7 +423,7 @@ const FIVEXFAD_MANIFEST = (() => {
     },
     {
       id: "celltype-ols",
-      title: `§3 · Mechanism — per-cell substrate-site OLS <span class="muted">(5xFAD celltype_ols_shards)</span>`,
+      title: `§3 · Mechanism — per-cell substrate-site OLS <span class="muted">(${COHORT_LABELS.fivexfad} celltype_ols_shards)</span>`,
       caption: null,
       wide: true,
       render(secHostId, ctx, row, _kstats) {

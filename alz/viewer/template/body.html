@@ -2,9 +2,9 @@
 <header id="app-header">
   <h1>Kinase + Pathway Viewer</h1>
   <div class="mode-toggle" id="mode-toggle" role="tablist" aria-label="Cohort mode" hidden>
-    <button class="mode-btn" data-mode="mouse" role="tab" aria-selected="true">Mouse (Song)</button>
-    <button class="mode-btn" data-mode="fivexfad" role="tab" aria-selected="false">Mouse (5xFAD)</button>
-    <button class="mode-btn" data-mode="human" role="tab" aria-selected="false">Human (Mukesh)</button>
+    <button class="mode-btn" data-mode="mouse" role="tab" aria-selected="true">Mouse (MouseC1)</button>
+    <button class="mode-btn" data-mode="fivexfad" role="tab" aria-selected="false">Mouse (MouseC2)</button>
+    <button class="mode-btn" data-mode="human" role="tab" aria-selected="false">Human (HumanC1)</button>
   </div>
   <label class="filter-label" data-filter="fdr" data-metric="fdr">FDR &lt; <input id="f-fdr" aria-label="FDR threshold" type="number" step="0.05" min="0" max="1"
     value="0.25" style="width:60px;"></label>
@@ -48,9 +48,9 @@
             </label>
           </span>
           <span class="ke-filter-label" id="ke-ms-song-wrap">
-            <label class="ke-filter-label">Song
-              <select id="ke-filter-song" aria-label="Minimum mouse Song location specificity (fold over even-split)"
-                      title="Minimum Song location evidence, as fold over the even-split baseline (1/31). Kinase passes if its peak cell-type share reaches the selected threshold.">
+            <label class="ke-filter-label">MouseC1
+              <select id="ke-filter-song" aria-label="Minimum mouse MouseC1 location specificity (fold over even-split)"
+                      title="Minimum MouseC1 location evidence, as fold over the even-split baseline (1/31). Kinase passes if its peak cell-type share reaches the selected threshold.">
                 <option value="0">Any</option>
                 <option value="2">&geq;2&times;</option>
                 <option value="5">&geq;5&times;</option>
@@ -88,9 +88,9 @@
               <th data-col="agreement_profile" data-metric="agreementProfile" title="Bulk-vs-decomp agreement across 9 contrasts. Green = both pipelines significant, same direction; orange = disagreement (decomp_only / bulk_only / mixed / pure disagreement); empty = neither significant. Click to sort by count of disagreement contrasts (in scope).">Agreement</th>
               <th data-col="peak_NES" data-metric="peakNes" title="Peak NES — signed NES at the contrast with the largest |NES| in the active disease/timepoint scope (or all 9 contrasts if no scope). Click to sort by |NES|.">NES</th>
               <th data-col="n_sig" data-metric="nSig" title="n_sig — count of contrasts where FDR < threshold, within the active disease/timepoint scope (or out of 9 if no scope). Click to sort.">n_sig</th>
-              <th data-col="n_attributed_celltypes" data-metric="nAttributed" title="The cell type this kinase is exclusively expressed in (from the recalculated confidence). Over-split Song clusters of one cell type are collapsed into an expandable parent; distinct cell types stay separate. Blank when broadly expressed. Click to sort by exclusivity.">Cell type</th>
-              <th data-col="song_spec" data-metric="songTau" title="Song location evidence, shown as fold over the even-split baseline (1/31 ≈ 0.032): ≥10× / ≥5× / ≥2× / ≥1×. The fold is the kinase's peak cell-type share; the concentration index τ and the cell type are in the tooltip. Click to sort.">Song</th>
-              <th data-col="wmb_max_tier" data-metric="wmbMaxTier" title="WMB cross-check — maximum WMB location tier reached by any attribution row in scope, as a multiple of the retained-class uniform (1/9 ≈ 0.111). Independent atlas check on the Song call. Click to sort by max tier.">WMB</th>
+              <th data-col="n_attributed_celltypes" data-metric="nAttributed" title="The cell type this kinase is exclusively expressed in (from the recalculated confidence). Over-split MouseC1 clusters of one cell type are collapsed into an expandable parent; distinct cell types stay separate. Blank when broadly expressed. Click to sort by exclusivity.">Cell type</th>
+              <th data-col="song_spec" data-metric="songTau" title="MouseC1 location evidence, shown as fold over the even-split baseline (1/31 ≈ 0.032): ≥10× / ≥5× / ≥2× / ≥1×. The fold is the kinase's peak cell-type share; the concentration index τ and the cell type are in the tooltip. Click to sort.">MouseC1</th>
+              <th data-col="wmb_max_tier" data-metric="wmbMaxTier" title="WMB cross-check — maximum WMB location tier reached by any attribution row in scope, as a multiple of the retained-class uniform (1/9 ≈ 0.111). Independent atlas check on the MouseC1 call. Click to sort by max tier.">WMB</th>
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -244,8 +244,8 @@
   <div id="tab-incytrheatmap" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytrheatmap" hidden>
     <div class="card">
       <div class="ke-toolbar ke-toolbar-multi">
-        <label class="ke-filter-label" id="ih-tissue-wrap" title="5xFAD tissue. Switches the incytr dataset between cortex and hippocampus." hidden>Tissue
-          <select id="ih-tissue" aria-label="5xFAD tissue"></select>
+        <label class="ke-filter-label" id="ih-tissue-wrap" title="MouseC2 tissue. Switches the incytr dataset between cortex and hippocampus." hidden>Tissue
+          <select id="ih-tissue" aria-label="MouseC2 tissue"></select>
         </label>
         <label class="ke-filter-label">Disease
           <select id="ih-disease" aria-label="Disease"></select>
@@ -310,8 +310,8 @@
   <div id="tab-incytrpathways" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytrpathways" hidden>
     <div class="card">
       <div class="ke-toolbar ke-toolbar-multi">
-        <label class="ke-filter-label" id="ip-tissue-wrap" title="5xFAD tissue. Switches the incytr dataset between cortex and hippocampus." hidden>Tissue
-          <select id="ip-tissue" aria-label="5xFAD tissue"></select>
+        <label class="ke-filter-label" id="ip-tissue-wrap" title="MouseC2 tissue. Switches the incytr dataset between cortex and hippocampus." hidden>Tissue
+          <select id="ip-tissue" aria-label="MouseC2 tissue"></select>
         </label>
         <label class="ke-filter-label" title="Top overall ranks the packaged top pathway instances across all sender/receiver cell-type pairs. Cell Type loads one sender/receiver pair for detailed evidence inspection.">View
           <select id="ip-mode" aria-label="Incytr pathway view">
@@ -390,11 +390,11 @@
     <div class="explorer-layout kinase-audit-layout">
       <div class="card">
         <div class="ke-toolbar ke-toolbar-multi" id="kx-toolbar">
-          <label class="ke-filter-label" title="Cell-type pivot for the WMB and SEA-AD expr tiers. 'Any cell type' shows each kinase's peak across all clusters (hover a tier for the cluster); pick a cluster to pin them to it. Song location evidence is per kinase and does not pivot, but a pinned cluster gets a ★ when it IS the kinase's top cell type.">Cluster
+          <label class="ke-filter-label" title="Cell-type pivot for the WMB and SEA-AD expr tiers. 'Any cell type' shows each kinase's peak across all clusters (hover a tier for the cluster); pick a cluster to pin them to it. MouseC1 location evidence is per kinase and does not pivot, but a pinned cluster gets a ★ when it IS the kinase's top cell type.">Cluster
             <select id="kx-cluster" aria-label="Levy-T5 cluster"></select>
           </label>
-          <label class="ke-filter-label" title="Song location evidence, as fold over the even-split baseline (1/31 ≈ 0.032): how concentrated a kinase's expression is in one cell type across this study's own cells. Keeps a kinase whose peak cell-type share reaches the fold threshold.">Song
-            <select id="kx-mspec" aria-label="Minimum mouse Song specificity (fold over even-split)">
+          <label class="ke-filter-label" title="MouseC1 location evidence, as fold over the even-split baseline (1/31 ≈ 0.032): how concentrated a kinase's expression is in one cell type across this study's own cells. Keeps a kinase whose peak cell-type share reaches the fold threshold.">MouseC1
+            <select id="kx-mspec" aria-label="Minimum mouse MouseC1 specificity (fold over even-split)">
               <option value="0">Any</option>
               <option value="2">&geq;2&times;</option>
               <option value="5">&geq;5&times;</option>
@@ -423,13 +423,13 @@
           <label class="ke-filter-label" title="Compute M med, H med, and the direction category over ALL measured contrasts/donors, not just those significant at the header FDR. A dataset counts as present if it has any measurement; direction is the all-sample median.">
             <input type="checkbox" id="kx-allsamples"/> All samples
           </label>
-          <label class="ke-filter-label" title="Which dataset comparison drives the Crossplay category. Mukesh CTRL donors remain visual reference only.">Compare
+          <label class="ke-filter-label" title="Which dataset comparison drives the Crossplay category. HumanC1 CTRL donors remain visual reference only.">Compare
             <select id="kx-compare-scope" aria-label="Crossplay comparison scope">
               <option value="three_way">3-way</option>
-              <option value="song_mukesh">Song vs Mukesh</option>
-              <option value="song_f5">Song vs 5xFAD</option>
-              <option value="mukesh_f5">Mukesh vs 5xFAD</option>
-              <option value="f5_tissue">5xFAD tissue split</option>
+              <option value="song_mukesh">MouseC1 vs HumanC1</option>
+              <option value="song_f5">MouseC1 vs MouseC2</option>
+              <option value="mukesh_f5">HumanC1 vs MouseC2</option>
+              <option value="f5_tissue">MouseC2 tissue split</option>
             </select>
           </label>
           <label class="ke-filter-label" title="Simple agreement filter under the selected comparison scope, computed live at the current FDR.">State
@@ -441,13 +441,13 @@
               <option value="disagree">Disagree</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Require matching 5xFAD cortex or hippocampus attribution in this cell type.">5xFAD cell
-            <select id="kx-f5-celltype" aria-label="5xFAD cell-type filter">
+          <label class="ke-filter-label" title="Require matching MouseC2 cortex or hippocampus attribution in this cell type.">MouseC2 cell
+            <select id="kx-f5-celltype" aria-label="MouseC2 cell-type filter">
               <option value="">Any</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Minimum 5xFAD attribution confidence in cortex or hippocampus.">5xFAD conf
-            <select id="kx-f5-confidence" aria-label="Minimum 5xFAD attribution confidence">
+          <label class="ke-filter-label" title="Minimum MouseC2 attribution confidence in cortex or hippocampus.">MouseC2 conf
+            <select id="kx-f5-confidence" aria-label="Minimum MouseC2 attribution confidence">
               <option value="">Any</option>
               <option value="very_high">very high</option>
               <option value="high">high+</option>
@@ -455,16 +455,16 @@
               <option value="low">low+</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Minimum 5xFAD snRNA location specificity in cortex or hippocampus, as fold over the even-split baseline.">5xFAD snRNA
-            <select id="kx-f5-snrna" aria-label="Minimum 5xFAD snRNA tier">
+          <label class="ke-filter-label" title="Minimum MouseC2 snRNA location specificity in cortex or hippocampus, as fold over the even-split baseline.">MouseC2 snRNA
+            <select id="kx-f5-snrna" aria-label="Minimum MouseC2 snRNA tier">
               <option value="0">Any</option>
               <option value="2">&geq;2&times;</option>
               <option value="5">&geq;5&times;</option>
               <option value="10">&geq;10&times;</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Minimum WMB location specificity among matching 5xFAD attribution rows.">5xFAD WMB
-            <select id="kx-f5-wmb" aria-label="Minimum 5xFAD WMB tier">
+          <label class="ke-filter-label" title="Minimum WMB location specificity among matching MouseC2 attribution rows.">MouseC2 WMB
+            <select id="kx-f5-wmb" aria-label="Minimum MouseC2 WMB tier">
               <option value="0">Any</option>
               <option value="2">&geq;2&times;</option>
               <option value="5">&geq;5&times;</option>
@@ -487,23 +487,23 @@
         <div class="ke-toolbar ke-toolbar-multi" id="f5-toolbar">
           <label class="sr-only" for="f5-search">Search kinase or gene</label>
           <input id="f5-search" aria-label="Search kinase or gene" placeholder="Search kinase or gene…"/>
-          <label class="ke-filter-label" title="Filter 5xFAD kinase rows by modeled tissue.">Tissue
-            <select id="f5-filter-tissue" aria-label="5xFAD tissue">
+          <label class="ke-filter-label" title="Filter MouseC2 kinase rows by modeled tissue.">Tissue
+            <select id="f5-filter-tissue" aria-label="MouseC2 tissue">
               <option value="">Any</option>
             </select>
           </label>
           <label class="ke-filter-label" title="Age-specific TG-vs-WT contrast.">Age
-            <select id="f5-filter-age" aria-label="5xFAD age">
+            <select id="f5-filter-age" aria-label="MouseC2 age">
               <option value="">Any</option>
             </select>
           </label>
           <label class="ke-filter-label" title="Require at least one high/moderate mouse attribution row in the selected cell type.">Cell type
-            <select id="f5-filter-celltype" aria-label="5xFAD attributed cell type">
+            <select id="f5-filter-celltype" aria-label="MouseC2 attributed cell type">
               <option value="">Any</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Minimum 5xFAD location-confidence tier.">Location confidence
-            <select id="f5-filter-confidence" aria-label="Minimum 5xFAD location confidence">
+          <label class="ke-filter-label" title="Minimum MouseC2 location-confidence tier.">Location confidence
+            <select id="f5-filter-confidence" aria-label="Minimum MouseC2 location confidence">
               <option value="">Any</option>
               <option value="very_high">very high (only)</option>
               <option value="high">high+</option>
@@ -511,8 +511,8 @@
               <option value="low">low+</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Minimum 5xFAD snRNA location specificity, as fold over the even-split baseline.">5xFAD snRNA
-            <select id="f5-filter-fivexfad" aria-label="Minimum 5xFAD snRNA location tier">
+          <label class="ke-filter-label" title="Minimum MouseC2 snRNA location specificity, as fold over the even-split baseline.">MouseC2 snRNA
+            <select id="f5-filter-fivexfad" aria-label="Minimum MouseC2 snRNA location tier">
               <option value="0">Any</option>
               <option value="2">&geq;2&times;</option>
               <option value="5">&geq;5&times;</option>
@@ -520,7 +520,7 @@
             </select>
           </label>
           <label class="ke-filter-label" title="Minimum WMB location specificity tier.">WMB
-            <select id="f5-filter-wmb" aria-label="Minimum 5xFAD WMB location tier">
+            <select id="f5-filter-wmb" aria-label="Minimum MouseC2 WMB location tier">
               <option value="0">Any</option>
               <option value="2">&geq;2&times;</option>
               <option value="5">&geq;5&times;</option>
@@ -528,10 +528,10 @@
             </select>
           </label>
           <label class="ke-filter-label" title="Minimum number of selected ages with FDR below the header threshold.">n_sig &ge;
-            <input id="f5-filter-nsig" type="number" min="0" max="4" step="1" value="0" style="width:48px;" aria-label="Minimum significant 5xFAD ages"/>
+            <input id="f5-filter-nsig" type="number" min="0" max="4" step="1" value="0" style="width:48px;" aria-label="Minimum significant MouseC2 ages"/>
           </label>
-          <label class="ke-filter-label" title="Filter by NES trend across ordered 5xFAD ages.">Trend
-            <select id="f5-filter-pattern" aria-label="5xFAD NES trend">
+          <label class="ke-filter-label" title="Filter by NES trend across ordered MouseC2 ages.">Trend
+            <select id="f5-filter-pattern" aria-label="MouseC2 NES trend">
               <option value="">Any</option>
               <option value="always_up">always up</option>
               <option value="always_down">always down</option>
@@ -542,8 +542,8 @@
               <option value="trough">single trough</option>
             </select>
           </label>
-          <button id="f5-filter-reset" class="ke-filter-reset" title="Reset all 5xFAD filters">Reset</button>
-          <button id="f5-export" class="ke-filter-reset" title="Export current 5xFAD kinase table as CSV">Export CSV</button>
+          <button id="f5-filter-reset" class="ke-filter-reset" title="Reset all MouseC2 filters">Reset</button>
+          <button id="f5-export" class="ke-filter-reset" title="Export current MouseC2 kinase table as CSV">Export CSV</button>
           <span class="muted" id="f5-count"></span>
         </div>
         <div class="ke-table-wrap">
@@ -552,14 +552,14 @@
               <th data-col="kinase" title="Kinase identifier from kinase-library MEA.">Kinase</th>
               <th data-col="gene_symbol" title="Gene symbol associated with the kinase.">Gene</th>
               <th data-col="family" title="Kinase family from kinase-library metadata. Click to sort.">Family</th>
-              <th data-col="tissue" title="Modeled 5xFAD tissue for this kinase row.">Tissue</th>
+              <th data-col="tissue" title="Modeled MouseC2 tissue for this kinase row.">Tissue</th>
               <th data-col="residue_type" title="Phospho-residue track.">Res</th>
               <th data-col="profile" title="Age-wise TG-vs-WT NES profile. Color = direction, saturation = |NES|, outline = FDR below the header threshold.">NES Profile</th>
-              <th data-col="agreement_profile" title="Bulk-vs-decomp agreement across 5xFAD ages. Green = bulk and per-cell decomposition are both significant in the same direction; orange = decomp-only, bulk-only, mixed, or opposing significant decomposition; empty = neither significant.">Agreement</th>
+              <th data-col="agreement_profile" title="Bulk-vs-decomp agreement across MouseC2 ages. Green = bulk and per-cell decomposition are both significant in the same direction; orange = decomp-only, bulk-only, mixed, or opposing significant decomposition; empty = neither significant.">Agreement</th>
               <th data-col="peakAbsNes" title="Signed NES at the age with the largest |NES| in the active age scope. Sorted by |NES|.">NES</th>
               <th data-col="sigCount" title="Selected ages with FDR below the header threshold.">n_sig</th>
               <th data-col="n_attributed_celltypes" title="Cell types attributed at high or moderate confidence.">Cell types</th>
-              <th data-col="fivexfad_spec" title="5xFAD snRNA location evidence, shown as fold over the even-split baseline.">5xFAD snRNA</th>
+              <th data-col="fivexfad_spec" title="MouseC2 snRNA location evidence, shown as fold over the even-split baseline.">MouseC2 snRNA</th>
               <th data-col="wmb_max_tier" title="WMB location cross-check tier.">WMB</th>
             </tr></thead>
             <tbody></tbody>
@@ -568,7 +568,7 @@
       </div>
       <div class="ka-splitter" id="f5-splitter" title="Drag to resize"></div>
       <section class="detail-card" id="f5-detail" aria-live="polite">
-        <div class="muted">Select a 5xFAD kinase row to see age-specific details.</div>
+        <div class="muted">Select a MouseC2 kinase row to see age-specific details.</div>
       </section>
     </div>
   </div>
