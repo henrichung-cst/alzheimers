@@ -89,6 +89,7 @@ install-incytr = "R CMD INSTALL --no-multiarch ../incytr"
 verify-incytr-sce4 = "bash alz/incytr_pair/verify_incytr_sce4.sh"
 verify-incytr-sce4-full = "Rscript alz/incytr_pair/verify_sce4_full.R"
 incytr-backbone = "python alz/incytr_pair/backbone_reduction.py --verify"
+substrate-compare = "python -m alz.cross_reference.substrate_motif_compare"
 
 [dependencies]
 python = "3.11.*"
