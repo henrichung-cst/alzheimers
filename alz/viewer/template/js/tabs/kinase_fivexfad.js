@@ -677,10 +677,9 @@ function _f5SyncControls() {
 }
 
 function exportFiveXFADCsv() {
-  const stamp = new Date().toISOString().slice(0, 10);
-  const headers = ["Kinase","Gene","Family","Tissue","Residue","n_sig","peak_NES","5xFAD_snrna","WMB_tier","Conf"];
-  const keys    = ["kinase","gene_symbol","family","tissue","residue_type","sigCount","peakAbsNes","_exportF5Snrna","_exportWmbTier","_exportConf"];
-  csvDownload(csvSerialize(headers, keys, _f5Visible), `fivexfad_kinase_${stamp}.csv`);
+  const headers = ["Kinase","Gene","Family","Tissue","Residue","n_sig","peak_NES","MouseC2_snrna","WMB_tier","Conf"];
+  const keys    = ["kinase","gene_symbol","family","tissue","residue_type","sigCount","peakNes","_exportF5Snrna","_exportWmbTier","_exportConf"];
+  csvDownload(csvSerialize(headers, keys, _f5Visible), exportFilename(COHORT_LABELS.fivexfad, "kinase"));
 }
 
 function wireFiveXFADKinase() {

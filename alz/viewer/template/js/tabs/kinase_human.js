@@ -1498,10 +1498,9 @@ function _khPopulateCelltypeFilter() {
 }
 
 function exportKinaseHumanCsv() {
-  const stamp = new Date().toISOString().slice(0, 10);
   const headers = ["Kinase","Gene","Family","Residue","median_NES_sig","n_donors_sig","n_up","n_down","n_ctrl_sig","conf","location_tier","n_cell_types"];
   const keys    = ["name","gene_symbol","family","residue_type","median_nes_sig_only","n_donors_sig","n_donors_up","n_donors_down","n_ctrl_sig","_exportAttrConf","_exportAttrMaxTierRank","_exportAttrCount"];
-  csvDownload(csvSerialize(headers, keys, _khVisible), `kinase_human_${stamp}.csv`);
+  csvDownload(csvSerialize(headers, keys, _khVisible), exportFilename(COHORT_LABELS.mukesh, "kinase"));
 }
 
 function wireKinaseHuman() {

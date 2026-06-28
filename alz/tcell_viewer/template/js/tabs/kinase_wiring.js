@@ -112,6 +112,9 @@ function wireKinaseTable() {
       renderKinaseExplorer();
     });
   }
+
+  const exportBtn = document.getElementById("ke-export");
+  if (exportBtn) exportBtn.addEventListener("click", exportKinaseCsv);
 }
 
 function _syncKinaseFilterUI() {

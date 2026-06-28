@@ -567,6 +567,9 @@ function _renderAttributionDetailShared(hostId, ctx, row, kstats, manifest) {
 // ---- Main engine ------------------------------------------------------------
 
 const AttributionView = (() => {
+  // Last rendered visible rows per host ID — used by exportVerdictCsv.
+  const _lastVisible = new Map();
+
   function render(hostId, ctx, manifest) {
     const host = document.getElementById(hostId);
     if (!host) return;
@@ -574,6 +577,7 @@ const AttributionView = (() => {
     const allRows = manifest.getRows(ctx);
     if (allRows.length === 0) {
       host.innerHTML = `<div class="muted">No attribution rows in ${_escapeHtml(ctx.contrast || "")}.</div>`;
+      _lastVisible.set(hostId, []);
       return;
     }
 
@@ -613,6 +617,7 @@ const AttributionView = (() => {
     const visibleRows = (manifest.rowVisible && !showAll)
       ? rows.filter(manifest.rowVisible)
       : rows;
+    _lastVisible.set(hostId, visibleRows);
     const hiddenCount = rows.length - visibleRows.length;
 
     // Render each verdict row + its paired hidden detail row.
@@ -726,7 +731,11 @@ const AttributionView = (() => {
     if (visibleRows[0]) _attrExpand(0);
   }
 
-  return {render};
+  function getLastVisible(hostId) {
+    return _lastVisible.get(hostId) || [];
+  }
+
+  return {render, getLastVisible};
 })();
 
 // Bulk anchor block renderer (shared, called from the engine).

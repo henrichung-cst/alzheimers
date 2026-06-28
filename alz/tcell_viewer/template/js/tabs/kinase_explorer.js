@@ -183,8 +183,11 @@ function _ensureKinaseIdx() {
   _kinaseIdxById = m;
 }
 
+let _keVisible = [];
+
 function resetKinaseContextCaches() {
   _keRows = null;
+  _keVisible = [];
   _kinaseIdxById = null;
   _decompByKey = null;
   _decompByKinCtx = null;
@@ -728,6 +731,11 @@ function renderKinaseExplorer() {
     const scopedSig = _kineSigCountScoped(r, fdr, scopedCtxIds);
     const peakAbsNes = _kineMaxAbsNesScoped(r, scopedCtxIds);
     const subCls = scopedSig === 0 ? " sub-thresh" : "";
+
+    // Stamp export-friendly computed values onto the row for csvSerialize.
+    r._exportScopedSig = scopedSig;
+    r._exportPeakNes = _kineSignedPeakNesScoped(r, scopedCtxIds);
+    r._exportTopCelltype = r.tcell_celltype || r.top_celltype_1 || "";
     const drvCls = (drvSet && drvSet.has(r.id)) ? " driver" : "";
 
     // Within-cohort cell-type badge + state-enrichment badge + cell-states pill +
@@ -757,9 +765,17 @@ function renderKinaseExplorer() {
       `</tr>`
     );
   }
+  _keVisible = visible.slice();
   tbody.innerHTML = parts.join("");
   const countEl = document.getElementById("ke-count");
   if (countEl) countEl.textContent = `${visible.length} / ${_keRows.length} kinases`;
+}
+
+function exportKinaseCsv() {
+  const donor = (ViewerPayload.activeContext && ViewerPayload.activeContext()) || "donor1";
+  const headers = ["Kinase","Gene","Family","Residue","n_sig","peak_NES","tcell_top_celltype"];
+  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportPeakNes","_exportTopCelltype"];
+  csvDownload(csvSerialize(headers, keys, _keVisible), exportFilename(donor, "kinase"));
 }
 
 function _updateRowSelection(tableSel, rowCls, dataAttr, value) {

@@ -933,10 +933,9 @@ function renderKinaseExplorer() {
 }
 
 function exportKinaseCsv() {
-  const stamp = new Date().toISOString().slice(0, 10);
-  const headers = ["Kinase","Gene","Family","Residue","n_sig","peak_NES_App","peak_NES_Tau","peak_NES_ApTt","song_topCelltype","wmb_max_tier","conf"];
+  const headers = ["Kinase","Gene","Family","Residue","n_sig","peak_NES_App","peak_NES_Tau","peak_NES_ApTt","MouseC1_topCelltype","wmb_max_tier","conf"];
   const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","peak_NES_App","peak_NES_Tau","peak_NES_ApTt","_exportSongTopCelltype","_exportWmbMaxTier","_exportConf"];
-  csvDownload(csvSerialize(headers, keys, _keVisible), `kinase_${stamp}.csv`);
+  csvDownload(csvSerialize(headers, keys, _keVisible), exportFilename(COHORT_LABELS.song, "kinase"));
 }
 
 function _updateRowSelection(tableSel, rowCls, dataAttr, value) {

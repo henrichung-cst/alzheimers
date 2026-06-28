@@ -934,11 +934,17 @@ async function renderActiveKinaseAuditTab(kinase_id) {
       // reference (it is a genuinely separate view of the raw shard, not the
       // drawer's backing data).
       body.innerHTML =
-        `<section class="audit-panel audit-wide"><h4>Verdict across cell types <span class="muted">for ${_escapeHtml(ctx.name)} / ${_escapeHtml(ctx.contrast)}</span></h4>` +
+        `<section class="audit-panel audit-wide">` +
+        `<div style="display:flex;align-items:baseline;gap:.6em;margin-bottom:.4em;">` +
+        `<h4 style="margin:0;">Verdict across cell types <span class="muted">for ${_escapeHtml(ctx.name)} / ${_escapeHtml(ctx.contrast)}</span></h4>` +
+        `<button id="attr-verdict-export" class="export-btn" title="Export visible verdict rows as CSV">Export CSV</button>` +
+        `</div>` +
         `<div id="attr-verdict"></div></section>` +
         `<section class="audit-panel"><h4>Raw attribution rows <span class="muted">(unified_attribution.csv)</span></h4>` +
         `<div id="audit-attribution"></div></section>`;
       AttributionView.render("attr-verdict", ctx, TCELL_MANIFEST);
+      const verdictExportBtn = document.getElementById("attr-verdict-export");
+      if (verdictExportBtn) verdictExportBtn.addEventListener("click", exportVerdictCsv);
       _renderAuditTable("audit-attribution", "unified_attribution", ctx.attrRows,
         ["kinase","gene_symbol","contrast","cell_type","tcell_detected","tcell_fraction_expressing","tcell_state_enrichment","tcell_lfc","tcell_concordance","tcell_consistency","NES","FDR"],
         "unified_attribution");
@@ -949,4 +955,21 @@ async function renderActiveKinaseAuditTab(kinase_id) {
     const msg = e && (e.message || e.toString && e.toString()) || String(e);
     body.innerHTML = `<div class="muted">Audit table load failed: ${_escapeHtml(msg)}</div>`;
   }
+}
+
+function exportVerdictCsv() {
+  const rows = AttributionView.getLastVisible("attr-verdict");
+  if (!rows.length) { alert("No verdict rows to export."); return; }
+  const donor = (ViewerPayload.activeContext && ViewerPayload.activeContext()) || "donor1";
+  const headers = [
+    "cell_type", "confidence_tier",
+    "tcell_detected", "tcell_fraction_expressing", "tcell_state_enrichment",
+    "tcell_lfc", "tcell_concordance", "tcell_consistency",
+  ];
+  const keys = [
+    "cell_type", "confidence_tier",
+    "tcell_detected", "tcell_fraction_expressing", "tcell_state_enrichment",
+    "tcell_lfc", "tcell_concordance", "tcell_consistency",
+  ];
+  csvDownload(csvSerialize(headers, keys, rows), exportFilename(donor, "attribution"));
 }

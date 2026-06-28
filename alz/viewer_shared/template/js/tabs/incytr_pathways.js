@@ -1979,9 +1979,12 @@ async function _ipExportCurrentView() {
     rows = _ipFilterRows();
   }
   const ctx = (ViewerPayload.activeContext && ViewerPayload.activeContext()) || "context";
-  const stamp = new Date().toISOString().slice(0, 10);
-  const safeCtx = String(ctx).replace(/[^A-Za-z0-9_.-]+/g, "_");
-  _ipDownloadCsv(rows, `incytr_pathways_${safeCtx}_${mode}_filtered_${stamp}.csv`);
+  // Map internal context id to a display name when a COHORT_LABELS map is available
+  // (unified viewer). Tcell donor ids (donor1/donor2) pass through as-is.
+  const ctxDisplay = (typeof COHORT_LABELS !== "undefined" && COHORT_LABELS[ctx])
+    ? COHORT_LABELS[ctx]
+    : String(ctx).replace(/[^A-Za-z0-9_.-]+/g, "_");
+  _ipDownloadCsv(rows, exportFilename(ctxDisplay, "incytr_pathways"));
 }
 
 function wireIncytrPathways() {
