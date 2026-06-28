@@ -311,6 +311,13 @@ function songOverallPeak(row) {
   return candidates[0];
 }
 
+// Per-genotype peak NES cell (signed); – when the genotype has no peak.
+function _kePeakNesCell(v) {
+  return v != null && isFinite(v)
+    ? `<td class="attr-num">${v > 0 ? "+" : ""}${v.toFixed(2)}</td>`
+    : `<td class="attr-num"><span class="muted">—</span></td>`;
+}
+
 function _ensureKinaseIdx() {
   if (_kinaseIdxById !== null) return;
   const K = ViewerPayload.kinases();
@@ -575,14 +582,9 @@ function _makeKeCompare(scopedCtxIds) {
       va = _kineDisagreeCountScoped(a, scopedCtxIds);
       vb = _kineDisagreeCountScoped(b, scopedCtxIds);
     }
-    else if (col === "peak_NES") {
-      // Use songOverallPeak (max-|NES| across genotypes) for scope-independent sort.
-      const pa = songOverallPeak(a), pb = songOverallPeak(b);
-      va = pa.nes != null ? Math.abs(pa.nes) : null;
-      vb = pb.nes != null ? Math.abs(pb.nes) : null;
-      if (va == null) va = -Infinity;
-      if (vb == null) vb = -Infinity;
-    }
+    else if (col === "peak_NES_App")  { va = a.peak_NES_App;  vb = b.peak_NES_App; }
+    else if (col === "peak_NES_Tau")  { va = a.peak_NES_Tau;  vb = b.peak_NES_Tau; }
+    else if (col === "peak_NES_ApTt") { va = a.peak_NES_ApTt; vb = b.peak_NES_ApTt; }
     else { va = a[col]; vb = b[col]; }
     if (va == null && vb == null) return 0;
     if (va == null) return 1;
@@ -865,7 +867,6 @@ function renderKinaseExplorer() {
     const selCls = r.id === selKid ? " selected" : "";
     // sub-thresh: 0 sig contrasts in the scoped set.
     const scopedSig = _kineSigCountScoped(r, fdr, scopedCtxIds);
-    const peakAbsNes = _kineMaxAbsNesScoped(r, scopedCtxIds);
     const subCls = scopedSig === 0 ? " sub-thresh" : "";
     const drvCls = (drvSet && drvSet.has(r.id)) ? " driver" : "";
 
@@ -886,7 +887,6 @@ function renderKinaseExplorer() {
 
     // Stamp export-friendly computed values onto the row for csvSerialize.
     r._exportScopedSig = scopedSig;
-    r._exportPeakAbsNes = peakAbsNes;
     r._exportSongTopCelltype = r.song ? r.song.topCelltype : null;
     r._exportWmbMaxTier = _kineMaxWmbTierScoped(r.id, colFilter);
     r._exportConf = hit ? hit.tier : "low";
@@ -904,7 +904,9 @@ function renderKinaseExplorer() {
       `<td>${_escapeHtml(r.family || "")}</td>` +
       `<td>${profile}</td>` +
       `<td>${agreementProfile}</td>` +
-      `<td class="attr-num">${(() => { const op = songOverallPeak(r); return op.nes != null ? (op.nes > 0 ? "+" : "") + op.nes.toFixed(2) : '<span class="muted">—</span>'; })()}</td>` +
+      _kePeakNesCell(r.peak_NES_App) +
+      _kePeakNesCell(r.peak_NES_Tau) +
+      _kePeakNesCell(r.peak_NES_ApTt) +
       `<td class="attr-num">${scopedSig}<span class="muted" style="font-size:10px;"> / ${sigDenom}</span></td>` +
       `<td>${_renderCellTypesCell(r, colFilter)}</td>` +
       `<td style="text-align:center;">${_keSongBadge(r.song)}</td>` +
@@ -920,8 +922,8 @@ function renderKinaseExplorer() {
 
 function exportKinaseCsv() {
   const stamp = new Date().toISOString().slice(0, 10);
-  const headers = ["Kinase","Gene","Family","Residue","n_sig","peak_NES","song_topCelltype","wmb_max_tier","conf"];
-  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportPeakAbsNes","_exportSongTopCelltype","_exportWmbMaxTier","_exportConf"];
+  const headers = ["Kinase","Gene","Family","Residue","n_sig","peak_NES_App","peak_NES_Tau","peak_NES_ApTt","song_topCelltype","wmb_max_tier","conf"];
+  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","peak_NES_App","peak_NES_Tau","peak_NES_ApTt","_exportSongTopCelltype","_exportWmbMaxTier","_exportConf"];
   csvDownload(csvSerialize(headers, keys, _keVisible), `kinase_${stamp}.csv`);
 }
 
