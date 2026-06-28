@@ -274,9 +274,19 @@ function _buildKinaseRowModel() {
       gene_symbol: K.gene_symbol[i] || "",
       family: famMap[K.name[i]] || "",
       residue_type: (K.residue_type && K.residue_type[i]) || "ST",
-      trajectory: K.trajectory[i] || "",
-      peak_contrast: K.peak_contrast[i] || "",
-      peak_NES: K.peak_NES[i],
+      // Per-genotype scalars (App/Tau/ApTt) — no pooled peak_NES/trajectory.
+      peak_NES_App:     K.peak_NES_App     ? K.peak_NES_App[i]     : null,
+      peak_NES_Tau:     K.peak_NES_Tau     ? K.peak_NES_Tau[i]     : null,
+      peak_NES_ApTt:    K.peak_NES_ApTt    ? K.peak_NES_ApTt[i]    : null,
+      peak_contrast_App:  K.peak_contrast_App  ? (K.peak_contrast_App[i]  || "") : "",
+      peak_contrast_Tau:  K.peak_contrast_Tau  ? (K.peak_contrast_Tau[i]  || "") : "",
+      peak_contrast_ApTt: K.peak_contrast_ApTt ? (K.peak_contrast_ApTt[i] || "") : "",
+      n_sig_App:  K.n_sig_App  ? (K.n_sig_App[i]  || 0) : 0,
+      n_sig_Tau:  K.n_sig_Tau  ? (K.n_sig_Tau[i]  || 0) : 0,
+      n_sig_ApTt: K.n_sig_ApTt ? (K.n_sig_ApTt[i] || 0) : 0,
+      trajectory_App:  K.trajectory_App  ? (K.trajectory_App[i]  || "") : "",
+      trajectory_Tau:  K.trajectory_Tau  ? (K.trajectory_Tau[i]  || "") : "",
+      trajectory_ApTt: K.trajectory_ApTt ? (K.trajectory_ApTt[i] || "") : "",
       top_celltype_1: K.top_celltype_1[i] || "",
       song: songByKid.get(K.id[i]) || null,
       _fdr: CONTRASTS.map(c => K["FDR_" + c][i]),
@@ -285,6 +295,20 @@ function _buildKinaseRowModel() {
   }
   _kinaseIdxById = idxById;
   return out;
+}
+
+// Shared transient helper: max-|NES| across the 3 per-genotype peaks.
+// Returns {nes, contrast, genotype} — computed on the fly, never stored.
+// Display stays genotype-explicit: peak_contrast_{g} already names the genotype.
+function songOverallPeak(row) {
+  const candidates = [
+    {genotype: "App",  nes: row.peak_NES_App,  contrast: row.peak_contrast_App},
+    {genotype: "Tau",  nes: row.peak_NES_Tau,  contrast: row.peak_contrast_Tau},
+    {genotype: "ApTt", nes: row.peak_NES_ApTt, contrast: row.peak_contrast_ApTt},
+  ].filter(c => c.nes != null && isFinite(c.nes));
+  if (!candidates.length) return {nes: null, contrast: CONTRASTS[0] || "", genotype: ""};
+  candidates.sort((a, b) => Math.abs(b.nes) - Math.abs(a.nes));
+  return candidates[0];
 }
 
 function _ensureKinaseIdx() {
@@ -552,9 +576,10 @@ function _makeKeCompare(scopedCtxIds) {
       vb = _kineDisagreeCountScoped(b, scopedCtxIds);
     }
     else if (col === "peak_NES") {
-      // Scope-aware to match the column's displayed value.
-      va = _kineMaxAbsNesScoped(a, scopedCtxIds);
-      vb = _kineMaxAbsNesScoped(b, scopedCtxIds);
+      // Use songOverallPeak (max-|NES| across genotypes) for scope-independent sort.
+      const pa = songOverallPeak(a), pb = songOverallPeak(b);
+      va = pa.nes != null ? Math.abs(pa.nes) : null;
+      vb = pb.nes != null ? Math.abs(pb.nes) : null;
       if (va == null) va = -Infinity;
       if (vb == null) vb = -Infinity;
     }
@@ -879,7 +904,7 @@ function renderKinaseExplorer() {
       `<td>${_escapeHtml(r.family || "")}</td>` +
       `<td>${profile}</td>` +
       `<td>${agreementProfile}</td>` +
-      `<td class="attr-num">${r.peak_NES != null && isFinite(r.peak_NES) ? (r.peak_NES > 0 ? "+" : "") + r.peak_NES.toFixed(2) : '<span class="muted">—</span>'}</td>` +
+      `<td class="attr-num">${(() => { const op = songOverallPeak(r); return op.nes != null ? (op.nes > 0 ? "+" : "") + op.nes.toFixed(2) : '<span class="muted">—</span>'; })()}</td>` +
       `<td class="attr-num">${scopedSig}<span class="muted" style="font-size:10px;"> / ${sigDenom}</span></td>` +
       `<td>${_renderCellTypesCell(r, colFilter)}</td>` +
       `<td style="text-align:center;">${_keSongBadge(r.song)}</td>` +

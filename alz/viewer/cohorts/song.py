@@ -113,13 +113,17 @@ def _build_kinases_slice(data: UnifiedData) -> dict:
     cols: dict[str, list] = {
         "id": [], "name": [], "gene_symbol": [],
         "residue_type": [],
-        "trajectory": [], "peak_contrast": [], "peak_NES": [],
-        "n_sig_contrasts": [],
         "top_celltype_1": [], "top_celltype_2": [], "top_celltype_3": [],
         "top_celltype_1_sea_ad_lfc": [],
         "top_celltype_1_song_lfc": [],
         "n_celltype_candidates": [],
     }
+    # Per-genotype scalars: peak_NES_{g}, peak_contrast_{g}, n_sig_{g}, trajectory_{g}
+    for g in config.DISEASE_GROUPS:
+        cols[f"peak_NES_{g}"] = []
+        cols[f"peak_contrast_{g}"] = []
+        cols[f"n_sig_{g}"] = []
+        cols[f"trajectory_{g}"] = []
     for c in contrasts:
         cols[f"NES_{c}"] = []
         cols[f"FDR_{c}"] = []
@@ -138,10 +142,11 @@ def _build_kinases_slice(data: UnifiedData) -> dict:
 
         cols["gene_symbol"].append(_get(ka_row, "gene_symbol", ""))
         cols["residue_type"].append(_get(ka_row, "residue_type", "ST"))
-        cols["trajectory"].append(_get(ka_row, "trajectory_label", ""))
-        cols["peak_contrast"].append(_get(ka_row, "peak_contrast", ""))
-        cols["peak_NES"].append(_get(ka_row, "peak_NES"))
-        cols["n_sig_contrasts"].append(_get(ka_row, "n_sig_contrasts", 0))
+        for g in config.DISEASE_GROUPS:
+            cols[f"peak_NES_{g}"].append(_get(ka_row, f"peak_NES_{g}"))
+            cols[f"peak_contrast_{g}"].append(_get(ka_row, f"peak_contrast_{g}", ""))
+            cols[f"n_sig_{g}"].append(_get(ka_row, f"n_sig_{g}", 0))
+            cols[f"trajectory_{g}"].append(_get(ka_row, f"trajectory_{g}", ""))
         cols["top_celltype_1"].append(_get(hyp_row, "top_celltype_1", ""))
         cols["top_celltype_2"].append(_get(hyp_row, "top_celltype_2", ""))
         cols["top_celltype_3"].append(_get(hyp_row, "top_celltype_3", ""))

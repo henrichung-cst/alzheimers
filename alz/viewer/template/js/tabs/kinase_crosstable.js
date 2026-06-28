@@ -153,9 +153,19 @@ function _kxBuildIndexes() {
       gene: K.gene_symbol[i] || "",
       family: famMap[K.name[i]] || "",
       residue: (K.residue_type && K.residue_type[i]) || "ST",
-      peak_NES: K.peak_NES[i],
-      trajectory: K.trajectory ? (K.trajectory[i] || "") : "",
-      n_sig_contrasts: K.n_sig_contrasts ? (K.n_sig_contrasts[i] || 0) : 0,
+      // Per-genotype scalars (no pooled peak_NES/trajectory/n_sig_contrasts).
+      peak_NES_App:     K.peak_NES_App     ? K.peak_NES_App[i]     : null,
+      peak_NES_Tau:     K.peak_NES_Tau     ? K.peak_NES_Tau[i]     : null,
+      peak_NES_ApTt:    K.peak_NES_ApTt    ? K.peak_NES_ApTt[i]    : null,
+      peak_contrast_App:  K.peak_contrast_App  ? (K.peak_contrast_App[i]  || "") : "",
+      peak_contrast_Tau:  K.peak_contrast_Tau  ? (K.peak_contrast_Tau[i]  || "") : "",
+      peak_contrast_ApTt: K.peak_contrast_ApTt ? (K.peak_contrast_ApTt[i] || "") : "",
+      n_sig_App:  K.n_sig_App  ? (K.n_sig_App[i]  || 0) : 0,
+      n_sig_Tau:  K.n_sig_Tau  ? (K.n_sig_Tau[i]  || 0) : 0,
+      n_sig_ApTt: K.n_sig_ApTt ? (K.n_sig_ApTt[i] || 0) : 0,
+      trajectory_App:  K.trajectory_App  ? (K.trajectory_App[i]  || "") : "",
+      trajectory_Tau:  K.trajectory_Tau  ? (K.trajectory_Tau[i]  || "") : "",
+      trajectory_ApTt: K.trajectory_ApTt ? (K.trajectory_ApTt[i] || "") : "",
       n_celltype_candidates: K.n_celltype_candidates ? (K.n_celltype_candidates[i] || 0) : 0,
       _nes: nesByC, _fdr: fdrByC,
     });
@@ -336,7 +346,11 @@ function _kxBuildIndexes() {
     const residue = key.slice(bar + 1);
     _KX_ROWS.push({
       kid: human.kid, name, gene: "", family: famMap[name] || "", residue,
-      peak_NES: null, trajectory: "", n_sig_contrasts: 0, n_celltype_candidates: 0,
+      peak_NES_App: null, peak_NES_Tau: null, peak_NES_ApTt: null,
+      peak_contrast_App: "", peak_contrast_Tau: "", peak_contrast_ApTt: "",
+      n_sig_App: 0, n_sig_Tau: 0, n_sig_ApTt: 0,
+      trajectory_App: "", trajectory_Tau: "", trajectory_ApTt: "",
+      n_celltype_candidates: 0,
       _nes: {}, _fdr: {}, _human: human, _humanOnly: true,
     });
     seen.add(key);
@@ -348,7 +362,11 @@ function _kxBuildIndexes() {
       if (seen.has(key)) continue;
       _KX_ROWS.push({
         kid: null, name: rec.kinase, gene: rec.gene || "", family: famMap[rec.kinase] || "", residue: rec.residue,
-        peak_NES: null, trajectory: "", n_sig_contrasts: 0, n_celltype_candidates: 0,
+        peak_NES_App: null, peak_NES_Tau: null, peak_NES_ApTt: null,
+        peak_contrast_App: "", peak_contrast_Tau: "", peak_contrast_ApTt: "",
+        n_sig_App: 0, n_sig_Tau: 0, n_sig_ApTt: 0,
+        trajectory_App: "", trajectory_Tau: "", trajectory_ApTt: "",
+        n_celltype_candidates: 0,
         _nes: {}, _fdr: {}, _human: null, _humanOnly: true, _f5Only: true,
       });
       seen.add(key);
@@ -806,11 +824,32 @@ function _kxComparisonMeta(scope, state) {
 // allSamples = include EVERY measured unit in the median (and treat "measured"
 // as the inclusion criterion for the category), instead of only units FDR-
 // significant at the gate. Lets the user see the all-sample direction/agreement.
+// Compute per-genotype songVals from the row's CONTRASTS data.
+// Returns {App: source, Tau: source, ApTt: source} where each source is the
+// result of _kxSourceFromValues over that genotype's contrasts.
+function _kxSongSourcesByGenotype(r, fdrGate, allSamples) {
+  const result = {};
+  for (const g of ["App", "Tau", "ApTt"]) {
+    const vals = [];
+    for (const c of (CONTRASTS || [])) {
+      if (c.split("_")[0] !== g) continue;
+      vals.push({nes: r._nes[c], fdr: r._fdr[c]});
+    }
+    result[g] = _kxSourceFromValues(vals, fdrGate, allSamples);
+  }
+  return result;
+}
+
 function _kxComputeAgreement(rows, fdrGate, allSamples) {
   for (const r of rows) {
-    const songVals = [];
-    for (const c of (CONTRASTS || [])) songVals.push({nes: r._nes[c], fdr: r._fdr[c]});
-    const song = _kxSourceFromValues(songVals, fdrGate, allSamples);
+    // Per-genotype Song sources (3×): App / Tau / ApTt
+    const songSources = _kxSongSourcesByGenotype(r, fdrGate, allSamples);
+    r._songSource_App  = songSources.App;
+    r._songSource_Tau  = songSources.Tau;
+    r._songSource_ApTt = songSources.ApTt;
+    r._mNes_App  = songSources.App.nes;
+    r._mNes_Tau  = songSources.Tau.nes;
+    r._mNes_ApTt = songSources.ApTt.nes;
 
     const humanVals = [];
     const pd = r._human ? _KX_HUMAN_PERDONOR.get(r._human.kid) : null;
@@ -824,18 +863,40 @@ function _kxComputeAgreement(rows, fdrGate, allSamples) {
     const hippocampus = _kxF5TissueSource(r, "hippocampus", fdrGate, allSamples);
     const f5 = _kxAggregateF5(cortex, hippocampus, fdrGate, allSamples);
 
-    r._songSource = song;
+    // Retain a combined songSource for _kxComparisonState / _kxComparePair compatibility.
+    // Use the most-concordant genotype's source (see _agreeCategory below).
     r._mukeshSource = mukesh;
     r._f5Tissues = {cortex, hippocampus};
     r._f5Source = f5;
-    r._mouseSig = song.sig; r._humanSig = mukesh.sig;
-    r._mNes = song.nes; r._hNes = mukesh.nes; r._f5Nes = f5.nes;
+    r._humanSig = mukesh.sig;
+    r._hNes = mukesh.nes; r._f5Nes = f5.nes;
 
-    const cat = _kxComparisonState(r, _kxState().compareScope || "three_way");
-    r._agreeCategory = cat;
-    // Internal sort rank only: categories first, then available evidence breadth.
+    // Agreement: category = the MOST-CONCORDANT genotype (argmax agreement with Human/5xFAD).
+    // _agreeScore is labeled with that genotype for display.
     const rank = {sig_same: 6, directional_same: 5, source_only: 4, cortex_only: 4, hippocampus_only: 4, measured: 3, missing_one: 2, missing: 1, directional_opposite: -2, mixed_sig: -3, sig_opposite: -4};
-    r._agreeScore = (rank[cat] || 0) * 100 + (song.nSig || 0) + (mukesh.nSig || 0) + (f5.nSig || 0);
+    let bestGenotype = "App", bestCat = null, bestRank = -Infinity;
+    for (const g of ["App", "Tau", "ApTt"]) {
+      // Temporarily set _songSource to this genotype's source for _kxComparisonState.
+      r._songSource = songSources[g];
+      r._mouseSig = songSources[g].sig;
+      r._mNes = songSources[g].nes;
+      const cat = _kxComparisonState(r, _kxState().compareScope || "three_way");
+      const catRank = rank[cat] || 0;
+      if (catRank > bestRank) {
+        bestRank = catRank;
+        bestCat = cat;
+        bestGenotype = g;
+      }
+    }
+    // Stamp the most-concordant genotype's source as the active _songSource.
+    r._songSource = songSources[bestGenotype];
+    r._mouseSig = songSources[bestGenotype].sig;
+    r._mNes = songSources[bestGenotype].nes;
+    r._agreeGenotype = bestGenotype;
+    r._agreeCategory = bestCat;
+    // Sort rank: category first, then evidence breadth across all genotypes.
+    const totalSongSig = (songSources.App.nSig || 0) + (songSources.Tau.nSig || 0) + (songSources.ApTt.nSig || 0);
+    r._agreeScore = bestRank * 100 + totalSongSig + (mukesh.nSig || 0) + (f5.nSig || 0);
   }
 }
 
@@ -1169,7 +1230,9 @@ function _kxBuildHeader(s) {
   cells.push(TH(null, COHORT_LABELS.mukesh, `${COHORT_LABELS.mukesh} per-donor MEA NES: AD donors, then a muted CTRL reference group (red=up, blue=down; outlined=FDR<header).`, "kx-hglyph"));
   cells.push(TH(null, `${COHORT_LABELS.fivexfad} cortex`, `${COHORT_LABELS.fivexfad} cortex TG-vs-WT kinase MEA across 3/6/9/12 months. Red=up, blue=down, outline=FDR<header.`, "kx-f5glyph"));
   cells.push(TH(null, `${COHORT_LABELS.fivexfad} hip`, `${COHORT_LABELS.fivexfad} hippocampus TG-vs-WT kinase MEA across 3/6/9/12 months. Red=up, blue=down, outline=FDR<header.`, "kx-f5glyph"));
-  cells.push(TH("m_med", "M med", "Mouse median NES over the contrasts feeding the direction call (FDR-significant, or all when 'All samples' is on). – = none. Sort by magnitude.", "kx-nes-num"));
+  cells.push(TH("m_med_App",  "MouseC1_App",  `${COHORT_LABELS.song} App genotype: median NES over significant timepoints (signed). – = none. Sort by magnitude.`, "kx-nes-num"));
+  cells.push(TH("m_med_Tau",  "MouseC1_Tau",  `${COHORT_LABELS.song} Tau genotype: median NES over significant timepoints (signed). – = none. Sort by magnitude.`, "kx-nes-num"));
+  cells.push(TH("m_med_ApTt", "MouseC1_ApTt", `${COHORT_LABELS.song} ApTt genotype: median NES over significant timepoints (signed). – = none. Sort by magnitude.`, "kx-nes-num"));
   cells.push(TH("h_med", "H med", "Human median NES over the AD donors feeding the direction call (FDR-significant, or all when 'All samples' is on). – = none. Sort by magnitude.", "kx-nes-num"));
   cells.push(TH("f5_med", `${COHORT_LABELS.fivexfad} med`, `${COHORT_LABELS.fivexfad} median NES over cortex and hippocampus age units feeding the direction call (FDR-significant, or all when 'All samples' is on). – = none. Sort by magnitude.`, "kx-nes-num"));
   cells.push(TH("agree_score", "Crossplay", `Categorical comparison under the active scope: ${COHORT_LABELS.song}, ${COHORT_LABELS.mukesh} AD, and/or ${COHORT_LABELS.fivexfad} aggregate cortex+hippocampus. CTRL donors are visual reference only.`, "kx-agree-col"));
@@ -1214,7 +1277,9 @@ function _kxBuildRow(r, s, fdrGate) {
   tds.push(_kxHumanGlyphCell(r, fdrGate));
   tds.push(_kxF5GlyphCell(r, "cortex", fdrGate));
   tds.push(_kxF5GlyphCell(r, "hippocampus", fdrGate));
-  tds.push(_kxMedNesCell(r._mNes));
+  tds.push(_kxMedNesCell(r._mNes_App));
+  tds.push(_kxMedNesCell(r._mNes_Tau));
+  tds.push(_kxMedNesCell(r._mNes_ApTt));
   tds.push(_kxMedNesCell(r._hNes));
   tds.push(_kxMedNesCell(r._f5Nes));
   tds.push(_kxAgreeCategoryCell(r._agreeCategory));
@@ -1270,14 +1335,20 @@ function _kxSortRows(rows, s) {
         const ma = _KX_SEAAD_MAX_BY_NAME.get(a.name), mb = _KX_SEAAD_MAX_BY_NAME.get(b.name);
         av = ma ? ma.score : null; bv = mb ? mb.score : null;
       }
-    } else if (s.sortKey === "m_med") {
-      av = a._mNes; bv = b._mNes;
+    } else if (s.sortKey === "m_med_App") {
+      av = a._mNes_App; bv = b._mNes_App;
+    } else if (s.sortKey === "m_med_Tau") {
+      av = a._mNes_Tau; bv = b._mNes_Tau;
+    } else if (s.sortKey === "m_med_ApTt") {
+      av = a._mNes_ApTt; bv = b._mNes_ApTt;
     } else if (s.sortKey === "h_med") {
       av = a._hNes; bv = b._hNes;
     } else if (s.sortKey === "f5_med") {
       av = a._f5Nes; bv = b._f5Nes;
     } else {
-      av = a.peak_NES; bv = b.peak_NES;
+      // Default fallback: overall peak (max-|NES| across the 3 per-genotype peaks).
+      const pa = songOverallPeak(a), pb = songOverallPeak(b);
+      av = pa.nes; bv = pb.nes;
     }
     const aMissing = av == null || !isFinite(av);
     const bMissing = bv == null || !isFinite(bv);
@@ -1436,12 +1507,24 @@ function _kxRenderDetail() {
     const e = pd.get(d);
     if (e && e.nes != null && isFinite(e.nes)) { hTot++; if (e.fdr != null && e.fdr < fdrGate) hSig++; }
   }
-  const mNesTxt = row._mNes != null ? `${row._mNes >= 0 ? "+" : ""}${row._mNes.toFixed(2)}` : "n/a";
+  // Per-genotype NES / sig counts for the verdict header.
+  const _gNes = (g) => {
+    const src = row[`_songSource_${g}`];
+    const v = src ? src.nes : null;
+    return v != null ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}` : "n/a";
+  };
+  const _gSig = (g) => {
+    const src = row[`_songSource_${g}`];
+    return src ? (src.nSig || 0) : 0;
+  };
+  const _gMeas = (g) => {
+    const src = row[`_songSource_${g}`];
+    return src ? (src.nMeasured || 0) : 0;
+  };
   const hNesTxt = row._hNes != null ? `${row._hNes >= 0 ? "+" : ""}${row._hNes.toFixed(2)}` : "n/a";
   const f5NesTxt = row._f5Nes != null ? `${row._f5Nes >= 0 ? "+" : ""}${row._f5Nes.toFixed(2)}` : "n/a";
   const allS = s.allSamples;
   const nesLbl = allS ? "median NES (all samples)" : "median NES";
-  const mCntTxt = allS ? `${mTot} contrast${mTot === 1 ? "" : "s"}` : `${mSig}/${mTot || "–"} contrasts sig`;
   const hCntTxt = allS ? `${hTot} donor${hTot === 1 ? "" : "s"}` : `${hSig}/${hTot || "–"} donors sig`;
   const f5Cnt = row._f5Source || {nSig: 0, nMeasured: 0};
   const f5CntTxt = allS
@@ -1457,7 +1540,9 @@ function _kxRenderDetail() {
         <span class="${meta.cls}" title="${_escapeHtml(meta.tip)}">${meta.glyph} ${_escapeHtml(meta.label)}</span>
       </div>
       <div class="kx-detail-verdict muted">
-        ${COHORT_LABELS.song} ${nesLbl} <b>${mNesTxt}</b> (${mCntTxt}) ·
+        MouseC1_App ${nesLbl} <b>${_gNes("App")}</b> (${allS ? `${_gMeas("App")} contrasts` : `${_gSig("App")}/${_gMeas("App") || "–"} sig`}) ·
+        MouseC1_Tau ${nesLbl} <b>${_gNes("Tau")}</b> (${allS ? `${_gMeas("Tau")} contrasts` : `${_gSig("Tau")}/${_gMeas("Tau") || "–"} sig`}) ·
+        MouseC1_ApTt ${nesLbl} <b>${_gNes("ApTt")}</b> (${allS ? `${_gMeas("ApTt")} contrasts` : `${_gSig("ApTt")}/${_gMeas("ApTt") || "–"} sig`}) ·
         ${COHORT_LABELS.mukesh} AD ${nesLbl} <b>${hNesTxt}</b> (${hCntTxt}) ·
         ${COHORT_LABELS.fivexfad} ${nesLbl} <b>${f5NesTxt}</b> (${f5CntTxt}) ·
         ${COHORT_LABELS.fivexfad} aggregate ${_kxStatusBadge(row._f5Source ? row._f5Source.status : "missing")}
@@ -1608,8 +1693,8 @@ function wireKinaseCrosstable() {
 
 function exportCrosstableCsv() {
   const stamp = new Date().toISOString().slice(0, 10);
-  const headers = ["Kinase","Gene","Residue","Family","Mouse_med_NES","Human_med_NES","5xFAD_med_NES","Crossplay","Song_tier","WMB_tier","SEAAD_log2"];
-  const keys    = ["name","gene","residue","family","_mNes","_hNes","_f5Nes","_agreeCategory","_exportSongTier","_exportWmb","_exportSeaad"];
+  const headers = ["Kinase","Gene","Residue","Family","MouseC1_App_med_NES","MouseC1_Tau_med_NES","MouseC1_ApTt_med_NES","Human_med_NES","5xFAD_med_NES","Crossplay","Song_tier","WMB_tier","SEAAD_log2"];
+  const keys    = ["name","gene","residue","family","_mNes_App","_mNes_Tau","_mNes_ApTt","_hNes","_f5Nes","_agreeCategory","_exportSongTier","_exportWmb","_exportSeaad"];
   csvDownload(csvSerialize(headers, keys, _kxVisible), `crosstable_${stamp}.csv`);
 }
 
