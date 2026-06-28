@@ -7,7 +7,8 @@ Compares leading-edge phosphosite substrate profiles between cohorts (Song mouse
 
 C5-stable public API
 --------------------
-    build_profile(kinase, cohort, contrast, track, *, human_mode, human_m)
+    build_profile(kinase, cohort, contrast, track, *, human_mode, human_m,
+                  ad_donor_set=None)
         → Profile  (dict[motif_upper: ProfileEntry])
     compare(profile_a, profile_b) → Decomposition
     motif_similarity(m_a, m_b)    → SimilarityResult
@@ -480,15 +481,23 @@ def _build_fivexfad_profile(kinase: str, contrast: str, track: str) -> Profile:
 
 
 def _build_human_perdonor_profile(
-    kinase: str, track: str, *, human_m: int = 1
+    kinase: str, track: str, *, human_m: int = 1,
+    ad_donor_set: Optional[list] = None,
 ) -> Profile:
     """Human per-donor leading-edge profile.
 
-    Motif is included if it appears in the leading edge of >= human_m AD donors.
-    direction = majority sign vote across AD donors that contributed the motif.
-    support = number of AD donors in whose leading edge the motif appears.
+    Motif is included if it appears in the leading edge of >= human_m donors in
+    the active donor set.
+    direction = majority sign vote across donors that contributed the motif.
+    support = number of donors in whose leading edge the motif appears.
 
     LFC per donor per site: donor_col - nanmean(ctrl_cols) from stoichiometry_matrix.
+
+    Parameters
+    ----------
+    ad_donor_set : explicit list of donor sample_ids to treat as "AD" for this
+        profile.  None (default) → derive from sample_mapping.csv group=='AD'
+        (official grouping, byte-identical to prior behavior).
     """
     paths = _human_paths(track)
     for k, p in paths.items():
@@ -503,7 +512,10 @@ def _build_human_perdonor_profile(
     smap = conn.execute(
         f'SELECT sample_id, "group" FROM read_csv_auto(\'{paths["sample_map"]}\')'
     ).fetchdf()
-    ad_donors = sorted(smap.loc[smap["group"] == "AD", "sample_id"].tolist())
+    if ad_donor_set is not None:
+        ad_donors = sorted(ad_donor_set)
+    else:
+        ad_donors = sorted(smap.loc[smap["group"] == "AD", "sample_id"].tolist())
     ctrl_donors = sorted(smap.loc[smap["group"] == "CTRL", "sample_id"].tolist())
     if not ad_donors:
         raise RuntimeError("No AD donors found in sample_mapping.csv")
@@ -761,20 +773,25 @@ def build_profile(
     *,
     human_mode: str = "perdonor",
     human_m: int = 1,
+    ad_donor_set: Optional[list] = None,
 ) -> Profile:
     """Build a substrate profile for one kinase at one cohort×contrast.
 
     Parameters
     ----------
-    kinase     : kinase abbreviation (case-sensitive, as in MEA tables)
-    cohort     : 'song' | 'fivexfad' | 'mukesh'
-    contrast   : cohort-specific contrast string
-                 Song:     '{genotype}_{age}mo'  e.g. 'App_2mo'
-                 5xFAD:    '{tissue}_TG_vs_WT_{age}mo' e.g. 'cortex_TG_vs_WT_6mo'
-                 Mukesh:   ignored for perdonor; 'AD_vs_cleanCTRL' for pergroup
-    track      : 'st' | 'py'
-    human_mode : 'perdonor' (default) | 'pergroup'
-    human_m    : recurrence threshold for perdonor (motif in >= M donor LEs)
+    kinase       : kinase abbreviation (case-sensitive, as in MEA tables)
+    cohort       : 'song' | 'fivexfad' | 'mukesh'
+    contrast     : cohort-specific contrast string
+                   Song:     '{genotype}_{age}mo'  e.g. 'App_2mo'
+                   5xFAD:    '{tissue}_TG_vs_WT_{age}mo' e.g. 'cortex_TG_vs_WT_6mo'
+                   Mukesh:   ignored for perdonor; 'AD_vs_cleanCTRL' for pergroup
+    track        : 'st' | 'py'
+    human_mode   : 'perdonor' (default) | 'pergroup'
+    human_m      : recurrence threshold for perdonor (motif in >= M donor LEs)
+    ad_donor_set : (perdonor only) explicit list of donor sample_ids to use as
+                   the "AD" set.  None (default) = official group=='AD' from
+                   sample_mapping.csv.  Pass e.g. AD8 ∪ {CTRL-08, CTRL-10} for
+                   the b-donorset one-off (suspects treated as AD).
 
     Returns
     -------
@@ -787,7 +804,9 @@ def build_profile(
         return _build_fivexfad_profile(kinase, contrast, track)
     elif cohort == "mukesh":
         if human_mode == "perdonor":
-            return _build_human_perdonor_profile(kinase, track, human_m=human_m)
+            return _build_human_perdonor_profile(
+                kinase, track, human_m=human_m, ad_donor_set=ad_donor_set
+            )
         else:
             return _build_human_pergroup_profile(kinase, contrast, track)
     else:
