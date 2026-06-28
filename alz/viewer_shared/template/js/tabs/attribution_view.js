@@ -11,9 +11,14 @@
 // ---- Leaf cell renderers (global scope — referenced by kinase_fivexfad.js) --
 
 function _detGateCell(detected, frac, where) {
+  const ctxNoun = where || "this cell type";
+  // null detection = no call exists for this kinase here (e.g. a reference's
+  // probe panel does not cover it) — distinct from a measured "not detected".
+  if (detected == null) {
+    return `<span class="muted" title="No detection call for ${ctxNoun} (kinase outside this panel).">n/a</span>`;
+  }
   const detBool = detected === true || detected === "True" || detected === "true";
   const fracPct = (frac != null && isFinite(frac)) ? (Number(frac) * 100).toFixed(0) + "%" : "";
-  const ctxNoun = where || "this cell type";
   if (!detBool) {
     return `<span class="song-det-no" title="Not detected in ${ctxNoun} (${fracPct ? fracPct + ' of cells' : 'frac n/a'} < 10% threshold)">✗ ${fracPct}</span>`;
   }

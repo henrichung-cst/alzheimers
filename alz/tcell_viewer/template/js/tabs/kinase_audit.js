@@ -521,33 +521,16 @@ function _attrPathwayFromContrast(contrast) {
 }
 
 // External-reference (10x 897k-cell NSCLC) DETECTION — the independent check on
-// whether the kinase is actually present in a cell type (expressed in ≥1 cell;
-// no minimum-fraction floor — the 897k-cell reference is deep enough that any
-// nonzero fraction is a real detection). This replaces
+// whether the kinase is actually present in a cell type (≥10% of cells express it,
+// the single cross-cohort detection floor shared with the within-cohort scRNA).
+// This replaces
 // the old transcript-share tier: a share is a relative ranking, not presence, and
 // was shown inversely predictive of truth (docs/plans/standard_attribution_metric.md).
 // All values are precomputed in Python; the JS only renders.
-// NOTE: _nsclcDetCell returns a complete <td>; used by TCELL_MANIFEST column render.
-function _nsclcDetCell(frac, detected) {
-  // Per-state reference detection for the verdict table. null = the kinase is
-  // outside the NSCLC probe panel (the reference cannot speak to it).
-  if (frac == null || detected == null) return '<td class="attr-num"><span class="muted">n/a</span></td>';
-  const pct = (Number(frac) * 100).toFixed(0) + "%";
-  return detected
-    ? '<td class="attr-num nsclc-det-yes" title="Detected in this cell type in the independent NSCLC reference: ' +
-        pct + ' of cells express the kinase (expressed in ≥1 cell — no minimum-fraction floor).">✓ ' + pct + '</td>'
-    : '<td class="attr-num nsclc-det-no" title="NOT detected in this cell type in the independent NSCLC reference: ' +
-        pct + ' of cells express the kinase.">✗ ' + pct + '</td>';
-}
-function _nsclcConcTierBadge(tier) {
-  // Concentration tier (≥2×/5×/10× the even 1/N share of total expression across
-  // all lineages), precomputed in Python. Tier 1 = at/above even share; 0 / null
-  // = not detected.
-  const t = Number(tier) || 0;
-  if (!t) return "";
-  const cls = t >= 10 ? "vhi" : (t >= 5 ? "hi" : (t >= 2 ? "mid" : "lo"));
-  return ' <span class="badge ' + cls + '" title="Concentrated here: ≥' + t +
-         '× the even 1/N share of total expression across all lineages.">≥' + t + '×</span>';
+// Concentration badge: the shared _concTierCell (attribution_view.js) renders the
+// ≥N× tier identically; prefix a space and suppress it at tier 0 (no badge).
+function _concTierBadgeOrEmpty(tier) {
+  return (Number(tier) || 0) > 0 ? " " + _concTierCell(tier) : "";
 }
 
 // ATTR_VERDICT_COLS removed — replaced by TCELL_MANIFEST.columns in attribution_manifest_tcell.js.
@@ -560,23 +543,23 @@ function _nsclcConcTierBadge(tier) {
 
 
 
-// Per-lineage detection strip — the independent NSCLC reference's breadth
+// Per-cell-type detection strip — the independent NSCLC reference's breadth
 // readout for one kinase. Reads native-type rows from nsclc_kinase_expression.csv
 // (one row per cell_type); renders the 14 ProjecTILs T-states grouped by
-// CD8/CD4/Treg, and non-T lineages individually. Detection = binary_expressed
-// (fraction_cells_expressing ≥ 1%). This answers the breadth question the
-// T-only verdict table cannot: is the kinase a T-lineage kinase at all, and how
+// CD8/CD4/Treg, and non-T cell types individually. Detection = binary_expressed
+// (fraction_cells_expressing ≥ 10%, the single cross-cohort floor). This answers the breadth question the
+// T-only verdict table cannot: is the kinase a T-cell kinase at all, and how
 // many cell types would a knockout affect?
-function _tcellLineageGroup(cellType) {
+function _tcellCellTypeGroup(cellType) {
   if (!cellType) return "Other";
   const s = String(cellType);
   if (s === "Treg" || s === "CD4.Treg") return "Treg";
   if (s.startsWith("CD8")) return "CD8";
   if (s.startsWith("CD4")) return "CD4";
-  return "T_NK";  // NK or other T subtypes
+  return "T_NK";  // NK or other T cell states
 }
 
-function _renderNSCLCLineageStrip(hostId, ctx) {
+function _renderNSCLCCellTypeStrip(hostId, ctx) {
   const host = document.getElementById(hostId);
   if (!host) return;
   const rows = ctx.nsclcRows || [];
@@ -586,14 +569,14 @@ function _renderNSCLCLineageStrip(hostId, ctx) {
   }
   const isTrue = (v) => v === true || String(v).toLowerCase() === "true" || Number(v) === 1;
 
-  // Separate T-cell states (spec_group == T_NK) from non-T lineages.
+  // Separate T-cell states (spec_group == T_NK) from non-T cell types.
   const tRows = rows.filter(r => String(r.spec_group || "") === "T_NK");
   const nonTRows = rows.filter(r => String(r.spec_group || "") !== "T_NK");
 
   // Group T-states by CD8/CD4/Treg.
   const tGroups = {};
   for (const r of tRows) {
-    const grp = _tcellLineageGroup(String(r.cell_type || ""));
+    const grp = _tcellCellTypeGroup(String(r.cell_type || ""));
     if (!tGroups[grp]) tGroups[grp] = [];
     tGroups[grp].push(r);
   }
@@ -612,7 +595,7 @@ function _renderNSCLCLineageStrip(hostId, ctx) {
     const topFrac = detRows.length
       ? Math.max(...detRows.map(r => Number(r.fraction_cells_expressing) || 0)) : 0;
     const topTier = grpRows.reduce((mx, r) => Math.max(mx, Number(r.concentration_tier) || 0), 0);
-    const dim = nDet === 0 ? " nsclc-lineage-chip-dim" : "";
+    const dim = nDet === 0 ? " nsclc-celltype-chip-dim" : "";
     const mark = nDet > 0
       ? `<span class="nsclc-det-yes">✓ ${nDet}/${nTotal} states</span>`
       : `<span class="muted">✗ 0/${nTotal} states</span>`;
@@ -620,11 +603,11 @@ function _renderNSCLCLineageStrip(hostId, ctx) {
     const stateLines = grpRows.map(r =>
       `  ${_escapeHtml(String(r.cell_type))} ${isTrue(r.binary_expressed) ? '✓' : '✗'} ${(Number(r.fraction_cells_expressing) * 100 || 0).toFixed(0)}%`
     ).join("\n");
-    return `<span class="nsclc-lineage-chip${dim}" title="${_escapeHtml(grpName)} (${nDet}/${nTotal} states detected):\n${stateLines}">` +
-      `<strong>${_escapeHtml(grpName)}</strong> ${mark}${_nsclcConcTierBadge(topTier)}</span>`;
+    return `<span class="nsclc-celltype-chip${dim}" title="${_escapeHtml(grpName)} (${nDet}/${nTotal} states detected):\n${stateLines}">` +
+      `<strong>${_escapeHtml(grpName)}</strong> ${mark}${_concTierBadgeOrEmpty(topTier)}</span>`;
   }).join("");
 
-  // Non-T lineages: one chip each.
+  // Non-T cell types: one chip each.
   const nonTChips = nonTRows
     .map(r => ({
       g: String(r.spec_group || r.cell_type || ""),
@@ -635,12 +618,12 @@ function _renderNSCLCLineageStrip(hostId, ctx) {
     .filter(e => e.g)
     .sort((a, b) => (b.det - a.det) || (b.frac - a.frac))
     .map(e => {
-      const dim = e.det ? "" : " nsclc-lineage-chip-dim";
+      const dim = e.det ? "" : " nsclc-celltype-chip-dim";
       const mark = e.det
         ? `<span class="nsclc-det-yes">✓ ${(e.frac * 100).toFixed(0)}%</span>`
         : `<span class="muted">✗ ${(e.frac * 100).toFixed(0)}%</span>`;
-      return `<span class="nsclc-lineage-chip${dim}" title="${_escapeHtml(e.g)}: ${(e.frac * 100).toFixed(0)}% of cells ${e.det ? '(detected)' : '(not detected)'}.">` +
-        `<strong>${_escapeHtml(e.g)}</strong> ${mark}${_nsclcConcTierBadge(e.tier)}</span>`;
+      return `<span class="nsclc-celltype-chip${dim}" title="${_escapeHtml(e.g)}: ${(e.frac * 100).toFixed(0)}% of cells ${e.det ? '(detected)' : '(not detected)'}.">` +
+        `<strong>${_escapeHtml(e.g)}</strong> ${mark}${_concTierBadgeOrEmpty(e.tier)}</span>`;
     }).join("");
 
   const allRows = rows;
@@ -656,11 +639,11 @@ function _renderNSCLCLineageStrip(hostId, ctx) {
     verdict = `detected in ${nDetAll} / ${nTotalAll} cell types`;
   }
 
-  const tSection = tChips ? `<div class="nsclc-lineage-group-label">T-cells (CD8 / CD4 / Treg)</div><div class="nsclc-lineage-strip">${tChips}</div>` : "";
-  const nonTSection = nonTChips ? `<div class="nsclc-lineage-group-label">Non-T lineages</div><div class="nsclc-lineage-strip">${nonTChips}</div>` : "";
+  const tSection = tChips ? `<div class="nsclc-celltype-group-label">T-cells (CD8 / CD4 / Treg)</div><div class="nsclc-celltype-strip">${tChips}</div>` : "";
+  const nonTSection = nonTChips ? `<div class="nsclc-celltype-group-label">Non-T cell types</div><div class="nsclc-celltype-strip">${nonTChips}</div>` : "";
 
   host.innerHTML =
-    `<p class="muted attr-caption">Independent human reference (10x 897k-cell NSCLC TME). Detection = binary_expressed (fraction_cells_expressing ≥ 1%); T-states are the 14 ProjecTILs functional.cluster labels grouped by CD8/CD4/Treg. ${verdict}.</p>` +
+    `<p class="muted attr-caption">Independent human reference (10x 897k-cell NSCLC TME). Detection = binary_expressed (fraction_cells_expressing ≥ 10%, the single cross-cohort floor); T-states are the 14 ProjecTILs functional.cluster labels grouped by CD8/CD4/Treg. ${verdict}.</p>` +
     tSection + nonTSection;
 }
 
@@ -800,7 +783,7 @@ function renderNumberTrace(rawMatrix, stoichMatrix, normRows, sampleRows, hostId
     {step:"Stoichiometry", source:"stoichiometry_matrix.csv", value:sto[sample]},
     {step:"Matched protein", source:"stoichiometry_matrix.csv", value:sto.matched_protein},
     {step:"IRS method", source:"normalization_summary.json", value:norm.normalization_method || ""},
-    {step:"Raw workbook reference", source:"pipeline provenance", value:"Referenced by generated CSV lineage; raw workbooks are not embedded in v1."},
+    {step:"Raw workbook reference", source:"pipeline provenance", value:"Referenced by generated CSV provenance; raw workbooks are not embedded in v1."},
   ];
   _renderAuditTable(hostId || "audit-number-trace", "number_trace", rows, ["step","source","value"], "stoichiometry_matrix");
 }

@@ -588,8 +588,8 @@ window.KinaseFilter = (function() {
     confidence: "",   // Legacy/shared handoff slot; not exposed in T-cell MEA.
     nSigMin: 0,       // minimum n_sig (count of significant contrasts in scope)
     tcellMin: 0,      // 0 = Any (off, default); 1.5/2/3 = opt-in minimum state
-                      // enrichment (fold over the kinase's median state).
-                      // Specificity only — concordance is never gated
+                      // enrichment (fold over the kinase's baseline mean state).
+                      // Enrichment only — concordance is never gated
                       // (docs/tcell_exhaustion_analysis_summary.md).
     sign: "",         // "" | "up" | "down" over selected day contrasts.
     pattern: "",      // TrendFilter value over ordered donor-day NES contrasts.

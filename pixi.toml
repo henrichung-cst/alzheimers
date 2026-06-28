@@ -75,6 +75,9 @@ deploy-viewer = "bash alz/runners/supporting/deploy_viewer.sh unified"
 deploy-tcell-viewer = "bash alz/runners/supporting/deploy_viewer.sh tcell"
 deploy-all-viewers = "bash alz/runners/supporting/deploy_viewer.sh both"
 tcell-within-cohort = "python alz/cross_reference/tcell_within_cohort.py donor1"
+# Projected-state kinase MEA → canonical <donor>/state_mea/{st,py} (viewer Decomp NES column).
+# Both residue tracks: pY-only kinases (e.g. CTK/MATK) need the py projection to carry a Decomp NES.
+tcell-state-mea = "python -m alz.cohorts.tcells.state_mea --donor donor1 --track both"
 # TODO #2: 10x NSCLC cell-type specificity reference for the T-cell cohort.
 nsclc-ingest = "bash alz/runners/supporting/ingest_nsclc_10x.sh"
 nsclc-label = "python alz/reference/nsclc_expression.py --label-clusters"

@@ -294,7 +294,7 @@ def _register_kinase_audit_tables(tables: dict) -> None:
     # detection + specificity_score (concentration of expression in type) +
     # specificity_count (N-of-7 coarse groups at ≥10% prevalence floor) +
     # nsclc_enrichment_<state> (ProjecTILs 14-state share, post Stage-1 regen).
-    # The NSCLC lineage strip and verdict table read from this single canonical CSV.
+    # The NSCLC cell-type strip and verdict table read from this single canonical CSV.
     nsclc_src = config.NSCLC_KINASE_EXPRESSION_FILE
     if os.path.exists(nsclc_src):
         os.makedirs(AUDIT_SOURCES_DIR, exist_ok=True)

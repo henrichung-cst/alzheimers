@@ -92,8 +92,8 @@ function wireKinaseTable() {
     });
   }
 
-  // Specificity narrowing tool — OPT-IN only (defaults to Any/0, hides nothing
-  // by default; the ke-count indicator reflects when it's active). Specificity
+  // State-enrichment narrowing tool — OPT-IN only (defaults to Any/0, hides nothing
+  // by default; the ke-count indicator reflects when it's active). State enrichment
   // is the informative localizer; concordance is never filtered (de-gate dir.).
   const tcellSel = document.getElementById("ke-filter-tcell");
   if (tcellSel) {

@@ -198,15 +198,17 @@ def _load_projected_state_mea_payload() -> dict | None:
         source_files: list[str] = []
 
         for out_dir in _projected_state_candidate_dirs(donor):
-            for filename, kind in (
-                ("mea_projected_state.csv", "stoich"),
-                ("mea_projected_state_raw.csv", "raw"),
-            ):
-                path = os.path.join(out_dir, filename)
-                rows = _read_projected_state_rows(path, kind=kind)
-                if rows:
-                    donor_rows.extend(rows)
-                    source_files.append(os.path.relpath(path, UNIFIED_VIEWER_DIR))
+            # Decomposition NES uses the RAW (non-stoichiometry-corrected)
+            # projection. Stoich correction subtracts the per-state protein, and
+            # the decomposition share scales both phosphosite and protein, so the
+            # share cancels in the subtraction — collapsing per-state NES to the
+            # bulk value (a known limitation). The raw projection keeps the share,
+            # so the per-state NES is genuinely state-specific.
+            path = os.path.join(out_dir, "mea_projected_state_raw.csv")
+            rows = _read_projected_state_rows(path, kind="raw")
+            if rows:
+                donor_rows.extend(rows)
+                source_files.append(os.path.relpath(path, UNIFIED_VIEWER_DIR))
 
             manifest_path = os.path.join(out_dir, "projected_state_mea_manifest.json")
             manifest = _read_projected_state_manifest(manifest_path)
@@ -273,8 +275,9 @@ def _load_nsclc_detection() -> dict:
     """Per-(gene, NSCLC cell type) detection from the reference, the independent
     corroborator for within-cohort T-state attribution.
     Returns {(GENE_UPPER, nsclc_cell_type): (frac, detected)}.
-    NSCLC detection = expressed in ≥1 cell (frac > 0); no minimum-fraction floor
-    (the 897k-cell reference is deep enough that any nonzero fraction is real).
+    NSCLC detection = ≥10% of the cell type's cells express it — the single
+    cross-cohort detection floor (specificity.DETECTION_FRAC_MIN), identical to
+    the within-cohort scRNA so "detected" never means two different things.
     Computed in alz/reference/nsclc_expression.py."""
     src = config.NSCLC_KINASE_EXPRESSION_FILE
     if not os.path.exists(src):
@@ -306,29 +309,40 @@ def _build_decomposition_index_from_state_mea(
     """Build a `decomposition_index`-compatible payload block from projected-state
     MEA rows, mirroring the structure used by the AD cohort in song.py.
 
+    decomp_nes is the RAW (non-stoichiometry-corrected) per-state NES — the only
+    projection that varies across states (stoich correction cancels the per-state
+    decomposition share; see _load_projected_state_mea_payload).
+
     Schema (parallel arrays, one entry per (kinase, contrast, state) row):
-      kinase_id[]   → uint16 index into kinases_slice["name"]
+      kinase_id[]   → uint16 index into kinases_slice["by_context"][donor]["name"]
       contrast_id[] → uint8  index into meta["contrasts"]
       cell_type[]   → ProjecTILs state label (str)
       decomp_nes[]  → float, 4 dp
       decomp_fdr[]  → float, 4 dp
 
     Returns None when the projected_state_payload carries no rows (gate
-    dependency: mea_projected_state.csv absent until state_mea runs).
+    dependency: mea_projected_state_raw.csv absent until state_mea runs).
     """
     by_context = (projected_state_payload or {}).get("by_context", {})
-    all_rows: list[dict] = []
-    for block in by_context.values():
-        all_rows.extend(block.get("rows", []))
-    if not all_rows:
-        return None
-
-    # Kinase name → position map.
-    kinase_names: list[str] = kinases_slice.get("name", [])
-    kid = {name: i for i, name in enumerate(kinase_names)}
+    # State MEA rows carry their own `donor`; the viewer's kinase identity is the
+    # per-donor integer index into kinases_slice["by_context"][donor]["name"]
+    # (== attribution_index.kinase_id == ctx.kinase_id). Build one name→id map per
+    # donor so the emitted kinase_id matches the index the JS keys on.
+    kinase_ctx = (kinases_slice or {}).get("by_context", {})
+    kid_by_donor: dict[str, dict[str, int]] = {
+        donor: {name: i for i, name in enumerate(block.get("name", []))}
+        for donor, block in kinase_ctx.items()
+    }
     # Contrast → position map.
     contrasts: list[str] = meta.get("contrasts", [])
     cid = {c: i for i, c in enumerate(contrasts)}
+
+    all_rows: list[dict] = []
+    for donor, block in by_context.items():
+        for row in block.get("rows", []):
+            all_rows.append({**row, "donor": row.get("donor", donor)})
+    if not all_rows:
+        return None
 
     kinase_ids: list[int] = []
     contrast_ids: list[int] = []
@@ -338,14 +352,19 @@ def _build_decomposition_index_from_state_mea(
     seen: set = set()
 
     for r in all_rows:
+        donor = str(r.get("donor", ""))
+        kid = kid_by_donor.get(donor, {})
         k_name = str(r.get("kinase", ""))
-        contrast = str(r.get("contrast", ""))
+        # The viewer's contrast axis is the bare day (meta["contrasts"] = d13,
+        # d17, ...). State MEA emits contrast="d13_vs_d2" but timepoint="d13", so
+        # key on timepoint to match `cid`; the raw "_vs_d2" form is never in cid.
+        contrast = str(r.get("timepoint") or r.get("contrast", ""))
         state = str(r.get("state", ""))
         nes_val = r.get("NES")
         fdr_val = r.get("FDR")
         if k_name not in kid or contrast not in cid:
             continue
-        key = (k_name, contrast, state)
+        key = (donor, k_name, contrast, state)
         if key in seen:
             continue
         seen.add(key)
@@ -392,38 +411,12 @@ def _tcell_celltype_pill(tier: int, corroborated: bool) -> str:
     return "high" if corroborated else "moderate"
 
 
-def _compute_nsclc_coarse_groups(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute per (gene_symbol, spec_group) cell-weighted group statistics
-    from native-type rows in nsclc_kinase_expression.csv.
-
-    Input df must have: gene_symbol, spec_group, n_cells,
-    fraction_cells_expressing, binary_expressed.
-
-    Returns per-group DataFrame with columns:
-      gene_symbol, spec_group, group_fraction, group_detected, n_cells_group.
-    """
-    df = df.copy()
-    df["_wt"] = df["n_cells"].astype(float) * df["fraction_cells_expressing"].astype(float)
-    agg = df.groupby(["gene_symbol", "spec_group"]).agg(
-        _wt_sum=("_wt", "sum"),
-        _nc=("n_cells", "sum"),
-    ).reset_index()
-    agg["group_fraction"] = agg["_wt_sum"] / agg["_nc"].clip(lower=1)
-    # T_NK detected = any T-state has binary_expressed (frac ≥ 0.01)
-    # Non-T groups: single native type, so binary_expressed applies directly.
-    _det_any = df.groupby(["gene_symbol", "spec_group"])["binary_expressed"].any().reset_index()
-    _det_any.columns = ["gene_symbol", "spec_group", "group_detected"]
-    agg = agg.merge(_det_any, on=["gene_symbol", "spec_group"], how="left")
-    agg.rename(columns={"_nc": "n_cells_group"}, inplace=True)
-    return agg[["gene_symbol", "spec_group", "group_fraction", "group_detected", "n_cells_group"]]
-
-
 def _load_nsclc_tnk_detection() -> dict:
-    """Per-gene NSCLC detection in the T_NK lineage — the cell-type-axis
+    """Per-gene NSCLC detection in the T_NK cell type — the cell-type-axis
     corroborator ("does the independent reference agree this is a T-cell kinase?").
 
     Derived from nsclc_kinase_expression.csv: a gene is T_NK-detected when any
-    of its ProjecTILs T-state rows has binary_expressed = True (fraction ≥ 1% of
+    of its ProjecTILs T-state rows has binary_expressed = True (fraction ≥ 10% of
     cells). Returns {GENE_UPPER: bool}; a gene absent from the dict is outside
     the NSCLC probe panel (treated as uncorroborated, not disconfirming).
     """
@@ -436,103 +429,35 @@ def _load_nsclc_tnk_detection() -> dict:
     return {str(g).upper(): bool(v) for g, v in tnk_det.items()}
 
 
-def _load_nsclc_coarse_breadth() -> dict:
-    """Per-gene NSCLC cross-lineage breadth derived from nsclc_kinase_expression.csv.
-
-    The independent reference's answer to "is this kinase specific to a cell
-    TYPE, beyond T cells?" — how many of the coarse lineages (T_NK + the non-T
-    lineages B_plasma / Myeloid / Epithelial / Endothelial / Fibroblast / Mast)
-    detect the kinase (expressed in any cell — binary_expressed, frac ≥ 1%),
-    out of how many present, and which lineage dominates.
-    Returns {GENE_UPPER: (n_detected, n_lineages, top_lineage, member_list)}.
-    """
-    src = config.NSCLC_KINASE_EXPRESSION_FILE
-    if not os.path.exists(src):
-        return {}
-    df = pd.read_csv(src, usecols=["gene_symbol", "spec_group",
-                                   "n_cells", "fraction_cells_expressing",
-                                   "binary_expressed"])
-    grp = _compute_nsclc_coarse_groups(df)
-    out: dict = {}
-    for gene, gdf in grp.groupby("gene_symbol"):
-        n_det = int(gdf["group_detected"].astype(bool).sum())
-        n_total = int(len(gdf))
-        # Top lineage = group with highest cell-weighted fraction (most prevalent).
-        top_row = gdf.loc[gdf["group_fraction"].fillna(0).idxmax()]
-        top = str(top_row["spec_group"]) if pd.notna(top_row["spec_group"]) else ""
-        members = sorted(
-            gdf.loc[gdf["group_detected"].astype(bool), "spec_group"]
-               .astype(str).tolist())
-        out[str(gene).upper()] = (n_det, n_total, top, members)
-    return out
-
-
 def _load_nsclc_specificity_count() -> dict:
-    """Per-gene NSCLC specificity count — N of 7 coarse groups where the cell-
-    weighted group_fraction ≥ 0.10 (pure prevalence at 10% threshold).
+    """Per-gene NSCLC cell-type specificity — the SINGLE breadth metric.
 
-    This is the "Specificity" column in the verdict table: distinctly different
-    from the 1% detection floor used for `binary_expressed` and corroboration.
-    Returns {GENE_UPPER: (count, expressing_groups_list)}.
+    N of the coarse cell-type groups (T_NK + non-T: B_plasma / Myeloid /
+    Epithelial / Endothelial / Fibroblast / Mast) whose cell-weighted
+    group_fraction ≥ the shared detection floor (specificity.DETECTION_FRAC_MIN).
+    Read straight from the canonical nsclc_kinase_expression.csv columns the
+    builder writes (`specificity_count` / `expressing_groups` / `top_coarse_group`)
+    — no inline recompute, no native-max variant.
+    Returns {GENE_UPPER: (count, expressing_groups, n_groups_total, top_group)}.
     """
     src = config.NSCLC_KINASE_EXPRESSION_FILE
     if not os.path.exists(src):
         return {}
-    # Prefer pre-computed columns (post-Stage-1 regeneration).
-    df = pd.read_csv(src)
-    if "specificity_count" in df.columns and "expressing_groups" in df.columns:
-        dedup = df.drop_duplicates("gene_symbol")
-        return {
-            str(r.gene_symbol).upper(): (
-                int(r.specificity_count),
-                [g for g in str(r.expressing_groups).split(",") if g])
-            for r in dedup.itertuples(index=False)
-        }
-    # Fallback: compute inline from native-type rows (pre-Stage-1 artifact).
-    need_cols = ["gene_symbol", "spec_group", "n_cells",
-                 "fraction_cells_expressing", "binary_expressed"]
-    df2 = pd.read_csv(src, usecols=need_cols)
-    grp = _compute_nsclc_coarse_groups(df2)
+    df = pd.read_csv(src, usecols=["gene_symbol", "spec_group", "specificity_count",
+                                   "expressing_groups", "top_coarse_group"])
+    totals = df.groupby("gene_symbol")["spec_group"].nunique()
     out: dict = {}
-    for gene, gdf in grp.groupby("gene_symbol"):
-        spec_rows = gdf[gdf["group_fraction"] >= 0.10]
-        count = int(len(spec_rows))
-        groups = sorted(spec_rows["spec_group"].astype(str).tolist())
-        out[str(gene).upper()] = (count, groups)
+    for r in df.drop_duplicates("gene_symbol").itertuples(index=False):
+        gene = str(r.gene_symbol)
+        groups = ([] if pd.isna(r.expressing_groups)
+                  else [g for g in str(r.expressing_groups).split(",") if g])
+        out[gene.upper()] = (
+            int(r.specificity_count),
+            groups,
+            int(totals.get(gene, 0)),
+            "" if pd.isna(r.top_coarse_group) else str(r.top_coarse_group),
+        )
     return out
-
-
-def _normalize_attr_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize unified_attribution_tcells.csv schema for stale pre-rename artifacts.
-
-    Pre-A1-rename artifacts produced by older tcell_within_cohort.py have:
-      tcell_specificity → renamed to tcell_state_enrichment
-      tcell_tier        → renamed to tcell_enrichment_tier (informational)
-    and may lack newer columns (tcell_detected, tcell_fraction_expressing,
-    tcell_effective_n, tcell_top_celltype, tcell_celltype_concentration_tier).
-    This function normalizes so downstream code always sees the current schema.
-    Gate re-run of tcell_within_cohort.py produces the authoritative schema.
-    """
-    _renames = {
-        "tcell_specificity": "tcell_state_enrichment",
-        "tcell_tier": "tcell_enrichment_tier",
-    }
-    _defaults: dict[str, object] = {
-        "tcell_state_enrichment": None,
-        "tcell_detected": False,
-        "tcell_fraction_expressing": None,
-        "tcell_effective_n": None,
-        "tcell_top_celltype": "",
-        "tcell_celltype_concentration_tier": None,
-    }
-    rename_map = {old: new for old, new in _renames.items()
-                  if old in df.columns and new not in df.columns}
-    if rename_map:
-        df = df.rename(columns=rename_map)
-    add_cols = {col: val for col, val in _defaults.items() if col not in df.columns}
-    if add_cols:
-        df = df.assign(**add_cols)
-    return df
 
 
 def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list,
@@ -553,8 +478,8 @@ def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list,
                        type's share over the even 1/3; per-kinase). N-normalized,
                        so it reads correctly on a 3-unit axis where effective_n
                        (bounded by 3) cannot.
-        corroborated = NSCLC reference detects the kinase in its T_NK lineage
-                       (`nsclc_tnk`; detection = expressed in any cell, no floor). Kinase outside the NSCLC probe
+        corroborated = NSCLC reference detects the kinase in its T_NK cell type
+                       (`nsclc_tnk`; detection = ≥10% of cells, the single cross-cohort floor). Kinase outside the NSCLC probe
                        panel → uncorroborated (not disconfirming).
         tier 0 → none; tier 1 → low (broad); tier ≥2 → high if corroborated else
         moderate.
@@ -598,7 +523,7 @@ def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list,
             }
 
     # corroborated = the independent NSCLC reference detects the kinase in its T_NK
-    # lineage (detection = expressed in any cell, no minimum-fraction floor). Absence from the NSCLC probe panel → uncorroborated (not
+    # cell type (detection = ≥10% of cells, the single cross-cohort floor). Absence from the NSCLC probe panel → uncorroborated (not
     # disconfirming). Pill: tier 0 (no cell-type expression) → none; tier 1 (broad
     # across cell types) → low; tier ≥2 (concentrated in one cell type) → high if
     # corroborated else moderate (uncorroborated caps at moderate, as in the brain
@@ -630,11 +555,11 @@ def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list,
             basis = f"concentrated in {top_ct} (≥2× the even 1/3 share); {corr_note}"
         kinase_tier[kk_key] = (tier_name, basis)
 
-    # Per-(kinase, residue) headline STATE = the most state-enriched ELIGIBLE state
+    # Per-(kinase, residue) pill-anchor row = the most state-enriched ELIGIBLE state
     # (NaN enrichment never wins); fall back to the first state seen when a kinase
     # has no eligible state. The cell-type confidence pill is rendered once, on this
-    # state's row, in the attribution table (the rows are states, not cell types).
-    home_state: dict[tuple[str, str], tuple[str, float]] = {}
+    # anchor row, in the attribution table (the rows are states, not cell types).
+    pill_anchor: dict[tuple[str, str], tuple[str, float]] = {}
     seen_first: dict[tuple[str, str], str] = {}
     for r in attr_df.itertuples(index=False):
         rt = str(getattr(r, "residue_type", "") or "")
@@ -643,16 +568,16 @@ def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list,
         e = r.tcell_state_enrichment
         if pd.isna(e):
             continue
-        if key not in home_state or float(e) > home_state[key][1]:
-            home_state[key] = (str(r.cell_type), float(e))
+        if key not in pill_anchor or float(e) > pill_anchor[key][1]:
+            pill_anchor[key] = (str(r.cell_type), float(e))
 
-    def _home(key: tuple[str, str]) -> str:
-        return home_state[key][0] if key in home_state else seen_first.get(key, "")
+    def _anchor(key: tuple[str, str]) -> str:
+        return pill_anchor[key][0] if key in pill_anchor else seen_first.get(key, "")
 
     cols: dict[str, list] = {k: [] for k in (
         "kinase_id", "contrast_id", "cell_type",
         "tcell_detected", "tcell_fraction_expressing", "tcell_state_enrichment",
-        "tcell_effective_n", "tcell_top_celltype", "home_state",
+        "tcell_effective_n", "tcell_top_celltype", "_pill_anchor",
         "tcell_lfc", "tcell_concordance", "tcell_concordant",
         "tcell_consistency", "nes", "fdr",
         "nsclc_frac", "nsclc_detected",
@@ -686,7 +611,7 @@ def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list,
         cols["tcell_effective_n"].append(_f(r.tcell_effective_n))
         cols["tcell_top_celltype"].append(
             str(r.tcell_top_celltype) if pd.notna(r.tcell_top_celltype) else "")
-        cols["home_state"].append(_home(kk_key))
+        cols["_pill_anchor"].append(_anchor(kk_key))
         cols["tcell_state_enrichment"].append(_f(r.tcell_state_enrichment))
         cols["tcell_lfc"].append(_f(r.tcell_lfc))
         cols["tcell_concordance"].append(_f(r.tcell_concordance))
@@ -767,14 +692,13 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
         "top_celltype_1": [""] * len(rows),
         "tcell_celltype": [""] * len(rows),
         "tcell_celltype_tier": [0] * len(rows),
-        # NSCLC breadth: N-of-N detected (binary_expressed, 1% floor)
-        "nsclc_lineages_detected": [None] * len(rows),
-        "nsclc_lineages_total": [None] * len(rows),
-        "nsclc_top_lineage": [""] * len(rows),
-        "nsclc_lineage_list": [None] * len(rows),
-        # NSCLC specificity: N-of-7 with group_fraction ≥ 0.10 (prevalence count)
+        # NSCLC specificity: N of the coarse groups with cell-weighted
+        # group_fraction ≥ the shared detection floor, + denominator, members,
+        # and dominant group. Single metric, read from the canonical CSV columns.
         "nsclc_specificity_count": [None] * len(rows),
+        "nsclc_groups_total": [None] * len(rows),
         "nsclc_expressing_groups": [None] * len(rows),
+        "nsclc_top_group": [""] * len(rows),
     }
     for sc in short_contrasts:
         cols[f"NES_{sc}"] = []
@@ -820,33 +744,27 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
 
     gene_upper_map = _upper_gene_map(gene_map)
 
-    # NSCLC cross-lineage breadth (independent reference): per-kinase count of
-    # coarse cell-TYPE lineages the kinase is detected in (binary_expressed,
-    # 1% floor), out of those present, + the dominant lineage. Gene-keyed and
-    # cohort-independent — answers the cell-type-specificity question the
-    # within-cohort T-STATE columns cannot.
+    # NSCLC cross-cell-type specificity (independent reference): per-kinase count
+    # of coarse cell types whose cell-weighted prevalence ≥ the shared 10% floor,
+    # out of those present, + members + dominant group. Gene-keyed and cohort-
+    # independent — answers the cell-type-specificity question the within-cohort
+    # T-STATE columns cannot.
     # Absent gene (outside the NSCLC probe panel) → left null ("n/a" in the UI).
-    nsclc_breadth = _load_nsclc_coarse_breadth()
     nsclc_spec = _load_nsclc_specificity_count()
     for i, (k, _residue_type) in enumerate(rows):
         gene_up = gene_upper_map.get(k, k.upper())
-        entry = nsclc_breadth.get(gene_up)
-        if entry is not None:
-            cols["nsclc_lineages_detected"][i] = entry[0]
-            cols["nsclc_lineages_total"][i] = entry[1]
-            cols["nsclc_top_lineage"][i] = entry[2]
-            cols["nsclc_lineage_list"][i] = entry[3]
         spec_entry = nsclc_spec.get(gene_up)
         if spec_entry is not None:
             cols["nsclc_specificity_count"][i] = spec_entry[0]
             cols["nsclc_expressing_groups"][i] = spec_entry[1]
+            cols["nsclc_groups_total"][i] = spec_entry[2]
+            cols["nsclc_top_group"][i] = spec_entry[3]
 
     # Within-cohort attribution: columnar index for the viewer + per-kinase
-    # headline STATE (most state-enriched eligible state) and cell-TYPE home.
+    # headline STATE (most state-enriched eligible state) and the cell TYPE.
     attr_df = _load_tcell_attribution(donor)
     attribution_index = None
     if attr_df is not None:
-        attr_df = _normalize_attr_schema(attr_df)
         nsclc_det = _load_nsclc_detection()
         nsclc_tnk = _load_nsclc_tnk_detection()
         attribution_index = _build_tcell_attribution_index(
@@ -867,9 +785,9 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
             top_by_key.get((k, residue_type), "")
             for k, residue_type in rows
         ]
-        # Cell-TYPE home (CD8/CD4/Treg) + concentration tier — per-kinase, the
-        # within-cohort cell-type-specificity column. Distinct from top_celltype_1
-        # (a STATE) and from the NSCLC cross-lineage breadth columns.
+        # Cell TYPE (CD8/CD4/Treg) + concentration tier — per-kinase, the
+        # within-cohort cell-type confidence column. Distinct from top_celltype_1
+        # (a STATE) and from the NSCLC cross-cell-type breadth columns.
         ct_by_key: dict = {}
         for r in attr_df.drop_duplicates(["kinase", "residue_type"]).itertuples(index=False):
             rt = str(getattr(r, "residue_type", "") or "")

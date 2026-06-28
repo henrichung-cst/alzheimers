@@ -8,12 +8,14 @@ Vocabulary note — T-cell specificity vs enrichment
 The T-cell cohort uses two metrics that **diverge** from the AD cohorts:
 
 - **Enrichment** (within-cohort): concentration of expression in a ProjecTILs
-  T-state, computed as fold over the kinase's median state (the same
-  computational method the AD cohorts call "specificity" / WMB-tier share, but
-  named enrichment here to reflect the T-state activation-continuum reading).
+  T-state, computed as fold over the kinase's BASELINE mean across all
+  adequately-sampled states (the AD cohorts' celltype_mean / global_mean share,
+  ported to states; named enrichment here to reflect the T-state
+  activation-continuum reading). A kinase concentrated in one state divides by a
+  low baseline -> high fold; a broadly-expressed kinase sits near 1×.
 
-- **Specificity** (NSCLC reference): N-of-7 coarse-lineage prevalence count —
-  how many of the 7 TME cell-type lineages express the kinase at ≥10% of cells.
+- **Specificity** (NSCLC reference): N-of-7 coarse cell-type prevalence count —
+  how many of the 7 TME cell types express the kinase at ≥10% of cells.
   This is a DIFFERENT kind of metric than human-AD "specificity"
   (log2(celltype_mean/brain_mean) ratio with no detection gate).
 
@@ -46,7 +48,7 @@ TCELL_ATTRIBUTION_CAVEAT = (
     "Concordance is directional co-evidence only and is never used to filter: a "
     "kinase's activity (substrate phosphorylation) is post-translationally "
     "decoupled from its own transcript, so sign-agreement runs at chance "
-    "(OR≈1, same in the mouse Song reference). Read it alongside specificity.")
+    "(OR≈1, same in the mouse Song reference). Read it alongside enrichment.")
 
 # Sequential viridis progression replaces the mouse 3-disease palette.
 # Sampled from the matplotlib viridis colormap at evenly spaced points.
@@ -66,7 +68,7 @@ TIMEPOINT_COLOR_MAP = {
 # Metric vocabulary constants — use these in payload keys and UI labels so
 # changes are made in one place.
 ENRICHMENT = "enrichment"   # within-cohort ProjecTILs T-state concentration
-SPECIFICITY = "specificity"  # NSCLC N-of-7 coarse-lineage breadth
+SPECIFICITY = "specificity"  # NSCLC N-of-7 coarse cell-type breadth
 
 PROJECTILS_LABEL_MAP = {
     "CD8.CM": "CD8CM",

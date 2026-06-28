@@ -33,10 +33,11 @@ function _confPass(rowConf, threshold) {
   return (_CONF_RANK[rowConf] || 0) >= (_CONF_RANK[threshold] || 0);
 }
 
-// Within-cohort T-cell specificity:
-// detection evidence (tcell_fraction_expressing >= 0.01) is shown separately.
+// Within-cohort T-cell state enrichment:
+// detection evidence (tcell_fraction_expressing >= 0.10) is shown separately.
 // STATE ENRICHMENT = each state's linear expression as a fold over the
-// kinase's median state across the full ProjecTILs state set (precomputed in Python). The standard
+// kinase's BASELINE mean across all adequately-sampled ProjecTILs states (gene-agnostic;
+// precomputed in Python), so a kinase concentrated in one state scores a high fold. The
 // concentration-of-total tier is retired here — it saturates at ≥2× because the
 // ~14 ProjecTILs states are transcriptionally homogeneous, so it cannot localize
 // a kinase along the activation continuum. Enrichment uses the full state set and
@@ -46,19 +47,19 @@ function _tcellEnrichBadge(fold) {
   if (fold == null || !isFinite(v)) return '<span class="muted">—</span>';
   const lbl = v.toFixed(1) + "×";
   const cls = v >= 3 ? "hi" : (v >= 2 ? "mid" : (v >= 1.5 ? "lo" : ""));
-  if (!cls) return `<span class="muted" title="Within ~1.5× of the typical (median) T-cell state — broadly expressed, not state-enriched">${lbl}</span>`;
-  return `<span class="badge ${cls}" title="${lbl} the kinase's median-state expression — enriched in this state vs a typical T-cell state">${lbl}</span>`;
+  if (!cls) return `<span class="muted" title="Within ~1.5× of the kinase's baseline (mean) T-cell state — broadly expressed, not state-enriched">${lbl}</span>`;
+  return `<span class="badge ${cls}" title="${lbl} the kinase's baseline (mean-state) expression — enriched in this state vs a typical T-cell state">${lbl}</span>`;
 }
 
 function getScopedAttribution(kinaseId, filter) {
   // Returns filtered within-cohort attribution rows from
   // PAYLOAD.attribution_index for one kinase. The T-cell attribution carries the
-  // expression evidence (tcell_detected) + two specificity axes — cell-TYPE
-  // (tcell_top_celltype = CD8/CD4/Treg, which drives confidence_tier) and the
-  // activation-state axis (tcell_state_enrichment, gated on detection) — plus
-  // pseudobulk concordance vs bulk NES + confidence_tier/confidence_basis.
-  // specificity_celltype = home_state anchors the cell-type pill on the kinase's
-  // headline state row.
+  // expression evidence (tcell_detected) + two within-cohort axes — cell-TYPE
+  // confidence (tcell_top_celltype = CD8/CD4/Treg, which drives confidence_tier)
+  // and the activation-state axis (tcell_state_enrichment, gated on detection) —
+  // plus pseudobulk concordance vs bulk NES + confidence_tier/confidence_basis.
+  // specificity_celltype (the shared key the unified engine reads) = _pill_anchor;
+  // it anchors the cell-type pill on the kinase's headline state row.
   // filter dimensions may be string ("" = any) or array ([] = any);
   // celltype scopes the cell_type axis.
   const AI = PAYLOAD.attribution_index || {};
@@ -71,7 +72,7 @@ function getScopedAttribution(kinaseId, filter) {
     if (scopedCtx.size > 0 && !scopedCtx.has(AI.contrast_id[j])) continue;
     if (ctSet.size && !ctSet.has(AI.cell_type[j]))                continue;
     const topCt = AI.tcell_top_celltype ? AI.tcell_top_celltype[j] : "";
-    const homeState = AI.home_state ? AI.home_state[j] : "";
+    const pillAnchor = AI._pill_anchor ? AI._pill_anchor[j] : "";
     out.push({
       contrast_id:        AI.contrast_id[j],
       cell_type:          AI.cell_type[j],
@@ -93,7 +94,7 @@ function getScopedAttribution(kinaseId, filter) {
       // The cell-type confidence pill (a kinase-level property) is rendered once,
       // on the kinase's headline STATE row — _attrVerdictConfCell shows it where
       // cell_type === specificity_celltype.
-      specificity_celltype: homeState,
+      specificity_celltype: pillAnchor,
     });
   }
   return out;
@@ -160,15 +161,12 @@ function _buildKinaseRowModel() {
       tcell_celltype: (K.tcell_celltype && K.tcell_celltype[i]) || "",
       tcell_celltype_tier: (K.tcell_celltype_tier && K.tcell_celltype_tier[i] != null)
         ? K.tcell_celltype_tier[i] : 0,
-      nsclc_lineages_detected: (K.nsclc_lineages_detected && K.nsclc_lineages_detected[i] != null)
-        ? K.nsclc_lineages_detected[i] : null,
-      nsclc_lineages_total: (K.nsclc_lineages_total && K.nsclc_lineages_total[i] != null)
-        ? K.nsclc_lineages_total[i] : null,
-      nsclc_top_lineage: (K.nsclc_top_lineage && K.nsclc_top_lineage[i]) || "",
-      nsclc_lineage_list: (K.nsclc_lineage_list && K.nsclc_lineage_list[i]) || null,
       nsclc_specificity_count: (K.nsclc_specificity_count && K.nsclc_specificity_count[i] != null)
         ? K.nsclc_specificity_count[i] : null,
+      nsclc_groups_total: (K.nsclc_groups_total && K.nsclc_groups_total[i] != null)
+        ? K.nsclc_groups_total[i] : null,
       nsclc_expressing_groups: (K.nsclc_expressing_groups && K.nsclc_expressing_groups[i]) || null,
+      nsclc_top_group: (K.nsclc_top_group && K.nsclc_top_group[i]) || "",
       _fdr: CONTRASTS.map(c => K["FDR_" + c][i]),
       _nes: CONTRASTS.map(c => K["NES_" + c][i]),
     });
@@ -256,8 +254,8 @@ function _kineMaxAbsNesScoped(r, scopedCtxIds) {
 }
 
 // Peak within-cohort state enrichment across attribution rows for this kinase
-  // under the active filter scope (fold over the median state). Returns 0
-// when no qualifying rows. This is the T-cell specificity signal.
+  // under the active filter scope (fold over the baseline mean state). Returns 0
+// when no qualifying rows. This is the T-cell state-enrichment signal.
 function _kineMaxTcellEnrichScoped(kinaseId, filter) {
   let best = 0;
   for (const e of getScopedAttribution(kinaseId, filter)) {
@@ -344,7 +342,7 @@ function _makeKeCompare(scopedCtxIds) {
     }
     else if (col === "n_attributed_celltypes") {
       // Match the Cell states column: count distinct T-cell states the kinase is
-      // DETECTED in (≥1% of cells) in scope.
+      // DETECTED in (≥10% of cells) in scope.
       const _nDetectedStates = (kid) => {
         const s = new Set();
         for (const e of getScopedAttribution(kid, kf)) {
@@ -477,10 +475,10 @@ function _renderAgreementProfile(r) {
 }
 
 function _renderCellTypesCell(r, filter) {
-  // T-cell states this kinase is DETECTED in (fraction expressing ≥1%) in the
+  // T-cell states this kinase is DETECTED in (fraction expressing ≥10%) in the
   // active filter scope — breadth of detection within the cohort, parallel to the
-  // Cross-lineage (NSCLC) breadth column. Enrichment lives in the State
-  // specificity column; this counts presence, so it stays coherent with the
+  // NSCLC spec column. Enrichment lives in the State
+  // enrichment column; this counts presence, so it stays coherent with the
   // per-state detection shown in the Attribution verdict tab.
   const rows = getScopedAttribution(r.id, filter || {});
   const detectedCells = new Set();
@@ -489,71 +487,63 @@ function _renderCellTypesCell(r, filter) {
       detectedCells.add(e.cell_type);
   }
   const n = detectedCells.size;
-  if (n === 0) return `<span class="muted" title="Not detected (≥1% of cells) in any T-cell state in scope">0</span>`;
+  if (n === 0) return `<span class="muted" title="Not detected (≥10% of cells) in any T-cell state in scope">0</span>`;
   const names = Array.from(detectedCells).sort();
-  const tip = `Detected (≥1% of cells) in ${n} T-cell state(s): ${names.join(", ")}`;
+  const tip = `Detected (≥10% of cells) in ${n} T-cell state(s): ${names.join(", ")}`;
   return `<span title="${_escapeHtml(tip)}"><strong>${n}</strong><span class="muted" style="font-size:10px;"> / 14</span></span>`;
 }
 
-// Within-cohort cell-TYPE specificity (CD8 / CD4 / Treg) from the donor's own
+// Within-cohort cell-TYPE confidence (CD8 / CD4 / Treg) from the donor's own
 // scRNA: the dominant cell type + whether the kinase concentrates there (tier ≥2
 // = ≥2× the even 1/3 share) or is broad across the three types. Distinct from the
-// NSCLC cross-lineage column (beyond-T breadth). Precomputed in Python
+// NSCLC spec column (beyond-T cell-type breadth). Precomputed in Python
 // (tcell_celltype / tcell_celltype_tier slice columns).
 function _renderCellTypeCell(r) {
   const ct = r.tcell_celltype || "";
   if (!ct) return '<span class="muted" title="No measurable cell-type expression distribution">—</span>';
   const tier = r.tcell_celltype_tier || 0;
   if (tier >= 2) {
-    return `<span class="badge hi" title="Concentrated in ${_escapeHtml(ct)} — ≥2× the even 1/3 cell-type share (cell-type specific)">${_escapeHtml(ct)} ✓</span>`;
+    return `<span class="badge hi" title="Concentrated in ${_escapeHtml(ct)} — ≥2× the even 1/3 cell-type share (concentrated in one cell type)">${_escapeHtml(ct)} ✓</span>`;
   }
   // Broad: the kinase is spread across CD8/CD4/Treg. Naming the bare argmax (a
   // near-tie) misreads as "it's a <type> kinase", so show only "broad".
   return `<span class="muted" title="Broad across CD8 / CD4 / Treg — not concentrated in any single T-cell type (≤2× the even 1/3 share)">broad</span>`;
 }
 
-// NSCLC specificity count — N of 7 coarse lineages where the kinase is
-// expressed in ≥10% of cells (cell-weighted group_fraction, pure prevalence).
-// Distinct from the 1% detection floor used for breadth. Precomputed in Python
-// from nsclc_kinase_expression.csv (nsclc_specificity_count slice column).
+// NSCLC cell-type specificity — the SINGLE independent-reference breadth metric:
+// N of the coarse cell-type groups (T_NK + non-T: B_plasma, Myeloid, Epithelial,
+// Endothelial, Fibroblast, Mast) whose cell-weighted prevalence ≥ the shared 10%
+// detection floor. One definition, read straight from the canonical
+// nsclc_kinase_expression.csv columns (specificity_count / expressing_groups /
+// top_coarse_group) — no native-max variant. Fewer = more cell-type-restricted.
 function _renderNSCLCSpecificityCountCell(r) {
   const cnt = r.nsclc_specificity_count;
   if (cnt == null) {
-    return `<span class="muted" title="Outside the NSCLC Flex probe panel.">n/a</span>`;
-  }
-  const groups = Array.isArray(r.nsclc_expressing_groups) ? r.nsclc_expressing_groups : [];
-  const groupStr = groups.length ? groups.join(", ") : "none";
-  const tip = `Expressed in ≥10% of cells in ${cnt} of 7 coarse lineages (NSCLC reference, 10% prevalence floor): ${groupStr}. Lower = more lineage-restricted.`;
-  const cls = cnt <= 1 ? "hi" : (cnt <= 2 ? "mid" : "lo");
-  return `<span class="badge ${cls}" title="${_escapeHtml(tip)}">${cnt} / 7</span>`;
-}
-
-// Cell-TYPE breadth from the independent NSCLC reference (not the within-cohort
-// T-states): how many coarse lineages (T_NK + non-T) detect the kinase
-// (expressed in any cell — binary_expressed, 1% floor), out of those present, +
-// the dominant lineage. Fewer = more cell-type-specific. n/a = outside probe
-// panel. All values precomputed in Python (nsclc_lineages_* slice columns).
-function _renderNSCLCBreadthCell(r) {
-  const total = r.nsclc_lineages_total;
-  if (total == null) {
     return `<span class="muted" title="Outside the NSCLC Flex probe panel — the independent reference cannot speak to this kinase.">n/a</span>`;
   }
-  const nDet = r.nsclc_lineages_detected || 0;
-  const top = r.nsclc_top_lineage || "";
-  const members = Array.isArray(r.nsclc_lineage_list) ? r.nsclc_lineage_list : [];
-  // Fewer lineages detected = more cell-type-specific (the signal of interest).
-  const cls = nDet <= 1 ? "hi" : (nDet <= 2 ? "mid" : "lo");
-  const memberStr = members.length ? members.join(", ") : "none";
-  const tip = `Detected in ${nDet} of ${total} cell-type lineages (independent NSCLC reference; detection = ≥1% of cells expressing): ${memberStr}.` +
-    (top ? ` Most concentrated in ${top}. ` : " ") +
-    "Fewer lineages = more cell-type-specific.";
+  const total = r.nsclc_groups_total != null ? r.nsclc_groups_total : 7;
+  const groups = Array.isArray(r.nsclc_expressing_groups) ? r.nsclc_expressing_groups : [];
+  const groupStr = groups.length ? groups.join(", ") : "none";
+  const top = r.nsclc_top_group || "";
+  // cnt 0 = expressed in NO cell type above the 10% bar (least specific, not most):
+  // it must not read green. 1 = restricted to a single cell type (most specific).
+  const cls = cnt === 0 ? "lo" : (cnt === 1 ? "hi" : (cnt <= 2 ? "mid" : "lo"));
+  const tipBase = `Expressed in ≥10% of cells (cell-weighted prevalence) in ${cnt} of ${total} coarse cell types (NSCLC reference, shared 10% floor): ${groupStr}.`;
+  if (cnt === 0) {
+    // Nothing clears the floor. The "dominant" group here is a ratio of
+    // sub-threshold expression (noise over noise) — it must NOT render at all,
+    // or it reads as a specificity call the data does not support.
+    const tip = `${tipBase} Not robustly detected in any cell type.`;
+    return `<span class="badge lo" title="${_escapeHtml(tip)}">${cnt} / ${total}</span>`;
+  }
+  const tip = `${tipBase}` +
+    (top ? ` Most prevalent in ${top}.` : "") +
+    " Fewer = more cell-type-restricted (more specific).";
   const badge = top ? ` <span class="badge ${cls}">${_escapeHtml(top)}</span>` : "";
-  // List the detected lineage names inline (muted) so the count is backed by the
-  // actual members, not just a dominant-lineage badge.
-  const memberInline = members.length
-    ? ` <span class="muted" style="font-size:10px;">${_escapeHtml(members.join(", "))}</span>`
+  const memberInline = groups.length
+    ? ` <span class="muted" style="font-size:10px;">${_escapeHtml(groupStr)}</span>`
     : "";
-  return `<span title="${_escapeHtml(tip)}"><strong>${nDet}</strong><span class="muted" style="font-size:10px;"> / ${total}</span>${badge}${memberInline}</span>`;
+  return `<span title="${_escapeHtml(tip)}"><strong>${cnt}</strong><span class="muted" style="font-size:10px;"> / ${total}</span>${badge}${memberInline}</span>`;
 }
 
 function _renderKinaseWhitelistBanner(wl) {
@@ -640,7 +630,7 @@ function renderKinaseExplorer() {
   const gridActive = hasAttribution
     && (dSet.size > 0 || tSet.size > 0 || cSet.size > 0 || !!kf.confidence);
   const nSigMin = Math.min(scopedDenom, Math.max(0, parseInt(kf.nSigMin, 10) || 0));
-  // Opt-in specificity narrowing. 0 = Any (off) — the default; hides nothing.
+  // Opt-in state-enrichment narrowing. 0 = Any (off) — the default; hides nothing.
   // Threshold is a state-enrichment fold (e.g. 1.5, 2, 3).
   const tcellMin = Math.max(0, parseFloat(kf.tcellMin) || 0);
 
@@ -673,9 +663,9 @@ function renderKinaseExplorer() {
     // active so a targeted lookup (e.g. "EGFR") still surfaces the kinase even
     // if persisted localStorage filters would otherwise disqualify it.
     if (!q && gridActive && !kinaseQualifies(r.id, kf)) continue;
-    // Opt-in specificity narrowing (tcellMin > 0, off by default): kinase passes
+    // Opt-in state-enrichment narrowing (tcellMin > 0, off by default): kinase passes
     // if any state in scope reaches the requested enrichment fold (≥ tcellMin ×
-    // the kinase's median state). Specificity only — concordance is
+    // the kinase's baseline mean state). Enrichment only — concordance is
     // never used to filter (de-gate
     // directive, docs/tcell_exhaustion_analysis_summary.md). Skipped
     // under text search so a targeted lookup always surfaces the kinase.
@@ -730,11 +720,10 @@ function renderKinaseExplorer() {
     const drvCls = (drvSet && drvSet.has(r.id)) ? " driver" : "";
 
     // Within-cohort cell-type badge + state-enrichment badge + cell-states pill +
-    // NSCLC cross-lineage breadth + NSCLC specificity (N/7 at ≥10% prevalence).
+    // NSCLC specificity (single N/7 metric at the shared ≥10% prevalence floor).
     const cellTypeCell = _renderCellTypeCell(r);
     const specBadge = _tcellEnrichBadge(_kineMaxTcellEnrichScoped(r.id, colFilter));
     const cellStatesCell = _renderCellTypesCell(r, colFilter);
-    const nsclcBreadthCell = _renderNSCLCBreadthCell(r);
     const nsclcSpecCell = _renderNSCLCSpecificityCountCell(r);
 
     const residueBadge = r.residue_type === "Y"
@@ -753,7 +742,6 @@ function renderKinaseExplorer() {
       `<td>${cellTypeCell}</td>` +
       `<td>${specBadge}</td>` +
       `<td>${cellStatesCell}</td>` +
-      `<td>${nsclcBreadthCell}</td>` +
       `<td>${nsclcSpecCell}</td>` +
       `</tr>`
     );

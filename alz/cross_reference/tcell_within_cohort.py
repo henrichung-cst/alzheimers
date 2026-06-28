@@ -18,9 +18,10 @@ Two deliberate departures from the mouse design (see
    fabricated. The mouse tier never consumed the Song p-value anyway. Concordance
    is a pseudobulk log2FC (direction + magnitude); credibility comes from
    timecourse consistency across d13/d17/d20.
-2. **Detection evidence** — `tcell_fraction_expressing >= DETECTION_FRAC_MIN` (0.01,
-   matching the NSCLC reference) is reported as a normalization-free presence
-   column. The breadth `tcell_effective_n` is computed over all states.
+2. **Detection evidence** — `tcell_fraction_expressing >= DETECTION_FRAC_MIN` (0.10;
+   a state where the kinase is expressed in <10% of cells cannot carry a
+   trustworthy enrichment) is reported as a normalization-free presence column.
+   The breadth `tcell_effective_n` is computed over all states.
 
 Two orthogonal specificity axes, reported as two columns:
 
@@ -38,11 +39,15 @@ Two orthogonal specificity axes, reported as two columns:
    so a per-state dominance tier saturates at ≥2×).
 4. **State enrichment** (`tcell_state_enrichment`) — the activation-continuum axis,
    T-cell-only (brain cohorts have no "state"). For each state, the fold of that
-   state's linear expression over the gene's median state, but GUARDED: only
-   states that are detected (frac >= DETECTION_FRAC_MIN) AND have >= MIN_STATE_CELLS cells are
-   eligible for the median or as the headline state; ineligible states get NaN
-   (no badge). This kills the undetected-state phantom (median of near-zero) and
-   the small-N artifact (CD8MAIT, n=8).
+   state's linear expression over the gene's BASELINE = the MEAN linear expression
+   across all adequately-sampled states (n_cells >= MIN_STATE_CELLS), gene-agnostic
+   in its state set (the brain cohorts' celltype_mean / global_mean, ported to
+   states). The baseline includes states where the gene is undetected, so a kinase
+   concentrated in one state divides by a low baseline -> high fold = state-specific.
+   GUARDED at DISPLAY time: only states that are detected (frac >= DETECTION_FRAC_MIN)
+   AND have >= MIN_STATE_CELLS cells carry a badge; ineligible states get NaN. A
+   median-over-detected-states baseline (the prior bug) inverted the metric —
+   single-state kinases pinned to 1.0 and breadth drove the fold.
 
 CORRECTNESS TRAP: `aggexp_data.csv` is `AggregateExpression(slot="data")` — a SUM
 of log-normalized expression across cells, NOT a mean. Every value is divided by
@@ -89,16 +94,18 @@ from alz.cross_reference import specificity  # noqa: E402
 CONTRAST_DAYS = ("d13", "d17", "d20")
 BASELINE_DAY = "d2"
 
-# A state must have at least this many cells (pooled across scRNA days) to be
-# eligible for the state-enrichment median or to be picked as a kinase's headline
-# state. Drops CD8MAIT (n=8 in donor1); every other state clears it.
+# A state must have at least this many cells (pooled across scRNA days) to enter
+# the state-enrichment baseline mean or to be picked as a kinase's headline state.
+# Drops CD8MAIT (n=8 in donor1); every other state clears it.
 MIN_STATE_CELLS = 50
 
 # Detection floor: a (gene, state) is "detected" when this fraction of the state's
-# cells express the transcript. Matches the NSCLC reference (0.01) so both
-# detection columns use one rule; the shared brain default (0.10) is for deep
-# snRNA and is left untouched.
-DETECTION_FRAC_MIN = 0.01
+# cells express the transcript. The SINGLE cross-cohort gate
+# (specificity.DETECTION_FRAC_MIN, 10%) — not a local copy — so "detected" and
+# "specific to N cell states" mean the same thing across the within-cohort scRNA
+# and the NSCLC reference. A state below it cannot carry a trustworthy enrichment
+# (the fold would be built on a handful of cells), so it is not eligible.
+DETECTION_FRAC_MIN = specificity.DETECTION_FRAC_MIN
 
 
 def _state_to_celltype(state: str) -> str:
@@ -282,16 +289,26 @@ def _compute_metric(donor: str, mean_long: pd.DataFrame
 
     # --- State enrichment (activation continuum), GUARDED -------------------
     # For each state: fold of that state's linear expression over the gene's
-    # MEDIAN state. ELIGIBLE = detected (frac >= DETECTION_FRAC_MIN) AND >= MIN_STATE_CELLS
-    # cells; the median is taken over eligible states only and ineligible states
-    # get NaN (no badge). This kills the undetected-state phantom (median of
-    # near-zero) and the small-N artifact (CD8MAIT, n=8). A kinase with no
-    # eligible state has no state enrichment.
-    elig = per_label["tcell_detected"] & (per_label["n_cells"] >= MIN_STATE_CELLS)
-    med = (per_label[elig].groupby("gene")["linear_expression"]
-           .median().replace(0.0, np.nan))
+    # BASELINE = MEAN linear expression across all adequately-sampled states
+    # (n_cells >= MIN_STATE_CELLS), gene-AGNOSTIC in its state set. The baseline
+    # deliberately includes states where THIS gene is undetected, so a kinase
+    # living in one state divides by a baseline pulled down by its many low
+    # states (-> high fold = state-specific). This is the brain cohorts'
+    # celltype_mean / global_mean specificity, ported to states.
+    #   MEAN, not median: a median over the ~13 sampled states is 0 for a
+    #   single-state gene and would null the very signal we want. The earlier
+    #   median-over-eligible-states baseline INVERTED the metric — it normalized
+    #   each gene by its OWN detected states, so a 1-state gene scored exactly 1.0
+    #   and breadth (not specificity) drove the fold (Spearman +0.69).
+    #   DISPLAY guard unchanged: only ELIGIBLE states (detected AND
+    #   >= MIN_STATE_CELLS cells) carry a badge; ineligible states get NaN. A
+    #   kinase with no eligible state has no state enrichment.
+    sampled = per_label["n_cells"] >= MIN_STATE_CELLS
+    baseline = (per_label[sampled].groupby("gene")["linear_expression"]
+                .mean().replace(0.0, np.nan))
     per_label["tcell_state_enrichment"] = (
-        per_label["linear_expression"] / per_label["gene"].map(med))
+        per_label["linear_expression"] / per_label["gene"].map(baseline))
+    elig = per_label["tcell_detected"] & sampled
     per_label.loc[~elig, "tcell_state_enrichment"] = np.nan
     return per_label, per_gene
 

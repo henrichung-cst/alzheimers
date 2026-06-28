@@ -58,8 +58,10 @@ ProjecTILs states using this cohort's own scRNA:
 - Detection evidence: whether the kinase transcript is present in each state
   (fraction of cells expressing >= 10%, normalization-free). Detection is shown
   separately and does not change the specificity denominator. State enrichment
-  is computed against the median ProjecTILs state across the full state set, and
-  effective number of states uses the same all-state expression distribution.
+  is computed against the kinase's MEAN expression across all adequately-sampled
+  ProjecTILs states (>= 50 cells), gene-agnostic in its state set, so a kinase
+  concentrated in one state scores a high fold; effective number of states uses
+  the same all-state expression distribution.
 - Transcript change: pseudobulk expression change versus d2.
 - Concordance: the sign of bulk kinase NES times the transcript change.
 - Time-course consistency: how often concordance is positive across the

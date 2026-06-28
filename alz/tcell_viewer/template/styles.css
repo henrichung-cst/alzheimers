@@ -290,11 +290,11 @@ main#app-main { padding:14px; }
   padding:8px 10px; }
 .attr-section h5 { margin:0 0 4px; font-size:13px; }
 .attr-caption { font-size:11px; margin:0 0 6px; line-height:1.4; }
-.nsclc-lineage-strip { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
-.nsclc-lineage-chip { display:inline-flex; align-items:center; gap:4px; padding:3px 8px;
+.nsclc-celltype-strip { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.nsclc-celltype-chip { display:inline-flex; align-items:center; gap:4px; padding:3px 8px;
   border-radius:10px; background:#f1f5f9; border:1px solid #cbd5e1; font-size:11px; white-space:nowrap; }
-.nsclc-lineage-chip strong { font-weight:600; color:#334155; }
-.nsclc-lineage-chip-dim { opacity:0.55; }
+.nsclc-celltype-chip strong { font-weight:600; color:#334155; }
+.nsclc-celltype-chip-dim { opacity:0.55; }
 /* NSCLC reference detection (standard attribution metric) */
 .nsclc-det-yes { color:#15803d; font-weight:600; }
 .nsclc-det-no { color:#b91c1c; font-weight:600; }

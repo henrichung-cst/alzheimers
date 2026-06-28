@@ -913,9 +913,10 @@ def run_projected_state_mea(
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Projected-state T-cell MEA matrix loader/builder helpers. "
-            "MEA execution is optional and writes outputs to a scratch directory "
-            "instead of canonical project outputs."
+            "Projected-state T-cell MEA: load inputs, build matrices, and run "
+            "per-state kinase MEA. Outputs (mea_projected_state*.csv) default to "
+            "the canonical outputs/reports/kinase_attribution_tcells/<donor>/"
+            "state_mea, where the T-cell viewer's Decomp NES column reads them."
         )
     )
     parser.add_argument("--donor", choices=[*_DONOR_CHOICES])
@@ -932,12 +933,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Load and validate requested inputs, then exit without running MEA.",
     )
     parser.add_argument(
-        "--runner-scratch-dir",
+        "--out-dir",
         type=Path,
         metavar="DIR",
         help=(
-            "Run projected-state MEA with a local runner wrapper and write scratch "
-            "outputs only (no canonical output paths are touched)."
+            "Output dir for the projected-state MEA tables. Defaults to the "
+            "canonical outputs/reports/kinase_attribution_tcells/<donor>/state_mea "
+            "(per-track subdir when --track both)."
         ),
     )
     parser.add_argument(
@@ -951,10 +953,21 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_CANONICAL_STATE_MEA_ROOT = (
+    _PROJECT_ROOT / "outputs" / "reports" / "kinase_attribution_tcells"
+)
+
+
 def _combo_out_dir(out_root: Path, donor: str, track: str, *, use_subdirs: bool) -> Path:
     if use_subdirs:
         return out_root / donor / track
     return out_root
+
+
+def _canonical_out_dir(donor: str, track: str, *, multi_track: bool) -> Path:
+    """Canonical viewer-consumed dir: <donor>/state_mea, per-track when both."""
+    base = _CANONICAL_STATE_MEA_ROOT / donor / "state_mea"
+    return base / track if multi_track else base
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -963,9 +976,6 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.donor is None or args.track is None:
         return
-
-    if not args.dry_run and args.runner_scratch_dir is None:
-        raise SystemExit("--runner-scratch-dir is required unless --dry-run is set")
 
     donors = ["donor1", "donor2"] if args.donor == "both" else [args.donor]
     tracks = ["st", "py"] if args.track == "both" else [args.track]
@@ -983,16 +993,16 @@ def main(argv: list[str] | None = None) -> None:
                 state_filter=args.state,
             )
 
-            combo_out_dir = (
-                _combo_out_dir(
-                    args.runner_scratch_dir,
-                    donor,
-                    track,
-                    use_subdirs=use_subdirs,
+            if dry_run:
+                combo_out_dir = Path(".")
+            elif args.out_dir is not None:
+                combo_out_dir = _combo_out_dir(
+                    args.out_dir, donor, track, use_subdirs=use_subdirs
                 )
-                if not dry_run
-                else Path(".")
-            )
+            else:
+                combo_out_dir = _canonical_out_dir(
+                    donor, track, multi_track=len(tracks) > 1
+                )
 
             if dry_run:
                 if inputs is not None:

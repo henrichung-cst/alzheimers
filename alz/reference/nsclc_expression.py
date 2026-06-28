@@ -11,9 +11,9 @@ clusters (86) + per-cluster diffexp. Cell types are therefore DERIVED by two
 complementary annotators (see docs/plans/todo2_tcell_specificity_reference.md):
 
   --label-clusters : score each of the 86 graphclust clusters against canonical
-                     lineage marker sets (T/NK, B/plasma, Myeloid, Epithelial,
+                     cell-type marker sets (T/NK, B/plasma, Myeloid, Epithelial,
                      Endothelial, Fibroblast, Mast) using the shipped diffexp
-                     Mean Counts; assign argmax lineage. This labels the NON-T
+                     Mean Counts; assign argmax cell type. This labels the NON-T
                      compartment (which ProjecTILs structurally cannot) and
                      sanity-checks the T calls. Cheap (no matrix load).
 
@@ -27,7 +27,7 @@ complementary annotators (see docs/plans/todo2_tcell_specificity_reference.md):
   --run            : stream the full 10x CSC matrix (h5py, indptr-bounded cell
                      chunks — NEVER full-load; 1.3 B nnz), assign each cell its
                      final label (ProjecTILs state where scGate gated it as a T
-                     cell, else the coarse marker lineage), accumulate per
+                     cell, else the coarse marker cell type), accumulate per
                      (gene, cell_type). Writes nsclc_kinase_expression.csv.
 
   --metrics        : recompute the standard attribution metric (detection-gated
@@ -72,17 +72,17 @@ from alz.cross_reference import specificity
 # Constants
 # ---------------------------------------------------------------------------
 
-# NSCLC reference detection floor: ≥1% of a cell type's cells express the kinase.
-# Lower than the cross-cohort 10% gate — the 897k-cell reference is deep, so a 1%
-# floor still filters ambient/dropout noise without rejecting real low-copy
-# kinases. Scoped to this reference; the shallow within-cohort cohort keeps 10%.
-NSCLC_DETECTION_FRAC_MIN = 0.01
+# Detection floor — the SINGLE cross-cohort gate (specificity.DETECTION_FRAC_MIN,
+# 10%). No per-reference override: a kinase counts as detected in a cell type only
+# when ≥10% of its cells express it, identically for the cohort scRNA and the NSCLC
+# reference, so "detected ✓" never means two different things across axes.
+NSCLC_DETECTION_FRAC_MIN = specificity.DETECTION_FRAC_MIN
 
 CHUNK_CELLS = 5000
 
-# Canonical lineage markers (HGNC symbols). T and NK share one coarse bucket
+# Canonical cell-type markers (HGNC symbols). T and NK share one coarse bucket
 # (T_NK) which ProjecTILs later resolves into 14 CD8/CD4 functional states.
-LINEAGE_MARKERS: Dict[str, list] = {
+CELLTYPE_MARKERS: Dict[str, list] = {
     "T_NK":        ["CD3D", "CD3E", "CD3G", "TRAC", "TRBC1", "TRBC2", "CD2",
                     "IL7R", "CD8A", "CD8B", "CD4", "FOXP3", "NKG7", "GNLY",
                     "KLRD1", "KLRF1", "NCAM1"],
@@ -97,10 +97,10 @@ LINEAGE_MARKERS: Dict[str, list] = {
     "Mast":        ["TPSAB1", "TPSB2", "CPA3", "MS4A2"],
 }
 
-# Margin below which a cluster's argmax lineage is flagged ambiguous.
+# Margin below which a cluster's argmax cell type is flagged ambiguous.
 AMBIGUOUS_MARGIN = 0.30
 
-# Coarse non-T lineages (everything ProjecTILs cannot classify). Any cell_type
+# Coarse non-T cell types (everything ProjecTILs cannot classify). Any cell_type
 # NOT in this set is a ProjecTILs T state (or T_NK_other) and collapses to the
 # single "T_NK" group for the specificity-share denominator (guardrail 2).
 _COARSE_NON_T = {"B_plasma", "Myeloid", "Epithelial", "Endothelial",
@@ -142,7 +142,7 @@ def _ensure_analysis_members() -> None:
 
 
 def label_clusters() -> pd.DataFrame:
-    """Assign each graphclust cluster a coarse lineage from diffexp markers."""
+    """Assign each graphclust cluster a coarse cell type from diffexp markers."""
     _ensure_analysis_members()
     os.makedirs(config.NSCLC_10X_CACHE_DIR, exist_ok=True)
 
@@ -162,7 +162,7 @@ def label_clusters() -> pd.DataFrame:
         idx = [g2i[g] for g in markers if g in g2i]
         return z[idx, :].mean(axis=0) if idx else np.full(z.shape[1], -np.inf)
 
-    S = pd.DataFrame({lin: marker_score(ms) for lin, ms in LINEAGE_MARKERS.items()},
+    S = pd.DataFrame({ct: marker_score(ms) for ct, ms in CELLTYPE_MARKERS.items()},
                      index=clusters)
     assign = S.idxmax(axis=1)
     top2 = S.apply(lambda r: r.nlargest(2).iloc[-1], axis=1)
@@ -174,7 +174,7 @@ def label_clusters() -> pd.DataFrame:
 
     out = pd.DataFrame({
         "cluster": assign.index,
-        "lineage": assign.values,
+        "coarse_cell_type": assign.values,
         "margin": margin.reindex(assign.index).values,
         # T/NK marker z-score per cluster — a sanity column. ProjecTILs/scGate
         # (not these markers) gates T cells now, so a non-T cluster with a high
@@ -188,24 +188,24 @@ def label_clusters() -> pd.DataFrame:
     out.to_csv(config.NSCLC_CLUSTER_LABELS_FILE, index=False)
     print(f"  Wrote {len(out)} cluster labels -> {config.NSCLC_CLUSTER_LABELS_FILE}")
 
-    # Per-barcode coarse marker lineage (cluster -> lineage join). This labels
+    # Per-barcode coarse marker cell type (cluster -> cell type join). This labels
     # the non-T compartment for the specificity denominator; ProjecTILs/scGate
     # overrides it for cells it gates as T (full-cohort projection).
-    cluster_to_lineage = dict(zip(out["cluster"], out["lineage"]))
+    cluster_to_celltype = dict(zip(out["cluster"], out["coarse_cell_type"]))
     cells = gc.rename(columns={"Barcode": "barcode", "Cluster": "cluster_num"})
     cells["cluster"] = "Cluster " + cells["cluster_num"].astype(str)
-    cells["coarse_lineage"] = cells["cluster"].map(cluster_to_lineage)
-    cells[["barcode", "cluster_num", "coarse_lineage"]].to_csv(
+    cells["coarse_cell_type"] = cells["cluster"].map(cluster_to_celltype)
+    cells[["barcode", "cluster_num", "coarse_cell_type"]].to_csv(
         config.NSCLC_CELL_LABELS_FILE, index=False)
     print(f"  Wrote {len(cells):,} per-barcode coarse labels "
           f"-> {config.NSCLC_CELL_LABELS_FILE}")
 
     # Summary
-    agg = out.groupby("lineage")["n_cells"].agg(["sum", "count"]).sort_values(
+    agg = out.groupby("coarse_cell_type")["n_cells"].agg(["sum", "count"]).sort_values(
         "sum", ascending=False)
-    print("\n  Marker lineage partition (cells / clusters):")
-    for lin, row in agg.iterrows():
-        print(f"    {lin:<12} {int(row['sum']):>9,}  ({int(row['count'])} clusters)")
+    print("\n  Marker cell-type partition (cells / clusters):")
+    for ct, row in agg.iterrows():
+        print(f"    {ct:<12} {int(row['sum']):>9,}  ({int(row['count'])} clusters)")
     n_amb = int(out["ambiguous"].sum())
     print(f"  Marker T/NK cells: {agg.loc['T_NK','sum']:,} "
           f"(scGate makes the authoritative T call over ALL cells)")
@@ -215,20 +215,20 @@ def label_clusters() -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Final per-cell labels (coarse lineage + ProjecTILs refinement of T/NK)
+# Final per-cell labels (coarse cell type + ProjecTILs refinement of T/NK)
 # ---------------------------------------------------------------------------
 
 
 def _final_cell_labels() -> pd.Series:
     """barcode -> final cell_type. scGate (inside ProjecTILs, run over ALL cells)
     is the authoritative T gate: a gated cell takes its ProjecTILs functional
-    state; every other cell keeps its coarse marker lineage. A marker-T cell
+    state; every other cell keeps its coarse marker cell type. A marker-T cell
     scGate rejected falls to T_NK_other (T by markers, unplaceable by ProjecTILs)."""
     if not os.path.exists(config.NSCLC_CELL_LABELS_FILE):
         raise FileNotFoundError(
             f"{config.NSCLC_CELL_LABELS_FILE} missing — run --label-clusters first.")
     cells = pd.read_csv(config.NSCLC_CELL_LABELS_FILE)
-    label = cells.set_index("barcode")["coarse_lineage"].copy()
+    label = cells.set_index("barcode")["coarse_cell_type"].copy()
     marker_tnk = label == "T_NK"
 
     if not os.path.exists(config.NSCLC_PROJECTILS_PREDICTIONS_FILE):
@@ -365,15 +365,16 @@ def compute_expression() -> pd.DataFrame:
                 "cell_type": ct,
                 "mean_log2_expression": round(float(mean_all[ci, k]), 6),
                 "fraction_cells_expressing": round(float(frac_all[ci, k]), 6),
-                # NSCLC detection floor (recomputed in _write_attribution_metrics).
+                # Shared 10% detection floor; re-aliased from `detected` in
+                # _write_attribution_metrics after specificity.compute().
                 "binary_expressed": bool(frac_all[ci, k] >= NSCLC_DETECTION_FRAC_MIN),
                 "n_cells": int(n_cells_ct[ci]),
                 "probe_covered": True,
             })
     df = pd.DataFrame(rows)
 
-    # spec_group = coarse lineage grouping. The 14 ProjecTILs T-states (+
-    # T_NK_other) collapse to one "T_NK" group; the 6 non-T lineages stay
+    # spec_group = coarse cell-type grouping. The 14 ProjecTILs T-states (+
+    # T_NK_other) collapse to one "T_NK" group; the 6 non-T cell types stay
     # separate. This is the coarse resolution for the standard attribution
     # metric (the data answers "how specific" differently at native vs coarse
     # resolution — both are reported). fraction_cells_expressing / detection
@@ -410,13 +411,22 @@ def _write_attribution_metrics(df: pd.DataFrame) -> pd.DataFrame:
       nsclc_kinase_expression.csv  — per (kinase, cell_type): raw facts (mean,
         fraction, n_cells) + native metrics (detected, linear_expression,
         specificity_score, concentration_tier) + per-kinase breadth columns:
-          specificity_count  — N of 7 coarse groups with group_fraction ≥ 0.10
+          specificity_count  — N of 7 coarse groups whose cell-weighted
+            group_fraction ≥ the shared detection floor (specificity.DETECTION_FRAC_MIN)
           expressing_groups  — comma-separated list of those groups
+          top_coarse_group   — dominant coarse group (highest group_fraction)
           nsclc_enrichment_<state>  — per-ProjecTILs-state share of the kinase's
             total T_NK expression (14 states; non-T types are NaN)
           nsclc_enrichment_tier_<state>  — tier binned at multiples of 1/14
     """
     df = df.copy()
+    # Re-entrant: keep only the raw per-(kinase, cell_type) facts. Every other
+    # column below is recomputed, so a prior pass's derived columns must be dropped
+    # or the spec_count/enrichment merges collide on suffixes (specificity_count_x/_y)
+    # when --metrics is re-run on an already-metriced CSV.
+    _RAW = ["kinase_id", "gene_symbol", "cell_type", "mean_log2_expression",
+            "fraction_cells_expressing", "n_cells", "probe_covered"]
+    df = df[[c for c in _RAW if c in df.columns]].copy()
     if "spec_group" not in df.columns:
         df["spec_group"] = df["cell_type"].map(_spec_group)
 
@@ -426,42 +436,27 @@ def _write_attribution_metrics(df: pd.DataFrame) -> pd.DataFrame:
         frac_col="fraction_cells_expressing", ncells_col="n_cells",
         group_col="spec_group")
 
-    # NSCLC reference detection has NO minimum-fraction floor. The 897k-cell
-    # reference (~5,500 cells per cell type) is deep enough that any nonzero
-    # fraction is a real detection, so "detected" = expressed in ≥1 cell
-    # (frac > 0), NOT frac ≥ 10%. (The shallow within-cohort cohort scRNA keeps
-    # the 10% gate; this floor-removal is scoped to the deep reference.) Override
-    # the shared metric's gated detection and recompute the reported counts so the
-    # breadth columns stay consistent — the specificity denominator is unaffected
-    # (detection never filters it).
-    per_label["detected"] = (
-        per_label["fraction_cells_expressing"].astype(float) >= NSCLC_DETECTION_FRAC_MIN)
+    # `detected`, `group_detected`, and the per-gene n_detected counts all come
+    # from specificity.compute() at the single shared 10% floor — no per-reference
+    # re-threshold. The CSV and JS read the `binary_expressed` alias of `detected`.
     per_label["binary_expressed"] = per_label["detected"]
-    per_group["group_detected"] = (
-        per_group["group_fraction"].astype(float) >= NSCLC_DETECTION_FRAC_MIN)
-    _nd_native = per_label.groupby("gene_symbol")["detected"].sum()
-    _nd_coarse = per_group.groupby("gene_symbol")["group_detected"].sum()
-    per_gene["n_detected_native"] = (
-        per_gene["gene_symbol"].map(_nd_native).fillna(0).astype(int))
-    per_gene["n_detected_coarse"] = (
-        per_gene["gene_symbol"].map(_nd_coarse).fillna(0).astype(int))
 
     # Rename concentration → specificity_score (the JS reads this column).
     # The coarse group columns are derived in-memory below; only the native-type
     # rows are written to the canonical CSV.
     per_label = per_label.rename(columns={"concentration": "specificity_score"})
 
-    # --- Per-kinase NSCLC specificity (N-of-7 breadth at group_fraction ≥ 0.10) ---
+    # --- Per-kinase NSCLC specificity (N-of-7 breadth at the shared 10% floor) ---
     # group_fraction = cell-weighted average fraction_cells_expressing across the
-    # native types in each coarse group. Specificity = pure prevalence count at
-    # ≥10% floor (distinct from the 1% detection floor used for `detected`).
+    # native types in each coarse group. Specificity = prevalence count of groups
+    # the kinase is detected in, at the same 10% floor as `detected`.
     spec_grp = per_label.copy()
     spec_grp["_wt"] = spec_grp["n_cells"] * spec_grp["fraction_cells_expressing"]
     _grp = spec_grp.groupby(["gene_symbol", "spec_group"]).agg(
         _wt_sum=("_wt", "sum"), _nc=("n_cells", "sum")).reset_index()
     _grp["group_fraction"] = _grp["_wt_sum"] / _grp["_nc"].clip(lower=1)
     _spec_count = (
-        _grp[_grp["group_fraction"] >= 0.10]
+        _grp[_grp["group_fraction"] >= specificity.DETECTION_FRAC_MIN]
         .groupby("gene_symbol")
         .agg(specificity_count=("spec_group", "count"),
              expressing_groups=("spec_group", lambda s: ",".join(sorted(s))))
@@ -469,6 +464,14 @@ def _write_attribution_metrics(df: pd.DataFrame) -> pd.DataFrame:
     per_label = per_label.merge(_spec_count, on="gene_symbol", how="left")
     per_label["specificity_count"] = per_label["specificity_count"].fillna(0).astype(int)
     per_label["expressing_groups"] = per_label["expressing_groups"].fillna("")
+    # Dominant coarse group = highest cell-weighted group_fraction (most prevalent),
+    # whether or not it clears the floor — so an undetected kinase still reports the
+    # cell type it tilts toward. Same prevalence basis as specificity_count.
+    _top = (_grp.sort_values("group_fraction", ascending=False)
+            .drop_duplicates("gene_symbol")[["gene_symbol", "spec_group"]]
+            .rename(columns={"spec_group": "top_coarse_group"}))
+    per_label = per_label.merge(_top, on="gene_symbol", how="left")
+    per_label["top_coarse_group"] = per_label["top_coarse_group"].fillna("")
 
     # --- Per-kinase NSCLC enrichment (14-state ProjecTILs share) ---------------
     # Subset T_NK rows → per-state share across 14 ProjecTILs states.
@@ -500,7 +503,7 @@ def _write_attribution_metrics(df: pd.DataFrame) -> pd.DataFrame:
         "n_cells", "probe_covered",
         "linear_expression", "detected", "specificity_score",
         "concentration_of_total", "concentration_tier",
-        "specificity_count", "expressing_groups",
+        "specificity_count", "expressing_groups", "top_coarse_group",
         *[c for c in per_label.columns if c.startswith("nsclc_enrichment_")]]]
     expr.to_csv(config.NSCLC_KINASE_EXPRESSION_FILE, index=False)
     print(f"\n  Wrote {len(expr):,} rows -> {config.NSCLC_KINASE_EXPRESSION_FILE}")
@@ -510,7 +513,8 @@ def _write_attribution_metrics(df: pd.DataFrame) -> pd.DataFrame:
           f"median effective # cell types (detected) = "
           f"{per_gene.loc[per_gene['n_detected_native'] > 0, 'effective_n_native'].median():.2f}")
     n_spec = int((_spec_count["specificity_count"] > 0).sum())
-    print(f"  Kinases with specificity_count ≥ 1 (group_fraction ≥ 0.10): {n_spec} / {len(per_gene)}")
+    print(f"  Kinases with specificity_count ≥ 1 (group_fraction ≥ "
+          f"{specificity.DETECTION_FRAC_MIN:g}): {n_spec} / {len(per_gene)}")
     return expr
 
 
@@ -635,7 +639,7 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--label-clusters", action="store_true",
-                   help="Coarse marker-based lineage labeling of graphclust clusters")
+                   help="Coarse marker-based cell-type labeling of graphclust clusters")
     g.add_argument("--run", action="store_true",
                    help="Stream the 10x matrix and compute per-cell-type expression")
     g.add_argument("--metrics", action="store_true",
