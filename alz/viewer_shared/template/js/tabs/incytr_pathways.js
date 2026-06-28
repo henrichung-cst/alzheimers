@@ -1204,13 +1204,7 @@ function _ipFilterRows() {
   ]);
   const isNumeric = numericKeys.has(key);
   const cmp = isNumeric
-    ? (a, b) => {
-        const av = a[key], bv = b[key];
-        if (av == null && bv == null) return 0;
-        if (av == null) return 1;
-        if (bv == null) return -1;
-        return dir * (av - bv);
-      }
+    ? (a, b) => numCmp(a[key], b[key], dir)
     : (a, b) => {
         const av = a[key], bv = b[key];
         if (av == null && bv == null) return 0;

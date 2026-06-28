@@ -1350,14 +1350,7 @@ function _kxSortRows(rows, s) {
       const pa = songOverallPeak(a), pb = songOverallPeak(b);
       av = pa.nes; bv = pb.nes;
     }
-    const aMissing = av == null || !isFinite(av);
-    const bMissing = bv == null || !isFinite(bv);
-    if (aMissing && bMissing) return (a.name || "").localeCompare(b.name || "");
-    if (aMissing) return 1;
-    if (bMissing) return -1;
-    const ax = Math.abs(av);
-    const bx = Math.abs(bv);
-    return s.sortDir < 0 ? (bx - ax) : (ax - bx);
+    return numCmp(av, bv, s.sortDir > 0 ? 1 : -1);
   });
 }
 

@@ -510,7 +510,7 @@ function _f5Metric(group, ages) {
     const q = _f5Num(row.FDR);
     if (q != null && q < fdr) sigCount += 1;
   }
-  return {peakAbsNes, peakSignedNes, sigCount};
+  return {peakAbsNes, peakSignedNes, peakNes: peakSignedNes, sigCount};
 }
 
 function _f5GroupPasses(group, ages, metric) {
@@ -543,9 +543,10 @@ function _f5FilteredRows() {
   const col = _F5State.sortCol;
   const asc = _F5State.sortAsc;
   out.sort((a, b) => {
-    let va = col === "profile" ? a.peakAbsNes : a[col];
-    let vb = col === "profile" ? b.peakAbsNes : b[col];
-    if (col === "n_attributed_celltypes") {
+    let va, vb;
+    if (col === "profile" || col === "peakAbsNes") {
+      return numCmp(a.peakNes, b.peakNes, asc ? -1 : 1);
+    } else if (col === "n_attributed_celltypes") {
       va = _f5CellTypeCount(a);
       vb = _f5CellTypeCount(b);
     } else if (col === "agreement_profile") {
@@ -560,12 +561,14 @@ function _f5FilteredRows() {
     } else if (col === "conf") {
       va = _f5BestAttr(a) ? _f5ConfRank(_f5BestAttr(a).confidence_tier) : 0;
       vb = _f5BestAttr(b) ? _f5ConfRank(_f5BestAttr(b).confidence_tier) : 0;
+    } else {
+      va = a[col]; vb = b[col];
     }
-    if (va == null && vb == null) return String(a.kinase).localeCompare(String(b.kinase));
-    if (va == null) return 1;
-    if (vb == null) return -1;
-    if (typeof va === "string") return asc ? va.localeCompare(vb) : vb.localeCompare(va);
-    return asc ? (va - vb) : (vb - va);
+    if (typeof va === "string" || typeof vb === "string") {
+      const sa = va == null ? "" : String(va), sb = vb == null ? "" : String(vb);
+      return asc ? sa.localeCompare(sb) : sb.localeCompare(sa);
+    }
+    return numCmp(va, vb, asc ? -1 : 1);
   });
   return out;
 }

@@ -86,23 +86,20 @@ function _attrVerdictConfCell(r) {
 
 // Sort comparator for a single column.
 function _attrVerdictCmp(a, b, key, type, asc) {
-  let va, vb;
+  const dir = asc ? -1 : 1;
   if (type === "num") {
-    va = a[key]; vb = b[key];
-    va = (va == null || !isFinite(va)) ? null : Number(va);
-    vb = (vb == null || !isFinite(vb)) ? null : Number(vb);
+    const va = (a[key] == null || !isFinite(a[key])) ? null : Number(a[key]);
+    const vb = (b[key] == null || !isFinite(b[key])) ? null : Number(b[key]);
+    return numCmp(va, vb, dir);
   } else if (type === "conf") {
-    va = _CONF_RANK[a[key]] ?? -1;
-    vb = _CONF_RANK[b[key]] ?? -1;
+    const va = _CONF_RANK[a[key]] ?? -1;
+    const vb = _CONF_RANK[b[key]] ?? -1;
+    return numCmp(va, vb, dir);
   } else {
-    va = (a[key] || "").toString();
-    vb = (b[key] || "").toString();
+    const va = (a[key] || "").toString();
+    const vb = (b[key] || "").toString();
+    return asc ? va.localeCompare(vb) : vb.localeCompare(va);
   }
-  if (va == null && vb == null) return 0;
-  if (va == null) return 1;
-  if (vb == null) return -1;
-  if (typeof va === "string") return asc ? va.localeCompare(vb) : vb.localeCompare(va);
-  return asc ? (va - vb) : (vb - va);
 }
 
 // ---- Shared section renderers ------------------------------------------------

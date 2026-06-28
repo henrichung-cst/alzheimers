@@ -411,6 +411,20 @@ function _kineMaxAbsNesScoped(r, scopedCtxIds) {
   return best;
 }
 
+function _kineSignedPeakNesScoped(r, scopedCtxIds) {
+  // Returns the signed NES at the max-|NES| contrast in scopedCtxIds (all if empty Set).
+  // Selects the peak by magnitude; ranks by sign. Returns null when no values.
+  let bestAbs = null, bestSigned = null;
+  for (let ci = 0; ci < CONTRASTS.length; ci++) {
+    if (scopedCtxIds.size > 0 && !scopedCtxIds.has(ci)) continue;
+    const v = r._nes[ci];
+    if (v == null) continue;
+    const a = Math.abs(v);
+    if (bestAbs == null || a > bestAbs) { bestAbs = a; bestSigned = v; }
+  }
+  return bestSigned;
+}
+
 // Max WMB concentration tier across attribution rows for this kinase under the
 // active filter scope. Returns 0 when no qualifying rows have wmb_concentration_tier.
 function _kineMaxWmbTierScoped(kinaseId, filter) {
@@ -527,10 +541,9 @@ function _makeKeCompare(scopedCtxIds) {
   return function(a, b) {
     let va, vb;
     if (col === "nes_profile") {
-      va = _kineMaxAbsNesScoped(a, scopedCtxIds);
-      vb = _kineMaxAbsNesScoped(b, scopedCtxIds);
-      if (va == null) va = -Infinity;
-      if (vb == null) vb = -Infinity;
+      return numCmp(_kineSignedPeakNesScoped(a, scopedCtxIds),
+                    _kineSignedPeakNesScoped(b, scopedCtxIds),
+                    asc ? -1 : 1);
     }
     else if (col === "n_attributed_celltypes") {
       // The Cell type column shows the kinase's single dominant Song cluster, so
@@ -586,12 +599,11 @@ function _makeKeCompare(scopedCtxIds) {
     else if (col === "peak_NES_Tau")  { va = a.peak_NES_Tau;  vb = b.peak_NES_Tau; }
     else if (col === "peak_NES_ApTt") { va = a.peak_NES_ApTt; vb = b.peak_NES_ApTt; }
     else { va = a[col]; vb = b[col]; }
-    if (va == null && vb == null) return 0;
-    if (va == null) return 1;
-    if (vb == null) return -1;
-    if (typeof va === "string") return asc
-      ? va.localeCompare(vb) : vb.localeCompare(va);
-    return asc ? (va - vb) : (vb - va);
+    if (typeof va === "string" || typeof vb === "string") {
+      const sa = va == null ? "" : String(va), sb = vb == null ? "" : String(vb);
+      return asc ? sa.localeCompare(sb) : sb.localeCompare(sa);
+    }
+    return numCmp(va, vb, asc ? -1 : 1);
   };
 }
 

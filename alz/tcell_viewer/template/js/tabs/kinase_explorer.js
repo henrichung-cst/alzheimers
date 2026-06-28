@@ -253,6 +253,20 @@ function _kineMaxAbsNesScoped(r, scopedCtxIds) {
   return best;
 }
 
+function _kineSignedPeakNesScoped(r, scopedCtxIds) {
+  // Returns the signed NES at the max-|NES| contrast in scopedCtxIds (all if empty Set).
+  // Selects the peak by magnitude; ranks by sign. Returns null when no values.
+  let bestAbs = null, bestSigned = null;
+  for (let ci = 0; ci < CONTRASTS.length; ci++) {
+    if (scopedCtxIds.size > 0 && !scopedCtxIds.has(ci)) continue;
+    const v = r._nes[ci];
+    if (v == null) continue;
+    const a = Math.abs(v);
+    if (bestAbs == null || a > bestAbs) { bestAbs = a; bestSigned = v; }
+  }
+  return bestSigned;
+}
+
 // Peak within-cohort state enrichment across attribution rows for this kinase
   // under the active filter scope (fold over the baseline mean state). Returns 0
 // when no qualifying rows. This is the T-cell state-enrichment signal.
@@ -335,10 +349,9 @@ function _makeKeCompare(scopedCtxIds) {
   return function(a, b) {
     let va, vb;
     if (col === "nes_profile") {
-      va = _kineMaxAbsNesScoped(a, scopedCtxIds);
-      vb = _kineMaxAbsNesScoped(b, scopedCtxIds);
-      if (va == null) va = -Infinity;
-      if (vb == null) vb = -Infinity;
+      return numCmp(_kineSignedPeakNesScoped(a, scopedCtxIds),
+                    _kineSignedPeakNesScoped(b, scopedCtxIds),
+                    asc ? -1 : 1);
     }
     else if (col === "n_attributed_celltypes") {
       // Match the Cell states column: count distinct T-cell states the kinase is
@@ -372,19 +385,17 @@ function _makeKeCompare(scopedCtxIds) {
       vb = _kineDisagreeCountScoped(b, scopedCtxIds);
     }
     else if (col === "peak_NES") {
-      // Scope-aware to match the column's displayed value.
-      va = _kineMaxAbsNesScoped(a, scopedCtxIds);
-      vb = _kineMaxAbsNesScoped(b, scopedCtxIds);
-      if (va == null) va = -Infinity;
-      if (vb == null) vb = -Infinity;
+      // Scope-aware signed sort — select peak by magnitude, rank by sign.
+      return numCmp(_kineSignedPeakNesScoped(a, scopedCtxIds),
+                    _kineSignedPeakNesScoped(b, scopedCtxIds),
+                    asc ? -1 : 1);
     }
     else { va = a[col]; vb = b[col]; }
-    if (va == null && vb == null) return 0;
-    if (va == null) return 1;
-    if (vb == null) return -1;
-    if (typeof va === "string") return asc
-      ? va.localeCompare(vb) : vb.localeCompare(va);
-    return asc ? (va - vb) : (vb - va);
+    if (typeof va === "string" || typeof vb === "string") {
+      const sa = va == null ? "" : String(va), sb = vb == null ? "" : String(vb);
+      return asc ? sa.localeCompare(sb) : sb.localeCompare(sa);
+    }
+    return numCmp(va, vb, asc ? -1 : 1);
   };
 }
 
