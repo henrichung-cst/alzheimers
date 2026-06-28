@@ -770,7 +770,7 @@ def validate_song(report: ValidationReport) -> None:
          ["kinase", "residue_type"],
          ["kinase", "residue_type"]),
         ("kinase_hypothesis_table.csv",
-         ["kinase", "residue_type", "n_sig_contrasts"],
+         ["kinase", "residue_type"],
          ["kinase", "residue_type"]),
     ]:
         rel = f"{recovery}/{fname}"

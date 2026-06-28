@@ -124,9 +124,10 @@ silently skipped and the annotation is lost.
 Synthesizes the final hypothesis tables:
 
 - **`kinase_activity_matrix.csv`** — wide NES/FDR per kinase across all 9
-  contrasts, plus a `trajectory_label` (progressive / declining / peaked /
-  sustained / early / late / single_contrast / mixed / none) computed within the
-  kinase's peak condition.
+  contrasts, plus per-genotype scalars `peak_NES_{g}`, `peak_contrast_{g}`,
+  `n_sig_{g}`, and `trajectory_{g}` (progressive / declining / peaked /
+  sustained / early / late / single_contrast / mixed / none) for each
+  genotype `g` in {App, Tau, ApTt}.
 - **`celltype_evidence_table.csv`** — one row per (kinase, cell type) above the
   WMB expression gate, deduped to the contrast with the strongest joint evidence.
 - **`kinase_hypothesis_table.csv`** — the primary deliverable: kinase-first
