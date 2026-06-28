@@ -101,7 +101,7 @@ _SONG_MECHANISM_COLUMNS = [
 ]
 
 
-def _build_kinases_slice(data: UnifiedData) -> dict:
+def _build_kinases_slice(data: UnifiedData, secretome_map: dict | None = None) -> dict:
     """Columnar kinases table. IDs follow edge_metadata['kinases'] ordering."""
     kinases = data.edge_metadata["kinases"]
     kid = {k: i for i, k in enumerate(kinases)}
@@ -113,6 +113,7 @@ def _build_kinases_slice(data: UnifiedData) -> dict:
     cols: dict[str, list] = {
         "id": [], "name": [], "gene_symbol": [],
         "residue_type": [],
+        "secretome_location": [],
         "top_celltype_1": [], "top_celltype_2": [], "top_celltype_3": [],
         "top_celltype_1_sea_ad_lfc": [],
         "top_celltype_1_song_lfc": [],
@@ -142,6 +143,8 @@ def _build_kinases_slice(data: UnifiedData) -> dict:
 
         cols["gene_symbol"].append(_get(ka_row, "gene_symbol", ""))
         cols["residue_type"].append(_get(ka_row, "residue_type", "ST"))
+        gene_up = (cols["gene_symbol"][-1] or "").upper()
+        cols["secretome_location"].append(secretome_map.get(gene_up, "") if secretome_map else "")
         for g in config.DISEASE_GROUPS:
             cols[f"peak_NES_{g}"].append(_get(ka_row, f"peak_NES_{g}"))
             cols[f"peak_contrast_{g}"].append(_get(ka_row, f"peak_contrast_{g}", ""))
@@ -1682,11 +1685,20 @@ class SongBuild:
     song_concordance_present_genes: list
 
 
-def build_song_viewer_slice(data: "UnifiedData") -> SongBuild:
+def build_song_viewer_slice(data: "UnifiedData", secretome_path: str | None = None) -> SongBuild:
     """Build the song (mouse AD) cohort slice + the meta-capability scalars
     build_payload needs. Reproduces build_payload's inline song-construction
     exactly; meta-building stays in build_payload."""
-    kinases_slice = _build_kinases_slice(data)
+    secretome_map: dict | None = None
+    if secretome_path and os.path.exists(secretome_path):
+        sec_df = pd.read_csv(secretome_path, sep="\t")
+        secretome_map = {
+            str(row["Gene"]).upper(): str(row["Secretome location"])
+            for _, row in sec_df.iterrows()
+            if pd.notna(row.get("Gene")) and pd.notna(row.get("Secretome location"))
+        }
+        print(f"  secretome: loaded {len(secretome_map)} genes from {secretome_path}", flush=True)
+    kinases_slice = _build_kinases_slice(data, secretome_map=secretome_map)
     celltypes_slice = _build_celltypes_slice(data)
 
     contrasts = data.edge_metadata["contrasts"]

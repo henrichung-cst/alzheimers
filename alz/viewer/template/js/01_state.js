@@ -290,6 +290,23 @@ const TAB_GUIDE = {
       { name: "All samples", desc: "uses measured units for medians and direction instead of only FDR-significant units; leave off for significant agreement calls." },
     ],
   },
+  diseasedirection: {
+    preamble: "A two-panel disease-direction view for the MouseC1 (Song) AD cohort. The top panel ranks kinases by their signed peak enrichment per genotype (App / Tau / ApTt double knock-in). The bottom panel lists substrate genes as candidate biomarkers, annotated with human secretome category and disease fold-change.",
+    method: [
+      "Top panel: each row is one kinase. The three MouseC1 columns show the signed peak NES (normalized enrichment score) for App, Tau, and ApTt separately — the NES at the time point with the largest absolute enrichment within that genotype. Trajectory badges encode the temporal shape (early = significant only at 2 months; peak = rises then falls; sustained = significant at every measured time point). n_sig counts contrasts significant at the active FDR threshold within each genotype.",
+      "Bottom panel: each row is a unique substrate gene symbol. The Secreted (human, HPA) column shows the Human Protein Atlas secretome category (e.g., Secreted to blood, Secreted in brain) — blank where HPA has no entry for that gene. LFC is the kinase-level top-cell-type log2 fold change (top_celltype_1_song_lfc) where available. SEA-AD expr is the human MTG expression location score (h_spec) from the SEA-AD reference.",
+    ],
+    shows: {
+      lead: "The top panel answers which kinases move in which direction and when, per genotype. The bottom panel answers which of those kinases' substrate genes are secreted in humans — the entry point for candidate biomarker or target-engagement prioritization.",
+      bullets: [
+        "Default sort is by overall signed peak NES (max |NES| across all three genotypes): the kinase with the largest absolute disease signal appears first; descending = most activated on top, ascending = most suppressed on top.",
+        "Header-click on any genotype column sorts by that genotype's signed NES, reaching the strongly-negative tail on the second click.",
+        "The Secreted (human, HPA) column is annotation only — it never filters rows. Blank indicates the gene is not in the HPA secretome list, not that it is confirmed non-secreted.",
+        "The gene-list textarea filters the biomarker table to pasted symbols and reports how many symbols had no match. Use Clear to reset.",
+      ],
+    },
+    howTo: "Sort the top panel by a genotype column to focus on App- or Tau-specific kinase activity. In the bottom panel, paste a gene list (one symbol per line) to filter to targets of interest; unmatched symbols are counted and reported. Click Open matched in Kinase Explorer to send the matched kinases to the Kinase Explorer tab for detailed trajectory and cell-type inspection.",
+  },
   methods: {
     preamble: "This panel contains the long-form methods documentation: pipeline stages, statistical model specifications, metric definitions, and integration design decisions. It is a reference companion to the analytical tabs, not an analytical view itself.",
     purpose: "Long-form methods reference: pipeline stages, statistical models, and metric definitions in full detail.",

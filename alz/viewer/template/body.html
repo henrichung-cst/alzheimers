@@ -243,6 +243,34 @@
       </details>
     </div>
   </div>
+  <div id="tab-diseasedirection" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-diseasedirection" hidden>
+    <div class="card">
+      <h3 style="margin:0 0 8px 0; font-size:14px; font-weight:600;">Kinase directional ranking — MouseC1 (App / Tau / ApTt)</h3>
+      <p class="muted" style="margin:0 0 10px 0; font-size:12px;">One row per kinase. Signed peak-NES per genotype. Default sort: largest |NES| across genotypes. Header-click to sort and toggle direction.</p>
+      <div id="dd-kinase-wrap" style="overflow-x:auto;"></div>
+    </div>
+    <div class="card" style="margin-top:14px;">
+      <h3 style="margin:0 0 8px 0; font-size:14px; font-weight:600;">Candidate-biomarker table</h3>
+      <p class="muted" style="margin:0 0 8px 0; font-size:12px;">One row per substrate gene symbol. Secretome category from Human Protein Atlas (blank where absent). LFC from kinase-level evidence. Paste gene symbols below to filter.</p>
+      <div style="display:flex; gap:8px; align-items:flex-start; margin-bottom:8px; flex-wrap:wrap;">
+        <div>
+          <label class="ke-filter-label" style="flex-direction:column; align-items:flex-start;">
+            Gene list (one per line, or comma-separated)
+            <textarea id="dd-gene-filter" rows="4" cols="32"
+              placeholder="MAPT&#10;APP&#10;PSEN1"
+              style="font-family:var(--font-mono,monospace); font-size:12px; margin-top:4px; resize:vertical; padding:4px 6px; border:1px solid var(--border); border-radius:3px;"></textarea>
+          </label>
+          <div style="display:flex; gap:6px; margin-top:4px; align-items:center;">
+            <button id="dd-gene-clear" class="ke-filter-reset" title="Clear gene filter">Clear</button>
+            <button id="dd-open-explorer" class="ke-filter-reset" disabled title="Open matched kinases in Kinase Explorer tab">Open matched in Kinase Explorer</button>
+            <span class="muted" id="dd-bio-unmatched" hidden style="font-size:11px; color:#b71c1c;"></span>
+            <span class="muted" id="dd-bio-count" style="font-size:11px;"></span>
+          </div>
+        </div>
+      </div>
+      <div id="dd-bio-wrap" style="overflow-x:auto;"></div>
+    </div>
+  </div>
   <div id="tab-incytrheatmap" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytrheatmap" hidden>
     <div class="card">
       <div class="ke-toolbar ke-toolbar-multi">

@@ -757,3 +757,25 @@ ul.spec-unit-children li.muted { color:#9aa5b1; }
   padding:6px 0 4px; overflow-x:auto; }
 .kinase-motif-logo .sequence-logo { display:block; }
 .kinase-motif-logo .sequence-logo text { font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+/* Disease Direction tab (C3) */
+.dd-table { border-collapse:collapse; width:100%; min-width:600px; }
+.dd-table th, .dd-table td { padding:4px 8px; border-bottom:1px solid var(--border);
+  text-align:left; white-space:nowrap; font-size:12px; }
+.dd-table th { background:#f5f7fa; font-weight:600; font-size:11px; position:sticky; top:0; z-index:1; }
+.dd-th-sort { cursor:pointer; user-select:none; }
+.dd-th-sort:hover { background:#e8edf4; }
+.dd-th-active { background:#dce6f5; }
+.dd-nes-num { text-align:right; font-variant-numeric:tabular-nums; min-width:54px; }
+.dd-num      { text-align:right; font-variant-numeric:tabular-nums; }
+.dd-name     { font-weight:500; }
+.dd-gene     { color:#555; }
+.dd-nsig     { text-align:center; color:#555; }
+.dd-traj-cell { text-align:center; }
+.dd-traj { display:inline-block; padding:1px 5px; border-radius:3px; font-size:10px;
+  font-family:var(--font-mono,monospace); background:#e0e0e0; color:#333; }
+.dd-traj-early    { background:#e3f2fd; color:#1565c0; }
+.dd-traj-peak     { background:#fce4ec; color:#880e4f; }
+.dd-traj-trough   { background:#e8f5e9; color:#1b5e20; }
+.dd-traj-sustained { background:#fff8e1; color:#e65100; }
+.dd-secretome { max-width:200px; white-space:normal; font-size:11px; color:#444; }
