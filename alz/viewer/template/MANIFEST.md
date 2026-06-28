@@ -47,6 +47,7 @@ per-tab branches to `boot.js`.
 | `js/tabs/temporal_v2.js` | 820 | Decomp series builder |
 | `js/tabs/kinase_crosstable.js` | 1576 | Decomp/SEA-AD/5xFAD cross-table |
 | `js/tabs/kinase_human.js` | 1600 | Human (Mukesh/NBB) per-donor kinase explorer (active when PAYLOAD.human present) |
+| `js/tabs/kinase_disease_direction.js` | — | Disease Direction tab (C3): kinase directional ranking + candidate-biomarker table |
 
 ## Shared fallback
 

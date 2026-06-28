@@ -25,6 +25,13 @@ const TAB_MANIFEST = {
     render: () => renderTemporalV2(),
     rerenderOn: { filters: true, selection: [] },
   },
+  diseasedirection: {
+    group: "landscape", label: "Disease Direction",
+    filters: [], requires: [], modes: ["mouse"],
+    wire: () => { if (typeof wireDiseasedirection === "function") wireDiseasedirection(); },
+    render: () => { if (typeof renderDiseasedirection === "function") renderDiseasedirection(); },
+    rerenderOn: { filters: false, selection: [] },
+  },
   crosstable: {
     group: "landscape", label: "Crosstable",
     filters: ["fdr"], requires: [], modes: ["mouse", "human"],

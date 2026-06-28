@@ -1281,6 +1281,7 @@ _VIEWER_SPECIFIC_TAB_INCLUDES = [
     "js/tabs/kinase_human.js",
     "js/tabs/kinase_fivexfad.js",
     "js/tabs/kinase_crosstable.js",
+    "js/tabs/kinase_disease_direction.js",
 ]
 
 
