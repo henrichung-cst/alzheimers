@@ -183,8 +183,11 @@ function _ensureKinaseIdx() {
   _kinaseIdxById = m;
 }
 
+let _keVisible = [];
+
 function resetKinaseContextCaches() {
   _keRows = null;
+  _keVisible = [];
   _kinaseIdxById = null;
   _decompByKey = null;
   _decompByKinCtx = null;
@@ -251,6 +254,20 @@ function _kineMaxAbsNesScoped(r, scopedCtxIds) {
     if (best == null || a > best) best = a;
   }
   return best;
+}
+
+function _kineSignedPeakNesScoped(r, scopedCtxIds) {
+  // Returns the signed NES at the max-|NES| contrast in scopedCtxIds (all if empty Set).
+  // Selects the peak by magnitude; ranks by sign. Returns null when no values.
+  let bestAbs = null, bestSigned = null;
+  for (let ci = 0; ci < CONTRASTS.length; ci++) {
+    if (scopedCtxIds.size > 0 && !scopedCtxIds.has(ci)) continue;
+    const v = r._nes[ci];
+    if (v == null) continue;
+    const a = Math.abs(v);
+    if (bestAbs == null || a > bestAbs) { bestAbs = a; bestSigned = v; }
+  }
+  return bestSigned;
 }
 
 // Peak within-cohort state enrichment across attribution rows for this kinase
@@ -335,10 +352,9 @@ function _makeKeCompare(scopedCtxIds) {
   return function(a, b) {
     let va, vb;
     if (col === "nes_profile") {
-      va = _kineMaxAbsNesScoped(a, scopedCtxIds);
-      vb = _kineMaxAbsNesScoped(b, scopedCtxIds);
-      if (va == null) va = -Infinity;
-      if (vb == null) vb = -Infinity;
+      return numCmp(_kineSignedPeakNesScoped(a, scopedCtxIds),
+                    _kineSignedPeakNesScoped(b, scopedCtxIds),
+                    asc ? -1 : 1);
     }
     else if (col === "n_attributed_celltypes") {
       // Match the Cell states column: count distinct T-cell states the kinase is
@@ -372,19 +388,17 @@ function _makeKeCompare(scopedCtxIds) {
       vb = _kineDisagreeCountScoped(b, scopedCtxIds);
     }
     else if (col === "peak_NES") {
-      // Scope-aware to match the column's displayed value.
-      va = _kineMaxAbsNesScoped(a, scopedCtxIds);
-      vb = _kineMaxAbsNesScoped(b, scopedCtxIds);
-      if (va == null) va = -Infinity;
-      if (vb == null) vb = -Infinity;
+      // Scope-aware signed sort — select peak by magnitude, rank by sign.
+      return numCmp(_kineSignedPeakNesScoped(a, scopedCtxIds),
+                    _kineSignedPeakNesScoped(b, scopedCtxIds),
+                    asc ? -1 : 1);
     }
     else { va = a[col]; vb = b[col]; }
-    if (va == null && vb == null) return 0;
-    if (va == null) return 1;
-    if (vb == null) return -1;
-    if (typeof va === "string") return asc
-      ? va.localeCompare(vb) : vb.localeCompare(va);
-    return asc ? (va - vb) : (vb - va);
+    if (typeof va === "string" || typeof vb === "string") {
+      const sa = va == null ? "" : String(va), sb = vb == null ? "" : String(vb);
+      return asc ? sa.localeCompare(sb) : sb.localeCompare(sa);
+    }
+    return numCmp(va, vb, asc ? -1 : 1);
   };
 }
 
@@ -717,6 +731,11 @@ function renderKinaseExplorer() {
     const scopedSig = _kineSigCountScoped(r, fdr, scopedCtxIds);
     const peakAbsNes = _kineMaxAbsNesScoped(r, scopedCtxIds);
     const subCls = scopedSig === 0 ? " sub-thresh" : "";
+
+    // Stamp export-friendly computed values onto the row for csvSerialize.
+    r._exportScopedSig = scopedSig;
+    r._exportPeakNes = _kineSignedPeakNesScoped(r, scopedCtxIds);
+    r._exportTopCelltype = r.tcell_celltype || r.top_celltype_1 || "";
     const drvCls = (drvSet && drvSet.has(r.id)) ? " driver" : "";
 
     // Within-cohort cell-type badge + state-enrichment badge + cell-states pill +
@@ -746,9 +765,17 @@ function renderKinaseExplorer() {
       `</tr>`
     );
   }
+  _keVisible = visible.slice();
   tbody.innerHTML = parts.join("");
   const countEl = document.getElementById("ke-count");
   if (countEl) countEl.textContent = `${visible.length} / ${_keRows.length} kinases`;
+}
+
+function exportKinaseCsv() {
+  const donor = (ViewerPayload.activeContext && ViewerPayload.activeContext()) || "donor1";
+  const headers = ["Kinase","Gene","Family","Residue","n_sig","peak_NES","tcell_top_celltype"];
+  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportPeakNes","_exportTopCelltype"];
+  csvDownload(csvSerialize(headers, keys, _keVisible), exportFilename(donor, "kinase"));
 }
 
 function _updateRowSelection(tableSel, rowCls, dataAttr, value) {

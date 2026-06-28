@@ -266,17 +266,27 @@ function _khFilter(rows) {
   });
 }
 
+function _khSignedPeakNes(r) {
+  // Returns the signed NES at the max-|NES| donor position. Returns null if all null.
+  let bestAbs = null, bestSigned = null;
+  for (const v of r._nes) {
+    if (v == null) continue;
+    const a = Math.abs(v);
+    if (bestAbs == null || a > bestAbs) { bestAbs = a; bestSigned = v; }
+  }
+  return bestSigned;
+}
+
 function _khSort(rows) {
   const col = _KHState.sortCol;
   const asc = _KHState.sortAsc;
+  const dir = asc ? -1 : 1;
   const cmp = (a, b) => {
     let va, vb;
     if (col === "nes_profile") {
-      va = Math.max(...a._nes.map(v => v == null ? -Infinity : Math.abs(v)));
-      vb = Math.max(...b._nes.map(v => v == null ? -Infinity : Math.abs(v)));
+      return numCmp(_khSignedPeakNes(a), _khSignedPeakNes(b), dir);
     } else if (col === "median_nes_sig_only") {
-      va = a.median_nes_sig_only == null ? -Infinity : Math.abs(a.median_nes_sig_only);
-      vb = b.median_nes_sig_only == null ? -Infinity : Math.abs(b.median_nes_sig_only);
+      return numCmp(a.median_nes_sig_only, b.median_nes_sig_only, dir);
     } else if (col === "n_attributed_celltypes") {
       va = _khAttributionSummary(a).count;
       vb = _khAttributionSummary(b).count;
@@ -287,22 +297,20 @@ function _khSort(rows) {
       va = _khAttrConfRank(_khAttributionSummary(a).conf);
       vb = _khAttrConfRank(_khAttributionSummary(b).conf);
     } else { va = a[col]; vb = b[col]; }
-    if (va == null && vb == null) return 0;
-    if (va == null) return 1;
-    if (vb == null) return -1;
-    if (typeof va === "string") return asc ? va.localeCompare(vb) : vb.localeCompare(va);
-    return asc ? (va - vb) : (vb - va);
+    if (typeof va === "string" || typeof vb === "string") {
+      const sa = va == null ? "" : String(va), sb = vb == null ? "" : String(vb);
+      return asc ? sa.localeCompare(sb) : sb.localeCompare(sa);
+    }
+    return numCmp(va, vb, dir);
   };
   const out = rows.slice();
   out.sort(cmp);
-  // Tie-break by |median_nes_sig_only| desc when primary col is n_donors_sig.
+  // Tie-break by signed median_nes_sig_only desc when primary col is n_donors_sig.
   if (col === "n_donors_sig") {
     out.sort((a, b) => {
       if (a.n_donors_sig !== b.n_donors_sig)
         return asc ? (a.n_donors_sig - b.n_donors_sig) : (b.n_donors_sig - a.n_donors_sig);
-      const am = a.median_nes_sig_only == null ? -Infinity : Math.abs(a.median_nes_sig_only);
-      const bm = b.median_nes_sig_only == null ? -Infinity : Math.abs(b.median_nes_sig_only);
-      return bm - am;
+      return numCmp(a.median_nes_sig_only, b.median_nes_sig_only, 1);
     });
   } else if (col === "conf") {
     out.sort((a, b) => {
@@ -315,9 +323,7 @@ function _khSort(rows) {
       const ac = _khAttributionSummary(a).count;
       const bc = _khAttributionSummary(b).count;
       if (ac !== bc) return bc - ac;
-      const am = a.median_nes_sig_only == null ? -Infinity : Math.abs(a.median_nes_sig_only);
-      const bm = b.median_nes_sig_only == null ? -Infinity : Math.abs(b.median_nes_sig_only);
-      return bm - am;
+      return numCmp(a.median_nes_sig_only, b.median_nes_sig_only, 1);
     });
   }
   return out;
@@ -1492,10 +1498,9 @@ function _khPopulateCelltypeFilter() {
 }
 
 function exportKinaseHumanCsv() {
-  const stamp = new Date().toISOString().slice(0, 10);
   const headers = ["Kinase","Gene","Family","Residue","median_NES_sig","n_donors_sig","n_up","n_down","n_ctrl_sig","conf","location_tier","n_cell_types"];
   const keys    = ["name","gene_symbol","family","residue_type","median_nes_sig_only","n_donors_sig","n_donors_up","n_donors_down","n_ctrl_sig","_exportAttrConf","_exportAttrMaxTierRank","_exportAttrCount"];
-  csvDownload(csvSerialize(headers, keys, _khVisible), `kinase_human_${stamp}.csv`);
+  csvDownload(csvSerialize(headers, keys, _khVisible), exportFilename(COHORT_LABELS.mukesh, "kinase"));
 }
 
 function wireKinaseHuman() {

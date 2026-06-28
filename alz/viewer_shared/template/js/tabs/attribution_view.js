@@ -86,23 +86,20 @@ function _attrVerdictConfCell(r) {
 
 // Sort comparator for a single column.
 function _attrVerdictCmp(a, b, key, type, asc) {
-  let va, vb;
+  const dir = asc ? -1 : 1;
   if (type === "num") {
-    va = a[key]; vb = b[key];
-    va = (va == null || !isFinite(va)) ? null : Number(va);
-    vb = (vb == null || !isFinite(vb)) ? null : Number(vb);
+    const va = (a[key] == null || !isFinite(a[key])) ? null : Number(a[key]);
+    const vb = (b[key] == null || !isFinite(b[key])) ? null : Number(b[key]);
+    return numCmp(va, vb, dir);
   } else if (type === "conf") {
-    va = _CONF_RANK[a[key]] ?? -1;
-    vb = _CONF_RANK[b[key]] ?? -1;
+    const va = _CONF_RANK[a[key]] ?? -1;
+    const vb = _CONF_RANK[b[key]] ?? -1;
+    return numCmp(va, vb, dir);
   } else {
-    va = (a[key] || "").toString();
-    vb = (b[key] || "").toString();
+    const va = (a[key] || "").toString();
+    const vb = (b[key] || "").toString();
+    return asc ? va.localeCompare(vb) : vb.localeCompare(va);
   }
-  if (va == null && vb == null) return 0;
-  if (va == null) return 1;
-  if (vb == null) return -1;
-  if (typeof va === "string") return asc ? va.localeCompare(vb) : vb.localeCompare(va);
-  return asc ? (va - vb) : (vb - va);
 }
 
 // ---- Shared section renderers ------------------------------------------------
@@ -570,6 +567,9 @@ function _renderAttributionDetailShared(hostId, ctx, row, kstats, manifest) {
 // ---- Main engine ------------------------------------------------------------
 
 const AttributionView = (() => {
+  // Last rendered visible rows per host ID — used by exportVerdictCsv.
+  const _lastVisible = new Map();
+
   function render(hostId, ctx, manifest) {
     const host = document.getElementById(hostId);
     if (!host) return;
@@ -577,6 +577,7 @@ const AttributionView = (() => {
     const allRows = manifest.getRows(ctx);
     if (allRows.length === 0) {
       host.innerHTML = `<div class="muted">No attribution rows in ${_escapeHtml(ctx.contrast || "")}.</div>`;
+      _lastVisible.set(hostId, []);
       return;
     }
 
@@ -616,6 +617,7 @@ const AttributionView = (() => {
     const visibleRows = (manifest.rowVisible && !showAll)
       ? rows.filter(manifest.rowVisible)
       : rows;
+    _lastVisible.set(hostId, visibleRows);
     const hiddenCount = rows.length - visibleRows.length;
 
     // Render each verdict row + its paired hidden detail row.
@@ -729,7 +731,11 @@ const AttributionView = (() => {
     if (visibleRows[0]) _attrExpand(0);
   }
 
-  return {render};
+  function getLastVisible(hostId) {
+    return _lastVisible.get(hostId) || [];
+  }
+
+  return {render, getLastVisible};
 })();
 
 // Bulk anchor block renderer (shared, called from the engine).

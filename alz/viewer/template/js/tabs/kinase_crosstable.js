@@ -1350,14 +1350,7 @@ function _kxSortRows(rows, s) {
       const pa = songOverallPeak(a), pb = songOverallPeak(b);
       av = pa.nes; bv = pb.nes;
     }
-    const aMissing = av == null || !isFinite(av);
-    const bMissing = bv == null || !isFinite(bv);
-    if (aMissing && bMissing) return (a.name || "").localeCompare(b.name || "");
-    if (aMissing) return 1;
-    if (bMissing) return -1;
-    const ax = Math.abs(av);
-    const bx = Math.abs(bv);
-    return s.sortDir < 0 ? (bx - ax) : (ax - bx);
+    return numCmp(av, bv, s.sortDir > 0 ? 1 : -1);
   });
 }
 
@@ -1692,10 +1685,9 @@ function wireKinaseCrosstable() {
 }
 
 function exportCrosstableCsv() {
-  const stamp = new Date().toISOString().slice(0, 10);
-  const headers = ["Kinase","Gene","Residue","Family","MouseC1_App_med_NES","MouseC1_Tau_med_NES","MouseC1_ApTt_med_NES","Human_med_NES","5xFAD_med_NES","Crossplay","Song_tier","WMB_tier","SEAAD_log2"];
+  const headers = ["Kinase","Gene","Residue","Family","MouseC1_App_med_NES","MouseC1_Tau_med_NES","MouseC1_ApTt_med_NES","HumanC1_med_NES","MouseC2_med_NES","Crossplay","MouseC1_tier","WMB_tier","SEAAD_log2"];
   const keys    = ["name","gene","residue","family","_mNes_App","_mNes_Tau","_mNes_ApTt","_hNes","_f5Nes","_agreeCategory","_exportSongTier","_exportWmb","_exportSeaad"];
-  csvDownload(csvSerialize(headers, keys, _kxVisible), `crosstable_${stamp}.csv`);
+  csvDownload(csvSerialize(headers, keys, _kxVisible), exportFilename(null, "crosstable"));
 }
 
 function renderKinaseCrosstable() {
