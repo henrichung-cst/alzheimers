@@ -45,3 +45,15 @@ function csvDownload(csv, filename) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
+
+/**
+ * Signed numeric comparator for table sort (dir: +1 desc, -1 asc).
+ * Nulls and NaN are always last regardless of dir.
+ */
+function numCmp(av, bv, dir) {            // dir: +1 desc (default), -1 asc
+  const an = (av == null || av !== av), bn = (bv == null || bv !== bv);
+  if (an && bn) return 0;
+  if (an) return 1;                        // nulls/NaN ALWAYS last
+  if (bn) return -1;
+  return dir > 0 ? (bv - av) : (av - bv);
+}
