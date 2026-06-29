@@ -288,6 +288,8 @@ function _buildKinaseRowModel() {
       trajectory_Tau:  K.trajectory_Tau  ? (K.trajectory_Tau[i]  || "") : "",
       trajectory_ApTt: K.trajectory_ApTt ? (K.trajectory_ApTt[i] || "") : "",
       top_celltype_1: K.top_celltype_1[i] || "",
+      n_backbones: (K.n_backbones && K.n_backbones[i] != null) ? K.n_backbones[i] : null,
+      n_paths:     (K.n_paths     && K.n_paths[i]     != null) ? K.n_paths[i]     : null,
       song: songByKid.get(K.id[i]) || null,
       _fdr: CONTRASTS.map(c => K["FDR_" + c][i]),
       _nes: CONTRASTS.map(c => K["NES_" + c][i]),
@@ -309,6 +311,13 @@ function songOverallPeak(row) {
   if (!candidates.length) return {nes: null, contrast: CONTRASTS[0] || "", genotype: ""};
   candidates.sort((a, b) => Math.abs(b.nes) - Math.abs(a.nes));
   return candidates[0];
+}
+
+// Integer count cell with thousands separators; — when absent.
+function _keCountCell(v) {
+  return v != null && isFinite(v)
+    ? `<td class="attr-num">${Number(v).toLocaleString()}</td>`
+    : `<td class="attr-num"><span class="muted">—</span></td>`;
 }
 
 // Per-genotype peak NES cell (signed); – when the genotype has no peak.
@@ -923,6 +932,8 @@ function renderKinaseExplorer() {
       `<td>${_renderCellTypesCell(r, colFilter)}</td>` +
       `<td style="text-align:center;">${_keSongBadge(r.song)}</td>` +
       `<td style="text-align:center;">${_wmbTierBadge(r._exportWmbMaxTier)}</td>` +
+      _keCountCell(r.n_backbones) +
+      _keCountCell(r.n_paths) +
       `</tr>`
     );
   }
@@ -933,8 +944,8 @@ function renderKinaseExplorer() {
 }
 
 function exportKinaseCsv() {
-  const headers = ["Kinase","Gene","Family","Residue","n_sig","peak_NES_App","peak_NES_Tau","peak_NES_ApTt","MouseC1_topCelltype","wmb_max_tier","conf"];
-  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","peak_NES_App","peak_NES_Tau","peak_NES_ApTt","_exportSongTopCelltype","_exportWmbMaxTier","_exportConf"];
+  const headers = ["Kinase","Gene","Family","Residue","n_sig","peak_NES_App","peak_NES_Tau","peak_NES_ApTt","MouseC1_topCelltype","wmb_max_tier","conf","n_backbones","n_paths"];
+  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","peak_NES_App","peak_NES_Tau","peak_NES_ApTt","_exportSongTopCelltype","_exportWmbMaxTier","_exportConf","n_backbones","n_paths"];
   csvDownload(csvSerialize(headers, keys, _keVisible), exportFilename(COHORT_LABELS.song, "kinase"));
 }
 

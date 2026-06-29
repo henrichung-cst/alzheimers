@@ -31,6 +31,7 @@ from alz.viewer.paths import (
     EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_CORTEX_DIR,
     EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_HIPPO_DIR,
     FIVEXFAD_KINASE_DIR,
+    KINASE_INCYTR_BRIDGE_DIR,
     SCHEMA_VERSION,
     UNIFIED_VIEWER_DIR,
 )
@@ -1493,6 +1494,25 @@ def _write_fivexfad_detail_shards(
     return detail_index
 
 
+def _load_fivexfad_participation() -> dict[tuple[str, str], tuple[int, int]]:
+    """Per-(kinase, tissue) backbone/path participation from B4's bridge.
+
+    Reads `fivexfad_<tissue>/kinase_participation.csv` for each tissue and
+    returns {(kinase, tissue): (n_backbones, n_paths)}. Kinases absent from a
+    tissue's table simply have no entry (NULL counts in the row payload).
+    """
+    out: dict[tuple[str, str], tuple[int, int]] = {}
+    for tissue in ("cortex", "hippocampus"):
+        path = os.path.join(KINASE_INCYTR_BRIDGE_DIR, f"fivexfad_{tissue}",
+                            "kinase_participation.csv")
+        if not os.path.exists(path):
+            continue
+        part = pd.read_csv(path)
+        for _, r in part.iterrows():
+            out[(str(r["kinase"]), tissue)] = (int(r["n_backbones"]), int(r["n_paths"]))
+    return out
+
+
 def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None:
     """Supporting 5xFAD kinase-enrichment slice.
 
@@ -1539,6 +1559,7 @@ def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None
     rows: list[dict] = []
     source_files: list[str] = []
     kinase_gene_map = _f5_kinase_gene_map()
+    participation = _load_fivexfad_participation()
     for tissue, track, assay, residue in track_specs:
         for analysis_track, basename in analysis_files:
             path = os.path.join(FIVEXFAD_KINASE_DIR, f"{tissue}_{track}_{basename}.csv")
@@ -1558,11 +1579,14 @@ def build_supporting_5xfad_slice(data: UnifiedData | None = None) -> dict | None
                 kinase = str(row.get("kinase", ""))
                 if not str(gene_symbol or "").strip() or str(gene_symbol) == kinase:
                     gene_symbol = kinase_gene_map.get(kinase, gene_symbol)
+                nb_np = participation.get((kinase, tissue))
                 rows.append({
                     "kinase": kinase,
                     "gene_symbol": str(gene_symbol),
                     "tissue": tissue,
                     "track": track,
+                    "n_backbones": nb_np[0] if nb_np else None,
+                    "n_paths": nb_np[1] if nb_np else None,
                     "analysis_track": analysis_track,
                     "assay": assay,
                     "residue_type": residue,

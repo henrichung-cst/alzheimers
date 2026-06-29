@@ -24,6 +24,7 @@ from alz.viewer.paths import (
     EDGE_SLICES_INCYTR_PATHWAYS_DIR,
     EDGE_SLICES_SONG_CONCORDANCE_DIR,
     INCYTR_PAIR_MODE_OUTPUTS_DIR,
+    KINASE_INCYTR_BRIDGE_DIR,
     SCHEMA_VERSION,
     UNIFIED_VIEWER_DIR,
 )
@@ -110,6 +111,17 @@ def _build_kinases_slice(data: UnifiedData, secretome_map: dict | None = None) -
     hyp = data.kinase_hypothesis.set_index("kinase")
     contrasts = data.edge_metadata["contrasts"]
 
+    # Pair-mode backbone/path participation from B4's bridge (kinase_participation.csv):
+    # n_backbones = distinct (Sender,Receiver,Receptor,EM) spines the kinase acts on;
+    # n_paths = distinct full pathways. Kinases absent from the table get NULL counts.
+    part_path = os.path.join(KINASE_INCYTR_BRIDGE_DIR, "song", "kinase_participation.csv")
+    n_backbones_by_kin: dict[str, int] = {}
+    n_paths_by_kin: dict[str, int] = {}
+    if os.path.exists(part_path):
+        part = pd.read_csv(part_path)
+        n_backbones_by_kin = dict(zip(part["kinase"], part["n_backbones"]))
+        n_paths_by_kin = dict(zip(part["kinase"], part["n_paths"]))
+
     cols: dict[str, list] = {
         "id": [], "name": [], "gene_symbol": [],
         "residue_type": [],
@@ -118,6 +130,7 @@ def _build_kinases_slice(data: UnifiedData, secretome_map: dict | None = None) -
         "top_celltype_1_sea_ad_lfc": [],
         "top_celltype_1_song_lfc": [],
         "n_celltype_candidates": [],
+        "n_backbones": [], "n_paths": [],
     }
     # Per-genotype scalars: peak_NES_{g}, peak_contrast_{g}, n_sig_{g}, trajectory_{g}
     for g in config.DISEASE_GROUPS:
@@ -156,6 +169,10 @@ def _build_kinases_slice(data: UnifiedData, secretome_map: dict | None = None) -
         cols["top_celltype_1_sea_ad_lfc"].append(_get(hyp_row, "top_celltype_1_sea_ad_lfc"))
         cols["top_celltype_1_song_lfc"].append(_get(hyp_row, "top_celltype_1_song_lfc"))
         cols["n_celltype_candidates"].append(_get(hyp_row, "n_celltype_candidates", 0))
+        nb = n_backbones_by_kin.get(k)
+        npaths = n_paths_by_kin.get(k)
+        cols["n_backbones"].append(int(nb) if pd.notna(nb) else None)
+        cols["n_paths"].append(int(npaths) if pd.notna(npaths) else None)
         for c in contrasts:
             cols[f"NES_{c}"].append(_get(ka_row, f"{c}_NES"))
             cols[f"FDR_{c}"].append(_get(ka_row, f"{c}_FDR"))

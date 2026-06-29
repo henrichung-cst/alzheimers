@@ -56,6 +56,12 @@ INCYTR_PAIR_MODE_OUTPUTS_DIR = os.path.join(
     config.REPO_ROOT, "outputs", "reports", "incytr_pair_mode"
 )
 
+# B4 kinase↔Incytr bridge outputs (per-cohort subdirs: song / fivexfad_cortex /
+# fivexfad_hippocampus). Carries kinase_participation.csv (n_backbones, n_paths).
+KINASE_INCYTR_BRIDGE_DIR = os.path.join(
+    config.REPO_ROOT, "outputs", "reports", "kinase_incytr_bridge"
+)
+
 # 5xFAD supporting-cohort kinase attribution inputs (also referenced by the
 # shared audit-manifest composer in build_unified_viewer._audit_specs).
 FIVEXFAD_KINASE_DIR = os.path.join(

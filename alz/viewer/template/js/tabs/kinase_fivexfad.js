@@ -411,6 +411,8 @@ function _f5EnsureIndexes() {
         assay: row.assay || "",
         residue_type: row.residue_type || "",
         analysis_track: row.analysis_track || "",
+        n_backbones: (row.n_backbones != null) ? row.n_backbones : null,
+        n_paths:     (row.n_paths     != null) ? row.n_paths     : null,
         rows: new Map(),
       };
       byKey.set(key, rec);
@@ -677,8 +679,8 @@ function _f5SyncControls() {
 }
 
 function exportFiveXFADCsv() {
-  const headers = ["Kinase","Gene","Family","Tissue","Residue","n_sig","peak_NES","MouseC2_snrna","WMB_tier","Conf"];
-  const keys    = ["kinase","gene_symbol","family","tissue","residue_type","sigCount","peakNes","_exportF5Snrna","_exportWmbTier","_exportConf"];
+  const headers = ["Kinase","Gene","Family","Tissue","Residue","n_sig","peak_NES","MouseC2_snrna","WMB_tier","Conf","n_backbones","n_paths"];
+  const keys    = ["kinase","gene_symbol","family","tissue","residue_type","sigCount","peakNes","_exportF5Snrna","_exportWmbTier","_exportConf","n_backbones","n_paths"];
   csvDownload(csvSerialize(headers, keys, _f5Visible), exportFilename(COHORT_LABELS.fivexfad, "kinase"));
 }
 
@@ -814,9 +816,11 @@ function renderFiveXFADKinase() {
       <td>${_f5CellTypesCell(r)}</td>
       <td style="text-align:center;">${_f5NativeBadge(r)}</td>
       <td style="text-align:center;">${_f5WmbBadge(r)}</td>
+      <td class="attr-num">${r.n_backbones == null ? '<span class="muted">—</span>' : Number(r.n_backbones).toLocaleString()}</td>
+      <td class="attr-num">${r.n_paths == null ? '<span class="muted">—</span>' : Number(r.n_paths).toLocaleString()}</td>
     </tr>`;
   }).join("");
-  tbody.innerHTML = html || `<tr><td colspan="12" class="muted">No ${COHORT_LABELS.fivexfad} rows match the active filters.</td></tr>`;
+  tbody.innerHTML = html || `<tr><td colspan="14" class="muted">No ${COHORT_LABELS.fivexfad} rows match the active filters.</td></tr>`;
   _f5SyncSortIndicators();
   renderFiveXFADKinaseDetail();
 }

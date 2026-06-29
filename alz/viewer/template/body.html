@@ -93,6 +93,8 @@
               <th data-col="n_attributed_celltypes" data-metric="nAttributed" title="The cell type this kinase is exclusively expressed in (from the recalculated confidence). Over-split MouseC1 clusters of one cell type are collapsed into an expandable parent; distinct cell types stay separate. Blank when broadly expressed. Click to sort by exclusivity.">Cell type</th>
               <th data-col="song_spec" data-metric="songTau" title="MouseC1 location evidence, shown as fold over the even-split baseline (1/31 ≈ 0.032): ≥10× / ≥5× / ≥2× / ≥1×. The fold is the kinase's peak cell-type share; the concentration index τ and the cell type are in the tooltip. Click to sort.">MouseC1</th>
               <th data-col="wmb_max_tier" data-metric="wmbMaxTier" title="WMB cross-check — maximum WMB location tier reached by any attribution row in scope, as a multiple of the retained-class uniform (1/9 ≈ 0.111). Independent atlas check on the MouseC1 call. Click to sort by max tier.">WMB</th>
+              <th data-col="n_backbones" data-metric="nBackbones" title="#Backbones — distinct (Sender, Receiver, Receptor, EM) pathway spines this kinase acts on (any node) across all gated pair-mode contrasts. Breadth signal; Target fan-out collapsed. Click to sort.">#Backbones</th>
+              <th data-col="n_paths" data-metric="nPaths" title="#Paths — distinct full (Sender, Receiver, Ligand, Receptor, EM, Target) pathways this kinase sits along across all gated pair-mode contrasts. Total end-to-end route involvement (~53× #Backbones). Click to sort.">#Paths</th>
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -591,6 +593,8 @@
               <th data-col="n_attributed_celltypes" title="Cell types attributed at high or moderate confidence.">Cell types</th>
               <th data-col="fivexfad_spec" title="MouseC2 snRNA location evidence, shown as fold over the even-split baseline.">MouseC2 snRNA</th>
               <th data-col="wmb_max_tier" title="WMB location cross-check tier.">WMB</th>
+              <th data-col="n_backbones" data-metric="nBackbones" title="#Backbones — distinct (Sender, Receiver, Receptor, EM) pathway spines this kinase acts on (any node) across all gated pair-mode contrasts for this tissue. Breadth signal; Target fan-out collapsed. Click to sort.">#Backbones</th>
+              <th data-col="n_paths" data-metric="nPaths" title="#Paths — distinct full (Sender, Receiver, Ligand, Receptor, EM, Target) pathways this kinase sits along across all gated pair-mode contrasts for this tissue. Total end-to-end route involvement. Click to sort.">#Paths</th>
             </tr></thead>
             <tbody></tbody>
           </table>

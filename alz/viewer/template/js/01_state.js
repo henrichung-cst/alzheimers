@@ -174,7 +174,8 @@ const METRIC_DEFS = {
   peakNES:       { label: "Peak NES",      short: "Largest |NES| across contrasts. Sign indicates direction." },
   topCelltype:   { label: "Top cell type", short: "Top attributed receiver cell type from the attribution evidence table." },
   highConfAttr:  { label: "Location confidence", short: "Whether the kinase has high-confidence cell-type attribution." },
-  nBackbones:    { label: "#Backbones",    short: "Number of distinct pathway backbones with significant support from this kinase, across all contrasts." },
+  nBackbones:    { label: "#Backbones",    short: "Distinct (Sender, Receiver, Receptor, EM) pathway spines this kinase acts on (any node) across all gated pair-mode contrasts. Target fan-out collapsed — a breadth signal." },
+  nPaths:        { label: "#Paths",        short: "Distinct full (Sender, Receiver, Ligand, Receptor, EM, Target) pathways this kinase sits along across all gated pair-mode contrasts. Total end-to-end route involvement, ~53× #Backbones." },
 
   // Pathway browser columns
   receiverCol:     { label: "Receiver",         short: "Receiver cell type for the backbone." },
@@ -245,17 +246,17 @@ window.applyMetricTooltips = applyMetricTooltips;
 
 const TAB_GUIDE = {
   kinase: {
-    preamble: "A ranked table of the 240 kinases whose substrate phosphosites shift coherently in at least one disease contrast. Each row is one kinase. NES (normalized enrichment score) columns capture the direction and magnitude of that shift in each genotype-by-timepoint context. Cell-type columns place that activity onto cortical subclasses using independent transcriptomic evidence. The backbone count is how many passing receptor → effector → target chains the kinase appears among the inferred drivers of.",
+    preamble: "A ranked table of the 240 kinases whose substrate phosphosites shift coherently in at least one disease contrast. Each row is one kinase. NES (normalized enrichment score) columns capture the direction and magnitude of that shift in each genotype-by-timepoint context. Cell-type columns place that activity onto cortical subclasses using independent transcriptomic evidence. The two count columns — #Backbones and #Paths — measure how broadly the kinase participates in the inferred signaling network: the number of distinct receptor → effector → target spines, and the number of distinct full ligand → … → target pathways, whose nodes include this kinase across all gated contrasts.",
     method: [
       "Phosphoproteomics measured how much of each protein site is phosphorylated in App, Tau, and ApTt (App-Tau double knock-in) mice at each timepoint, normalized to the parent protein's abundance so changes in total protein do not show up as apparent kinase activity changes. For each disease contrast, the analysis ranked every measured site by its disease-versus-control change and asked, for each kinase in the reference library, whether that kinase's known substrate sites cluster toward the top or bottom of the ranking more strongly than they would if we drew sites at random — a positive NES means the substrates concentrate among the upregulated sites, a negative NES means they concentrate among the downregulated sites.",
-      "Independently, single-nucleus RNA-seq from a separate human Alzheimer's cohort and a mouse brain reference atlas provided per-cell-type expression and disease-direction support for each kinase; those become the cell-type columns. The backbone count comes from the same chain analysis used elsewhere in the viewer: a chain passing at FDR < 0.25 (false-discovery rate; fewer than one in four flagged chains is expected to be a chance result) and naming this kinase among the over-represented substrate-phosphorylators contributes one to its count.",
+      "Independently, single-nucleus RNA-seq from a separate human Alzheimer's cohort and a mouse brain reference atlas provided per-cell-type expression and disease-direction support for each kinase; those become the cell-type columns. The #Backbones and #Paths columns come from the pair-mode pathway analysis used elsewhere in the viewer: every pathway clearing the canonical significance floor (signaling probability > 0.1 in either condition AND |PDS| ≥ 0.2) is scanned, and any pathway whose ligand, receptor, effector, or target gene is this kinase contributes to its counts — #Backbones counts the distinct receptor-effector-target spines (collapsing downstream target fan-out), #Paths counts the distinct full pathways. Both are pooled across the nine contrasts and, unlike the NES and cell-type columns, are network-wide totals that do not respond to the FDR slider or the filter bar.",
     ],
     shows: {
-      lead: "NES columns answer where in the disease landscape the kinase's substrates are most coherently shifted. Cell-type columns answer where in the cortex the kinase's transcript is concordantly differentially expressed in disease. Backbone count answers how broadly the kinase appears among inferred drivers of passing chains — a structural prevalence signal, not a per-chain magnitude.",
+      lead: "NES columns answer where in the disease landscape the kinase's substrates are most coherently shifted. Cell-type columns answer where in the cortex the kinase's transcript is concordantly differentially expressed in disease. #Backbones and #Paths answer how broadly the kinase participates in the gated signaling network — a structural prevalence signal, not a per-pathway magnitude. #Paths runs ~53× larger than #Backbones because each receptor-effector-target spine fans out across many downstream targets the kinase does not itself control.",
       bullets: [
         "240 kinases pass FDR < 0.25 in at least one of nine disease contrasts. Of those, 124 (52%) follow a peaked trajectory — enrichment rises and falls across the time course — while only three remain sustained across all three timepoints of one genotype.",
         "Peak enrichment concentrates in the double genotype: 125 kinases peak in an ApTt (App-Tau double knock-in) contrast versus 69 in App and four in Tau alone. The strongest individual signals by NES magnitude — AKT1, AKT2, AKT3 — are negative and peak at App_4mo (App genotype, 4 months), meaning their substrate phosphorylation is reduced relative to protein abundance specifically in amyloid disease at mid-disease. This AKT hypoactivity signature is absent from the Tau genotype.",
-        "The broadest backbone supporters — CAMK2D (15,028 chains), CDK1 (14,776), CHK1 (13,098) — have moderate NES across many contrasts. They are structural participants in many chains rather than strong disease-specific signals.",
+        "The broadest participants — CAMK2D (14,968 backbones / 799,064 paths), CDK1 (14,402 / 972,289), CHK1 (13,950 / 575,798) — have moderate NES across many contrasts. They are structural participants in many pathways rather than strong disease-specific signals; their #Paths order differs from #Backbones (CDK1 leads on paths), because path count is dominated by downstream target fan-out the kinase does not itself control.",
         "High NES with weak cell-type attribution is not evidence against the kinase; it is evidence that the transcriptomic side has less to say about where it acts. The reverse is also true.",
       ],
     },
@@ -265,7 +266,7 @@ const TAB_GUIDE = {
     ],
     toggles: [
       { name: "FDR threshold (false-discovery rate)", desc: "sets the cutoff for which kinases enter the table. 0.25 is hypothesis generation; 0.10 is closer to confirmatory." },
-      { name: "Receiver, Support", desc: "when set in the global filter bar, restrict the backbone count column to chains landing on that receiver or carrying that support type, so the rank reflects the kinase's role in the chosen subset rather than its total prevalence." },
+      { name: "Receiver, Support", desc: "when set in the global filter bar, narrow the NES and cell-type columns to the chosen contrast and receiver scope. #Backbones and #Paths are network-wide totals and do not respond to the filter bar." },
     ],
   },
   crosstable: {
@@ -324,6 +325,7 @@ const TAB_GUIDE = {
         "Cortex and hippocampus are not pooled statistically; the tissue filter only combines presentation.",
         "IMAC/ST and pY are kinase-library tracks. KGG and AcK remain provenance datasets and are not interpreted as kinase activity.",
         "Use stoichiometry as the primary readout and raw phospho as a sensitivity readout.",
+        "#Backbones and #Paths count how broadly the kinase participates in this tissue's gated pair-mode signaling network (canonical SigProb > 0.1 / |PDS| ≥ 0.2 floor): distinct receptor-effector-target spines and distinct full pathways, respectively. They are per-tissue network-wide totals and do not respond to the age or FDR filters.",
       ],
     },
     howTo: "Use tissue, assay, track, age, FDR, and significant-age filters to inspect kinase calls in each MouseC2 slice. Select a row to inspect MEA scores, preparation/QC, site-level details, and measurement-trace availability in the audit workbench.",
