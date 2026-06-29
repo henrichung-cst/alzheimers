@@ -3,8 +3,8 @@
 For each active kinase (MEA FDR ≤ 0.25), maps its leading-edge substrate
 genes to pathway nodes (Ligand / Receptor / EM / Target) in the pair-mode
 wide/*.parquet shards, annotates cell-type match, expression, and disease
-context, and emits a flat backend artifact plus a fan-structure
-characterization for backbone-grain reconciliation with B5.
+context, and emits a flat backend artifact, a Receptor-EM fan
+characterization, and a per-kinase ``#Backbones`` participation count.
 
 Cohorts implemented:
   - song    : 9 contrasts, ST-only stoichiometry MEA, no expression layer
@@ -19,12 +19,13 @@ Pathway set used:
   5xFAD   : outputs/reports/incytr_pair_mode_5xfad/{tissue}/wide/
   (gene_node_index.json.gz confirms the wide/ shards for both)
 
-Backbone grain: NOT locked (deferred to B5). B4 emits:
-  - recep_em_fan.csv        : per Receptor-EM spine fan characterization
-  - kinase_backbone_counts.csv : n_backbones per kinase under parameterized key
-  n_backbones is computed against BACKBONE_KEY (default: 'R-EM', provisional).
-  Change BACKBONE_KEY to 'L-R-EM', 'R-EM-T', or 'full' to recount without
-  code change — the key is the only parameter.
+B4 emits:
+  - recep_em_fan.csv         : per Receptor-EM spine fan characterization
+  - kinase_participation.csv : per-kinase participation over the gated wide/
+      shards, at two grains — n_backbones (distinct Sender-Receiver-Receptor-EM
+      spines, the kinase's own breadth) and n_paths (distinct full pathways the
+      kinase sits along). Both count any-node (L/R/EM/T) participation, computed
+      exactly via DuckDB (not estimated).
 
 Usage:
   pixi run kinase-incytr-bridge            # all cohorts
@@ -34,17 +35,25 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import glob
 import gzip
 import json
 import logging
 import os
 import re
+import sys
 import textwrap
 from pathlib import Path
-from typing import Optional
 
 import duckdb
 import pandas as pd
+
+# Repo root on sys.path so the in-process R-EM-T backbone reduction (folded into
+# this build step) imports cleanly whether run as a script or via `-m`.
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from alz.incytr_pair import backbone_reduction  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -78,24 +87,14 @@ OUT_ROOT = REPORTS / "kinase_incytr_bridge"
 # ---------------------------------------------------------------------------
 MEA_FDR_THRESH = 0.25
 
-# Backbone key used for n_backbones rollup.  Candidates:
-#   'R-EM'   : Receptor-EM spine (default, B4 provisional — deferred to B5)
-#   'L-R-EM' : Ligand-Receptor-EM triple
-#   'R-EM-T' : Receptor-EM-Target triple
-#   'full'   : full 4-tuple (Ligand, Receptor, EM, Target)
-BACKBONE_KEY: str = "R-EM"
+# Canonical pair-mode significance floor (identical to filter_significant_paths.py
+# and backbone_reduction.py): a chain "passes" when either side's SigProb clears
+# 0.1 AND |PDS| >= 0.2.  #Backbones counts passing chains, so this floor is
+# applied when enumerating wide/ full paths.
+SIGPROB_CUTOFF = 0.1
+ABS_PDS_CUTOFF = 0.2
 
 POSITIONS = ("Ligand", "Receptor", "EM", "Target")
-
-# Song MEA contrast → wide parquet filename mapping
-_SONG_COND_MAP = {"App": "AppP", "Tau": "Ttau", "ApTt": "ApTt"}
-
-
-def _song_contrast_to_parquet(contrast: str) -> str:
-    """ApTt_2mo -> ma_2mo_ApTt_ma_2mo_WTyp_incytr_output.parquet"""
-    condition, age = contrast.rsplit("_", 1)
-    cond_file = _SONG_COND_MAP.get(condition, condition)
-    return f"ma_{age}_{cond_file}_ma_{age}_WTyp_incytr_output.parquet"
 
 
 def _fivexfad_age_from_contrast(mea_contrast: str) -> int:
@@ -104,11 +103,6 @@ def _fivexfad_age_from_contrast(mea_contrast: str) -> int:
     if m is None:
         raise ValueError(f"Cannot extract age from MEA contrast: {mea_contrast!r}")
     return int(m.group(1))
-
-
-def _fivexfad_parquet_name(age: int) -> str:
-    """3 -> TG_3mo_WT_3mo_incytr_output.parquet"""
-    return f"TG_{age}mo_WT_{age}mo_incytr_output.parquet"
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +217,29 @@ def gene_node_hits(
 # Step 4: cell-type match (position-aware)
 # ---------------------------------------------------------------------------
 
+def _apply_celltype_ranks(
+    hits: pd.DataFrame,
+    ranks: pd.DataFrame,
+    join_cols: list[str],
+) -> pd.DataFrame:
+    """Left-join a long-form (join_cols..., celltype_match_rank) table onto hits.
+
+    Adds celltype_match (bool) and celltype_match_rank (Int64, <NA> when no match).
+    Join keys are string-cast on both sides to match the prior per-row str() compare.
+    """
+    hits = hits.copy()
+    for c in join_cols:
+        hits[c] = hits[c].astype(str)
+    if not ranks.empty:
+        ranks = ranks.copy()
+        for c in join_cols:
+            ranks[c] = ranks[c].astype(str)
+    hits = hits.merge(ranks, on=join_cols, how="left")
+    hits["celltype_match"] = hits["celltype_match_rank"].notna()
+    hits["celltype_match_rank"] = hits["celltype_match_rank"].astype("Int64")
+    return hits
+
+
 def annotate_celltype_match_song(
     hits: pd.DataFrame,
     hyp: pd.DataFrame,
@@ -233,37 +250,30 @@ def annotate_celltype_match_song(
     We use the first occurrence per kinase (has_high_conf_attribution kinases have full entries;
     others still carry top_celltype_1 as the best available guess).
 
-    Returns hits with added: celltype_match (bool), celltype_match_rank (1/2/3/None)
+    Returns hits with added: celltype_match (bool), celltype_match_rank (1/2/3/<NA>)
     """
-    # Build kinase -> [top_celltype_1, top_celltype_2, top_celltype_3]
-    top_cts: dict[str, list[str]] = {}
-    for _, r in hyp.iterrows():
-        k = str(r["kinase"])
-        if k not in top_cts:
-            top_cts[k] = [
-                str(r["top_celltype_1"]) if pd.notna(r.get("top_celltype_1")) else None,
-                str(r["top_celltype_2"]) if pd.notna(r.get("top_celltype_2")) else None,
-                str(r["top_celltype_3"]) if pd.notna(r.get("top_celltype_3")) else None,
-            ]
+    # First occurrence per kinase, melted to long form (kinase, owning_cluster, rank);
+    # best (lowest) rank wins per (kinase, cluster). Vectorized join — the hit table
+    # is millions of rows, so a per-row Python loop is not viable.
+    hyp_first = hyp.drop_duplicates(subset=["kinase"], keep="first")
+    rank_frames: list[pd.DataFrame] = []
+    for col, rank in (("top_celltype_1", 1), ("top_celltype_2", 2), ("top_celltype_3", 3)):
+        if col in hyp_first.columns:
+            sub = hyp_first[["kinase", col]].dropna(subset=[col]).copy()
+            sub = sub.rename(columns={col: "owning_cluster"})
+            sub["celltype_match_rank"] = rank
+            rank_frames.append(sub)
+    if rank_frames:
+        ranks = pd.concat(rank_frames, ignore_index=True)
+        ranks["kinase"] = ranks["kinase"].astype(str)
+        ranks["owning_cluster"] = ranks["owning_cluster"].astype(str)
+        ranks = ranks.groupby(["kinase", "owning_cluster"], as_index=False)[
+            "celltype_match_rank"
+        ].min()
+    else:
+        ranks = pd.DataFrame(columns=["kinase", "owning_cluster", "celltype_match_rank"])
 
-    match_col: list[bool] = []
-    rank_col: list[Optional[int]] = []
-    for _, r in hits.iterrows():
-        cts = top_cts.get(str(r["kinase"]), [None, None, None])
-        owning = str(r["owning_cluster"])
-        matched = False
-        rank = None
-        for i, ct in enumerate(cts):
-            if ct and ct == owning:
-                matched = True
-                rank = i + 1
-                break
-        match_col.append(matched)
-        rank_col.append(rank)
-    hits = hits.copy()
-    hits["celltype_match"] = match_col
-    hits["celltype_match_rank"] = rank_col
-    return hits
+    return _apply_celltype_ranks(hits, ranks, ["kinase", "owning_cluster"])
 
 
 def annotate_celltype_match_fivexfad(
@@ -279,109 +289,26 @@ def annotate_celltype_match_fivexfad(
 
     Returns hits with: celltype_match, celltype_match_rank
     """
-    # Build (kinase, contrast) -> [top_celltype_1, top_celltype_2, top_celltype_3]
+    # Per (kinase, contrast): rank cell types by FDR asc then NES desc, take top 3,
+    # melt to long form (kinase, contrast, owning_cluster, rank). Vectorized — best
+    # (lowest) rank wins per (kinase, contrast, cluster).
     sub = celltype_mea[celltype_mea["tissue"] == tissue].copy()
     # Only named clusters (not cluster-*) can match node senders/receivers
     sub = sub[~sub["cell_type"].str.startswith("cluster-")]
+    sub = sub.sort_values(["FDR", "NES"], ascending=[True, False])
+    sub["celltype_match_rank"] = sub.groupby(["kinase", "contrast"]).cumcount() + 1
+    sub = sub[sub["celltype_match_rank"] <= 3][
+        ["kinase", "contrast", "cell_type", "celltype_match_rank"]
+    ].rename(columns={"cell_type": "owning_cluster"})
+    ranks = sub.groupby(
+        ["kinase", "contrast", "owning_cluster"], as_index=False
+    )["celltype_match_rank"].min()
 
-    top_cts: dict[tuple[str, str], list[str]] = {}
-    for (kinase, contrast), grp in sub.groupby(["kinase", "contrast"]):
-        ranked = grp.sort_values(["FDR", "NES"], ascending=[True, False])
-        ranked_cts = ranked["cell_type"].tolist()[:3]
-        while len(ranked_cts) < 3:
-            ranked_cts.append(None)
-        top_cts[(str(kinase), str(contrast))] = ranked_cts
-
-    match_col: list[bool] = []
-    rank_col: list[Optional[int]] = []
-    for _, r in hits.iterrows():
-        key = (str(r["kinase"]), str(r["contrast"]))
-        cts = top_cts.get(key, [None, None, None])
-        owning = str(r["owning_cluster"])
-        matched = False
-        rank = None
-        for i, ct in enumerate(cts):
-            if ct and ct == owning:
-                matched = True
-                rank = i + 1
-                break
-        match_col.append(matched)
-        rank_col.append(rank)
-    hits = hits.copy()
-    hits["celltype_match"] = match_col
-    hits["celltype_match_rank"] = rank_col
-    return hits
+    return _apply_celltype_ranks(hits, ranks, ["kinase", "contrast", "owning_cluster"])
 
 
 # ---------------------------------------------------------------------------
-# Step 5: node-level fc from wide parquets (DuckDB-streamed)
-# ---------------------------------------------------------------------------
-
-def attach_node_fc(
-    hits: pd.DataFrame,
-    parquet_path: Path,
-    contrast: str,
-    channel: str,
-) -> pd.DataFrame:
-    """Attach per-node log2FC from a single wide parquet for one contrast.
-
-    For each (gene_symbol, role, sender, receiver) in hits (for this contrast),
-    pull the matching {role}_{channel}_log2FC + PDS from the parquet.
-    Uses DuckDB so the parquet is never loaded whole into pandas.
-
-    Returns: node_log2FC (channel-appropriate), node_PDS columns added.
-    """
-    if hits.empty:
-        return hits
-
-    fc_col = f"{{}}_{{channel}}_log2FC".replace("{channel}", channel)
-    # Build a filter: gene at role AND sender AND receiver
-    # We query each unique (role, sender, receiver, gene) combination
-    con = duckdb.connect()
-    # Register parquet as view
-    con.execute(f"CREATE VIEW src AS SELECT * FROM read_parquet('{parquet_path}')")
-
-    node_fc: dict[tuple[str, str, str, str], tuple[Optional[float], Optional[float]]] = {}
-    for (role, sender, receiver, gene), subhits in hits.groupby(
-        ["role", "sender", "receiver", "gene_symbol"]
-    ):
-        gene_col = role  # column name in parquet
-        fc_colname = f"{role}_{channel}_log2FC"
-        try:
-            result = con.execute(f"""
-                SELECT "{fc_colname}" AS fc, PDS
-                FROM src
-                WHERE "{gene_col}" = ?
-                  AND "Sender.group" = ?
-                  AND "Receiver.group" = ?
-                LIMIT 1
-            """, [gene, sender, receiver]).fetchone()
-            if result:
-                node_fc[(role, sender, receiver, gene)] = (result[0], result[1])
-            else:
-                node_fc[(role, sender, receiver, gene)] = (None, None)
-        except Exception:
-            node_fc[(role, sender, receiver, gene)] = (None, None)
-    con.close()
-
-    hits = hits.copy()
-    hits["node_log2FC"] = hits.apply(
-        lambda r: node_fc.get(
-            (r["role"], r["sender"], r["receiver"], r["gene_symbol"]), (None, None)
-        )[0],
-        axis=1,
-    )
-    hits["node_PDS"] = hits.apply(
-        lambda r: node_fc.get(
-            (r["role"], r["sender"], r["receiver"], r["gene_symbol"]), (None, None)
-        )[1],
-        axis=1,
-    )
-    return hits
-
-
-# ---------------------------------------------------------------------------
-# Step 6: expression + disease context annotations (5xFAD only)
+# Step 5: expression + disease context annotations (5xFAD only)
 # ---------------------------------------------------------------------------
 
 def annotate_fivexfad_expression(
@@ -448,137 +375,217 @@ def annotate_fivexfad_disease(
 
 
 # ---------------------------------------------------------------------------
-# Step 7: fan characterization + backbone counts
+# Step 6: Receptor-EM fan characterization
 # ---------------------------------------------------------------------------
 
-def build_fan_and_backbone(
-    hits_all: pd.DataFrame,
-    backbone_key: str = "R-EM",
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+def build_recep_em_fan(hits_all: pd.DataFrame) -> pd.DataFrame:
     """Per Receptor-EM spine: count distinct Ligands (fan-in) and Targets (fan-out).
 
     Fan logic: for each unique (Receptor-gene, EM-gene) pair among matched substrate
     hits, find all (sender, receiver) pairs where BOTH genes appear at their respective
     roles. Then count distinct Ligand-genes and Target-genes that also appear in those
     same (sender, receiver) pairs. This characterizes the fan-in (upstream Ligands)
-    and fan-out (downstream Targets) of each Receptor-EM spine — the Q3 deliverable
-    for B5 backbone-grain reconciliation.
+    and fan-out (downstream Targets) of each Receptor-EM spine.
 
-    NOTE: (sender,receiver) is used as the linking key, so two substrate genes can
-    appear in the same pair without necessarily being in the exact same 4-tuple path.
-    This is an upper-bound fan estimate; the exact bound requires loading the full
-    pathway parquets, which is deferred heavy-compute (B5 gate).
-
-    Returns:
-        fan_df : recep_em_fan.csv
-        backbone_df : kinase_backbone_counts.csv
+    NOTE: (sender,receiver) is the linking key, so two substrate genes can appear in
+    the same pair without necessarily being in the exact same 4-tuple path. This is a
+    structural fan characterization, not a path enumeration (that is #Backbones).
     """
-    if hits_all.empty:
-        return pd.DataFrame(), pd.DataFrame()
-
-    # Use cell-type-matched hits only (plan: default deliverable filters to matches)
-    matched = hits_all[hits_all["celltype_match"] == True].copy() if "celltype_match" in hits_all.columns else hits_all.copy()
-
     empty_fan = pd.DataFrame(columns=[
         "Receptor", "EM", "n_ligands", "n_targets", "n_senders", "n_receivers",
         "n_sender_receiver_pairs", "example_sender", "example_receiver",
     ])
-    empty_bb = pd.DataFrame(columns=["kinase", "backbone_key", "n_backbones", "backbone_key_note"])
-    if matched.empty:
-        return empty_fan, empty_bb
+    if hits_all.empty:
+        return empty_fan
 
-    # Separate by role
+    # Cell-type-matched hits only (default deliverable filters to matches)
+    matched = hits_all[hits_all["celltype_match"] == True].copy() if "celltype_match" in hits_all.columns else hits_all.copy()
+    if matched.empty:
+        return empty_fan
+
     recep_df = matched[matched["role"] == "Receptor"][["gene_symbol", "sender", "receiver"]].drop_duplicates()
     em_df = matched[matched["role"] == "EM"][["gene_symbol", "sender", "receiver"]].drop_duplicates()
     lig_df = matched[matched["role"] == "Ligand"][["gene_symbol", "sender", "receiver"]].drop_duplicates()
     tgt_df = matched[matched["role"] == "Target"][["gene_symbol", "sender", "receiver"]].drop_duplicates()
 
     if recep_df.empty or em_df.empty:
-        fan_df = empty_fan
-    else:
-        # Cross-join Receptor × EM on (sender, receiver)
-        spine_df = recep_df.rename(columns={"gene_symbol": "Receptor"}).merge(
-            em_df.rename(columns={"gene_symbol": "EM"}),
-            on=["sender", "receiver"],
+        return empty_fan
+
+    spine_df = recep_df.rename(columns={"gene_symbol": "Receptor"}).merge(
+        em_df.rename(columns={"gene_symbol": "EM"}),
+        on=["sender", "receiver"],
+    )
+
+    fan_rows: list[dict] = []
+    for (receptor, em), grp in spine_df.groupby(["Receptor", "EM"]):
+        pairs = set(zip(grp["sender"], grp["receiver"]))
+        pair_idx = pd.MultiIndex.from_tuples(pairs)
+
+        if not lig_df.empty:
+            lig_pairs = lig_df.set_index(["sender", "receiver"])
+            n_lig = lig_pairs.loc[lig_pairs.index.isin(pair_idx), "gene_symbol"].nunique()
+        else:
+            n_lig = 0
+
+        if not tgt_df.empty:
+            tgt_pairs = tgt_df.set_index(["sender", "receiver"])
+            n_tgt = tgt_pairs.loc[tgt_pairs.index.isin(pair_idx), "gene_symbol"].nunique()
+        else:
+            n_tgt = 0
+
+        ex_pair = next(iter(pairs))
+        fan_rows.append({
+            "Receptor": receptor,
+            "EM": em,
+            "n_ligands": int(n_lig),
+            "n_targets": int(n_tgt),
+            "n_senders": len({p[0] for p in pairs}),
+            "n_receivers": len({p[1] for p in pairs}),
+            "n_sender_receiver_pairs": len(pairs),
+            "example_sender": ex_pair[0],
+            "example_receiver": ex_pair[1],
+        })
+
+    if not fan_rows:
+        return empty_fan
+    return pd.DataFrame(fan_rows).sort_values(
+        ["n_ligands", "n_targets"], ascending=False
+    ).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Step 7: per-kinase participation counts (n_backbones + n_paths)
+# ---------------------------------------------------------------------------
+
+def _q(col: str) -> str:
+    """Double-quote a column name for DuckDB SQL."""
+    return f'"{col}"'
+
+
+def _detect_sigprob_cols(con: duckdb.DuckDBPyConnection, path: str) -> tuple[str, str]:
+    """Return the two ``SigProb_*`` column names for one wide parquet."""
+    names = [r[0] for r in con.execute(
+        f"DESCRIBE SELECT * FROM read_parquet('{path}') LIMIT 0"
+    ).fetchall()]
+    sig = sorted(n for n in names if n.startswith("SigProb_"))
+    if len(sig) != 2:
+        raise SystemExit(f"{path}: expected 2 SigProb_* cols, found {sig!r}")
+    if "PDS" not in names:
+        raise SystemExit(f"{path}: no PDS column")
+    return sig[0], sig[1]
+
+
+def compute_participation_counts(
+    hits_all: pd.DataFrame,
+    wide_glob: str,
+    memory_limit: str = "8GB",
+) -> pd.DataFrame:
+    """Per-kinase pathway participation, at two grains, over the gated wide/ shards.
+
+    A kinase *participates* in a gated path (canonical SigProb/PDS floor, pooled
+    distinct across contrasts) when one of its leading-substrate genes appears at
+    ANY node (L/R/EM/T) of that path in the matching sender×receiver pair.  Two
+    counts capture different questions:
+
+      n_backbones — distinct (Sender, Receiver, Receptor, EM) *spines* the kinase
+                    acts on.  The kinase's own reach: one phosphorylation per
+                    spine, the downstream Target fan-out collapsed.  This is the
+                    breadth number the kinase tab shows.
+      n_paths     — distinct full pathways (Sender, Receiver, Ligand, Receptor,
+                    EM, Target) the kinase sits along.  Total end-to-end route
+                    involvement; larger because each spine fans out across many
+                    downstream targets.
+
+    Entirely DuckDB-streamed: the wide shards (multi-GB decompressed) are never
+    read whole into pandas; only the small per-kinase result is materialized.
+
+    Returns columns: kinase, n_backbones, n_paths.
+    """
+    empty = pd.DataFrame(columns=["kinase", "n_backbones", "n_paths"])
+    files = sorted(glob.glob(wide_glob))
+    if not files:
+        log.warning(f"participation: no wide parquets at {wide_glob}")
+        return empty
+    if hits_all.empty:
+        return empty
+
+    spill = os.environ.get(
+        "DUCKDB_TEMP_DIR",
+        os.path.join(os.path.expanduser("~"), ".cache", "duckdb"),
+    )
+    os.makedirs(spill, exist_ok=True)
+    con = duckdb.connect()
+    con.execute(f"PRAGMA memory_limit='{memory_limit}'")
+    con.execute(f"SET temp_directory='{spill}'")
+
+    # Distinct kinase↔node attribution — ALL hits (matched or not): the preamble
+    # counts a kinase's chains by substrate-phosphorylator over-representation,
+    # not by cell-type match.
+    attr = hits_all[["kinase", "gene_symbol", "role", "sender", "receiver"]].drop_duplicates()
+    con.register("attr", attr)
+
+    parts: list[str] = []
+    for f in files:
+        sp1, sp2 = _detect_sigprob_cols(con, f)
+        safe = f.replace("'", "''")
+        parts.append(f"""
+            SELECT "Sender.group","Receiver.group",Ligand,Receptor,EM,Target
+            FROM read_parquet('{safe}')
+            WHERE ({_q(sp1)} > {SIGPROB_CUTOFF} OR {_q(sp2)} > {SIGPROB_CUTOFF})
+              AND ABS(PDS) >= {ABS_PDS_CUTOFF}""")
+    gated_union = "\n            UNION ALL".join(parts)
+
+    # Distinct full paths get a synthetic id, then are unpivoted into one row per
+    # occupied node so the kinase↔node match is a single 4-key equi-join
+    # (sender, receiver, role, gene) — a hash join, not the cross-product an
+    # OR-of-positions join over the (sender,receiver) bucket would produce.
+    sql = f"""
+    WITH gated AS ({gated_union}
+    ),
+    paths AS (
+        SELECT *, ROW_NUMBER() OVER () AS path_id
+        FROM (
+            SELECT DISTINCT "Sender.group","Receiver.group",Ligand,Receptor,EM,Target
+            FROM gated
         )
-
-        # Aggregate per (Receptor, EM) spine
-        fan_rows: list[dict] = []
-        for (receptor, em), grp in spine_df.groupby(["Receptor", "EM"]):
-            pairs = set(zip(grp["sender"], grp["receiver"]))
-            pair_idx = pd.MultiIndex.from_tuples(pairs)
-
-            # Count Ligands in same (sender, receiver) pairs
-            if not lig_df.empty:
-                lig_pairs = lig_df.set_index(["sender", "receiver"])
-                n_lig = lig_pairs.loc[lig_pairs.index.isin(pair_idx), "gene_symbol"].nunique()
-            else:
-                n_lig = 0
-
-            # Count Targets in same (sender, receiver) pairs
-            if not tgt_df.empty:
-                tgt_pairs = tgt_df.set_index(["sender", "receiver"])
-                n_tgt = tgt_pairs.loc[tgt_pairs.index.isin(pair_idx), "gene_symbol"].nunique()
-            else:
-                n_tgt = 0
-
-            ex_pair = next(iter(pairs))
-            fan_rows.append({
-                "Receptor": receptor,
-                "EM": em,
-                "n_ligands": int(n_lig),
-                "n_targets": int(n_tgt),
-                "n_senders": len({p[0] for p in pairs}),
-                "n_receivers": len({p[1] for p in pairs}),
-                "n_sender_receiver_pairs": len(pairs),
-                "example_sender": ex_pair[0],
-                "example_receiver": ex_pair[1],
-            })
-
-        fan_df = pd.DataFrame(fan_rows).sort_values(
-            ["n_ligands", "n_targets"], ascending=False
-        ).reset_index(drop=True) if fan_rows else empty_fan
-
-    # Backbone counts per kinase
-    # Backbone key determines what constitutes a unique "backbone"
-    def backbone_value(row: pd.Series) -> Optional[str]:
-        gene = row["gene_symbol"]
-        role = row["role"]
-        sender = row["sender"]
-        receiver = row["receiver"]
-        if backbone_key == "R-EM":
-            if role in ("Receptor", "EM"):
-                return f"{sender}::{receiver}::{role}::{gene}"
-            return None
-        elif backbone_key == "L-R-EM":
-            if role in ("Ligand", "Receptor", "EM"):
-                return f"{sender}::{receiver}::{role}::{gene}"
-            return None
-        elif backbone_key == "R-EM-T":
-            if role in ("Receptor", "EM", "Target"):
-                return f"{sender}::{receiver}::{role}::{gene}"
-            return None
-        elif backbone_key == "full":
-            return f"{sender}::{receiver}::{role}::{gene}"
-        return None
-
-    matched = matched.copy()
-    matched["_backbone_value"] = matched.apply(backbone_value, axis=1)
-    backbone_hits = matched[matched["_backbone_value"].notna()].copy()
-    if backbone_hits.empty:
-        backbone_df = pd.DataFrame(columns=["kinase", "backbone_key", "backbone_value", "n_backbones"])
-    else:
-        backbone_df = (
-            backbone_hits.groupby("kinase")["_backbone_value"]
-            .nunique()
-            .reset_index()
-            .rename(columns={"_backbone_value": "n_backbones"})
-        )
-        backbone_df["backbone_key"] = backbone_key
-        backbone_df["backbone_key_note"] = "provisional — pending B5 grain reconciliation"
-        backbone_df = backbone_df[["kinase", "backbone_key", "n_backbones", "backbone_key_note"]]
-
-    return fan_df, backbone_df
+    ),
+    nodes AS (
+        SELECT path_id, "Sender.group" AS sender, "Receiver.group" AS receiver,
+               'Ligand' AS role, Ligand AS gene FROM paths WHERE Ligand IS NOT NULL
+        UNION ALL
+        SELECT path_id, "Sender.group", "Receiver.group",
+               'Receptor', Receptor FROM paths WHERE Receptor IS NOT NULL
+        UNION ALL
+        SELECT path_id, "Sender.group", "Receiver.group",
+               'EM', EM FROM paths WHERE EM IS NOT NULL
+        UNION ALL
+        SELECT path_id, "Sender.group", "Receiver.group",
+               'Target', Target FROM paths WHERE Target IS NOT NULL
+    ),
+    touched AS (
+        SELECT DISTINCT a.kinase, n.path_id
+        FROM nodes n
+        JOIN attr a
+          ON n.sender = a.sender
+         AND n.receiver = a.receiver
+         AND n.role = a.role
+         AND n.gene = a.gene_symbol
+    ),
+    spine_touched AS (
+        SELECT DISTINCT t.kinase,
+               p."Sender.group", p."Receiver.group", p.Receptor, p.EM
+        FROM touched t
+        JOIN paths p ON t.path_id = p.path_id
+    ),
+    nb AS (SELECT kinase, COUNT(*) AS n_backbones FROM spine_touched GROUP BY kinase),
+    np AS (SELECT kinase, COUNT(*) AS n_paths FROM touched GROUP BY kinase)
+    SELECT np.kinase, nb.n_backbones, np.n_paths
+    FROM np JOIN nb USING (kinase)
+    ORDER BY n_backbones DESC, np.kinase
+    """
+    res = con.execute(sql).to_arrow_table().to_pandas()
+    con.close()
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -618,23 +625,6 @@ def run_song(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     log.info("Song: loading kinase_hypothesis_table for cell-type attribution")
     hyp = pd.read_csv(SONG_KINASE_HYP)
     hits = annotate_celltype_match_song(hits, hyp)
-
-    log.info("Song: attaching per-node log2FC from wide parquets")
-    contrast_hits: list[pd.DataFrame] = []
-    for contrast in hits["contrast"].unique():
-        ch = hits[hits["contrast"] == contrast].copy()
-        parquet_name = _song_contrast_to_parquet(contrast)
-        parquet_path = SONG_WIDE_DIR / parquet_name
-        if not parquet_path.exists():
-            log.warning(f"Song: parquet not found for {contrast}: {parquet_path}")
-            ch["node_log2FC"] = None
-            ch["node_PDS"] = None
-        else:
-            # Determine channel from the 'channel' column
-            channel = ch["channel"].iloc[0] if "channel" in ch.columns else "st"
-            ch = attach_node_fc(ch, parquet_path, contrast, channel)
-        contrast_hits.append(ch)
-    hits = pd.concat(contrast_hits, ignore_index=True)
 
     hits["cohort"] = "song"
     hits["tissue"] = None
@@ -684,24 +674,6 @@ def run_fivexfad(tissue: str) -> pd.DataFrame:
     celltype_mea = pd.read_parquet(FIVEXFAD_CELLTYPE_MEA)
     hits = annotate_celltype_match_fivexfad(hits, celltype_mea, tissue)
 
-    log.info(f"5xFAD {tissue}: attaching per-node log2FC from wide parquets")
-    wide_dir = FIVEXFAD_WIDE_DIR / tissue / "wide"
-    contrast_hits: list[pd.DataFrame] = []
-    for contrast in hits["contrast"].unique():
-        ch = hits[hits["contrast"] == contrast].copy()
-        age = _fivexfad_age_from_contrast(contrast)
-        parquet_name = _fivexfad_parquet_name(age)
-        parquet_path = wide_dir / parquet_name
-        if not parquet_path.exists():
-            log.warning(f"5xFAD {tissue}: parquet not found for {contrast}: {parquet_path}")
-            ch["node_log2FC"] = None
-            ch["node_PDS"] = None
-        else:
-            channel = ch["channel"].iloc[0] if "channel" in ch.columns else "st"
-            ch = attach_node_fc(ch, parquet_path, contrast, channel)
-        contrast_hits.append(ch)
-    hits = pd.concat(contrast_hits, ignore_index=True)
-
     log.info(f"5xFAD {tissue}: attaching expression specificity")
     expr_spec = pd.read_csv(FIVEXFAD_EXPR_SPEC)
     hits = annotate_fivexfad_expression(hits, expr_spec, tissue)
@@ -723,14 +695,13 @@ FINAL_COLS = [
     "cohort", "tissue", "kinase", "contrast", "channel", "NES", "FDR",
     "gene_symbol", "role", "sender", "receiver", "owning_cluster",
     "celltype_match", "celltype_match_rank",
-    "node_log2FC", "node_PDS",
     "n_rows", "best_abs_pds",
     "expression_fraction", "concentration_tier", "disease_lfc",
 ]
 
 
 def write_outputs(hits_all: pd.DataFrame, out_dir: Path, cohort_label: str,
-                  backbone_key: str = BACKBONE_KEY) -> None:
+                  wide_glob: str) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Reorder and fill missing columns
@@ -743,15 +714,18 @@ def write_outputs(hits_all: pd.DataFrame, out_dir: Path, cohort_label: str,
     hits_out.to_parquet(parquet_path, index=False, engine="pyarrow")
     log.info(f"Wrote {len(hits_out)} rows to {parquet_path}")
 
-    # Fan characterization + backbone counts
-    fan_df, backbone_df = build_fan_and_backbone(hits_all, backbone_key)
+    # Receptor-EM fan characterization
+    fan_df = build_recep_em_fan(hits_all)
     fan_path = out_dir / "recep_em_fan.csv"
     fan_df.to_csv(fan_path, index=False)
     log.info(f"Wrote fan characterization ({len(fan_df)} Receptor-EM spines) to {fan_path}")
 
-    bb_path = out_dir / "kinase_backbone_counts.csv"
-    backbone_df.to_csv(bb_path, index=False)
-    log.info(f"Wrote backbone counts ({len(backbone_df)} kinases) to {bb_path}")
+    # Per-kinase participation: n_backbones (spine breadth) + n_paths (full routes)
+    part_df = compute_participation_counts(hits_all, wide_glob)
+    part_path = out_dir / "kinase_participation.csv"
+    part_df.to_csv(part_path, index=False)
+    log.info(f"Wrote participation (n_backbones + n_paths) for {len(part_df)} "
+             f"kinases to {part_path}")
 
     # MANIFEST
     n_active = hits_all[["kinase", "contrast"]].drop_duplicates().shape[0]
@@ -764,7 +738,7 @@ def write_outputs(hits_all: pd.DataFrame, out_dir: Path, cohort_label: str,
 
     ## Parameters
     - MEA_FDR_THRESH: {MEA_FDR_THRESH}
-    - BACKBONE_KEY: {backbone_key!r} (provisional — pending B5 backbone-grain reconciliation)
+    - Backbone floor: SigProb > {SIGPROB_CUTOFF} (either side) AND |PDS| >= {ABS_PDS_CUTOFF}
 
     ## Counts
     - Active (kinase,contrast) pairs: {n_active}
@@ -787,9 +761,11 @@ def write_outputs(hits_all: pd.DataFrame, out_dir: Path, cohort_label: str,
     ## Output files
     - kinase_node_hits.parquet : flat hit table (all rows; celltype_match=False rows
       retained for traceability; default filter = celltype_match==True)
-    - recep_em_fan.csv : per Receptor-EM spine fan characterization (Q3 deliverable)
-    - kinase_backbone_counts.csv : n_backbones per kinase at BACKBONE_KEY grain
-      (provisional; recompute with --backbone-key to switch grain without code change)
+    - recep_em_fan.csv : per Receptor-EM spine fan characterization
+    - kinase_participation.csv : per-kinase participation over gated paths —
+      n_backbones (distinct Sender-Receiver-Receptor-EM spines, the breadth number)
+      and n_paths (distinct full Ligand-Receptor-EM-Target pathways, total routes),
+      both counting any-node (L/R/EM/T) participation
     - MANIFEST.md : this file
     """)
     manifest_path = out_dir / "MANIFEST.md"
@@ -806,12 +782,7 @@ def main() -> None:
     parser.add_argument("--cohort", choices=["song", "fivexfad", "all"], default="all")
     parser.add_argument("--tissue", choices=["cortex", "hippocampus", "both"], default="both",
                         help="5xFAD tissue (ignored for song cohort)")
-    parser.add_argument("--backbone-key", default=BACKBONE_KEY,
-                        choices=["R-EM", "L-R-EM", "R-EM-T", "full"],
-                        help="Backbone grain for n_backbones rollup (provisional, pending B5)")
     args = parser.parse_args()
-
-    backbone_key_to_use = args.backbone_key
 
     all_hits: list[pd.DataFrame] = []
 
@@ -821,8 +792,21 @@ def main() -> None:
         con.close()
         if not song_hits.empty:
             out_dir = OUT_ROOT / "song"
-            write_outputs(song_hits, out_dir, "Song cohort", backbone_key=backbone_key_to_use)
+            wide_glob = str(SONG_WIDE_DIR / "*_incytr_output.parquet")
+            write_outputs(song_hits, out_dir, "Song cohort", wide_glob)
             all_hits.append(song_hits)
+
+            # Fold: materialize the R-EM-T pathway backbone here (the build step),
+            # not as a standalone pipeline step.  B2's sankey reads it lazily.
+            rem_t_out = str(
+                REPORTS / "incytr_pair_mode" / "backbone" / "backbone_rem_t.parquet"
+            )
+            log.info("Song: reducing R-EM-T backbones for B2 sankey")
+            bb_summary = backbone_reduction.reduce(
+                wide_dir=str(SONG_WIDE_DIR), out_path=rem_t_out, verbose=False
+            )
+            log.info(f"Song: wrote {bb_summary['n_backbone_paths']:,} R-EM-T "
+                     f"backbones to {rem_t_out}")
         else:
             log.warning("Song: no hits produced")
 
@@ -832,7 +816,8 @@ def main() -> None:
             fx_hits = run_fivexfad(tissue)
             if not fx_hits.empty:
                 out_dir = OUT_ROOT / f"fivexfad_{tissue}"
-                write_outputs(fx_hits, out_dir, f"5xFAD {tissue}", backbone_key=backbone_key_to_use)
+                wide_glob = str(FIVEXFAD_WIDE_DIR / tissue / "wide" / "*_incytr_output.parquet")
+                write_outputs(fx_hits, out_dir, f"5xFAD {tissue}", wide_glob)
                 all_hits.append(fx_hits)
             else:
                 log.warning(f"5xFAD {tissue}: no hits produced")

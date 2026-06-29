@@ -81,27 +81,25 @@ Driver validates `CHANNELS ⊆ {pr,py,ps,Ack,KGG}` (`incytr_commandline.R:148`).
 
 ## B5 — Backbone / pathway reduction ✅
 
-**Purpose.** A reduction + ranking layer on top of the existing per-row gate, producing the pathway table B2's sankey consumes. It surfaces the *backbone* — paths that recur across timepoints — instead of the widest per-pair enumeration.
+**Purpose.** A reduction + ranking layer on top of the existing per-row gate, producing the pathway table B2's sankey consumes. It surfaces the *backbone* — spines that recur across timepoints — instead of the widest per-pair enumeration. **Folded into the B4 build** (`backbone_reduction.reduce()` called from the bridge's song branch — no standalone step/task); rationale `docs/plans/backbone_fold_into_build_2026-06-28.md`.
 
-**Input.** Gated pathway rows: the canonical `filter_significant_paths.py` floor (`SigProb > 0.1` in either condition AND `|PDS| >= 0.2`, uncapped). Schema: `Sender.group, Receiver.group, Ligand, Receptor, EM, Target, PDS, SigProb_<cond>`.
+**Input.** Gated pathway rows: the canonical floor (`SigProb > 0.1` in either condition AND `|PDS| >= 0.2`), re-applied in-query over the unfiltered `wide/` shards. Schema: `Sender.group, Receiver.group, Ligand, Receptor, EM, Target, PDS, SigProb_<cond>`.
 
-**Path identity** = the 6-tuple `(Sender.group, Receiver.group, Ligand, Receptor, EM, Target)`.
+**Path identity** = the R-EM-T 5-tuple `(Sender.group, Receiver.group, Receptor, EM, Target)`. `Ligand` is **excluded** — Target already fans a Receptor-EM spine ~547× (B4's `recep_em_fan.csv`), so keying on the full 6-tuple re-commits the widest-enumeration conflation. `Target` is in the key but may be NULL (NULL-safe join).
 
 **Reduction.**
-1. Collapse a path's occurrences across a condition's timepoints → `n_timepoints_present` (count passing the gate). Then across conditions → `n_conditions_present`.
-2. **Backbone = high `n_timepoints_present`.** Cholinergic.Neurons is the priority anchor (paths into it surfaced first).
+1. Collapse a spine's occurrences across a condition's timepoints → per-condition distinct-timepoint count; take the **max over conditions** → `n_timepoints_present`. Distinct conditions → `n_conditions_present`.
+2. **Backbone = high `n_timepoints_present`.** Cholinergic-Neurons is the priority anchor (flagged, never filtered).
 
-**Ranking — recurrence-first (lexicographic), NOT a composite score.** `backbone_rank` sorts by `n_timepoints_present` desc, then `n_conditions_present` desc, then `|PDS|` desc as tiebreak. A path in 3/3 timepoints always outranks one in 2/3 regardless of PDS. Rationale: matches the TODO's "common across all timepoints **first**, then conditions"; stays explainable for a publication deliverable (a composite `recurrence × |PDS| × specificity` is opaque and hand-weighted).
+**Ranking — recurrence-first (lexicographic), NOT a composite score.** `backbone_rank` = dense rank over `n_timepoints_present` desc, `n_conditions_present` desc, `|PDS|` desc as tiebreak. A spine in 3/3 timepoints always outranks one in 2/3 regardless of PDS. Explainable for a publication deliverable.
 
-**Annotations — NEVER hard filters.** Two derived columns inform `backbone_rank` softly and drive interactive viewer filtering, but **drop no rows**:
-- `mean_gene_specificity` — mean cell-type specificity of the 4 position genes (Ligand in Sender type; Receptor/EM/Target in Receiver type), derived from `aggexp.csv` (per-gene × 31-cluster share — same method as kinase `song_specificity`; the orphaned `specificity.py` is gone but the `aggexp` substrate is on disk for all cohorts).
-- `min_cell_count` — min n_cells across the path's Sender + Receiver clusters.
+**Cholinergic anchor — flag, never filter.** `is_cholinergic_target` (`Receiver.group == 'Cholinergic-Neurons'`) is a boolean B2 can pin/highlight; the reducer drops no rows. A hard specificity/cell-count floor would delete recurrent sparse-cluster backbone spines (the Cholinergic 1-cell/condition case) — the opposite of the goal.
 
-Rationale for annotation-not-filter: a hard specificity/cell-count floor would **delete recurrent low-specificity or sparse-cluster backbone paths** — exactly the Cholinergic anchor case (1 cell/condition at 2mo; broadly-expressed key ligands). That is the opposite of the goal. Keep all rows; flag honestly; let the viewer filter on demand.
+**Output schema (B2 consumes), `outputs/reports/incytr_pair_mode/backbone/backbone_rem_t.parquet`:** `Sender.group, Receiver.group, Receptor, EM, Target, PDS` (representative, signed) `, n_timepoints_present, n_conditions_present, backbone_rank, is_cholinergic_target, conditions_present, contrasts_present`. One row per R-EM-T key-tuple (2,782,293 rows).
 
-**Output schema (B2 consumes).** Gated path columns **+** `n_timepoints_present, n_conditions_present, backbone_rank, mean_gene_specificity, min_cell_count`.
+**Open divergence — soft annotation columns not shipped.** The original plan specified `mean_gene_specificity` + `min_cell_count` (annotate-not-filter, for B2's interactive filtering). The shipped reducer does **not** emit them. If B2 needs them, compute in B2 (apply the annotate-not-filter principle — drop no rows): `min_cell_count` from `pseudobulk_cell_counts.csv`; per-gene specificity from the canonical `song_expression_specificity.csv` (NOT aggexp — same file the kinase tab reads), joined `(gene, cell_type)` on the Levy-t5 spine.
 
-**Implication for agents.** B5 produces this reduced table; B2's sankey ranks/filters off `backbone_rank` + the annotations and must not re-implement its own reduction. The gate stays in `filter_significant_paths.py` (do not raise its cutoffs — see CLAUDE.md). Per-gene specificity is computed fresh from `aggexp` for *all* pathway genes, not just kinases.
+**Implication for agents.** The reduction is produced by the B4 build; B2's sankey ranks/filters off `backbone_rank` and must not re-implement its own reduction. The gate stays in `filter_significant_paths.py` (do not raise its cutoffs — see CLAUDE.md).
 
 ## F1 — Signed-sort convention ✅
 
