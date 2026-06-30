@@ -14,7 +14,7 @@ and its genuinely cohort-specific sections.
 **Unify the engine, the confidence definition, and the evidence axes; keep only
 the cohort-specific data (which reference, which cell-type vocabulary).** The
 fork rules in
-[`viewer_frontend_contract.md`](../foundation/viewer_frontend_contract.md) list
+[`viewer_frontend_contract.md`](../../foundation/viewer_frontend_contract.md) list
 `kinase_audit.js` as a consolidation candidate. We share the renderer AND the
 `confidence_tier` definition across all three cohorts; what stays per-cohort is
 only the corroborating reference and the cell-type spine — supplied as data, not
@@ -161,7 +161,7 @@ direction column · a "vs bulk" column.** Cohort extras layer on:
 
 `confidence_tier` is computed the **same way** for every cohort — Song's
 cell-type-exclusivity model
-([`specificity_confidence.md`](../foundation/specificity_confidence.md) §4):
+([`specificity_confidence.md`](../../foundation/specificity_confidence.md) §4):
 
 ```
 inputs (all from the shared standard metric — already cohort-uniform):

@@ -1,7 +1,7 @@
 # Attribution drawer — refactor & redesign
 
 > Current architecture source of truth:
-> [`docs/foundation/kinase_explorer_attribution.md`](../foundation/kinase_explorer_attribution.md).
+> [`docs/foundation/kinase_explorer_attribution.md`](../../foundation/kinase_explorer_attribution.md).
 > This file is implementation history for the Song AD attribution redesign; use
 > the foundation doc for live cross-cohort Attribution tab behavior.
 
@@ -53,7 +53,7 @@ specificity*.
    deep-dive for the **confidence pill**, but that pill was redesigned this
    cycle into a **cell-type-exclusivity** verdict (curated specificity units,
    `eff = 1/Σ share²`, detection-gated — see
-   [`docs/foundation/specificity_confidence.md`](../foundation/specificity_confidence.md)).
+   [`docs/foundation/specificity_confidence.md`](../../foundation/specificity_confidence.md)).
    The drawer shows **zero specificity evidence**: no `eff`, no detected-set
    share, no count of cell types detected, no unit membership, no collapse
    reveal. So clicking a row to "understand the verdict" shows direction and

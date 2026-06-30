@@ -127,5 +127,5 @@ type". Do **not** rename internal identifiers (`selection.celltype`,
 4. Confirm the **Attribution tab** first column now reads **Cell state** and the
    §2 lineage strip is unchanged.
 
-On approval, copy this plan to `docs/plans/tcell_cell_state_vs_cell_type.md`
+On approval, copy this plan to `docs/plans/tcell/tcell_cell_state_vs_cell_type.md`
 (repo is the durable review location per project rules) before implementing.

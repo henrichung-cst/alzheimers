@@ -299,7 +299,7 @@ which is unchanged).
 ## Phase 3 — 5xFAD within-cohort detection metric — DONE 2026-06-22
 
 Closes the consistency pass: 5xFAD was the last cohort on legacy share/τ. Plan:
-[`fivexfad_detection_metric_migration.md`](./fivexfad_detection_metric_migration.md).
+[`fivexfad_detection_metric_migration.md`](../fivexfad/fivexfad_detection_metric_migration.md).
 
 - **Producer** `alz/ingest/build_5xfad_snrna_attribution.R` is now a pseudobulk +
   detection exporter: per-(gene, tissue, cell type) `fraction_cells_expressing`

@@ -9,7 +9,7 @@ kinase to a cell type is the **wrong instrument for presence**, and is in fact *
 predictive of truth: on bulk-significant T-cell kinases, 83% of share-localized
 (kinase, state) pairs (tier ≥2×) and 93% of the peak-localized pairs (tier =10×) are
 **not detected** in an independent 897k-cell reference at the state the share assigned them
-(`docs/plans/nsclc_within_cohort_detection_comparison.md`). The harder the share localizes,
+(`docs/plans/tcell/nsclc_within_cohort_detection_comparison.md`). The harder the share localizes,
 the more likely it is a false positive.
 
 Cell-type attribution is a load-bearing output of every cohort. If the share is misleading

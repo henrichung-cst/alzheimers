@@ -1,13 +1,13 @@
 # 5xFAD → standard detection metric (Phase 3)
 
 > **Status: DONE 2026-06-22.** All steps below landed; completion recorded in
-> [`standard_attribution_metric.md`](./standard_attribution_metric.md) Phase 3.
+> [`standard_attribution_metric.md`](../attribution/standard_attribution_metric.md) Phase 3.
 > Verified end-to-end: `pixi run 5xfad-snrna-specificity` regenerated the CSVs
 > (35,144 rows, 14,898 detected), the package build wrote 382 attribution shards
 > (35 promoted to very_high), and `test_fivexfad.py` passes (9 tests).
 
 Closes the "consistency pass" left pending in
-[`standard_attribution_metric.md`](./standard_attribution_metric.md). 5xFAD is the
+[`standard_attribution_metric.md`](../attribution/standard_attribution_metric.md). 5xFAD is the
 last cohort still on legacy share/τ specificity. After this, **one metric, every
 cohort** is literally true.
 
