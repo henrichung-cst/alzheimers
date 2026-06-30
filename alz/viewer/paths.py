@@ -38,6 +38,16 @@ EDGE_SLICES_SONG_CONCORDANCE_DIR = os.path.join(
 EDGE_SLICES_INCYTR_PATHWAYS_DIR = os.path.join(
     UNIFIED_VIEWER_DIR, "edge_slices", "incytr_pathways"
 )
+# Incytr backbone-grain shards — one subdir per grain (R-EM, L-R-EM, R-EM-T).
+# Only the R-EM-T subdir gets per-(sender,receiver) parquet shards; R-EM and
+# L-R-EM ship their global binary index as the only file in their subdir.
+EDGE_SLICES_INCYTR_BACKBONE_DIR = os.path.join(
+    UNIFIED_VIEWER_DIR, "edge_slices", "incytr_backbone"
+)
+# Source backbone parquets emitted by the pair-mode driver (B-2, parallel to wide/).
+INCYTR_BACKBONE_PAIR_MODE_DIR = os.path.join(
+    config.REPO_ROOT, "outputs", "reports", "incytr_pair_mode", "backbone"
+)
 # 5xFAD incytr shards — separate dirs per tissue so Song's rmtree never clobbers them.
 EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_CORTEX_DIR = os.path.join(
     UNIFIED_VIEWER_DIR, "edge_slices", "incytr_pathways_fivexfad_cortex"

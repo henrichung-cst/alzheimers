@@ -1,10 +1,16 @@
 
 function _selectedAuditContrast(K, ki) {
-  // Audit panel's Contrast picker drives this. Falls back to peak_NES when
-  // picker = "ALL". Independent of the left-list KinaseFilter.
+  // Audit panel's Contrast picker drives this. Falls back to the strongest
+  // contrast (max-|NES| across all contrasts, computed live from the NES row)
+  // when picker = "ALL". Independent of the left-list KinaseFilter.
   const f = Store.state && Store.state.filters && Store.state.filters.contrast;
   if (f && f !== "ALL" && CONTRASTS.indexOf(f) >= 0) return f;
-  return K.peak_contrast[ki] || CONTRASTS[0];
+  let best = CONTRASTS[0] || "", bestAbs = -1;
+  for (const c of CONTRASTS) {
+    const v = K["NES_" + c] ? K["NES_" + c][ki] : null;
+    if (v != null && isFinite(v) && Math.abs(v) > bestAbs) { bestAbs = Math.abs(v); best = c; }
+  }
+  return best;
 }
 
 function _siteOlsColumns(contrast) {
@@ -525,7 +531,7 @@ function _attrPathwayFromContrast(contrast) {
 // the single cross-cohort detection floor shared with the within-cohort scRNA).
 // This replaces
 // the old transcript-share tier: a share is a relative ranking, not presence, and
-// was shown inversely predictive of truth (docs/plans/standard_attribution_metric.md).
+// was shown inversely predictive of truth (docs/plans/attribution/standard_attribution_metric.md).
 // All values are precomputed in Python; the JS only renders.
 // Concentration badge: the shared _concTierCell (attribution_view.js) renders the
 // ≥N× tier identically; prefix a space and suppress it at tier 0 (no badge).

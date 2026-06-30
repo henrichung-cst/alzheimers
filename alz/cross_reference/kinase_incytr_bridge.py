@@ -48,13 +48,6 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-# Repo root on sys.path so the in-process R-EM-T backbone reduction (folded into
-# this build step) imports cleanly whether run as a script or via `-m`.
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-from alz.incytr_pair import backbone_reduction  # noqa: E402
-
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
@@ -87,10 +80,10 @@ OUT_ROOT = REPORTS / "kinase_incytr_bridge"
 # ---------------------------------------------------------------------------
 MEA_FDR_THRESH = 0.25
 
-# Canonical pair-mode significance floor (identical to filter_significant_paths.py
-# and backbone_reduction.py): a chain "passes" when either side's SigProb clears
-# 0.1 AND |PDS| >= 0.2.  #Backbones counts passing chains, so this floor is
-# applied when enumerating wide/ full paths.
+# Canonical pair-mode significance floor (identical to filter_significant_paths.py):
+# a chain "passes" when either side's SigProb clears 0.1 AND |PDS| >= 0.2.
+# #Backbones counts passing chains, so this floor is applied when enumerating
+# wide/ full paths.
 SIGPROB_CUTOFF = 0.1
 ABS_PDS_CUTOFF = 0.2
 
@@ -795,18 +788,6 @@ def main() -> None:
             wide_glob = str(SONG_WIDE_DIR / "*_incytr_output.parquet")
             write_outputs(song_hits, out_dir, "Song cohort", wide_glob)
             all_hits.append(song_hits)
-
-            # Fold: materialize the R-EM-T pathway backbone here (the build step),
-            # not as a standalone pipeline step.  B2's sankey reads it lazily.
-            rem_t_out = str(
-                REPORTS / "incytr_pair_mode" / "backbone" / "backbone_rem_t.parquet"
-            )
-            log.info("Song: reducing R-EM-T backbones for B2 sankey")
-            bb_summary = backbone_reduction.reduce(
-                wide_dir=str(SONG_WIDE_DIR), out_path=rem_t_out, verbose=False
-            )
-            log.info(f"Song: wrote {bb_summary['n_backbone_paths']:,} R-EM-T "
-                     f"backbones to {rem_t_out}")
         else:
             log.warning("Song: no hits produced")
 

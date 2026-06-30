@@ -43,7 +43,7 @@ normalize → enrich → attribute → mechanism → recover
 | 2 | `enrich.py` | Sample filter → factorial OLS per site (9 contrasts) → MEA on stoichiometry β | `mea_stoichiometry.csv`, `site_level_ols.csv` |
 | 3 | `attribute.py` | Cross-join sig kinases × 31-cluster spine; layer SEA-AD + WMB + Song evidence; confidence tiers | `unified_attribution{,_full}.csv` |
 | 4 | `mechanism.py` | Raw-phospho MEA + abundance/activity/both classification; **merges `mechanism_annotation` back into `unified_attribution.csv` → must run after `attribute`** | `mechanism_annotation.csv`, `mea_raw_phospho{,_pY}.csv` |
-| 5 | `recover.py` | Cross-contrast trajectory classification + final hypothesis tables | **`kinase_hypothesis_table.csv`**, `kinase_activity_matrix.csv`, `celltype_evidence_table.csv` |
+| 5 | `recover.py` | Final hypothesis + kinase-activity / cell-type-evidence tables | **`kinase_hypothesis_table.csv`**, `kinase_activity_matrix.csv`, `celltype_evidence_table.csv` |
 | ⸻ | `summary.py` | Read-only: prints cached results across all stages (runs no analysis) | — |
 
 Run via pixi tasks (`pixi run normalize / enrich / attribute / mechanism /
@@ -124,10 +124,9 @@ silently skipped and the annotation is lost.
 Synthesizes the final hypothesis tables:
 
 - **`kinase_activity_matrix.csv`** — wide NES/FDR per kinase across all 9
-  contrasts, plus per-genotype scalars `peak_NES_{g}`, `peak_contrast_{g}`,
-  `n_sig_{g}`, and `trajectory_{g}` (progressive / declining / peaked /
-  sustained / early / late / single_contrast / mixed / none) for each
-  genotype `g` in {App, Tau, ApTt}.
+  contrasts, plus `sig_conditions` (comma-separated genotypes with ≥1
+  significant contrast). The viewer classifies each genotype's NES trend
+  (always up/down, monotonic up/down, mixed) client-side from the NES vector.
 - **`celltype_evidence_table.csv`** — one row per (kinase, cell type) above the
   WMB expression gate, deduped to the contrast with the strongest joint evidence.
 - **`kinase_hypothesis_table.csv`** — the primary deliverable: kinase-first

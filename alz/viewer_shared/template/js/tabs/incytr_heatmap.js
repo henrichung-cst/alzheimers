@@ -63,20 +63,23 @@ function _ihColorbarTitle() {
 
 function _ihPdsSignMode() {
   const f = IncytrFilter.get();
-  return f.hmPdsSign === "positive" || f.hmPdsSign === "negative" ? f.hmPdsSign : "both";
+  // Accept legacy "positive"/"negative" values from saved state; normalise to up/down.
+  if (f.hmPdsSign === "positive" || f.hmPdsSign === "up") return "up";
+  if (f.hmPdsSign === "negative" || f.hmPdsSign === "down") return "down";
+  return "both";
 }
 
 function _ihSignIndex() {
   const mode = _ihPdsSignMode();
-  if (mode === "positive") return 2;
-  if (mode === "negative") return 0;
+  if (mode === "up") return 2;
+  if (mode === "down") return 0;
   return null;
 }
 
 function _ihSignText() {
   const mode = _ihPdsSignMode();
-  if (mode === "positive") return "positive PDS";
-  if (mode === "negative") return "negative PDS";
+  if (mode === "up") return "up PDS";
+  if (mode === "down") return "down PDS";
   return "both PDS signs";
 }
 
@@ -327,7 +330,7 @@ function _ihSyncControls() {
   if (axisSel) axisSel.value = _ihAxisLimitN(f) ? String(_ihAxisLimitN(f)) : "all";
   const scaleSel = document.getElementById("ih-scale");
   if (scaleSel) scaleSel.value = _ihScaleMode();
-  const lowSel = document.getElementById("ih-low-signal");
+  const lowSel = document.getElementById("if-low-signal");
   if (lowSel) {
     const hasLow = IncytrCelltypeQc.hasLowSignal(block);
     lowSel.value = (f.excludeLowSignalCelltypes && hasLow) ? "exclude" : "include";
@@ -396,7 +399,7 @@ function wireIncytrHeatmap() {
   });
   const signSel = document.getElementById("ih-pds-sign");
   if (signSel) signSel.addEventListener("change", () => {
-    const v = signSel.value === "positive" || signSel.value === "negative" ? signSel.value : "both";
+    const v = (signSel.value === "up" || signSel.value === "down") ? signSel.value : "both";
     IncytrFilter.set({ hmPdsSign: v });
     _ihRenderPlot();
   });
@@ -410,12 +413,7 @@ function wireIncytrHeatmap() {
     IncytrFilter.set({ hmScale: scaleSel.value === "log1p" ? "log1p" : "linear" });
     _ihRenderPlot();
   });
-  const lowSel = document.getElementById("ih-low-signal");
-  if (lowSel) lowSel.addEventListener("change", () => {
-    IncytrFilter.set({ excludeLowSignalCelltypes: lowSel.value === "exclude" });
-    _ihSyncControls();
-    _ihRenderPlot();
-  });
+  // if-low-signal is wired once in wireIncytrPanel() to avoid double-wiring.
   const timelineSlider = document.getElementById("ih-timeline-slider");
   if (timelineSlider) timelineSlider.addEventListener("input", () => {
     const raw = parseInt(timelineSlider.value || "0", 10);
@@ -503,6 +501,7 @@ function _ihTotalAtThreshold(block, snap, snapAp) {
 
 function _ihSeedPathwayFilters(sender, receiver, disease, timepoint, snap, snapAp) {
   IncytrFilter.set({
+    ipMode:     "pair",   // a heatmap-cell click loads that pair's shard — switch to Cell Type.
     pair:       { sender, receiver },
     senderIn:   [sender],
     receiverIn: [receiver],
@@ -511,7 +510,8 @@ function _ihSeedPathwayFilters(sender, receiver, disease, timepoint, snap, snapA
     sliderP:    snap.open ? null : snap.value,
     sliderPds:  (snapAp.value != null && snapAp.value > 0) ? snapAp.value : null,
   });
-  Store.dispatch({type:"SET_VIEW", key:"activeTab", value:"incytrpathways"});
+  // Switch the unified Incytr pane to the table in-place (no tab jump).
+  _setIncytrPane("table");
 }
 
 function _ihQcRows(block) {
@@ -886,4 +886,81 @@ function renderIncytrHeatmap() {
   }
   _ihSyncControls();
   _ihRenderPlot();
+}
+
+// ---------------------------------------------------------------------------
+// Unified Incytr pane management (J-1)
+// The merged "incytr" tab shows either the heatmap or the table in its main
+// pane. _incytrPane tracks which view is active. _setIncytrPane switches,
+// syncs the DOM, and triggers the appropriate re-render. wireIncytrPanel wires
+// the view-switch buttons and the shared if-low-signal control.
+// ---------------------------------------------------------------------------
+
+let _incytrPane = "table"; // "table" | "heatmap"
+
+function _syncIncytrPane() {
+  const isHeatmap = _incytrPane === "heatmap";
+  const hp = document.getElementById("incytr-pane-heatmap");
+  const tp = document.getElementById("incytr-pane-table");
+  const hc = document.getElementById("incytr-hm-controls");
+  const ic = document.getElementById("incytr-ip-controls");
+  const tb = document.getElementById("incytr-view-table");
+  const hb = document.getElementById("incytr-view-heatmap");
+  if (hp) hp.hidden = !isHeatmap;
+  if (tp) tp.hidden = isHeatmap;
+  if (hc) hc.hidden = !isHeatmap;
+  if (ic) ic.hidden = isHeatmap;
+  if (tb) tb.classList.toggle("active", !isHeatmap);
+  if (hb) hb.classList.toggle("active", isHeatmap);
+}
+
+function _setIncytrPane(pane) {
+  _incytrPane = pane === "heatmap" ? "heatmap" : "table";
+  _syncIncytrPane();
+  if (_incytrPane === "heatmap") {
+    _ihSyncControls();
+    _ihRenderPlot();
+  } else {
+    // renderIncytrPathways is defined in incytr_pathways.js — loaded in same scope.
+    if (typeof renderIncytrPathways === "function") renderIncytrPathways();
+  }
+}
+
+function wireIncytrPanel() {
+  const tableBtn = document.getElementById("incytr-view-table");
+  if (tableBtn) tableBtn.addEventListener("click", () => _setIncytrPane("table"));
+  const heatmapBtn = document.getElementById("incytr-view-heatmap");
+  if (heatmapBtn) heatmapBtn.addEventListener("click", () => _setIncytrPane("heatmap"));
+
+  // Unified sparse-cell control: wired once here so both views share it without
+  // double-event firing. Handler behaviour differs per active pane.
+  const lowSel = document.getElementById("if-low-signal");
+  if (lowSel) lowSel.addEventListener("change", () => {
+    const excluded = lowSel.value === "exclude";
+    if (_incytrPane === "heatmap") {
+      IncytrFilter.set({ excludeLowSignalCelltypes: excluded });
+      _ihSyncControls();
+      _ihRenderPlot();
+    } else {
+      IncytrFilter.set({ excludeLowSignalCelltypes: excluded, pair: null });
+      if (typeof _ipBlock === "function") {
+        const block = _ipBlock();
+        if (block && typeof _ipSyncControls === "function") _ipSyncControls(block);
+      }
+      if (typeof _ipInvalidateScope === "function") _ipInvalidateScope();
+      if (typeof _ipResetPage === "function") _ipResetPage();
+      if (typeof _ipEnsureShards === "function") _ipEnsureShards();
+    }
+  });
+}
+
+function _renderIncytrTab() {
+  // Re-evaluate the 5xFAD cortex/hippocampus tissue control on every Incytr
+  // render so it tracks the active context: it must hide under Song (no tissue
+  // split) and only show for a 5xFAD incytr context. Defined in the unified
+  // viewer's chrome; absent (and irrelevant) in the t-cell viewer.
+  if (typeof _syncFivexfadTissueToggle === "function") _syncFivexfadTissueToggle();
+  _syncIncytrPane();
+  renderIncytrHeatmap();
+  if (typeof renderIncytrPathways === "function") renderIncytrPathways();
 }

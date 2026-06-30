@@ -25,13 +25,6 @@ const TAB_MANIFEST = {
     render: () => renderTemporalV2(),
     rerenderOn: { filters: true, selection: [] },
   },
-  diseasedirection: {
-    group: "landscape", label: "Disease Direction",
-    filters: [], requires: [], modes: ["mouse"],
-    wire: () => { if (typeof wireDiseasedirection === "function") wireDiseasedirection(); },
-    render: () => { if (typeof renderDiseasedirection === "function") renderDiseasedirection(); },
-    rerenderOn: { filters: false, selection: [] },
-  },
   crosstable: {
     group: "landscape", label: "Crosstable",
     filters: ["fdr"], requires: [], modes: ["mouse", "human"],
@@ -88,18 +81,11 @@ const TAB_MANIFEST = {
       return true;
     },
   },
-  incytrheatmap: {
-    group: "landscape", label: "Incytr Heatmap",
+  incytr: {
+    group: "landscape", label: "Incytr",
     filters: [], requires: [], modes: _INCYTR_MODES,
-    wire: () => wireIncytrHeatmap(),
-    render: () => renderIncytrHeatmap(),
-    rerenderOn: { filters: false, selection: [] },
-  },
-  incytrpathways: {
-    group: "drilldown", label: "Incytr Pathways",
-    filters: [], requires: [], modes: _INCYTR_MODES,
-    wire: () => wireIncytrPathways(),
-    render: () => renderIncytrPathways(),
+    wire: () => { wireIncytrHeatmap(); wireIncytrPathways(); wireIncytrPanel(); },
+    render: () => _renderIncytrTab(),
     rerenderOn: { filters: false, selection: [] },
   },
   methods: {
@@ -163,7 +149,7 @@ function _tissueLabel(ctx) {
 // of each incytr toolbar (#ih-tissue / #ip-tissue). Populated from the 5xFAD
 // incytr contexts; dispatches SET_SELECTION context on change. Idempotent.
 // Caches the {sel, wrap} pairs so _syncFivexfadTissueToggle avoids DOM lookups.
-const _FIVEXFAD_TISSUE_SELECT_IDS = ["ih-tissue", "ip-tissue"];
+const _FIVEXFAD_TISSUE_SELECT_IDS = ["if-tissue"];
 let _f5TissueSels = null;   // [{sel, wrap}] cached after first wire
 
 function wireFivexfadTissueToggle() {
@@ -190,13 +176,17 @@ function wireFivexfadTissueToggle() {
     .filter(p => p.sel);
 }
 
-// Shown only when 5xFAD Incytr is explicitly surfaced. The payload can package
-// 5xFAD cortex/hippocampus sidecars while SHOW_FIVEXFAD_INCYTR is false, so
-// visibility must follow the UI feature flag, not payload presence alone.
+// Shown only when 5xFAD Incytr is explicitly surfaced AND the active context
+// is a 5xFAD incytr context (not the Song AD context). Double-gates so a
+// mode/context desync (e.g., view=fivexfad but context still song_ad during
+// the context transition) does not flash the tissue control under Song.
 function _syncFivexfadTissueToggle() {
-  const show = !!(SHOW_FIVEXFAD_INCYTR && HAS_FIVEXFAD_INCYTR
-    && ((Store.state.view && Store.state.view.mode) || "mouse") === "fivexfad");
+  const mode = (Store.state.view && Store.state.view.mode) || "mouse";
   const ctx = ViewerPayload.activeContext();
+  // J-4: require that the active context is actually a 5xFAD incytr context.
+  const ctxIsFivexfad = _fivexfadIncytrContexts().some(c => c.id === ctx);
+  const show = !!(SHOW_FIVEXFAD_INCYTR && HAS_FIVEXFAD_INCYTR
+    && mode === "fivexfad" && ctxIsFivexfad);
   (_f5TissueSels || []).forEach(({ sel, wrap }) => {
     if (wrap) wrap.hidden = !show;
     if (show && sel.value !== ctx) sel.value = ctx;

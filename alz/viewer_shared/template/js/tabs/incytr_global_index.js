@@ -17,7 +17,10 @@ window.IncytrGlobalIndex = (function() {
   const _pathRowsCache = new Map();
   const _PATH_ROWS_CACHE_MAX = 128;
 
+  // J-3: Grain-aware block lookup. incytr_pathways.js registers _ipGrainBlock
+  // as window._ipGrainBlock when active; falls back to ViewerPayload.incytr().
   function _block() {
+    if (typeof window._ipGrainBlock === "function") return window._ipGrainBlock();
     return (window.ViewerPayload && ViewerPayload.incytr)
       ? ViewerPayload.incytr() : null;
   }
@@ -122,6 +125,48 @@ window.IncytrGlobalIndex = (function() {
     return m;
   }
 
+  // J-3: Timepoint-combination filter applied to a pre-filtered index list.
+  // Keeps only rows whose entity (defined by the grain's node_id_columns) appears
+  // in the selected timepoints within at least one disease. Evaluated per-disease
+  // — a backbone at 2mo in App and 6mo in Tau does NOT satisfy "all {2mo,6mo}".
+  function _filterTimepointCombine(indices, f, d) {
+    const required = f.timepointCombine || [];
+    if (!required.length) return indices;
+    const mode = f.timepointCombineMode || "all";
+    const { gi, cols, contrastDis, contrastTp } = d;
+    // Build entity key from the surviving node id columns (grain-specific).
+    const nodeIdCols = (gi.node_id_columns || []).map(name => cols[name]).filter(Boolean);
+    const B = (gi.gene_vocab && gi.gene_vocab.length) || 1;
+    const entityKey = nodeIdCols.length
+      ? (i) => { let k = 0; for (const c of nodeIdCols) k = k * B + c[i]; return k; }
+      : (i) => 0;  // no node ids: treat all as one entity
+    // Group by (entityKey → Map<disease, Set<timepoint>>) over the input indices.
+    const entityDisTp = new Map();
+    for (const i of indices) {
+      const ek = entityKey(i);
+      const cid = cols.contrastId[i];
+      const dis = contrastDis[cid];
+      const tp  = contrastTp[cid];
+      let dm = entityDisTp.get(ek);
+      if (!dm) { dm = new Map(); entityDisTp.set(ek, dm); }
+      let tset = dm.get(dis);
+      if (!tset) { tset = new Set(); dm.set(dis, tset); }
+      tset.add(tp);
+    }
+    const req = new Set(required);
+    const qualifies = (tpSet) => mode === "all"
+      ? [...req].every(tp => tpSet.has(tp))
+      : [...req].some(tp => tpSet.has(tp));
+    // Identify entity keys that pass for at least one disease.
+    const passing = new Set();
+    for (const [ek, dm] of entityDisTp) {
+      for (const tpSet of dm.values()) {
+        if (qualifies(tpSet)) { passing.add(ek); break; }
+      }
+    }
+    return indices.filter(i => passing.has(entityKey(i)));
+  }
+
   // Resolve filter state -> integer predicates, then single-scan the universe.
   // Returns { indices, total }: indices = capped+sorted row ids (<= topLimit),
   // total = full count of rows passing the filters (the true universe count).
@@ -133,7 +178,8 @@ window.IncytrGlobalIndex = (function() {
 
     // --- effect-size + pvalue gates -------------------------------------
     const sPds = (f.sliderPds != null) ? Number(f.sliderPds) : null;
-    const sP = (f.sliderP != null) ? Number(f.sliderP) : null;
+    // pvalue may be absent for backbone grain indexes.
+    const sP = (f.sliderP != null && cols.pvalue) ? Number(f.sliderP) : null;
     const pdsSign = (f.pdsSign === "up" || f.pdsSign === "down") ? f.pdsSign : "both";
     const scoreGates = [];
     const scoreMinAbs = (f.scoreMinAbs && typeof f.scoreMinAbs === "object")
@@ -174,11 +220,14 @@ window.IncytrGlobalIndex = (function() {
     }
 
     // --- trajectory trend -> bit position in trajBits -------------------
+    // J-3: trajBits may be absent in backbone grain indexes.
     let trendBit = -1;
     const trend = (window.TrendFilter && f.trend)
       ? TrendFilter.payloadLabel(f.trend) : "";
     if (trend) {
-      const bi = gi.traj_label_vocab.indexOf(trend);
+      const trajVocab = gi.traj_label_vocab;
+      if (!trajVocab || !trajVocab.length) return { indices: [], total: 0 };
+      const bi = trajVocab.indexOf(trend);
       if (bi >= 0) trendBit = bi; else return { indices: [], total: 0 };
     }
 
@@ -192,22 +241,23 @@ window.IncytrGlobalIndex = (function() {
     }));
 
     // --- single scan over the universe ----------------------------------
-    const PDS = cols.PDS, PV = cols.pvalue;
+    const PDS = cols.PDS, PV = cols.pvalue;     // PV may be null for backbone grains
     const sid = cols.senderId, rid = cols.receiverId, cid = cols.contrastId;
+    // J-3: node id columns may be absent for backbone grains (null-guarded below).
     const lig = cols.ligandId, rec = cols.receptorId, em = cols.emId, tgt = cols.targetId;
-    const trj = cols.trajBits;
+    const trj = cols.trajBits;                  // null for backbone grains; only accessed when trendBit >= 0
     const matched = d.scratch;
     let m = 0;
     for (let i = 0; i < N; i++) {
       if (sPds != null && !(Math.abs(PDS[i]) >= sPds)) continue;
       if (pdsSign === "up" && !(PDS[i] > 0)) continue;
       if (pdsSign === "down" && !(PDS[i] < 0)) continue;
-      if (sP != null && !(PV[i] < sP)) continue;          // NaN pvalue excluded
+      if (sP != null && !(PV[i] < sP)) continue;          // NaN pvalue excluded; sP=null when PV absent
       if (!contrastOk[cid[i]]) continue;
       if (senderOk && !senderOk[sid[i]]) continue;
       if (receiverOk && !receiverOk[rid[i]]) continue;
       if (lowSender && (lowSender[sid[i]] || lowReceiver[rid[i]])) continue;
-      if (trendBit >= 0 && !((trj[i] >> trendBit) & 1)) continue;
+      if (trendBit >= 0 && !((trj[i] >> trendBit) & 1)) continue;  // trj non-null here (guarded above)
       if (scoreGates.length) {
         let ok = true;
         for (let g = 0; g < scoreGates.length; g++) {
@@ -220,7 +270,11 @@ window.IncytrGlobalIndex = (function() {
         let ok = true;
         for (let k = 0; k < tokMasks.length; k++) {
           const tm = tokMasks[k];
-          if (!(tm.gene[lig[i]] || tm.gene[rec[i]] || tm.gene[em[i]] || tm.gene[tgt[i]]
+          // J-3: absent node id columns resolve to index 0 (first gene in vocab).
+          // Correct: backbone grains don't emit the dropped node so its gene is irrelevant.
+          const lv = lig ? tm.gene[lig[i]] : false;
+          const tv = tgt ? tm.gene[tgt[i]] : false;
+          if (!(lv || tm.gene[rec[i]] || tm.gene[em[i]] || tv
                 || tm.sender[sid[i]] || tm.receiver[rid[i]] || tm.contrast[cid[i]])) {
             ok = false; break;
           }
@@ -229,7 +283,20 @@ window.IncytrGlobalIndex = (function() {
       }
       matched[m++] = i;
     }
-    const total = m;
+    let total = m;
+
+    // J-3: Timepoint-combination filter: applied post-scan, before cap so the
+    // cap applies to qualifying entities rather than the pre-filter universe.
+    let filteredMatched;
+    if ((f.timepointCombine || []).length) {
+      filteredMatched = _filterTimepointCombine(
+        Array.from(matched.subarray(0, total)), f, d);
+      total = filteredMatched.length;
+    } else {
+      filteredMatched = null;
+    }
+    // Resolve the final matched source (typed or plain array).
+    const matchedArr = filteredMatched || matched;
 
     // --- order + cap -----------------------------------------------------
     const topLimit = opts.limit === "all"
@@ -239,25 +306,29 @@ window.IncytrGlobalIndex = (function() {
     const key = f.sortKey || "rank";
     const dir = f.sortDir || 1;
 
-    // Default (rank): matched is already in ABS(PDS)-desc order == rank asc.
+    // Default (rank): matchedArr is already in ABS(PDS)-desc order == rank asc.
     if (key === "rank") {
       const k = Math.min(total, topLimit);
       if (dir > 0) {
         const out = new Array(k);
-        for (let t = 0; t < k; t++) out[t] = matched[t];
+        for (let t = 0; t < k; t++) out[t] = matchedArr[t];
         return { indices: out, total };
       }
-      // rank desc: the last k matched rows, reversed.
+      // rank desc: the last k rows, reversed.
       const out = new Array(k);
-      for (let t = 0; t < k; t++) out[t] = matched[total - 1 - t];
+      for (let t = 0; t < k; t++) out[t] = matchedArr[total - 1 - t];
       return { indices: out, total };
     }
 
     // Custom sort: numeric key per matched row, NaN always last (legacy rule).
     const keyV = new Float64Array(total);
     const keyOf = _keyFn(d, key);
-    for (let t = 0; t < total; t++) keyV[t] = keyOf(matched[t]);
-    const indices = _selectTopK(matched, keyV, total, dir, topLimit);
+    for (let t = 0; t < total; t++) keyV[t] = keyOf(matchedArr[t]);
+    // Wrap matchedArr as Int32Array-compatible for _selectTopK.
+    const matchedI32 = filteredMatched
+      ? new Int32Array(filteredMatched)
+      : matched;
+    const indices = _selectTopK(matchedI32, keyV, total, dir, topLimit);
     return { indices, total };
   }
 
@@ -265,22 +336,26 @@ window.IncytrGlobalIndex = (function() {
   function _keyFn(d, key) {
     const { cols, rank } = d;
     if (key === "PDS") return i => cols.PDS[i];
-    if (key === "pvalue") return i => cols.pvalue[i];
+    // J-3: pvalue absent for backbone grains → treat as NaN (falls to end).
+    if (key === "pvalue") return cols.pvalue ? (i => cols.pvalue[i]) : (() => NaN);
     if (cols[key] && d.gi.score_columns.indexOf(key) >= 0) {
       const col = cols[key]; return i => _f16(col[i]);
     }
     if (key === "_sender") { const c = cols.senderId, r = rank.sender; return i => r[c[i]]; }
     if (key === "_receiver") { const c = cols.receiverId, r = rank.receiver; return i => r[c[i]]; }
     if (key === "contrast") { const c = cols.contrastId, r = rank.contrast; return i => r[c[i]]; }
-    if (key === "Ligand") { const c = cols.ligandId, r = rank.gene; return i => r[c[i]]; }
+    // J-3: missing node id columns (backbone grains) sort all rows equal (rank 0).
+    if (key === "Ligand") { const c = cols.ligandId, r = rank.gene; return c ? (i => r[c[i]]) : (() => 0); }
     if (key === "Receptor") { const c = cols.receptorId, r = rank.gene; return i => r[c[i]]; }
     if (key === "EM") { const c = cols.emId, r = rank.gene; return i => r[c[i]]; }
-    if (key === "Target") { const c = cols.targetId, r = rank.gene; return i => r[c[i]]; }
+    if (key === "Target") { const c = cols.targetId, r = rank.gene; return c ? (i => r[c[i]]) : (() => 0); }
     if (key === "Path") {
-      // Composite ligand>receptor>EM>target locale-rank, base = gene count.
+      // Composite locale-rank; absent node columns contribute 0.
       const g = rank.gene, B = rank.geneSpan;
       const L = cols.ligandId, R = cols.receptorId, E = cols.emId, T = cols.targetId;
-      return i => ((g[L[i]] * B + g[R[i]]) * B + g[E[i]]) * B + g[T[i]];
+      const lf = L ? (i => g[L[i]]) : () => 0;
+      const tf = T ? (i => g[T[i]]) : () => 0;
+      return i => ((lf(i) * B + g[R[i]]) * B + g[E[i]]) * B + tf(i);
     }
     return () => 0;  // unknown key: stable no-op order
   }
@@ -330,13 +405,16 @@ window.IncytrGlobalIndex = (function() {
     return pos.map(t => matched[t]);
   }
 
+  // J-3: label_states / traj_label_vocab absent for backbone grains.
   function _labelState(code) {
-    const states = manifest().label_states; // ["", "DEG", "prG"]
+    const states = manifest() && manifest().label_states; // ["", "DEG", "prG"]
+    if (!states) return "";
     return (code > 0 && code < states.length) ? states[code] : "";
   }
 
   function _decodeTraj(bits) {
-    const vocab = manifest().traj_label_vocab;
+    const vocab = manifest() && manifest().traj_label_vocab;
+    if (!vocab) return "";
     const out = [];
     for (let i = 0; i < vocab.length; i++) if ((bits >> i) & 1) out.push(vocab[i]);
     return out.join(";");
@@ -344,16 +422,20 @@ window.IncytrGlobalIndex = (function() {
 
   // Hydrate one display row from the columns (decode ids/f16/bitfields). Called
   // only for the <=100 rows on the current page.
+  // J-3: backbone grains omit ligandId/targetId/labelBits/pvalue/trajBits.
+  // Dropped-node genes are null (renderer shows "—"); label/traj/pvalue are null.
   function materialize(i) {
     const d = _data;
     if (!d) return null;
     const { cols, gi } = d;
-    const Ligand = gi.gene_vocab[cols.ligandId[i]];
+    const Ligand   = cols.ligandId  ? gi.gene_vocab[cols.ligandId[i]]  : null;
     const Receptor = gi.gene_vocab[cols.receptorId[i]];
-    const EM = gi.gene_vocab[cols.emId[i]];
-    const Target = gi.gene_vocab[cols.targetId[i]];
-    const lb = cols.labelBits[i];
-    const pv = cols.pvalue[i];
+    const EM       = gi.gene_vocab[cols.emId[i]];
+    const Target   = cols.targetId  ? gi.gene_vocab[cols.targetId[i]]  : null;
+    const lb       = cols.labelBits ? cols.labelBits[i] : 0;
+    const pv       = cols.pvalue    ? cols.pvalue[i]    : null;
+    const trj      = cols.trajBits  ? cols.trajBits[i]  : 0;
+    const pathParts = [Ligand || "—", Receptor, EM, Target || "—"];
     const row = {
       rank: i + 1,                          // global rank == row position + 1
       _sender: gi.sender_vocab[cols.senderId[i]],
@@ -361,15 +443,15 @@ window.IncytrGlobalIndex = (function() {
       sender: gi.sender_vocab[cols.senderId[i]],
       receiver: gi.receiver_vocab[cols.receiverId[i]],
       Ligand, Receptor, EM, Target,
-      Path: `${Ligand}|${Receptor}|${EM}|${Target}`,
-      Ligand_label: _labelState(lb & 3),
+      Path: pathParts.join("|"),
+      Ligand_label:   _labelState(lb & 3),
       Receptor_label: _labelState((lb >> 2) & 3),
-      EM_label: _labelState((lb >> 4) & 3),
-      Target_label: _labelState((lb >> 6) & 3),
+      EM_label:       _labelState((lb >> 4) & 3),
+      Target_label:   _labelState((lb >> 6) & 3),
       contrast: gi.contrast_vocab[cols.contrastId[i]],
-      pvalue: (pv === pv) ? pv : null,
+      pvalue: (pv !== null && pv === pv) ? pv : null,
       PDS: cols.PDS[i],
-      traj_labels: _decodeTraj(cols.trajBits[i]),
+      traj_labels: _decodeTraj(trj),
     };
     for (const sc of gi.score_columns) row[sc] = _f16(cols[sc][i]);
     return row;
@@ -387,6 +469,8 @@ window.IncytrGlobalIndex = (function() {
   // Fast path for the Incytr drawer score plot in Top mode. It avoids fetching
   // a full sender/receiver parquet shard when the global typed-array index is
   // already mapped for the table.
+  // J-3: path is a "|"-joined string of the SURVIVING node genes (null nodes
+  // represented as "—") — the same Path format emitted by materialize().
   function pathRows(ident) {
     const d = _data;
     if (!d || !ident) return [];
@@ -404,19 +488,25 @@ window.IncytrGlobalIndex = (function() {
     }
     const sidWant = gi.sender_vocab.indexOf(sender);
     const ridWant = gi.receiver_vocab.indexOf(receiver);
-    const ligWant = gi.gene_vocab.indexOf(parts[0]);
+    if (sidWant < 0 || ridWant < 0) return _cachePathRows(key, []);
+
+    // Resolve each node: "—" means absent from this grain (always matches).
     const recWant = gi.gene_vocab.indexOf(parts[1]);
     const emWant  = gi.gene_vocab.indexOf(parts[2]);
-    const tgtWant = gi.gene_vocab.indexOf(parts[3]);
-    if (sidWant < 0 || ridWant < 0 || ligWant < 0 || recWant < 0 || emWant < 0 || tgtWant < 0) {
-      return _cachePathRows(key, []);
-    }
+    if (recWant < 0 || emWant < 0) return _cachePathRows(key, []);
+
+    const ligWant = (parts[0] === "—" || !cols.ligandId) ? -2 : gi.gene_vocab.indexOf(parts[0]);
+    const tgtWant = (parts[3] === "—" || !cols.targetId) ? -2 : gi.gene_vocab.indexOf(parts[3]);
+    if (ligWant === -1 || tgtWant === -1) return _cachePathRows(key, []);
+
     const out = [];
     const sid = cols.senderId, rid = cols.receiverId;
     const lig = cols.ligandId, rec = cols.receptorId, em = cols.emId, tgt = cols.targetId;
     for (let i = 0; i < d.nrows; i++) {
       if (sid[i] !== sidWant || rid[i] !== ridWant) continue;
-      if (lig[i] !== ligWant || rec[i] !== recWant || em[i] !== emWant || tgt[i] !== tgtWant) continue;
+      if (rec[i] !== recWant || em[i] !== emWant) continue;
+      if (ligWant >= 0 && lig && lig[i] !== ligWant) continue;
+      if (tgtWant >= 0 && tgt && tgt[i] !== tgtWant) continue;
       out.push(materialize(i));
     }
     return _cachePathRows(key, out);

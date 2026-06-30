@@ -43,18 +43,11 @@ const TAB_MANIFEST = {
       return true;
     },
   },
-  incytrheatmap: {
-    group: "landscape", label: "Incytr Heatmap",
+  incytr: {
+    group: "landscape", label: "Incytr",
     filters: [], requires: [], modes: ["mouse"],
-    wire: () => wireIncytrHeatmap(),
-    render: () => renderIncytrHeatmap(),
-    rerenderOn: { filters: false, selection: [] },
-  },
-  incytrpathways: {
-    group: "drilldown", label: "Incytr Pathways",
-    filters: [], requires: [], modes: ["mouse"],
-    wire: () => wireIncytrPathways(),
-    render: () => renderIncytrPathways(),
+    wire: () => { wireIncytrHeatmap(); wireIncytrPathways(); wireIncytrPanel(); },
+    render: () => _renderIncytrTab(),
     rerenderOn: { filters: false, selection: [] },
   },
 };

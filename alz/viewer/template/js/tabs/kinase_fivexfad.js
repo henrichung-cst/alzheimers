@@ -56,7 +56,7 @@ const _F5State = {
   wmbMin: 0,
   nsigMin: 0,
   pattern: "",
-  sortCol: "peakAbsNes",
+  sortCol: "profile",
   sortAsc: false,
   auditTab: "mea-score",
   auditAge: null,
@@ -354,13 +354,26 @@ function _f5WmbBadge(group) {
 function _f5TrendMatches(group, pattern) {
   const pat = (window.TrendFilter && TrendFilter.normalize) ? TrendFilter.normalize(pattern || "") : (pattern || "");
   if (!pat) return true;
+  // Match the displayed pill exactly.
   const vals = _F5_AGES.map(age => {
-    const row = group.rows.get(age);
+    const row = group.rows.get(Number(age));
     const v = row ? _f5Num(row.NES) : null;
     return v == null ? null : v;
   });
-  if (window.TrendFilter && TrendFilter.vectorMatches) return TrendFilter.vectorMatches(vals, pat);
+  if (window.TrendFilter && TrendFilter.classify) return TrendFilter.classify(vals) === pat;
   return true;
+}
+
+// Trend pill cell for a 5xFAD row (single-genotype TG across ages).
+const _F5_TREND_RANK = { always_up: 0, monotonic_up: 1, mixed: 2, monotonic_down: 3, always_down: 4 };
+function _f5TrendRank(r) {
+  return (r.trend && _F5_TREND_RANK[r.trend] != null) ? _F5_TREND_RANK[r.trend] : 99;
+}
+function _f5TrendPillCell(r) {
+  if (!r.trend) return `<td class="ke-trend"><span class="muted">—</span></td>`;
+  const text = (window.TrendFilter && TrendFilter.label) ? TrendFilter.label(r.trend) : r.trend;
+  return `<td class="ke-trend"><span class="ke-trend-pill ke-trend-${r.trend}" ` +
+    `title="NES trend across ages: ${_f5Esc(text)}">${_f5Esc(text)}</span></td>`;
 }
 
 function _f5EnsureIndexes() {
@@ -512,7 +525,15 @@ function _f5Metric(group, ages) {
     const q = _f5Num(row.FDR);
     if (q != null && q < fdr) sigCount += 1;
   }
-  return {peakAbsNes, peakSignedNes, peakNes: peakSignedNes, sigCount};
+  // NES trend across the full ordered age set (the displayed pill + sort key).
+  // peakAbsNes/peakNes stay as the NES-Profile column's magnitude sort key.
+  const trendVec = _F5_AGES.map(age => {
+    const row = group.rows.get(Number(age));
+    const v = row ? _f5Num(row.NES) : null;
+    return v == null ? null : v;
+  });
+  const trend = (window.TrendFilter && TrendFilter.classify) ? TrendFilter.classify(trendVec) : null;
+  return {peakAbsNes, peakSignedNes, peakNes: peakSignedNes, sigCount, trend};
 }
 
 function _f5GroupPasses(group, ages, metric) {
@@ -548,6 +569,8 @@ function _f5FilteredRows() {
     let va, vb;
     if (col === "profile" || col === "peakAbsNes") {
       return numCmp(a.peakNes, b.peakNes, asc ? -1 : 1);
+    } else if (col === "trend") {
+      va = _f5TrendRank(a); vb = _f5TrendRank(b);
     } else if (col === "n_attributed_celltypes") {
       va = _f5CellTypeCount(a);
       vb = _f5CellTypeCount(b);
@@ -679,8 +702,8 @@ function _f5SyncControls() {
 }
 
 function exportFiveXFADCsv() {
-  const headers = ["Kinase","Gene","Family","Tissue","Residue","n_sig","peak_NES","MouseC2_snrna","WMB_tier","Conf","n_backbones","n_paths"];
-  const keys    = ["kinase","gene_symbol","family","tissue","residue_type","sigCount","peakNes","_exportF5Snrna","_exportWmbTier","_exportConf","n_backbones","n_paths"];
+  const headers = ["Kinase","Gene","Family","Tissue","Residue","n_sig","trend","MouseC2_snrna","WMB_tier","Conf","n_backbones","n_paths"];
+  const keys    = ["kinase","gene_symbol","family","tissue","residue_type","sigCount","trend","_exportF5Snrna","_exportWmbTier","_exportConf","n_backbones","n_paths"];
   csvDownload(csvSerialize(headers, keys, _f5Visible), exportFilename(COHORT_LABELS.fivexfad, "kinase"));
 }
 
@@ -711,7 +734,7 @@ function wireFiveXFADKinase() {
     Object.assign(_F5State, {
       search: "", tissue: "", age: "", celltype: "", confidence: "",
       fivexfadMin: 0, wmbMin: 0, nsigMin: 0, pattern: "",
-      sortCol: "peakAbsNes", sortAsc: false,
+      sortCol: "profile", sortAsc: false,
       auditTab: "mea-score", auditAge: null,
     });
     _f5SetSelectedKey(null);
@@ -811,7 +834,7 @@ function renderFiveXFADKinase() {
       <td>${_f5Esc(r.residue_type || "")}</td>
       <td>${_f5Profile(r, maxAbs)}</td>
       <td>${_f5AgreementProfile(r)}</td>
-      <td class="attr-num">${r.peakSignedNes == null ? '<span class="muted">—</span>' : (r.peakSignedNes > 0 ? "+" : "") + r.peakSignedNes.toFixed(2)}</td>
+      ${_f5TrendPillCell(r)}
       <td class="attr-num">${r.sigCount}<span class="muted" style="font-size:10px;"> / ${denom}</span></td>
       <td>${_f5CellTypesCell(r)}</td>
       <td style="text-align:center;">${_f5NativeBadge(r)}</td>

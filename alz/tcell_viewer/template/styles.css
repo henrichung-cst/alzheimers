@@ -313,6 +313,17 @@ main#app-main { padding:14px; }
   position:sticky; top:0; z-index:1; }
 .attr-decomp-ols-table td { padding:4px 8px; border-bottom:1px solid #f1f5f9; }
 .attr-decomp-ols-table td.attr-num { text-align:right; font-variant-numeric:tabular-nums; }
+
+/* Kinase Explorer — NES trend pill. Up = red, down = blue, mixed = neutral;
+   "always" = saturated tone, "monotonic" = lighter tone. */
+.ke-trend { text-align:center; white-space:nowrap; }
+.ke-trend-pill { display:inline-block; padding:1px 6px; border-radius:9px; font-size:10px;
+  font-weight:600; line-height:1.4; }
+.ke-trend-always_up      { background:#c53030; color:#fff; }
+.ke-trend-monotonic_up   { background:#fdd; color:#9b2c2c; }
+.ke-trend-always_down    { background:#2b6cb0; color:#fff; }
+.ke-trend-monotonic_down { background:#dbeafe; color:#2c5282; }
+.ke-trend-mixed          { background:#edf2f7; color:#4a5568; }
 .attr-decomp-ols-table td.motif-mono { font-family:var(--font-mono, monospace); font-size:11px; }
 @media (max-width:1100px) {
   .kinase-audit-layout, .audit-source-catalog { grid-template-columns:1fr; }
@@ -329,6 +340,11 @@ main#app-main { padding:14px; }
 .ke-toolbar.ke-toolbar-multi { flex-wrap:wrap; row-gap:6px; }
 .ke-toolbar input { padding:3px 6px; border:1px solid var(--border);
   border-radius:3px; font-size:12px; width:220px; }
+/* The HTML `hidden` attribute must always win — see the unified viewer's
+   styles.css. Without this, the `.ke-filter-label` display rule defeats
+   `[hidden]` and a hidden filter label (e.g. the grain selector, which the
+   t-cell cohort never populates) stays visible. */
+[hidden] { display:none !important; }
 .ke-filter-label { display:inline-flex; align-items:center; gap:4px;
   font-size:11px; color:#546e7a; }
 .ke-filter-label select { padding:2px 4px; border:1px solid var(--border);
@@ -347,6 +363,26 @@ main#app-main { padding:14px; }
   line-height:22px; }
 .ih-timeline-step:hover:not(:disabled) { background:#e3f2fd; border-color:#90caf9; }
 .ih-timeline-step:disabled { opacity:0.35; cursor:not-allowed; }
+/* ---------------------------------------------------------------------------
+ * Incytr unified screen layout (J-1)
+ * --------------------------------------------------------------------------- */
+.incytr-layout { display:flex; gap:0; align-items:stretch; min-height:0; }
+.incytr-filter-panel { flex:0 0 auto; width:260px; min-width:200px; max-width:320px;
+  overflow-y:auto; overflow-x:hidden; padding:10px 12px;
+  border-right:1px solid var(--border); display:flex; flex-direction:column; gap:6px; }
+.incytr-filter-panel .ke-filter-label { display:flex; flex-direction:column; align-items:flex-start;
+  gap:3px; width:100%; }
+.incytr-filter-panel .ke-filter-label select,
+.incytr-filter-panel .ke-filter-label input { width:100%; max-width:none; box-sizing:border-box; }
+.incytr-main-pane { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; padding:10px 14px; }
+.incytr-view-switch { display:flex; gap:4px; margin-bottom:8px; }
+.incytr-view-btn { padding:4px 14px; font-size:12px; border:1px solid #b0bec5;
+  border-radius:3px; background:#fff; color:#546e7a; cursor:pointer; }
+.incytr-view-btn.active { background:#1f4ea3; color:#fff; border-color:#1f4ea3; font-weight:600; }
+.incytr-view-btn:hover:not(.active) { background:#eceff1; }
+.incytr-pane { flex:1 1 auto; min-height:0; }
+#incytr-hm-controls, #incytr-ip-controls { display:flex; flex-direction:column; gap:6px; }
+#incytr-hm-controls .ke-filter-reset, #incytr-ip-controls .ke-filter-reset { width:100%; text-align:center; }
 @media (max-width:720px) {
   .ih-timeline-control { flex-wrap:wrap; }
   .ih-timeline-label { flex:1 0 100%; }

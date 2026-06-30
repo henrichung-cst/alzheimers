@@ -153,19 +153,6 @@ function _kxBuildIndexes() {
       gene: K.gene_symbol[i] || "",
       family: famMap[K.name[i]] || "",
       residue: (K.residue_type && K.residue_type[i]) || "ST",
-      // Per-genotype scalars (no pooled peak_NES/trajectory/n_sig_contrasts).
-      peak_NES_App:     K.peak_NES_App     ? K.peak_NES_App[i]     : null,
-      peak_NES_Tau:     K.peak_NES_Tau     ? K.peak_NES_Tau[i]     : null,
-      peak_NES_ApTt:    K.peak_NES_ApTt    ? K.peak_NES_ApTt[i]    : null,
-      peak_contrast_App:  K.peak_contrast_App  ? (K.peak_contrast_App[i]  || "") : "",
-      peak_contrast_Tau:  K.peak_contrast_Tau  ? (K.peak_contrast_Tau[i]  || "") : "",
-      peak_contrast_ApTt: K.peak_contrast_ApTt ? (K.peak_contrast_ApTt[i] || "") : "",
-      n_sig_App:  K.n_sig_App  ? (K.n_sig_App[i]  || 0) : 0,
-      n_sig_Tau:  K.n_sig_Tau  ? (K.n_sig_Tau[i]  || 0) : 0,
-      n_sig_ApTt: K.n_sig_ApTt ? (K.n_sig_ApTt[i] || 0) : 0,
-      trajectory_App:  K.trajectory_App  ? (K.trajectory_App[i]  || "") : "",
-      trajectory_Tau:  K.trajectory_Tau  ? (K.trajectory_Tau[i]  || "") : "",
-      trajectory_ApTt: K.trajectory_ApTt ? (K.trajectory_ApTt[i] || "") : "",
       n_celltype_candidates: K.n_celltype_candidates ? (K.n_celltype_candidates[i] || 0) : 0,
       _nes: nesByC, _fdr: fdrByC,
     });
@@ -346,10 +333,6 @@ function _kxBuildIndexes() {
     const residue = key.slice(bar + 1);
     _KX_ROWS.push({
       kid: human.kid, name, gene: "", family: famMap[name] || "", residue,
-      peak_NES_App: null, peak_NES_Tau: null, peak_NES_ApTt: null,
-      peak_contrast_App: "", peak_contrast_Tau: "", peak_contrast_ApTt: "",
-      n_sig_App: 0, n_sig_Tau: 0, n_sig_ApTt: 0,
-      trajectory_App: "", trajectory_Tau: "", trajectory_ApTt: "",
       n_celltype_candidates: 0,
       _nes: {}, _fdr: {}, _human: human, _humanOnly: true,
     });
@@ -362,10 +345,6 @@ function _kxBuildIndexes() {
       if (seen.has(key)) continue;
       _KX_ROWS.push({
         kid: null, name: rec.kinase, gene: rec.gene || "", family: famMap[rec.kinase] || "", residue: rec.residue,
-        peak_NES_App: null, peak_NES_Tau: null, peak_NES_ApTt: null,
-        peak_contrast_App: "", peak_contrast_Tau: "", peak_contrast_ApTt: "",
-        n_sig_App: 0, n_sig_Tau: 0, n_sig_ApTt: 0,
-        trajectory_App: "", trajectory_Tau: "", trajectory_ApTt: "",
         n_celltype_candidates: 0,
         _nes: {}, _fdr: {}, _human: null, _humanOnly: true, _f5Only: true,
       });
@@ -1346,9 +1325,14 @@ function _kxSortRows(rows, s) {
     } else if (s.sortKey === "f5_med") {
       av = a._f5Nes; bv = b._f5Nes;
     } else {
-      // Default fallback: overall peak (max-|NES| across the 3 per-genotype peaks).
-      const pa = songOverallPeak(a), pb = songOverallPeak(b);
-      av = pa.nes; bv = pb.nes;
+      // Default fallback: strongest MouseC1 median NES across the 3 genotypes.
+      const _absMax = r => {
+        const xs = [r._mNes_App, r._mNes_Tau, r._mNes_ApTt]
+          .filter(x => x != null && isFinite(x));
+        if (!xs.length) return null;
+        return xs.reduce((m, x) => Math.abs(x) > Math.abs(m) ? x : m, xs[0]);
+      };
+      av = _absMax(a); bv = _absMax(b);
     }
     return numCmp(av, bv, s.sortDir > 0 ? 1 : -1);
   });

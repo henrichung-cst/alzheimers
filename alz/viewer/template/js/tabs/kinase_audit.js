@@ -1,19 +1,16 @@
 
 function _selectedAuditContrast(K, ki) {
-  // Audit panel's Contrast picker drives this. Falls back to the overall peak
-  // contrast (max-|NES| across the 3 per-genotype peaks) when picker = "ALL".
-  // Independent of the left-list KinaseFilter.
+  // Audit panel's Contrast picker drives this. Falls back to the strongest
+  // contrast (max-|NES| across all contrasts, computed live from the NES row)
+  // when picker = "ALL". Independent of the left-list KinaseFilter.
   const f = Store.state && Store.state.filters && Store.state.filters.contrast;
   if (f && f !== "ALL" && CONTRASTS.indexOf(f) >= 0) return f;
-  const row = {
-    peak_NES_App:     K.peak_NES_App     ? K.peak_NES_App[ki]     : null,
-    peak_NES_Tau:     K.peak_NES_Tau     ? K.peak_NES_Tau[ki]     : null,
-    peak_NES_ApTt:    K.peak_NES_ApTt    ? K.peak_NES_ApTt[ki]    : null,
-    peak_contrast_App:  K.peak_contrast_App  ? (K.peak_contrast_App[ki]  || "") : "",
-    peak_contrast_Tau:  K.peak_contrast_Tau  ? (K.peak_contrast_Tau[ki]  || "") : "",
-    peak_contrast_ApTt: K.peak_contrast_ApTt ? (K.peak_contrast_ApTt[ki] || "") : "",
-  };
-  return songOverallPeak(row).contrast || CONTRASTS[0];
+  let best = CONTRASTS[0] || "", bestAbs = -1;
+  for (const c of CONTRASTS) {
+    const v = K["NES_" + c] ? K["NES_" + c][ki] : null;
+    if (v != null && isFinite(v) && Math.abs(v) > bestAbs) { bestAbs = Math.abs(v); best = c; }
+  }
+  return best;
 }
 
 function _siteOlsColumns(contrast) {

@@ -40,6 +40,7 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 echo "=== regenerating sce4 reference pairs (UNFILTERED, nboot=0) ==="
 NBOOT=0 NPAIR_WORKERS=1 \
 OUTPUT_DIR_OVERRIDE="$OUT" \
+BACKBONE_OUT_DIR="" \
 PAIR_SUBSET="Microglia:Cholinergic-Neurons,${NDNF}:${NDNF}" \
   pixi run Rscript "$DRIVER" ma_2mo_AppP ma_2mo_WTyp
 

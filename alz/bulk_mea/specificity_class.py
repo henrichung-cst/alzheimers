@@ -16,7 +16,7 @@ types (vascular = endothelial + pericyte + …) stay split — the native cluste
 the correct unit there. The collapse is never silent: the viewer shows a collapsed
 unit as an expandable parent over its child clusters.
 
-Design (see ``docs/plans/cross_reference_exclusivity_regrouping.md``):
+Design (see ``docs/plans/attribution/cross_reference_exclusivity_regrouping.md``):
 
 * **Within-cohort Song is the primary** and sets the tier. Fold the all-label
   ``song_concentration`` onto the specificity units and measure exclusivity by the

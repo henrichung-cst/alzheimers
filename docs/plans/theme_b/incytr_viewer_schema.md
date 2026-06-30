@@ -1,6 +1,11 @@
-# Incytr viewer — current schema (baseline, pre-refactor)
+# Incytr viewer — baseline schema (pre-merge snapshot)
 
-Ground-truth audit of the two shared Incytr tabs as they exist today. Source of truth, not
+> **HISTORICAL (pre-refactor).** This captures the **two separate** Incytr tabs as they were before
+> the merge. They are now **one** screen and the four gaps in §4 are resolved. Kept as the baseline
+> the refactor started from; for current behavior see
+> [`backbone_incytr_track.md`](backbone_incytr_track.md).
+
+Ground-truth audit of the two shared Incytr tabs as they existed at baseline. Source of truth, not
 recollection. Both tabs live in **`alz/viewer_shared/template/js/tabs/`** (shared by the unified
 *and* t-cell viewers — edits propagate to both). State is shared between them via `IncytrFilter`;
 a heatmap-cell click seeds the table's filters and switches tabs.
@@ -104,9 +109,9 @@ Top mode: `IncytrGlobalIndex` (complete-universe typed-array index, `rank_by = a
    free inputs in pathways, snapped-to-grid in heatmap). The refactor consolidates to one uniform
    surface.
 
-4. **Backbone dimension is absent.** The Wave-1 `backbone_rem_t.parquet` (R-EM-T) and its sibling
-   groupings (L-R-EM, R-EM) are not wired into either tab. The desired filter — *restrict to
-   pathways/backbones present at all 3 timepoints, then compare PDS* — does not exist yet. The
-   closest current proxies: `Trend = always-up/always-down` (requires all 3 timepoints present) and
-   the `Recur in` disease-AND-gate (recurrence across *diseases*, not *timepoints*). A genuine
-   **n-timepoints-present** filter at a selectable backbone grain (L-R-EM / R-EM-T / R-EM) is new.
+4. **Backbone dimension is absent.** At baseline there is no backbone grain in either tab. The
+   desired filter — *restrict to pathways/backbones present at all 3 timepoints, then compare PDS* —
+   does not exist yet. The closest proxies: `Trend = always-up/always-down` (requires all 3
+   timepoints present) and the `Recur in` disease-AND-gate (recurrence across *diseases*, not
+   *timepoints*). A genuine within-disease timepoint filter at a selectable backbone grain
+   (L-R-EM / R-EM-T / R-EM) is new — delivered by the refactor; see `backbone_incytr_track.md`.

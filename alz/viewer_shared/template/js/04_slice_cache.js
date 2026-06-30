@@ -219,13 +219,52 @@ const SliceCache = (function(){
     return p;
   }
 
+  // B-6: backbone spine index — grain -> Map<spine_key, [[sender,receiver],...]>.
+  // Loaded on-demand only when widen mode is activated in the "Expands to" drawer.
+  // Each grain has its own sidecar (backbone_spine_index.json.gz) fetched once
+  // and cached per grain; URL sourced from payload backbone_grains[grain].backbone_spine_index.url.
+  const siCache = new Map();     // grain -> Map<spine_key, [[s,r],...]>
+  const siInflight = new Map();  // grain -> Promise<Map|null>
+
+  async function loadBackboneSpineIndex(grain) {
+    _ensureInit();
+    if (siCache.has(grain)) {
+      const v = siCache.get(grain); _lruTouch(siCache, grain, v); return v;
+    }
+    if (siInflight.has(grain)) return siInflight.get(grain);
+    // Resolve URL from payload — read lazily so SliceCache works before PAYLOAD loads.
+    const block = (typeof ViewerPayload !== "undefined" && ViewerPayload.incytr)
+      ? ViewerPayload.incytr() : null;
+    const grainBlock = block && block.backbone_grains && block.backbone_grains[grain];
+    const meta = grainBlock && grainBlock.backbone_spine_index;
+    const url = meta && meta.url;
+    if (!url) return null;
+    const p = (async () => {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`spine index fetch ${url} -> ${resp.status}`);
+      // Same DecompressionStream pattern as gene_node_index_shard and IncytrGlobalIndex.
+      const blob = await resp.blob();
+      const stream = blob.stream().pipeThrough(new DecompressionStream("gzip"));
+      const data = JSON.parse(await new Response(stream).text());
+      const map = new Map(Object.entries(data.spine_to_pairs || {}));
+      _lruTouch(siCache, grain, map);
+      siInflight.delete(grain);
+      return map;
+    })();
+    siInflight.set(grain, p);
+    p.catch(() => { siInflight.delete(grain); });
+    return p;
+  }
+
   return { loadBackboneBucket, backboneEdges, loadDecompOls, loadIncytrShard,
+           loadBackboneSpineIndex,
            loadSongConcordance, loadHumanPerdonorSubstrate,
            get backboneCacheSize(){ return bCache.size; },
            get decompOlsCacheSize(){ return dCache.size; },
            get incytrCacheSize(){ return iCache.size; },
            get songConcordanceCacheSize(){ return sCache.size; },
-           get humanPerdonorCacheSize(){ return hCache.size; } };
+           get humanPerdonorCacheSize(){ return hCache.size; },
+           get backboneSpineIndexCacheSize(){ return siCache.size; } };
 })();
 window.SliceCache = SliceCache;
 

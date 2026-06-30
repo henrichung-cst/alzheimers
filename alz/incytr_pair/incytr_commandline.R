@@ -66,6 +66,21 @@ if (!nzchar(OUTPUT_DIR)) {
 }
 dir.create(OUTPUT_DIR, recursive = TRUE, showWarnings = FALSE)
 
+# BACKBONE_OUT_DIR: root dir for backbone grain shards, parallel to wide/.
+# Set to empty string to disable backbone emission (used by verify-incytr-sce4
+# which only checks path parity).  When not set at all, defaults to the
+# canonical backbone path.  Distinction between "not set" (NA) and "set to
+# empty string" (deliberate disable) is made via unset=NA_character_.
+.backbone_env <- Sys.getenv("BACKBONE_OUT_DIR", unset = NA_character_)
+BACKBONE_OUT_DIR <- if (is.na(.backbone_env)) {
+  # Not set in environment → canonical default
+  file.path(REPO_ROOT, "outputs", "reports", "incytr_pair_mode", "backbone")
+} else {
+  # Explicitly set (including to "" for deliberate disable)
+  .backbone_env
+}
+rm(.backbone_env)
+
 # =====================================================================
 # Parallelism / memory config.
 #
@@ -621,7 +636,8 @@ process_pair <- function(i) {
       nboot             = NBOOT,
       seed.use          = 1L,
       perm.n.cores      = N_PERM_WORKERS,
-      expr_bygroup      = expr_substrate
+      expr_bygroup      = expr_substrate,
+      backbone_out_dir  = if (nzchar(BACKBONE_OUT_DIR)) BACKBONE_OUT_DIR else NULL
     ),
     error = function(e) {
       warning(sprintf("[pair-driver] Cal_pairwise_grid failed for %s -> %s: %s",
@@ -745,3 +761,43 @@ file.rename(tmp_out, out_path)
 sz <- file.info(out_path)$size
 cat(sprintf("[pair-driver] wrote %s (%.1f MB)\n", out_path, sz / 1e6))
 unlink(shard_dir, recursive = TRUE)
+
+# =====================================================================
+# Backbone shard concat — one parquet per grain, parallel to wide/ output.
+# Shards written by .emit_backbone_shards inside Cal_pairwise_grid are
+# concatenated here in the same DuckDB-stream pattern as path shards.
+# Skipped when BACKBONE_OUT_DIR is empty (e.g. during verify-incytr-sce4).
+# =====================================================================
+if (nzchar(BACKBONE_OUT_DIR)) {
+  contrast_key    <- paste(condition1, condition2, sep = "_")
+  backbone_grains <- c("R-EM", "L-R-EM", "R-EM-T")
+  for (grain in backbone_grains) {
+    bshard_dir <- file.path(BACKBONE_OUT_DIR, grain, ".shards", contrast_key)
+    bshards    <- if (dir.exists(bshard_dir))
+                    sort(list.files(bshard_dir, pattern = "\\.parquet$", full.names = TRUE))
+                  else character(0)
+    if (length(bshards) == 0L) {
+      cat(sprintf("[pair-driver] backbone %s/%s: no shards, skipping concat\n",
+                  grain, contrast_key))
+      next
+    }
+    bout_path <- file.path(BACKBONE_OUT_DIR, grain,
+                           paste0(condition1, "_", condition2, "_backbone_output.parquet"))
+    btmp_out  <- paste0(bout_path, ".tmp")
+    dir.create(dirname(bout_path), recursive = TRUE, showWarnings = FALSE)
+    bcon <- DBI::dbConnect(duckdb::duckdb())
+    DBI::dbExecute(bcon, "PRAGMA memory_limit='10GB'")
+    DBI::dbExecute(bcon, sprintf("PRAGMA temp_directory='%s'",
+                                 Sys.getenv("DUCKDB_TEMP_DIR",
+                                            file.path(Sys.getenv("HOME"), ".cache/duckdb"))))
+    DBI::dbExecute(bcon, sprintf(
+      "COPY (SELECT * FROM read_parquet([%s], union_by_name=true)) TO '%s' (FORMAT PARQUET, COMPRESSION ZSTD)",
+      paste(sprintf("'%s'", bshards), collapse = ", "), btmp_out))
+    DBI::dbDisconnect(bcon, shutdown = TRUE)
+    file.rename(btmp_out, bout_path)
+    bsz <- file.info(bout_path)$size
+    cat(sprintf("[pair-driver] backbone %s/%s: wrote %s (%.1f MB, %d shards)\n",
+                grain, contrast_key, bout_path, bsz / 1e6, length(bshards)))
+    unlink(bshard_dir, recursive = TRUE)
+  }
+}

@@ -637,7 +637,8 @@ function _openIncytrPathwaysFromBar(series, genotype, timepoint) {
     sliderP:    (snap && !snap.open) ? snap.value : null,
     sliderPds:  apSnap && apSnap.value > 0 ? apSnap.value : null,
   });
-  Store.dispatch({type:"SET_VIEW", key:"activeTab", value:"incytrpathways"});
+  if (typeof _incytrPane !== "undefined") _incytrPane = "table";
+  Store.dispatch({type:"SET_VIEW", key:"activeTab", value:"incytr"});
 }
 
 function _openKinaseDeepDiveWithWhitelist(kinaseIds, sourceLabel, ctx) {

@@ -14,7 +14,7 @@ Inputs:
   outputs/reports/kinase_attribution/unified_attribution_full.csv
 
 Outputs (all under outputs/reports/attribution_recovery/):
-  kinase_activity_matrix.csv    -- wide NES/FDR + trajectory label (1 row/kinase)
+  kinase_activity_matrix.csv    -- wide NES/FDR + sig_conditions (1 row/kinase)
   celltype_evidence_table.csv   -- WMB-gated static evidence (1 row/kinase×celltype)
   kinase_hypothesis_table.csv   -- kinase-first synthesis (1 row/kinase)
 """
@@ -43,9 +43,6 @@ OUTPUT_DIR = config.ATTRIBUTION_RECOVERY_OUTPUT_DIR
 CONTRASTS = list(config.CONTRAST_COEFS.keys())
 NES_COLS = [f"{c}_NES" for c in CONTRASTS]
 FDR_COLS = [f"{c}_FDR" for c in CONTRASTS]
-
-_SUSTAINED_RATIO_THRESH = 1.5
-
 
 def _load_gene_symbol_map(kinases) -> dict[str, str]:
     """Load the canonical kinase-abbreviation -> gene-symbol map."""
@@ -183,7 +180,7 @@ def _build_celltype_evidence(uaf_full):
 
 
 # ---------------------------------------------------------------------------
-# Trajectory classification
+# Significant-conditions summary
 # ---------------------------------------------------------------------------
 
 def _get_sig_conditions(row):
@@ -193,55 +190,6 @@ def _get_sig_conditions(row):
         if row[f"{c}_FDR"] < config.MEA_FDR_THRESH:
             sig_conds.add(c.rsplit("_", 1)[0])
     return ",".join(sorted(sig_conds)) if sig_conds else ""
-
-
-def _classify_trajectory(row, g_contrasts):
-    """Classify temporal pattern for a genotype's contrasts.
-
-    Takes ``g_contrasts`` — the list of contrasts belonging to one genotype
-    (e.g. ["App_2mo","App_4mo","App_6mo"]).  The genotype prefix is inferred
-    from the first element.
-
-    Labels (checked in order):
-      none            -- no significant contrasts within this genotype
-      single_contrast -- exactly 1 significant contrast within this genotype
-      progressive     -- |NES| monotonically increases 2mo->4mo->6mo
-      declining       -- |NES| monotonically decreases
-      peaked          -- 4mo has highest |NES|
-      sustained       -- all 3 timepoints significant, max/min |NES| <= threshold
-      early           -- only 2mo significant
-      late            -- only 6mo significant
-      mixed           -- everything else
-    """
-    g_fdr = [row[f"{c}_FDR"] for c in g_contrasts]
-    n_sig = sum(1 for f in g_fdr if f < config.MEA_FDR_THRESH)
-    if n_sig == 0:
-        return "none"
-    if n_sig == 1:
-        return "single_contrast"
-
-    # Genotype prefix is the shared prefix of all g_contrasts.
-    peak_cond = g_contrasts[0].rsplit("_", 1)[0]
-    tp_keys = [f"{peak_cond}_2mo", f"{peak_cond}_4mo", f"{peak_cond}_6mo"]
-    nes = [abs(row[f"{k}_NES"]) for k in tp_keys]
-    sig = [row[f"{k}_FDR"] < config.MEA_FDR_THRESH for k in tp_keys]
-    n2, n4, n6 = nes
-    s2, s4, s6 = sig
-
-    if n2 < n4 < n6:
-        return "progressive"
-    if n2 > n4 > n6:
-        return "declining"
-    if n4 > n2 and n4 > n6:
-        return "peaked"
-    if s2 and s4 and s6:
-        if min(nes) > 0 and max(nes) / min(nes) <= _SUSTAINED_RATIO_THRESH:
-            return "sustained"
-    if s2 and not s4 and not s6:
-        return "early"
-    if not s2 and not s4 and s6:
-        return "late"
-    return "mixed"
 
 
 # ---------------------------------------------------------------------------
@@ -264,39 +212,6 @@ def _build_kinase_activity_matrix(mea, gene_map):
 
     t1["sig_conditions"] = t1.apply(_get_sig_conditions, axis=1)
 
-    # Per-genotype scalars: peak_NES_{g}, peak_contrast_{g}, n_sig_{g}, trajectory_{g}
-    # Split key: genotype = contrast.split("_")[0] in config.DISEASE_GROUPS
-    per_genotype_cols = []
-    for g in config.DISEASE_GROUPS:
-        g_contrasts = [c for c in CONTRASTS if c.split("_")[0] == g]
-        g_nes_cols = [f"{c}_NES" for c in g_contrasts if f"{c}_NES" in t1.columns]
-        g_fdr_cols = [f"{c}_FDR" for c in g_contrasts if f"{c}_FDR" in t1.columns]
-
-        if g_nes_cols:
-            t1[f"peak_NES_{g}"] = t1[g_nes_cols].apply(
-                lambda r: max(r, key=abs), axis=1)
-            t1[f"peak_contrast_{g}"] = t1.apply(
-                lambda r, gc=g_contrasts: max(
-                    gc, key=lambda c: abs(r[f"{c}_NES"]) if f"{c}_NES" in r.index else 0
-                ), axis=1)
-        else:
-            t1[f"peak_NES_{g}"] = float("nan")
-            t1[f"peak_contrast_{g}"] = ""
-
-        if g_fdr_cols:
-            t1[f"n_sig_{g}"] = (t1[g_fdr_cols] < config.MEA_FDR_THRESH).sum(axis=1)
-        else:
-            t1[f"n_sig_{g}"] = 0
-
-        g_contrasts_present = [c for c in g_contrasts if f"{c}_FDR" in t1.columns]
-        t1[f"trajectory_{g}"] = t1.apply(
-            lambda r, gc=g_contrasts_present: _classify_trajectory(r, gc) if gc else "none",
-            axis=1)
-
-        per_genotype_cols += [
-            f"peak_NES_{g}", f"peak_contrast_{g}", f"n_sig_{g}", f"trajectory_{g}"
-        ]
-
     t1["gene_symbol"] = t1["kinase"].map(gene_map)
 
     # Carry residue type through so downstream consumers can stratify
@@ -313,7 +228,7 @@ def _build_kinase_activity_matrix(mea, gene_map):
 
     return t1[["kinase", "gene_symbol", "residue_type"] +
               present_nes + present_fdr +
-              ["sig_conditions"] + per_genotype_cols]
+              ["sig_conditions"]]
 
 
 # ---------------------------------------------------------------------------
@@ -391,12 +306,7 @@ def _build_kinase_hypothesis_table(t1, t2):
     else:
         high_conf = pd.Series(dtype=bool, name="has_high_conf_attribution")
 
-    # Pull per-genotype scalars from t1 for the hypothesis table header.
     t1_cols = ["kinase", "gene_symbol", "residue_type", "sig_conditions"]
-    for g in config.DISEASE_GROUPS:
-        for suffix in [f"peak_NES_{g}", f"peak_contrast_{g}", f"n_sig_{g}", f"trajectory_{g}"]:
-            if suffix in t1.columns:
-                t1_cols.append(suffix)
     t1_cols = [c for c in t1_cols if c in t1.columns]
     t3 = (t1[t1_cols]
           .merge(n_cands.reset_index(), on="kinase", how="left")
@@ -409,19 +319,18 @@ def _build_kinase_hypothesis_table(t1, t2):
             t3["has_high_conf_attribution"].notna(), other=False
         ).astype(bool))
 
-    # Sort by max n_sig across genotypes, then max |peak_NES| across genotypes.
-    peak_nes_cols = [f"peak_NES_{g}" for g in config.DISEASE_GROUPS if f"peak_NES_{g}" in t3.columns]
-    n_sig_cols = [f"n_sig_{g}" for g in config.DISEASE_GROUPS if f"n_sig_{g}" in t3.columns]
-    if n_sig_cols:
-        t3["_max_n_sig"] = t3[n_sig_cols].max(axis=1)
-    else:
-        t3["_max_n_sig"] = 0
-    if peak_nes_cols:
-        t3["_abs_peak"] = t3[peak_nes_cols].abs().max(axis=1)
-    else:
-        t3["_abs_peak"] = 0.0
-    t3 = t3.sort_values(["_max_n_sig", "_abs_peak"], ascending=[False, False])
-    t3 = t3.drop(columns=["_max_n_sig", "_abs_peak"])
+    # Sort by total significant contrasts, then max |NES| across all contrasts —
+    # computed live from t1's raw NES/FDR columns (no per-genotype peak scalars).
+    fdr_cols = [f"{c}_FDR" for c in CONTRASTS if f"{c}_FDR" in t1.columns]
+    nes_cols = [f"{c}_NES" for c in CONTRASTS if f"{c}_NES" in t1.columns]
+    sort_keys = pd.DataFrame({"kinase": t1["kinase"].values})
+    sort_keys["_total_sig"] = (
+        (t1[fdr_cols] < config.MEA_FDR_THRESH).sum(axis=1).values if fdr_cols else 0)
+    sort_keys["_abs_max_nes"] = (
+        t1[nes_cols].abs().max(axis=1).values if nes_cols else 0.0)
+    t3 = t3.merge(sort_keys, on="kinase", how="left")
+    t3 = t3.sort_values(["_total_sig", "_abs_max_nes"], ascending=[False, False])
+    t3 = t3.drop(columns=["_total_sig", "_abs_max_nes"])
 
     return t3
 
@@ -460,12 +369,9 @@ def print_summary():
         t1 = pd.read_csv(t1_path)
         print(f"\nS3 (Table 1): Kinase Activity Matrix")
         print(f"  {len(t1)} kinases")
-        for g in config.DISEASE_GROUPS:
-            col = f"trajectory_{g}"
-            if col in t1.columns:
-                print(f"  Trajectory distribution ({g}):")
-                for label, cnt in t1[col].value_counts().items():
-                    print(f"    {label}: {cnt}")
+        if "sig_conditions" in t1.columns:
+            print(f"  Significant in >=1 contrast: "
+                  f"{(t1['sig_conditions'].fillna('') != '').sum()}")
     else:
         print("\nS3 (Table 1): Not yet computed")
 

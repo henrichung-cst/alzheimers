@@ -5,8 +5,9 @@
 // ---------------------------------------------------------------------------
 
 window.TrendFilter = (function() {
-  const KINASE_VALUES = ["always_up", "always_down", "monotonic_up", "monotonic_down", "mixed", "peak", "trough"];
-  const INCYTR_VALUES = ["always_up", "always_down", "monotonic_up", "monotonic_down", "mixed"];
+  // One trend vocabulary repo-wide (kinase per-genotype pills + incytr paths):
+  // direction × monotonicity, plus "mixed" for a sign reversal across timepoints.
+  const TREND_VALUES = ["always_up", "always_down", "monotonic_up", "monotonic_down", "mixed"];
   const LABELS = {
     "": "Any",
     always_up: "always up",
@@ -14,8 +15,6 @@ window.TrendFilter = (function() {
     monotonic_up: "monotonic up",
     monotonic_down: "monotonic down",
     mixed: "mixed",
-    peak: "single peak",
-    trough: "single trough",
   };
 
   function normalize(value) {
@@ -31,13 +30,12 @@ window.TrendFilter = (function() {
     return LABELS[v] || v || LABELS[""];
   }
 
-  function options(kind) {
-    const vals = kind === "incytr" ? INCYTR_VALUES : KINASE_VALUES;
-    return ["", ...vals];
+  function options() {
+    return ["", ...TREND_VALUES];
   }
 
-  function optionsHtml(kind) {
-    return options(kind).map(v =>
+  function optionsHtml() {
+    return options().map(v =>
       `<option value="${_escapeHtml(v)}">${_escapeHtml(label(v))}</option>`
     ).join("");
   }
@@ -76,24 +74,24 @@ window.TrendFilter = (function() {
       }
       return strict;
     }
-    if (p === "peak") {
-      let k = 0;
-      for (let i = 1; i < v.length; i++) if (v[i] > v[k]) k = i;
-      if (k === 0 || k === v.length - 1) return false;
-      for (let i = 1; i <= k; i++) if (v[i] <= v[i - 1]) return false;
-      for (let i = k + 1; i < v.length; i++) if (v[i] >= v[i - 1]) return false;
-      return true;
-    }
-    if (p === "trough") {
-      let k = 0;
-      for (let i = 1; i < v.length; i++) if (v[i] < v[k]) k = i;
-      if (k === 0 || k === v.length - 1) return false;
-      for (let i = 1; i <= k; i++) if (v[i] >= v[i - 1]) return false;
-      for (let i = k + 1; i < v.length; i++) if (v[i] <= v[i - 1]) return false;
-      return true;
-    }
     return true;
   }
 
-  return { normalize, payloadLabel, label, options, optionsHtml, vectorMatches };
+  // Classify an ordered NES vector into a single, mutually-exclusive trend label
+  // (the pill state, and what the kinase filter matches against). Sign-consistency
+  // is the primary axis: a vector that never changes sign is always_up/always_down
+  // regardless of monotonicity; a sign-crossing vector that is strictly ordered is
+  // monotonic_up/down; any other sign-crossing vector is "mixed". Returns null when
+  // there are < 2 finite values (rendered as a muted "—", never a fabricated label).
+  function classify(values) {
+    const v = (values || []).map(Number).filter(Number.isFinite);
+    if (v.length < 2) return null;
+    if (v.every(x => x > 0)) return "always_up";
+    if (v.every(x => x < 0)) return "always_down";
+    if (vectorMatches(v, "monotonic_up")) return "monotonic_up";
+    if (vectorMatches(v, "monotonic_down")) return "monotonic_down";
+    return "mixed";
+  }
+
+  return { normalize, payloadLabel, label, options, optionsHtml, vectorMatches, classify };
 })();

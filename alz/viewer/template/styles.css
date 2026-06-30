@@ -356,6 +356,12 @@ ul.spec-unit-children li.muted { color:#9aa5b1; }
 .ke-toolbar.ke-toolbar-multi { flex-wrap:wrap; row-gap:6px; }
 .ke-toolbar input { padding:3px 6px; border:1px solid var(--border);
   border-radius:3px; font-size:12px; width:220px; }
+/* The HTML `hidden` attribute must always win. The UA `[hidden]{display:none}`
+   rule is author-overridable, and the `.ke-filter-label` `display` rules below
+   would otherwise defeat it — a hidden filter label (e.g. the 5xFAD-only Tissue
+   control, or the grain selector when a cohort has no backbone grains) would
+   stay visible. Restore correct hiding. */
+[hidden] { display:none !important; }
 .ke-filter-label { display:inline-flex; align-items:center; gap:4px;
   font-size:11px; color:#546e7a; }
 .ke-filter-label select { padding:2px 4px; border:1px solid var(--border);
@@ -374,6 +380,27 @@ ul.spec-unit-children li.muted { color:#9aa5b1; }
   line-height:22px; }
 .ih-timeline-step:hover:not(:disabled) { background:#e3f2fd; border-color:#90caf9; }
 .ih-timeline-step:disabled { opacity:0.35; cursor:not-allowed; }
+/* ---------------------------------------------------------------------------
+ * Incytr unified screen layout (J-1)
+ * Left filter panel + right main pane with Table/Heatmap switch.
+ * --------------------------------------------------------------------------- */
+.incytr-layout { display:flex; gap:0; align-items:stretch; min-height:0; }
+.incytr-filter-panel { flex:0 0 auto; width:260px; min-width:200px; max-width:320px;
+  overflow-y:auto; overflow-x:hidden; padding:10px 12px;
+  border-right:1px solid var(--border); display:flex; flex-direction:column; gap:6px; }
+.incytr-filter-panel .ke-filter-label { display:flex; flex-direction:column; align-items:flex-start;
+  gap:3px; width:100%; }
+.incytr-filter-panel .ke-filter-label select,
+.incytr-filter-panel .ke-filter-label input { width:100%; max-width:none; box-sizing:border-box; }
+.incytr-main-pane { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; padding:10px 14px; }
+.incytr-view-switch { display:flex; gap:4px; margin-bottom:8px; }
+.incytr-view-btn { padding:4px 14px; font-size:12px; border:1px solid #b0bec5;
+  border-radius:3px; background:#fff; color:#546e7a; cursor:pointer; }
+.incytr-view-btn.active { background:#1f4ea3; color:#fff; border-color:#1f4ea3; font-weight:600; }
+.incytr-view-btn:hover:not(.active) { background:#eceff1; }
+.incytr-pane { flex:1 1 auto; min-height:0; }
+#incytr-hm-controls, #incytr-ip-controls { display:flex; flex-direction:column; gap:6px; }
+#incytr-hm-controls .ke-filter-reset, #incytr-ip-controls .ke-filter-reset { width:100%; text-align:center; }
 @media (max-width:720px) {
   .ih-timeline-control { flex-wrap:wrap; }
   .ih-timeline-label { flex:1 0 100%; }
@@ -758,24 +785,14 @@ ul.spec-unit-children li.muted { color:#9aa5b1; }
 .kinase-motif-logo .sequence-logo { display:block; }
 .kinase-motif-logo .sequence-logo text { font-family: ui-monospace, Menlo, Consolas, monospace; }
 
-/* Disease Direction tab (C3) */
-.dd-table { border-collapse:collapse; width:100%; min-width:600px; }
-.dd-table th, .dd-table td { padding:4px 8px; border-bottom:1px solid var(--border);
-  text-align:left; white-space:nowrap; font-size:12px; }
-.dd-table th { background:#f5f7fa; font-weight:600; font-size:11px; position:sticky; top:0; z-index:1; }
-.dd-th-sort { cursor:pointer; user-select:none; }
-.dd-th-sort:hover { background:#e8edf4; }
-.dd-th-active { background:#dce6f5; }
-.dd-nes-num { text-align:right; font-variant-numeric:tabular-nums; min-width:54px; }
-.dd-num      { text-align:right; font-variant-numeric:tabular-nums; }
-.dd-name     { font-weight:500; }
-.dd-gene     { color:#555; }
-.dd-nsig     { text-align:center; color:#555; }
-.dd-traj-cell { text-align:center; }
-.dd-traj { display:inline-block; padding:1px 5px; border-radius:3px; font-size:10px;
-  font-family:var(--font-mono,monospace); background:#e0e0e0; color:#333; }
-.dd-traj-early    { background:#e3f2fd; color:#1565c0; }
-.dd-traj-peak     { background:#fce4ec; color:#880e4f; }
-.dd-traj-trough   { background:#e8f5e9; color:#1b5e20; }
-.dd-traj-sustained { background:#fff8e1; color:#e65100; }
-.dd-secretome { max-width:200px; white-space:normal; font-size:11px; color:#444; }
+/* Kinase Explorer — per-genotype NES trend pill (App/Tau/ApTt columns).
+   Up = red (more activity), down = blue, mixed = neutral; the "always"
+   variants are the saturated tone, "monotonic" the lighter tone. */
+.ke-trend { text-align:center; white-space:nowrap; }
+.ke-trend-pill { display:inline-block; padding:1px 6px; border-radius:9px; font-size:10px;
+  font-weight:600; line-height:1.4; }
+.ke-trend-always_up      { background:#c53030; color:#fff; }
+.ke-trend-monotonic_up   { background:#fdd; color:#9b2c2c; }
+.ke-trend-always_down    { background:#2b6cb0; color:#fff; }
+.ke-trend-monotonic_down { background:#dbeafe; color:#2c5282; }
+.ke-trend-mixed          { background:#edf2f7; color:#4a5568; }

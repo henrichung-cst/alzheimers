@@ -41,7 +41,7 @@ Index assigned by primacy: C1 = primary IMAC + snRNA cohort, C2 = supporting tra
 
 **The data already supports it.** NES/pathway results are keyed by `contrast`, and the 9 Song contrasts encode genotype as their name prefix (`App_{2,4,6}mo`, `Tau_{2,4,6}mo`, `ApTt_{2,4,6}mo`); `DISEASE_GROUPS = ["App","Tau","ApTt"]` is already in config. The split key is the contrast prefix — no analysis change, no payload duplication.
 
-**Hard invariant — split axis is genotype; never pool across genotypes.** Any Song surface that reduces to a scalar reduces it **per genotype** (App / Tau / ApTt). Applies to: crosstable `median_nes` / `_kxMedian`, `peak_NES` / `peak_contrast`, and the audit verdict's single "Song" NES/LFC column. Each becomes three values, displayed as `MouseC1_App` / `MouseC1_Tau` / `MouseC1_ApTt` (C2 names).
+**Hard invariant — split axis is genotype; never pool across genotypes.** Any Song surface that reduces to a scalar reduces it **per genotype** (App / Tau / ApTt). Applies to: crosstable `median_nes` / `_kxMedian`, the kinase-explorer per-genotype NES trend pill, and the audit verdict's single "Song" NES/LFC column. Each becomes three values, displayed as `MouseC1_App` / `MouseC1_Tau` / `MouseC1_ApTt` (C2 names). (The former `peak_NES` / `trajectory` per-genotype scalars were dropped — the trend pill is classified client-side from the per-genotype NES vector; see `kinase_trend_refactor.md`.)
 
 **Timepoint reduction is context-dependent, NOT a fixed rule.** When a surface reduces a genotype's 3 timepoints to one number, median-over-timepoints is an acceptable choice — but it is per-context, not a global mandate (some surfaces keep the full per-timepoint trajectory, some peak, some median). The contract fixes only the *genotype* axis, never the timepoint reduction.
 
@@ -79,27 +79,21 @@ Driver validates `CHANNELS ⊆ {pr,py,ps,Ack,KGG}` (`incytr_commandline.R:148`).
 
 **Implication for agents / meta-plan.** B3 is NOT a Wave-1 contract producer with pending edits — it's a settled convention. Any theme adding PTM must use the channel names + `wide_ptm/` convention above verbatim.
 
-## B5 — Backbone / pathway reduction ✅
+## B5 — Backbone grain ✅ (pivoted — engine grain, not a reduction)
 
-**Purpose.** A reduction + ranking layer on top of the existing per-row gate, producing the pathway table B2's sankey consumes. It surfaces the *backbone* — spines that recur across timepoints — instead of the widest per-pair enumeration. **Folded into the B4 build** (`backbone_reduction.reduce()` called from the bridge's song branch — no standalone step/task); rationale `docs/plans/backbone_fold_into_build_2026-06-28.md`.
+**Authoritative spec:** [`theme_b/backbone_incytr_track.md`](theme_b/backbone_incytr_track.md). This section is the cross-theme contract surface only.
 
-**Input.** Gated pathway rows: the canonical floor (`SigProb > 0.1` in either condition AND `|PDS| >= 0.2`), re-applied in-query over the unfiltered `wide/` shards. Schema: `Sender.group, Receiver.group, Ligand, Receptor, EM, Target, PDS, SigProb_<cond>`.
+**Pivot.** A backbone is **a pathway with fewer nodes**, scored by the same engine on its own nodes — not a precomputed recurrence reduction. The standalone `backbone_reduction.py` / `backbone_rem_t.parquet` / `backbone_rank` approach is **removed**; recurrence is a **live within-disease timepoint filter** in the viewer, never an aggregated rank.
 
-**Path identity** = the R-EM-T 5-tuple `(Sender.group, Receiver.group, Receptor, EM, Target)`. `Ligand` is **excluded** — Target already fans a Receptor-EM spine ~547× (B4's `recep_em_fan.csv`), so keying on the full 6-tuple re-commits the widest-enumeration conflation. `Target` is in the key but may be NULL (NULL-safe join).
+**Grains.** Full (L-R-EM-T) · R-EM-T (drop Ligand) · L-R-EM (drop Target) · R-EM (drop Ligand+Target). The Ligand-exclusion rationale that motivated dropping it from the old key now manifests as the R-EM / L-R-EM grain distinction (Target fans a Receptor-EM spine ~547× — a property the grain selector exposes rather than collapses).
 
-**Reduction.**
-1. Collapse a spine's occurrences across a condition's timepoints → per-condition distinct-timepoint count; take the **max over conditions** → `n_timepoints_present`. Distinct conditions → `n_conditions_present`.
-2. **Backbone = high `n_timepoints_present`.** Cholinergic-Neurons is the priority anchor (flagged, never filtered).
+**Emission.** Engine-integrated in `Cal_pairwise_grid` (uses in-memory `style="aFC"` fold-changes — re-scoring from `wide/`, which strips `_aFC`, drifts PDS past the floor). Per grain: `outputs/reports/incytr_pair_mode/backbone/<grain>/<contrast>_backbone_output.parquet`. The path-scoring path stays byte-identical → sce4 parity preserved.
 
-**Ranking — recurrence-first (lexicographic), NOT a composite score.** `backbone_rank` = dense rank over `n_timepoints_present` desc, `n_conditions_present` desc, `|PDS|` desc as tiebreak. A spine in 3/3 timepoints always outranks one in 2/3 regardless of PDS. Explainable for a publication deliverable.
+**Floor (unchanged).** `SigProb > 0.1` in either condition AND `|PDS| >= 0.2`, plus ε=0.01. Gate lives in `filter_significant_paths.py` — **do not raise its cutoffs** (CLAUDE.md). Cholinergic-Neurons (sparse, 1-cell/condition) must survive — no hard specificity/cell-count floor.
 
-**Cholinergic anchor — flag, never filter.** `is_cholinergic_target` (`Receiver.group == 'Cholinergic-Neurons'`) is a boolean B2 can pin/highlight; the reducer drops no rows. A hard specificity/cell-count floor would delete recurrent sparse-cluster backbone spines (the Cholinergic 1-cell/condition case) — the opposite of the goal.
+**Recurrence.** A within-disease timepoint-combination filter on per-(entity × contrast) rows (multiselect {2mo,4mo,6mo} + all/any), evaluated within a single disease. There is **no representative/argmax PDS** — every backbone carries a real per-contrast PDS from `score_spine`.
 
-**Output schema (B2 consumes), `outputs/reports/incytr_pair_mode/backbone/backbone_rem_t.parquet`:** `Sender.group, Receiver.group, Receptor, EM, Target, PDS` (representative, signed) `, n_timepoints_present, n_conditions_present, backbone_rank, is_cholinergic_target, conditions_present, contrasts_present`. One row per R-EM-T key-tuple (2,782,293 rows).
-
-**Open divergence — soft annotation columns not shipped.** The original plan specified `mean_gene_specificity` + `min_cell_count` (annotate-not-filter, for B2's interactive filtering). The shipped reducer does **not** emit them. If B2 needs them, compute in B2 (apply the annotate-not-filter principle — drop no rows): `min_cell_count` from `pseudobulk_cell_counts.csv`; per-gene specificity from the canonical `song_expression_specificity.csv` (NOT aggexp — same file the kinase tab reads), joined `(gene, cell_type)` on the Levy-t5 spine.
-
-**Implication for agents.** The reduction is produced by the B4 build; B2's sankey ranks/filters off `backbone_rank` and must not re-implement its own reduction. The gate stays in `filter_significant_paths.py` (do not raise its cutoffs — see CLAUDE.md).
+**Implication for agents.** Consume the per-grain `*_backbone_output.parquet`, never `backbone_rem_t.parquet` or `backbone_rank` (gone). Do not reintroduce a separate reduction or a recurrence "mode" — it is a grain + a filter.
 
 ## F1 — Signed-sort convention ✅
 

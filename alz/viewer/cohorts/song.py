@@ -22,13 +22,20 @@ from alz.viewer.paths import (
     DECOMP_OLS_PARQUET,
     EDGE_SLICES_DECOMP_OLS_DIR,
     EDGE_SLICES_INCYTR_PATHWAYS_DIR,
+    EDGE_SLICES_INCYTR_BACKBONE_DIR,
     EDGE_SLICES_SONG_CONCORDANCE_DIR,
+    INCYTR_BACKBONE_PAIR_MODE_DIR,
     INCYTR_PAIR_MODE_OUTPUTS_DIR,
     KINASE_INCYTR_BRIDGE_DIR,
     SCHEMA_VERSION,
     UNIFIED_VIEWER_DIR,
 )
 from alz.viewer.shared.incytr_index import (
+    BACKBONE_GRAIN_MODE,
+    BACKBONE_GRAIN_NODES,
+    BACKBONE_GRAIN_SPINE_EXPR,
+    _BACKBONE_INDEX_FILENAME,
+    _BACKBONE_SPINE_INDEX_FILENAME,
     _INCYTR_FC_COLS,
     _INCYTR_FC_METRICS,
     _INCYTR_GENE_NODE_INDEX_FILENAME,
@@ -40,7 +47,10 @@ from alz.viewer.shared.incytr_index import (
     _INCYTR_PATHWAY_ABS_PDS,
     _INCYTR_PATHWAY_PVALUES,
     _INCYTR_SCORE_COLS,
+    _INCYTR_SCORE_COLS_BASE,
+    _INCYTR_SCORE_COLS_OPTIONAL,
     _SIGN_VEC_LABELS,
+    _active_optional_score_cols,
     _idx_label_bits,
     _idx_traj_bits,
 )
@@ -102,7 +112,7 @@ _SONG_MECHANISM_COLUMNS = [
 ]
 
 
-def _build_kinases_slice(data: UnifiedData, secretome_map: dict | None = None) -> dict:
+def _build_kinases_slice(data: UnifiedData) -> dict:
     """Columnar kinases table. IDs follow edge_metadata['kinases'] ordering."""
     kinases = data.edge_metadata["kinases"]
     kid = {k: i for i, k in enumerate(kinases)}
@@ -125,19 +135,11 @@ def _build_kinases_slice(data: UnifiedData, secretome_map: dict | None = None) -
     cols: dict[str, list] = {
         "id": [], "name": [], "gene_symbol": [],
         "residue_type": [],
-        "secretome_location": [],
         "top_celltype_1": [], "top_celltype_2": [], "top_celltype_3": [],
         "top_celltype_1_sea_ad_lfc": [],
-        "top_celltype_1_song_lfc": [],
         "n_celltype_candidates": [],
         "n_backbones": [], "n_paths": [],
     }
-    # Per-genotype scalars: peak_NES_{g}, peak_contrast_{g}, n_sig_{g}, trajectory_{g}
-    for g in config.DISEASE_GROUPS:
-        cols[f"peak_NES_{g}"] = []
-        cols[f"peak_contrast_{g}"] = []
-        cols[f"n_sig_{g}"] = []
-        cols[f"trajectory_{g}"] = []
     for c in contrasts:
         cols[f"NES_{c}"] = []
         cols[f"FDR_{c}"] = []
@@ -156,18 +158,10 @@ def _build_kinases_slice(data: UnifiedData, secretome_map: dict | None = None) -
 
         cols["gene_symbol"].append(_get(ka_row, "gene_symbol", ""))
         cols["residue_type"].append(_get(ka_row, "residue_type", "ST"))
-        gene_up = (cols["gene_symbol"][-1] or "").upper()
-        cols["secretome_location"].append(secretome_map.get(gene_up, "") if secretome_map else "")
-        for g in config.DISEASE_GROUPS:
-            cols[f"peak_NES_{g}"].append(_get(ka_row, f"peak_NES_{g}"))
-            cols[f"peak_contrast_{g}"].append(_get(ka_row, f"peak_contrast_{g}", ""))
-            cols[f"n_sig_{g}"].append(_get(ka_row, f"n_sig_{g}", 0))
-            cols[f"trajectory_{g}"].append(_get(ka_row, f"trajectory_{g}", ""))
         cols["top_celltype_1"].append(_get(hyp_row, "top_celltype_1", ""))
         cols["top_celltype_2"].append(_get(hyp_row, "top_celltype_2", ""))
         cols["top_celltype_3"].append(_get(hyp_row, "top_celltype_3", ""))
         cols["top_celltype_1_sea_ad_lfc"].append(_get(hyp_row, "top_celltype_1_sea_ad_lfc"))
-        cols["top_celltype_1_song_lfc"].append(_get(hyp_row, "top_celltype_1_song_lfc"))
         cols["n_celltype_candidates"].append(_get(hyp_row, "n_celltype_candidates", 0))
         nb = n_backbones_by_kin.get(k)
         npaths = n_paths_by_kin.get(k)
@@ -744,6 +738,532 @@ def _pair_mode_contrast_from_filename(fname: str) -> str | None:
         return None
     return f"{geno}_{age}mo"
 
+
+def _backbone_contrast_from_filename(fname: str) -> str | None:
+    """`ma_2mo_AppP_ma_2mo_WTyp_backbone_output.parquet` → 'App_2mo'."""
+    m = re.match(
+        r"ma_(\d+)mo_([A-Za-z]+)_ma_\1mo_WTyp_backbone_output\.parquet$", fname
+    )
+    if not m:
+        return None
+    age, geno_token = m.group(1), m.group(2)
+    geno = _INCYTR_PAIR_GENO_NORMALIZE.get(geno_token)
+    if geno is None:
+        return None
+    return f"{geno}_{age}mo"
+
+
+def _write_incytr_backbone_grains(
+    *,
+    senders_canonical: list[str],
+    receivers_canonical: list[str],
+    present_contrasts: list[str],
+    contrast_to_idx: dict[str, int],
+) -> dict:
+    """Build B-3 heatmap count tensors + B-4 entity payload for all backbone grains.
+
+    Called from _write_incytr_pair_pathways() after the pathway view is built and
+    canonical sender/receiver vocabs are established.  Uses the same vocabs as the
+    Full pathway grain so grid indices align across grains.
+
+    Returns a dict mapping grain key → payload block for each grain that has data.
+    Grains with no backbone parquets are silently omitted.
+
+    Memory safety:
+      - R-EM and L-R-EM are "inline" (all rows materialized; ~20k rows at full scale).
+      - R-EM-T is "sharded" (streaming pass; ~2.78M rows at full scale).
+    All heavy I/O uses DuckDB with a spill directory cap.
+    """
+    if not os.path.isdir(INCYTR_BACKBONE_PAIR_MODE_DIR):
+        print(f"  backbone_grains: backbone dir not found "
+              f"({INCYTR_BACKBONE_PAIR_MODE_DIR}); skipping", flush=True)
+        return {}
+
+    import duckdb as _duckdb
+
+    result: dict[str, dict] = {}
+    n_s = len(senders_canonical)
+    n_r = len(receivers_canonical)
+    n_c = len(present_contrasts)
+    n_thr = len(_INCYTR_PATHWAY_PVALUES)
+    n_ap = len(_INCYTR_PATHWAY_ABS_PDS)
+    sender_to_idx_g = {s: i for i, s in enumerate(senders_canonical)}
+    receiver_to_idx_g = {r: i for i, r in enumerate(receivers_canonical)}
+
+    for grain, grain_nodes in BACKBONE_GRAIN_NODES.items():
+        grain_dir = os.path.join(INCYTR_BACKBONE_PAIR_MODE_DIR, grain)
+        if not os.path.isdir(grain_dir):
+            continue
+
+        parquet_files = sorted(
+            glob.glob(os.path.join(grain_dir, "*_backbone_output.parquet"))
+        )
+        if not parquet_files:
+            continue
+
+        # Pair each file with its contrast (skip if contrast not in canonical list).
+        file_to_contrast_bb: list[tuple[str, str]] = []
+        for fpath in parquet_files:
+            c = _backbone_contrast_from_filename(os.path.basename(fpath))
+            if c is not None and c in contrast_to_idx:
+                file_to_contrast_bb.append((fpath, c))
+        if not file_to_contrast_bb:
+            continue
+
+        grain_mode = BACKBONE_GRAIN_MODE[grain]
+        print(f"  backbone_grains: grain={grain}  parquets={len(file_to_contrast_bb)}"
+              f"  mode={grain_mode}", flush=True)
+
+        grain_con = _duckdb.connect()
+        grain_con.execute("PRAGMA threads=4; PRAGMA memory_limit='8GB';")
+        _configure_duckdb_tempdir(grain_con)
+
+        # Schema detection from first file.
+        first_schema = pq.read_schema(file_to_contrast_bb[0][0])
+        bb_src_cols = {f.name for f in first_schema}
+        # Optional score cols present in the backbone parquets' schema.
+        optional_in_schema_bb = [c for c in _INCYTR_SCORE_COLS_OPTIONAL
+                                  if c in bb_src_cols]
+        base_nonsik_bb = [c for c in _INCYTR_SCORE_COLS_BASE if c != "SiK_score"]
+
+        # Build per-file SELECT clauses unioning into bb_src VIEW.
+        bb_selects: list[str] = []
+        for fpath, contrast in file_to_contrast_bb:
+            sch = pq.read_schema(fpath)
+            names = {f.name for f in sch}
+
+            # SiK_score: collapse to disease arm (consistent with pathway builder).
+            sik_col = next(
+                (n for n in names
+                 if n.startswith("SiK_score_") and not n.endswith("_WTyp")),
+                None,
+            )
+            sik_clause = (
+                f'CAST("{sik_col}" AS DOUBLE) AS SiK_score' if sik_col
+                else "CAST(NULL AS DOUBLE) AS SiK_score"
+            )
+
+            # Base non-SiK scores: present → cast; absent → NULL-fill.
+            present_base = [c for c in base_nonsik_bb if c in names]
+            missing_base = [c for c in base_nonsik_bb if c not in names]
+            parts: list[str] = []
+            if present_base:
+                parts.append(",\n              ".join(
+                    f"CAST({c} AS DOUBLE) AS {c}" for c in present_base
+                ))
+            if missing_base:
+                parts.append(",\n              ".join(
+                    f"CAST(NULL AS DOUBLE) AS {c}" for c in missing_base
+                ))
+            parts.append(sik_clause)
+            # Optional cols: present → cast; absent → exclude (no NULL fill).
+            opt_present = [c for c in optional_in_schema_bb if c in names]
+            if opt_present:
+                parts.append(",\n              ".join(
+                    f"CAST({c} AS DOUBLE) AS {c}" for c in opt_present
+                ))
+            extra_select_bb = ",\n              ".join(p for p in parts if p)
+
+            bb_selects.append(f"""
+            SELECT
+              "Sender.group" AS sender,
+              "Receiver.group" AS receiver,
+              Ligand, Receptor, EM, Target,
+              '{contrast}' AS contrast,
+              CAST(PDS AS DOUBLE) AS PDS,
+              CAST(n_paths AS INTEGER) AS n_paths,
+              {extra_select_bb}
+            FROM read_parquet('{fpath}')
+            """)
+
+        union_bb = "\nUNION ALL\n".join(bb_selects)
+        grain_con.execute(f"CREATE VIEW bb_src AS {union_bb}")
+
+        n_bb_total = grain_con.execute("SELECT COUNT(*) FROM bb_src").fetchone()[0]
+        print(f"    {grain}: {n_bb_total:,} rows", flush=True)
+        if n_bb_total == 0:
+            grain_con.close()
+            continue
+
+        # B-5: detect active optional score cols for this grain (non-zero check).
+        active_opt_bb = _active_optional_score_cols(
+            set(optional_in_schema_bb), grain_con, "bb_src"
+        )
+        grain_score_cols: tuple[str, ...] = _INCYTR_SCORE_COLS_BASE + active_opt_bb
+        if active_opt_bb:
+            print(f"    {grain}: optional channels active: {list(active_opt_bb)}",
+                  flush=True)
+
+        # B-3: heatmap count tensors.
+        # Backbone has no pvalue → all pvalue-threshold bands give the same count;
+        # the tensor keeps the same shape as Full so the JS can reuse one decoder.
+        hm_thr_clauses_list = []
+        for ip, _tp in enumerate(_INCYTR_PATHWAY_PVALUES):
+            for iap, tap in enumerate(_INCYTR_PATHWAY_ABS_PDS):
+                hm_thr_clauses_list.append(
+                    f"COUNT(*) FILTER (WHERE COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
+                )
+        hm_thr_clauses = ", ".join(hm_thr_clauses_list)
+
+        hm_rows = grain_con.execute(f"""
+            SELECT sender, receiver, contrast, {hm_thr_clauses}
+            FROM bb_src
+            GROUP BY sender, receiver, contrast
+        """).fetchall()
+        grid = np.zeros((n_s, n_r, n_c, n_thr, n_ap), dtype=np.uint32)
+        for row in hm_rows:
+            s_raw, r_raw, c_val = row[0], row[1], row[2]
+            if s_raw not in sender_to_idx_g or r_raw not in receiver_to_idx_g:
+                continue
+            if c_val not in contrast_to_idx:
+                continue
+            s_i = sender_to_idx_g[s_raw]
+            r_i = receiver_to_idx_g[r_raw]
+            c_i = contrast_to_idx[c_val]
+            offset = 3
+            for ip in range(n_thr):
+                for iap in range(n_ap):
+                    grid[s_i, r_i, c_i, ip, iap] = int(row[offset])
+                    offset += 1
+
+        totals = np.zeros((n_thr, n_ap), dtype=np.uint64)
+        for ip in range(n_thr):
+            for iap in range(n_ap):
+                totals[ip, iap] = int(grid[:, :, :, ip, iap].sum())
+
+        heatmap_counts_bb = {
+            "thresholds": list(_INCYTR_PATHWAY_PVALUES),
+            "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
+            "shape": [n_s, n_r, n_c, n_thr, n_ap],
+            "counts": grid.flatten().tolist(),
+            "total_by_threshold": totals.tolist(),
+        }
+
+        hm_signed_rows = grain_con.execute(f"""
+            SELECT sender, receiver, contrast,
+                   CASE WHEN PDS > 0 THEN 2 WHEN PDS < 0 THEN 0 ELSE 1 END AS s,
+                   {hm_thr_clauses}
+            FROM bb_src
+            GROUP BY sender, receiver, contrast, s
+        """).fetchall()
+        signed_grid = np.zeros((n_s, n_r, n_c, 3, n_thr, n_ap), dtype=np.uint32)
+        for row in hm_signed_rows:
+            s_raw, r_raw, c_val, sign_i = row[0], row[1], row[2], int(row[3])
+            if s_raw not in sender_to_idx_g or r_raw not in receiver_to_idx_g:
+                continue
+            if c_val not in contrast_to_idx:
+                continue
+            s_i = sender_to_idx_g[s_raw]
+            r_i = receiver_to_idx_g[r_raw]
+            c_i = contrast_to_idx[c_val]
+            offset = 4
+            for ip in range(n_thr):
+                for iap in range(n_ap):
+                    signed_grid[s_i, r_i, c_i, sign_i, ip, iap] = int(row[offset])
+                    offset += 1
+
+        signed_totals = np.zeros((3, n_thr, n_ap), dtype=np.uint64)
+        for sign_i in range(3):
+            for ip in range(n_thr):
+                for iap in range(n_ap):
+                    signed_totals[sign_i, ip, iap] = int(
+                        signed_grid[:, :, :, sign_i, ip, iap].sum()
+                    )
+
+        heatmap_counts_signed_bb = {
+            "thresholds": list(_INCYTR_PATHWAY_PVALUES),
+            "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
+            "shape": [n_s, n_r, n_c, 3, n_thr, n_ap],
+            "counts": signed_grid.flatten().tolist(),
+            "total_by_sign_threshold": signed_totals.tolist(),
+            "sign_source": "PDS",
+        }
+        del grid, signed_grid  # free numpy arrays
+
+        # B-4: entity payload — binary index (all grains) + shard files (R-EM-T only).
+        grain_out_dir = os.path.join(EDGE_SLICES_INCYTR_BACKBONE_DIR, grain)
+        shutil.rmtree(grain_out_dir, ignore_errors=True)
+        os.makedirs(grain_out_dir, exist_ok=True)
+
+        # Surviving node columns for this grain.
+        node_src_cols = [n for n in ("Ligand", "Receptor", "EM", "Target")
+                         if n in grain_nodes]
+        # ID column names: lowercase node name + "Id" (receptorId, emId, …).
+        node_id_cols = [f"{n.lower()}Id" for n in node_src_cols]
+
+        # Binary index column layout (f4 → u2 → u1 for alignment).
+        BB_INDEX_COLUMNS: list[tuple[str, str]] = (
+            [("PDS", "f4"), ("n_paths", "f4")]
+            + [(sc, "u2") for sc in grain_score_cols]
+            + [(col, "u2") for col in node_id_cols]
+            + [("senderId", "u1"), ("receiverId", "u1"), ("contrastId", "u1")]
+        )
+
+        bb_gene_to_id: dict[str, int] = {}
+        bb_gene_vocab: list[str] = []
+        bb_idx_chunks: list[dict] = []
+
+        def _bb_gene_id(val: object) -> int:
+            s = str(val) if val is not None and str(val) != "None" else ""
+            if s not in bb_gene_to_id:
+                bb_gene_to_id[s] = len(bb_gene_vocab)
+                bb_gene_vocab.append(s)
+            return bb_gene_to_id[s]
+
+        def _bb_accumulate(frame: "pd.DataFrame",
+                           s_idx: int, r_idx: int) -> None:
+            n = len(frame)
+            if n == 0:
+                return
+            chunk: dict = {
+                "PDS":        frame["PDS"].to_numpy(dtype="<f4"),
+                "n_paths":    frame["n_paths"].fillna(0).to_numpy(dtype="<f4"),
+                "senderId":   np.full(n, s_idx, dtype="<u1"),
+                "receiverId": np.full(n, r_idx, dtype="<u1"),
+                "contrastId": frame["contrast"].map(contrast_to_idx).to_numpy(dtype="<u1"),
+            }
+            for sc in grain_score_cols:
+                chunk[sc] = (
+                    frame[sc].to_numpy(dtype="float16").view("<u2")
+                    if sc in frame.columns
+                    else np.zeros(n, dtype="<u2")
+                )
+            for node_col, id_col in zip(node_src_cols, node_id_cols):
+                ids = np.array(
+                    [_bb_gene_id(v) for v in frame[node_col]],
+                    dtype="<u2",
+                )
+                chunk[id_col] = ids
+            bb_idx_chunks.append(chunk)
+
+        # Shard select cols: surviving nodes + per-entity scalars.
+        bb_shard_select = (
+            list(grain_nodes)
+            + ["contrast", "PDS", "n_paths"]
+            + list(grain_score_cols)
+        )
+
+        total_bb_rows = 0
+        present_pairs_bb: list[list[str]] = []
+        pair_row_counts_bb: dict[str, int] = {}
+
+        if grain_mode == "sharded":
+            # Streaming pass: ORDER BY sender, receiver to flush at pair boundaries.
+            bb_stream_cols = ["sender", "receiver"] + bb_shard_select
+            reader = grain_con.execute(
+                f"SELECT {', '.join(bb_stream_cols)} FROM bb_src"
+                f" ORDER BY sender, receiver"
+            ).fetch_record_batch(500_000)
+
+            cur_s_bb: str | None = None
+            cur_r_bb: str | None = None
+            buf_bb: list["pd.DataFrame"] = []
+
+            def _bb_flush(key: tuple[str, str],
+                          frames: list["pd.DataFrame"]) -> None:
+                nonlocal total_bb_rows
+                if not frames:
+                    return
+                s_raw, r_raw = key
+                sub = pd.concat(frames, ignore_index=True, copy=False)
+                s_idx = sender_to_idx_g.get(s_raw, 0)
+                r_idx = receiver_to_idx_g.get(r_raw, 0)
+                _bb_accumulate(sub, s_idx, r_idx)
+                # Float16 compress score cols + PDS for parquet storage.
+                for c in (["PDS"] + list(grain_score_cols)):
+                    if c in sub.columns:
+                        sub[c] = sub[c].astype("float16")
+                fname = f"{_incytr_sanitize(s_raw)}__{_incytr_sanitize(r_raw)}.parquet"
+                fpath_out = os.path.join(grain_out_dir, fname)
+                pq.write_table(
+                    pa.Table.from_pandas(sub, preserve_index=False),
+                    fpath_out, compression="zstd",
+                )
+                present_pairs_bb.append([s_raw, r_raw])
+                pair_row_counts_bb[fname] = len(sub)
+                total_bb_rows += len(sub)
+
+            for batch in reader:
+                bdf = batch.to_pandas()
+                senders_arr = bdf["sender"].to_numpy()
+                receivers_arr = bdf["receiver"].to_numpy()
+                starts = [0]
+                for i in range(1, len(senders_arr)):
+                    if (senders_arr[i] != senders_arr[i - 1]
+                            or receivers_arr[i] != receivers_arr[i - 1]):
+                        starts.append(i)
+                starts.append(len(senders_arr))
+                for j in range(len(starts) - 1):
+                    a, b = starts[j], starts[j + 1]
+                    s_val = senders_arr[a]
+                    r_val = receivers_arr[a]
+                    seg = bdf.iloc[a:b].drop(columns=["sender", "receiver"])
+                    if cur_s_bb is None:
+                        cur_s_bb, cur_r_bb = s_val, r_val
+                    elif s_val != cur_s_bb or r_val != cur_r_bb:
+                        _bb_flush((cur_s_bb, cur_r_bb), buf_bb)
+                        buf_bb = []
+                        cur_s_bb, cur_r_bb = s_val, r_val
+                    buf_bb.append(seg)
+            if buf_bb and cur_s_bb is not None and cur_r_bb is not None:
+                _bb_flush((cur_s_bb, cur_r_bb), buf_bb)
+
+        else:
+            # Inline mode: small grain — single materialise pass.
+            bb_all = grain_con.execute(
+                f"SELECT sender, receiver, {', '.join(bb_shard_select)} FROM bb_src"
+            ).fetchdf()
+            total_bb_rows = len(bb_all)
+            for (s_raw, r_raw), group in bb_all.groupby(
+                    ["sender", "receiver"], sort=False):
+                s_idx = sender_to_idx_g.get(s_raw, 0)
+                r_idx = receiver_to_idx_g.get(r_raw, 0)
+                _bb_accumulate(group.drop(columns=["sender", "receiver"]), s_idx, r_idx)
+
+        # B-6: backbone_spine_index — spine-key → present (sender,receiver) pairs.
+        # Pure DISTINCT aggregation on bb_src; result is bounded at any scale
+        # (at most n_distinct_spines × 961 rows for the full 31-cluster run).
+        _bb_spine_index_meta: dict | None = None
+        spine_expr_bb = BACKBONE_GRAIN_SPINE_EXPR.get(grain)
+        if spine_expr_bb:
+            not_null_parts = [
+                f'"{n}" IS NOT NULL AND "{n}" != \'\'' for n in grain_nodes
+            ]
+            spine_rows_raw = grain_con.execute(f"""
+                SELECT DISTINCT {spine_expr_bb} AS spine_key, sender, receiver
+                FROM bb_src
+                WHERE {' AND '.join(not_null_parts)}
+                ORDER BY spine_key
+            """).fetchall()
+            spine_to_pairs: dict[str, list[list[str]]] = {}
+            for sk, s, r in spine_rows_raw:
+                if sk not in spine_to_pairs:
+                    spine_to_pairs[sk] = []
+                spine_to_pairs[sk].append([s, r])
+            spine_index_data = {
+                "schema_version": 1,
+                "grain": grain,
+                "nodes": list(grain_nodes),
+                "n_spines": len(spine_to_pairs),
+                "n_spine_pair_entries": len(spine_rows_raw),
+                "spine_to_pairs": spine_to_pairs,
+            }
+            raw_spine = json.dumps(
+                spine_index_data, ensure_ascii=False, separators=(",", ":"),
+            ).encode("utf-8")
+            gz_spine = gzip.compress(raw_spine, compresslevel=6)
+            with open(
+                os.path.join(grain_out_dir, _BACKBONE_SPINE_INDEX_FILENAME), "wb"
+            ) as f:
+                f.write(gz_spine)
+            _bb_spine_index_meta = {
+                "url": (
+                    f"edge_slices/incytr_backbone/{grain}/"
+                    f"{_BACKBONE_SPINE_INDEX_FILENAME}"
+                ),
+                "n_spines": len(spine_to_pairs),
+                "n_spine_pair_entries": len(spine_rows_raw),
+            }
+            print(
+                f"    {grain} spine_index: {len(spine_to_pairs):,} spines × "
+                f"{len(spine_rows_raw):,} (spine,pair) entries; "
+                f"{len(raw_spine) / 1e3:.1f} KB raw → {len(gz_spine) / 1e3:.1f} KB gz",
+                flush=True,
+            )
+
+        grain_con.close()
+
+        # Build and write global binary index for this grain.
+        global_index_bb: dict | None = None
+        if bb_idx_chunks:
+            assert sys.byteorder == "little", "backbone index assumes little-endian"
+            bb_cols_map = {
+                name: np.concatenate([c[name] for c in bb_idx_chunks])
+                for name, _dt in BB_INDEX_COLUMNS
+            }
+            bb_idx_chunks.clear()
+            n_bb_idx = int(len(bb_cols_map["PDS"]))
+            perm_bb = np.argsort(-np.abs(bb_cols_map["PDS"]), kind="stable")
+            buf_bb_bin = bytearray()
+            bb_columns_manifest: list[dict] = []
+            for name, dt in BB_INDEX_COLUMNS:
+                arr = np.ascontiguousarray(
+                    bb_cols_map[name][perm_bb],
+                    dtype=np.dtype("<" + dt[0] + dt[1]),
+                )
+                bb_columns_manifest.append({
+                    "name": name, "type": dt, "bytes": int(arr.nbytes)
+                })
+                buf_bb_bin += arr.tobytes()
+            del bb_cols_map
+            raw_bb_bin = bytes(buf_bb_bin)
+            gz_bb_bin = gzip.compress(raw_bb_bin, compresslevel=6)
+            idx_path = os.path.join(grain_out_dir, _BACKBONE_INDEX_FILENAME)
+            with open(idx_path, "wb") as f:
+                f.write(gz_bb_bin)
+            url_prefix = f"edge_slices/incytr_backbone/{grain}/"
+            global_index_bb = {
+                "url": f"{url_prefix}{_BACKBONE_INDEX_FILENAME}",
+                "nrows": n_bb_idx,
+                "rank_by": "abs(PDS)",
+                "byteorder": "little",
+                "sender_vocab": senders_canonical,
+                "receiver_vocab": receivers_canonical,
+                "contrast_vocab": list(present_contrasts),
+                "gene_vocab": bb_gene_vocab,
+                "node_id_columns": node_id_cols,
+                "score_columns": list(grain_score_cols),
+                "columns": bb_columns_manifest,
+                "raw_bytes": len(raw_bb_bin),
+                "gzip_bytes": len(gz_bb_bin),
+            }
+            print(
+                f"    {grain} index: {n_bb_idx:,} rows × "
+                f"{len(bb_columns_manifest)} cols; "
+                f"{len(raw_bb_bin) / 1e6:.1f} MB raw → "
+                f"{len(gz_bb_bin) / 1e6:.1f} MB gz",
+                flush=True,
+            )
+
+        grain_payload: dict = {
+            "grain": grain,
+            "nodes": list(grain_nodes),
+            "mode": grain_mode,
+            "heatmap_counts": heatmap_counts_bb,
+            "heatmap_counts_signed": heatmap_counts_signed_bb,
+            "score_columns": list(grain_score_cols),
+            "global_index": global_index_bb,
+        }
+        # B-6: wire in spine index metadata when it was successfully built.
+        if _bb_spine_index_meta is not None:
+            grain_payload["backbone_spine_index"] = _bb_spine_index_meta
+
+        if grain_mode == "sharded" and present_pairs_bb:
+            shard_index = {
+                "schema_version": SCHEMA_VERSION,
+                "filename_template": "{sender}__{receiver}.parquet",
+                "sanitize_rule": "replace('/', '-'); replace(' ', '_')",
+                "present": sorted(present_pairs_bb),
+                "n_total_rows": total_bb_rows,
+                "pair_row_counts": pair_row_counts_bb,
+            }
+            with open(os.path.join(grain_out_dir, "index.json"), "w") as f:
+                json.dump(shard_index, f)
+            grain_payload["slice_index"] = shard_index
+
+        result[grain] = grain_payload
+        print(f"    {grain}: done ({total_bb_rows:,} entity rows total)", flush=True)
+
+    if result:
+        print(f"  backbone_grains: built {len(result)} grain(s): "
+              f"{sorted(result)}", flush=True)
+    else:
+        print(f"  backbone_grains: no backbone data found in "
+              f"{INCYTR_BACKBONE_PAIR_MODE_DIR}", flush=True)
+
+    return result
+
+
 def _write_incytr_pair_pathways() -> dict | None:
     """Shard the pair-mode Incytr output by (sender, receiver) — unfiltered.
 
@@ -783,11 +1303,23 @@ def _write_incytr_pair_pathways() -> dict | None:
     present_contrasts = [c for c in _INCYTR_CONTRASTS
                          if c in {c2 for _, c2 in file_to_contrast}]
     contrast_to_idx = {c: i for i, c in enumerate(present_contrasts)}
+
+    # Collect backbone parquet paths for signature (so backbone data changes
+    # invalidate the build cache and trigger a full rebuild).
+    backbone_input_files: list[str] = []
+    for _grain in BACKBONE_GRAIN_NODES:
+        _gdir = os.path.join(INCYTR_BACKBONE_PAIR_MODE_DIR, _grain)
+        if os.path.isdir(_gdir):
+            backbone_input_files.extend(
+                sorted(glob.glob(os.path.join(_gdir, "*_backbone_output.parquet")))
+            )
+
     signature = _input_signature(
         "incytr_pathways",
-        [__file__, *[f for f, _ in file_to_contrast], _incytr_celltype_qc_counts_path()],
+        [__file__, *[f for f, _ in file_to_contrast],
+         _incytr_celltype_qc_counts_path(), *backbone_input_files],
         {
-            "builder_version": 2,  # 2: global filter-index replaces top_instances
+            "builder_version": 5,  # v5: B-6 backbone_spine_index per grain
             "schema_version": SCHEMA_VERSION,
             "input_dir": os.path.relpath(input_dir, config.REPO_ROOT),
             "file_to_contrast": [
@@ -798,7 +1330,9 @@ def _write_incytr_pair_pathways() -> dict | None:
             "pvalue_thresholds": list(_INCYTR_PATHWAY_PVALUES),
             "abs_pds_thresholds": list(_INCYTR_PATHWAY_ABS_PDS),
             "global_index_file": _INCYTR_INDEX_FILENAME,
-            "score_columns": list(_INCYTR_SCORE_COLS),
+            "score_columns_base": list(_INCYTR_SCORE_COLS_BASE),
+            "score_columns_optional": list(_INCYTR_SCORE_COLS_OPTIONAL),
+            "backbone_index_file": _BACKBONE_INDEX_FILENAME,
             "fc_columns": list(_INCYTR_FC_COLS),
             "label_columns": list(_INCYTR_LABEL_COLS),
             "label_vocab": list(_INCYTR_LABEL_VOCAB),
@@ -828,6 +1362,9 @@ def _write_incytr_pair_pathways() -> dict | None:
     dir_flag_cols = [c for c in ("pr_up", "pr_down", "ps_up", "ps_down",
                                   "py_up", "py_down")
                      if c in src_cols]
+    # B-5: optional PTM-track score columns present in this cohort's schema.
+    # Value-based gating (non-zero check) runs after the view is created.
+    optional_in_schema = [c for c in _INCYTR_SCORE_COLS_OPTIONAL if c in src_cols]
     # aFC is byte-identical to log2FC in every row (verified across all 9
     # contrasts) — drop the duplicate to save ~17% of shard storage. log2FC
     # is the canonical path-level fold-change column.
@@ -881,13 +1418,17 @@ def _write_incytr_pair_pathways() -> dict | None:
         )
         # SiK_score handled via sik_clause (two-condition collapse); the rest
         # are single-name and emitted verbatim or NULL-filled.
-        generic_scores = [c for c in _INCYTR_SCORE_COLS if c != "SiK_score"]
+        # Base non-SiK scores + optional cols present in schema; missing base
+        # cols get NULL-filled, missing optional cols are excluded.
+        base_nonsik = [c for c in _INCYTR_SCORE_COLS_BASE if c != "SiK_score"]
+        generic_scores = base_nonsik + [c for c in optional_in_schema if c in names]
         score_clauses = ",\n          ".join(
             f"CAST({c} AS DOUBLE) AS {c}" for c in generic_scores
             if c in names
         )
-        # Stable column order; missing scores are NULL.
-        missing_scores = [c for c in generic_scores if c not in names]
+        # Stable column order; missing base scores are NULL-filled.
+        # Optional cols not in this file's schema are simply excluded (no NULL fill).
+        missing_scores = [c for c in base_nonsik if c not in names]
         missing_score_clauses = ",\n          ".join(
             f"CAST(NULL AS DOUBLE) AS {c}" for c in missing_scores
         )
@@ -964,6 +1505,18 @@ def _write_incytr_pair_pathways() -> dict | None:
             "low_signal_celltypes",
             pd.DataFrame({"cell_type": sorted(low_signal_celltypes)}),
         )
+
+    # B-5: which optional score cols have any non-zero value in this cohort?
+    # Only these are included in the binary index, shards, and score_columns.
+    # Cols present but all-zero (e.g. Ack/KGG/Rme1 on Song) are excluded.
+    active_optional = _active_optional_score_cols(set(optional_in_schema), con, "src")
+    effective_score_cols: tuple[str, ...] = _INCYTR_SCORE_COLS_BASE + active_optional
+    if active_optional:
+        print(f"    score_columns: {len(active_optional)} optional channel(s) active: "
+              f"{list(active_optional)}", flush=True)
+    else:
+        print(f"    score_columns: no optional channels active "
+              f"(Ack/KGG/Rme1 absent or all-zero)", flush=True)
 
     # --- heatmap_counts cube (same shape contract as factorial) ----------
     n_thr = len(_INCYTR_PATHWAY_PVALUES)
@@ -1120,9 +1673,12 @@ def _write_incytr_pair_pathways() -> dict | None:
     # are ordered wide→narrow (f4, then u2, then u1) so each column's byte
     # offset is a multiple of its element size — the viewer maps each as a
     # zero-copy TypedArray view, which REQUIRES aligned offsets.
+    # B-5: column layout uses effective_score_cols (base + active optional).
+    # Alignment: f4 first, then u2, then u1 — each column's byte offset is a
+    # multiple of its element size (zero-copy TypedArray views in JS require this).
     INCYTR_INDEX_COLUMNS = (
         [("PDS", "f4"), ("pvalue", "f4")]
-        + [(sc, "u2") for sc in _INCYTR_SCORE_COLS]   # float16 bit-patterns
+        + [(sc, "u2") for sc in effective_score_cols]   # float16 bit-patterns
         + [("ligandId", "u2"), ("receptorId", "u2"),
            ("emId", "u2"), ("targetId", "u2")]
         + [("senderId", "u1"), ("receiverId", "u1"), ("contrastId", "u1"),
@@ -1157,7 +1713,7 @@ def _write_incytr_pair_pathways() -> dict | None:
             "PDS": frame["PDS"].to_numpy(dtype="<f4"),
             "pvalue": frame["pvalue"].to_numpy(dtype="<f4"),
         }
-        for sc in _INCYTR_SCORE_COLS:
+        for sc in effective_score_cols:
             chunk[sc] = (frame[sc].to_numpy(dtype="float16").view("<u2")
                          if sc in frame.columns else np.zeros(n, dtype="<u2"))
         idx_chunks.append(chunk)
@@ -1196,7 +1752,7 @@ def _write_incytr_pair_pathways() -> dict | None:
     shard_select_cols = (
         ["Ligand", "Receptor", "EM", "Target",
          "contrast", "pvalue", "PDS"]
-        + list(_INCYTR_SCORE_COLS)
+        + list(effective_score_cols)   # B-5: base + active optional only
         + dir_flag_cols
         + extra_path_cols
         + fc_select
@@ -1207,7 +1763,7 @@ def _write_incytr_pair_pathways() -> dict | None:
     # float16 — ~3 decimal digits of precision, matching the UI display.
     float32_cols = ["pvalue"]
     float16_cols = (["PDS"]
-                    + list(_INCYTR_SCORE_COLS)
+                    + list(effective_score_cols)   # B-5: base + active optional only
                     + list(_INCYTR_FC_COLS)
                     + dir_flag_cols + extra_path_cols)
     float_cols = float32_cols + float16_cols  # for BSS encoding selection
@@ -1404,7 +1960,7 @@ def _write_incytr_pair_pathways() -> dict | None:
             "traj_label_vocab": list(_SIGN_VEC_LABELS),
             "label_states": ["", *_INCYTR_LABEL_VOCAB],   # code 0/1/2 → ""/DEG/prG
             "label_nodes": list(_INCYTR_LABEL_NODES),
-            "score_columns": list(_INCYTR_SCORE_COLS),
+            "score_columns": list(effective_score_cols),   # B-5: active only
             "columns": columns_manifest,
             "raw_bytes": len(raw_bin),
             "gzip_bytes": len(gz_bin),
@@ -1413,9 +1969,18 @@ def _write_incytr_pair_pathways() -> dict | None:
               f"{len(idx_gene_vocab):,} genes; {len(raw_bin)/1e6:.1f} MB raw → "
               f"{len(gz_bin)/1e6:.1f} MB gz", flush=True)
 
+    # B-3 / B-4: build backbone grain payload blocks.  Called here so backbone
+    # data is embedded in payload_block before the cache is written.
+    backbone_grains = _write_incytr_backbone_grains(
+        senders_canonical=senders_canonical,
+        receivers_canonical=receivers_canonical,
+        present_contrasts=present_contrasts,
+        contrast_to_idx=contrast_to_idx,
+    )
+
     payload_block = {
         "schema_version": SCHEMA_VERSION,
-        "version": 3,           # CR-04: v3 = multi-label traj_labels (semicolon-joined)
+        "version": 4,   # v4: backbone_grains (B-3/B-4) + effective score cols (B-5)
         "source": f"pair_mode ({os.path.relpath(input_dir, config.REPO_ROOT)})",
         "source_mode": "pair_mode",
         "contrasts": list(present_contrasts),
@@ -1429,7 +1994,7 @@ def _write_incytr_pair_pathways() -> dict | None:
         "pathway_counts": pathway_counts,
         "pathway_counts_low_signal_excluded": pathway_counts_low_signal_excluded,
         "slice_index": index,
-        "score_columns": list(_INCYTR_SCORE_COLS),
+        "score_columns": list(effective_score_cols),   # B-5: base + active optional
         "label_columns": list(_INCYTR_LABEL_COLS),
         "label_nodes": list(_INCYTR_LABEL_NODES),
         "label_vocab": list(_INCYTR_LABEL_VOCAB),
@@ -1442,6 +2007,10 @@ def _write_incytr_pair_pathways() -> dict | None:
         ),
         # CR-04: traj_labels/sign_vec live in shard rows; summary inline.
         "trajectory_summary": traj_summary,
+        # B-3 / B-4: per-grain backbone entity tables + heatmap tensors.
+        # Absent when backbone parquets have not been produced (e.g. sce4 parity runs
+        # that set BACKBONE_OUT_DIR="" to disable backbone emission).
+        **({"backbone_grains": backbone_grains} if backbone_grains else {}),
     }
     _write_build_cache(
         "incytr_pathways",
@@ -1702,20 +2271,11 @@ class SongBuild:
     song_concordance_present_genes: list
 
 
-def build_song_viewer_slice(data: "UnifiedData", secretome_path: str | None = None) -> SongBuild:
+def build_song_viewer_slice(data: "UnifiedData") -> SongBuild:
     """Build the song (mouse AD) cohort slice + the meta-capability scalars
     build_payload needs. Reproduces build_payload's inline song-construction
     exactly; meta-building stays in build_payload."""
-    secretome_map: dict | None = None
-    if secretome_path and os.path.exists(secretome_path):
-        sec_df = pd.read_csv(secretome_path, sep="\t")
-        secretome_map = {
-            str(row["Gene"]).upper(): str(row["Secretome location"])
-            for _, row in sec_df.iterrows()
-            if pd.notna(row.get("Gene")) and pd.notna(row.get("Secretome location"))
-        }
-        print(f"  secretome: loaded {len(secretome_map)} genes from {secretome_path}", flush=True)
-    kinases_slice = _build_kinases_slice(data, secretome_map=secretome_map)
+    kinases_slice = _build_kinases_slice(data)
     celltypes_slice = _build_celltypes_slice(data)
 
     contrasts = data.edge_metadata["contrasts"]

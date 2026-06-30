@@ -429,7 +429,7 @@ Current companion specs:
 
 Historical inputs that this document supersedes for current behavior:
 
-- `docs/plans/attribution_drawer_redesign.md`
+- `docs/plans/attribution/attribution_drawer_redesign.md`
 - `docs/integrations/5xfad-kinase-mea-viewer.md` Attribution sections
 - `docs/plans/todo2_tcell_specificity_reference.md` viewer-integration section
 - `docs/audits/cohort_abstraction_refactor/phase_5A_payload_inventory.md`

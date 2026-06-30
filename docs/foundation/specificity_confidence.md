@@ -4,7 +4,7 @@
 
 The repo has **one cell-type attribution metric**, defined in
 `alz/cross_reference/specificity.py` (`specificity.compute`), used by every
-cohort. Full spec: [`docs/plans/standard_attribution_metric.md`](../plans/standard_attribution_metric.md).
+cohort. Full spec: [`docs/plans/attribution/standard_attribution_metric.md`](../plans/attribution/standard_attribution_metric.md).
 
 In brief: a cell type is **detected** when `fraction_cells_expressing ≥ 0.10`
 (count-based, normalization-free). Expression weights are de-logged to linear
@@ -80,7 +80,7 @@ info-only.
 Song's Song-specific wiring (`assign_specificity_class`) runs after
 `assign_confidence` in `alz/bulk_mea/attribute.py`. Design history of the Song
 model:
-[`docs/plans/cross_reference_exclusivity_regrouping.md`](../plans/cross_reference_exclusivity_regrouping.md).
+[`docs/plans/attribution/cross_reference_exclusivity_regrouping.md`](../plans/attribution/cross_reference_exclusivity_regrouping.md).
 
 ---
 

@@ -39,7 +39,7 @@
               <option value="down">Down</option>
             </select>
           </label>
-          <label class="ke-filter-label" title="Filter by NES trend across day-vs-d2 contrasts in time order. Requires a complete finite profile.">Trend
+          <label class="ke-filter-label" title="Filter by the NES trend pill across day-vs-d2 contrasts in time order. Matches the displayed pill exactly; requires ≥2 finite contrasts.">Trend
             <select id="ke-filter-pattern" aria-label="NES trend">
               <option value="">Any</option>
               <option value="always_up">always up</option>
@@ -47,8 +47,6 @@
               <option value="monotonic_up">monotonic up</option>
               <option value="monotonic_down">monotonic down</option>
               <option value="mixed">mixed</option>
-              <option value="peak">single peak</option>
-              <option value="trough">single trough</option>
             </select>
           </label>
           <label class="ke-filter-label" title="Optional narrowing tool (defaults to Any/off — nothing is hidden unless you choose a minimum). A kinase passes if it is enriched ≥Nx over its baseline (mean) state in at least one state within the active scope. State enrichment is the within-T-cell-state localizer; concordance is never filtered.">State enrichment &geq;
@@ -70,7 +68,7 @@
               <th data-col="gene_symbol" data-metric="kinaseGene" title="Display label: Gene&#10;Raw column: gene_symbol&#10;Definition: Gene symbol associated with the kinase.">Gene</th>
               <th data-col="family" data-metric="kinaseFamily" title="Display label: Family&#10;Raw column: family&#10;Definition: Kinase family from kinase-library metadata. Click to sort.">Family</th>
               <th data-col="nes_profile" data-metric="nesProfile" title="NES profile across day-vs-baseline (d2) contrasts. Color = direction (red up, blue down), saturation = |NES|, black outline = FDR < threshold. Click to sort by max |NES|.">NES Profile</th>
-              <th data-col="peak_NES" data-metric="peakNes" title="Peak NES — signed NES at the contrast with the largest |NES| across timepoint contrasts. Click to sort by |NES|.">NES</th>
+              <th data-col="trend" data-metric="trend" title="NES trend across timepoint contrasts (always up/down, monotonic up/down, mixed). — = no readable trend (< 2 finite contrasts). Click to sort.">Trend</th>
               <th data-col="n_sig" data-metric="nSig" title="n_sig — count of contrasts where FDR < threshold. Click to sort.">n_sig</th>
               <th data-col="tcell_celltype" data-metric="tcellCelltype" title="Cell type — within-cohort cell-type confidence. The dominant T-cell type (CD8 / CD4 / Treg) the kinase concentrates in, from the donor's own scRNA. A ✓ tier badge marks concentration ≥2× the even 1/3 share (concentrated in one cell type); otherwise the kinase is broad across CD8/CD4/Treg. Distinct from Enrichment (which activation state) and the NSCLC spec column (beyond-T cell-type breadth). Click to sort.">Cell type</th>
               <th data-col="tcell_max_enrich" data-metric="tcellMaxEnrich" title="Enrichment — peak within-cohort T-cell-state enrichment (fold of the most-enriched eligible state over the kinase's baseline mean state) across states in scope. Only states detected in ≥10% of cells with ≥50 cells are eligible; an undetected kinase has no badge. Localizes a kinase among the ProjecTILs T-cell states; sortable, never gated. Click to sort.">Enrichment</th>
@@ -103,143 +101,186 @@
            style="width:100%;"></div>
     </div>
   </div>
-  <div id="tab-incytrheatmap" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytrheatmap" hidden>
-    <div class="card">
-      <div class="ke-toolbar ke-toolbar-multi">
-        <label class="ke-filter-label" title="Day vs d2 baseline. Per-donor vocabulary: donor1 = d13/d17/d20; donor2 = d5/d7/d9/d11.">Day
-          <select id="ih-disease" aria-label="Day vs baseline"></select>
-        </label>
-        <label class="ke-filter-label" title="Baseline reference day (always d2 for T-cell).">Baseline
-          <select id="ih-timepoint" aria-label="Baseline"></select>
-        </label>
-        <label class="ke-filter-label" title="Keep paths with pvalue &lt; threshold. Snapped to the precomputed grid (0.001 / 0.005 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0). Blank or 1.0 = no gate. (Per-animal SigProb Wald-t is unreliable in this cohort; prefer |PDS|.)">pvalue &lt;
-          <input id="ih-pvalue" type="number" step="0.005" min="0.001" max="1" style="width:64px;"/>
-        </label>
-        <label class="ke-filter-label" title="Keep paths with |PDS| ≥ threshold (composite multimodel effect-size magnitude). Snapped to the precomputed grid (0 / 0.001 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0). 0 = no gate.">|PDS| ≥
-          <input id="ih-abs-pds" type="number" step="0.01" min="0" max="2" style="width:64px;"/>
-        </label>
-        <label class="ke-filter-label" title="Filter heatmap cells by the sign of the composite PDS. Both includes positive and negative pathway changes.">PDS
-          <select id="ih-pds-sign" aria-label="PDS direction">
-            <option value="both">Both</option>
-            <option value="positive">Positive</option>
-            <option value="negative">Negative</option>
-          </select>
-        </label>
-        <label class="ke-filter-label" title="Limit sender and receiver axes to the top cell types by visible path count under the active contrast and gates. Counts are not changed.">Axes
-          <select id="ih-axis-limit" aria-label="Heatmap axis limit">
-            <option value="all">All</option>
-            <option value="10">Top 10</option>
-            <option value="15">Top 15</option>
-            <option value="25">Top 25</option>
-          </select>
-        </label>
-        <label class="ke-filter-label" title="Color transform only. Log1p compresses saturated cells so weaker interactions remain visible; hover and click-through still use raw counts.">Color
-          <select id="ih-scale" aria-label="Heatmap color scale">
-            <option value="linear">Linear</option>
-            <option value="log1p">log1p</option>
-          </select>
-        </label>
-        <label class="ke-filter-label" title="Sensitivity mode: remove cell-cell interactions where either endpoint has median n_cells <= 3 when the payload provides cell-count QC metadata.">Sparse cells
-          <select id="ih-low-signal" aria-label="Sparse cell-type filter">
+  <div id="tab-incytr" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytr" hidden>
+    <div class="incytr-layout">
+
+      <!-- ===== LEFT FILTER PANEL ===== -->
+      <aside class="incytr-filter-panel">
+
+        <!-- Sparse cells: shared; wired once in wireIncytrPanel() -->
+        <label class="ke-filter-label" title="Sensitivity mode: remove cell-cell interactions where either endpoint has median n_cells &lt;= 3 when the payload provides cell-count QC metadata.">Sparse cells
+          <select id="if-low-signal" aria-label="Sparse cell-type filter">
             <option value="include">Include all</option>
             <option value="exclude">Exclude median n &lt;= 3</option>
           </select>
         </label>
-        <button id="ih-reset" class="ke-filter-reset" title="Reset heatmap filters">Reset</button>
-        <span class="muted" id="ih-count"></span>
-      </div>
-      <div id="ih-timeline-control" class="ih-timeline-control" style="display:none;">
-        <span class="muted ih-timeline-label" id="ih-timeline-label"></span>
-        <button id="ih-timeline-prev" class="ih-timeline-step" type="button" aria-label="Previous timeline frame">&lt;</button>
-        <div class="ih-timeline-scrubber">
-          <input id="ih-timeline-slider" type="range" min="0" max="0" step="1" value="0"
-                 aria-label="Timeline frame"/>
-          <div id="ih-timeline-ticks" class="muted ih-timeline-ticks"></div>
+
+        <!-- HEATMAP-SPECIFIC CONTROLS (hidden when table pane is active) -->
+        <div id="incytr-hm-controls" hidden>
+          <label class="ke-filter-label" title="Day vs d2 baseline. Per-donor vocabulary: donor1 = d13/d17/d20; donor2 = d5/d7/d9/d11.">Day
+            <select id="ih-disease" aria-label="Day vs baseline"></select>
+          </label>
+          <label class="ke-filter-label" title="Baseline reference day (always d2 for T-cell).">Baseline
+            <select id="ih-timepoint" aria-label="Baseline"></select>
+          </label>
+          <label class="ke-filter-label" title="Keep paths with pvalue &lt; threshold. Snapped to the precomputed grid. Blank or 1.0 = no gate.">pvalue &lt;
+            <input id="ih-pvalue" type="number" step="0.005" min="0.001" max="1" style="width:100%;"/>
+          </label>
+          <label class="ke-filter-label" title="Keep paths with |PDS| ≥ threshold. Snapped to the precomputed grid. 0 = no gate.">|PDS| ≥
+            <input id="ih-abs-pds" type="number" step="0.01" min="0" max="2" style="width:100%;"/>
+          </label>
+          <label class="ke-filter-label" title="Filter heatmap cells by the sign of the composite PDS.">PDS
+            <select id="ih-pds-sign" aria-label="PDS direction">
+              <option value="both">Both</option>
+              <option value="up">Up</option>
+              <option value="down">Down</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Limit sender and receiver axes to the top cell types by visible path count.">Axes
+            <select id="ih-axis-limit" aria-label="Heatmap axis limit">
+              <option value="all">All</option>
+              <option value="10">Top 10</option>
+              <option value="15">Top 15</option>
+              <option value="25">Top 25</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Color transform only. Log1p compresses saturated cells.">Color
+            <select id="ih-scale" aria-label="Heatmap color scale">
+              <option value="linear">Linear</option>
+              <option value="log1p">log1p</option>
+            </select>
+          </label>
+          <button id="ih-reset" class="ke-filter-reset" title="Reset heatmap filters">Reset</button>
+          <span class="muted" id="ih-count" style="font-size:11px;"></span>
         </div>
-        <button id="ih-timeline-next" class="ih-timeline-step" type="button" aria-label="Next timeline frame">&gt;</button>
+
+        <!-- TABLE-SPECIFIC CONTROLS (hidden when heatmap pane is active) -->
+        <div id="incytr-ip-controls">
+          <!-- J-3: Grain selector. Hidden when backbone_grains absent from payload. -->
+          <label class="ke-filter-label" id="ip-grain-wrap" title="Node grain: Full = L-R-EM-T (default). Backbone grains drop one or two nodes; dropped columns show '—'." hidden>Grain
+            <select id="ip-grain" aria-label="Incytr node grain">
+              <option value="Full">Full (L-R-EM-T)</option>
+              <option value="L-R-EM">L-R-EM (drop Target)</option>
+              <option value="R-EM-T">R-EM-T (drop Ligand)</option>
+              <option value="R-EM">R-EM (drop Ligand+Target)</option>
+            </select>
+          </label>
+          <!-- B-6: drill-back button. Visible only during a drill navigation. -->
+          <button id="ip-drill-back" class="ke-filter-reset" hidden
+                  title="Restore the view from before the last drill (grain, mode, search, filters)">↩ Back</button>
+          <label class="ke-filter-label" title="Top overall ranks the packaged top pathway instances across all sender/receiver cell-type pairs. Cell Type loads one sender/receiver pair for detailed evidence inspection.">View
+            <select id="ip-mode" aria-label="Incytr pathway view">
+              <option value="top">Top overall</option>
+              <option value="pair">Cell Type</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="How many rows to display, ranked by |PDS|.">Show
+            <select id="ip-top-limit" aria-label="Top pathway count">
+              <option value="500">Top 500</option>
+              <option value="1000">Top 1000</option>
+              <option value="5000">Top 5000</option>
+            </select>
+          </label>
+          <span id="ip-ms-sender" class="ke-filter-label"
+                title="Filter rows by sender cell type. Empty = any."></span>
+          <span id="ip-ms-receiver" class="ke-filter-label"
+                title="Filter rows by receiver cell type. Empty = any."></span>
+          <span id="ip-ms-disease" class="ke-filter-label"
+                title="Filter rows by disease contrast prefix. Empty = any."></span>
+          <span id="ip-ms-time" class="ke-filter-label"
+                title="Filter rows by timepoint contrast suffix. Empty = any."></span>
+          <!-- J-3: Timepoint-combination filter (self-gates; hidden when no timepoints). -->
+          <span id="ip-ms-tp-combine" class="ke-filter-label"
+                title="Keep entities present in the selected timepoints within at least one disease. 'All' = AND; 'Any' = OR."></span>
+          <label class="ke-filter-label" id="ip-tp-combine-mode-wrap" title="All = AND within a disease; Any = OR." hidden>Cover
+            <select id="ip-tp-combine-mode" aria-label="Timepoint combination mode">
+              <option value="all">All (AND)</option>
+              <option value="any">Any (OR)</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Filter rows by PDS trend across ordered timepoints.">Trend
+            <select id="ip-trend" aria-label="Incytr PDS trend">
+              <option value="">Any</option>
+              <option value="always_up">always up</option>
+              <option value="always_down">always down</option>
+              <option value="monotonic_up">monotonic up</option>
+              <option value="monotonic_down">monotonic down</option>
+              <option value="mixed">mixed</option>
+            </select>
+          </label>
+          <span id="ip-ms-recur" class="ke-filter-label"
+                title="AND-filter: keep only pathways that appear as significant in ALL selected disease contrasts."></span>
+          <label class="ke-filter-label" title="Keep rows with pvalue &lt; threshold.">pvalue &lt;
+            <input id="ip-slider-p" type="number" step="0.005" min="0" max="1" style="width:100%;"/>
+          </label>
+          <label class="ke-filter-label" title="Keep rows with |PDS| &gt;= threshold.">|PDS| ≥
+            <input id="ip-slider-pds" type="number" step="0.05" min="0" style="width:100%;"/>
+          </label>
+          <label class="ke-filter-label" title="Filter by the sign of the composite PDS. Up keeps positive PDS; Down keeps negative PDS.">PDS
+            <select id="ip-pds-sign" aria-label="Incytr PDS direction">
+              <option value="both">Both</option>
+              <option value="up">Up</option>
+              <option value="down">Down</option>
+            </select>
+          </label>
+          <span id="ip-score-filters"></span>
+          <label class="ke-filter-label" title="Substring search across Ligand / Receptor / EM / Target / Path / Sender / Receiver / contrast.">search
+            <input id="ip-search" type="search" placeholder="gene or path…" style="width:100%;"/>
+          </label>
+          <button id="ip-export" class="ke-filter-reset" title="Export every row that matches the active Incytr Pathways filters">Export CSV</button>
+          <button id="ip-reset" class="ke-filter-reset" title="Reset all pathway filters">Reset</button>
+          <span class="muted" id="ip-count" style="font-size:11px;"></span>
+        </div>
+
+      </aside>
+
+      <!-- ===== MAIN PANE ===== -->
+      <div class="incytr-main-pane">
+
+        <!-- View switch: Table / Heatmap -->
+        <div class="incytr-view-switch">
+          <button type="button" id="incytr-view-table" class="incytr-view-btn active"
+                  title="Show the pathway table">Table</button>
+          <button type="button" id="incytr-view-heatmap" class="incytr-view-btn"
+                  title="Show the sender × receiver path-count heatmap">Heatmap</button>
+        </div>
+
+        <!-- Heatmap pane (hidden by default) -->
+        <div id="incytr-pane-heatmap" class="incytr-pane" hidden>
+          <div id="ih-timeline-control" class="ih-timeline-control" style="display:none;">
+            <span class="muted ih-timeline-label" id="ih-timeline-label"></span>
+            <button id="ih-timeline-prev" class="ih-timeline-step" type="button" aria-label="Previous timeline frame">&lt;</button>
+            <div class="ih-timeline-scrubber">
+              <input id="ih-timeline-slider" type="range" min="0" max="0" step="1" value="0"
+                     aria-label="Timeline frame"/>
+              <div id="ih-timeline-ticks" class="muted ih-timeline-ticks"></div>
+            </div>
+            <button id="ih-timeline-next" class="ih-timeline-step" type="button" aria-label="Next timeline frame">&gt;</button>
+          </div>
+          <div id="ih-plot" role="img" aria-label="Incytr candidate-path heatmap"
+               style="width:100%;"></div>
+          <div id="ih-qc-wrap" style="margin-top:14px;display:none;">
+            <div id="ih-qc-plot" role="img" aria-label="Median cell count versus Incytr pathway burden"
+                 style="width:100%;"></div>
+          </div>
+        </div>
+
+        <!-- Table pane (visible by default) -->
+        <div id="incytr-pane-table" class="incytr-pane">
+          <div class="muted" style="margin:4px 0 8px 0;font-size:11px;"
+               title="Each node carries a {DEG, prG} badge marking the seed list that admitted the gene.">
+            Evidence-source badges:
+            <span style="display:inline-block;padding:0 4px;font-size:10px;font-family:ui-monospace,monospace;
+                         border-radius:2px;background:#e8eefc;color:#1f4ea3;">DEG</span>
+            = single-cell differentially-expressed gene ·
+            <span style="display:inline-block;padding:0 4px;font-size:10px;font-family:ui-monospace,monospace;
+                         border-radius:2px;background:#e7f4ec;color:#1f7a3a;">prG</span>
+            = proteomics-significant gene
+          </div>
+          <div id="ip-table-wrap"></div>
+        </div>
+
       </div>
-      <div id="ih-plot" role="img" aria-label="Incytr candidate-path heatmap"
-           style="width:100%;"></div>
-      <div id="ih-qc-wrap" style="margin-top:14px;display:none;">
-        <div id="ih-qc-plot" role="img" aria-label="Median cell count versus Incytr pathway burden"
-             style="width:100%;"></div>
-      </div>
-    </div>
-  </div>
-  <div id="tab-incytrpathways" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytrpathways" hidden>
-    <div class="card">
-      <div class="ke-toolbar ke-toolbar-multi">
-        <label class="ke-filter-label" title="Top overall ranks the packaged top pathway instances across all sender/receiver cell-type pairs. Cell Type loads one sender/receiver pair for detailed evidence inspection.">View
-          <select id="ip-mode" aria-label="Incytr pathway view">
-            <option value="top">Top overall</option>
-            <option value="pair">Cell Type</option>
-          </select>
-        </label>
-        <label class="ke-filter-label" title="How many rows to display, ranked by |PDS| over every pathway that passes the active filters. A display budget, not a data cut: filters apply to the complete universe first, then the strongest N are shown.">Show
-          <select id="ip-top-limit" aria-label="Top pathway count">
-            <option value="500">Top 500</option>
-            <option value="1000">Top 1000</option>
-            <option value="5000">Top 5000</option>
-          </select>
-        </label>
-        <span id="ip-ms-sender"   class="ke-filter-label"
-              title="Filter rows by sender cell type. Empty = any. Picking values shards-load every matching (sender, receiver) pair."></span>
-        <span id="ip-ms-receiver" class="ke-filter-label"
-              title="Filter rows by receiver cell type. Empty = any."></span>
-        <span id="ip-ms-disease"  class="ke-filter-label"
-              title="Filter rows by disease contrast prefix. Empty = any."></span>
-        <span id="ip-ms-time"     class="ke-filter-label"
-              title="Filter rows by timepoint contrast suffix. Empty = any."></span>
-        <label class="ke-filter-label" title="Filter rows by PDS trend across ordered timepoints within the row's disease group. Requires complete trajectory labels in the payload.">Trend
-          <select id="ip-trend" aria-label="Incytr PDS trend">
-            <option value="">Any</option>
-            <option value="always_up">always up</option>
-            <option value="always_down">always down</option>
-            <option value="monotonic_up">monotonic up</option>
-            <option value="monotonic_down">monotonic down</option>
-            <option value="mixed">mixed</option>
-          </select>
-        </label>
-        <span id="ip-ms-recur"    class="ke-filter-label"
-              title="AND-filter: keep only pathways that appear as significant in ALL selected disease contrasts (at the active pvalue/|PDS| gates). Empty = no recur constraint."></span>
-        <label class="ke-filter-label" title="Keep rows with pvalue &lt; threshold. Blank = no constraint. (Per-animal SigProb Wald-t is unreliable in this cohort; prefer |PDS|.)">pvalue &lt;
-          <input id="ip-slider-p" type="number" step="0.005" min="0" max="1" style="width:64px;"/>
-        </label>
-        <label class="ke-filter-label" title="Keep rows with |PDS| &gt;= threshold. Blank = no constraint.">|PDS| ≥
-          <input id="ip-slider-pds" type="number" step="0.05" min="0" style="width:64px;"/>
-        </label>
-        <label class="ke-filter-label" title="Filter by the sign of the composite PDS. Up keeps positive PDS; Down keeps negative PDS.">PDS
-          <select id="ip-pds-sign" aria-label="Incytr PDS direction">
-            <option value="both">Both</option>
-            <option value="up">Up</option>
-            <option value="down">Down</option>
-          </select>
-        </label>
-        <span id="ip-score-filters"></span>
-        <label class="ke-filter-label" title="Substring search across Ligand / Receptor / EM / Target / Path / Sender / Receiver / contrast. Case-insensitive. Space-separated tokens are AND'd.">search
-          <input id="ip-search" type="search" placeholder="gene or path…" style="width:140px;"/>
-        </label>
-        <label class="ke-filter-label" title="Sensitivity mode: remove cell-cell interactions where either endpoint has median n_cells <= 3 when the payload provides cell-count QC metadata.">Sparse cells
-          <select id="ip-low-signal" aria-label="Sparse cell-type filter">
-            <option value="include">Include all</option>
-            <option value="exclude">Exclude median n &lt;= 3</option>
-          </select>
-        </label>
-        <button id="ip-export" class="ke-filter-reset" title="Export every row that matches the active Incytr Pathways filters">Export CSV</button>
-        <button id="ip-reset" class="ke-filter-reset" title="Reset all pathway filters">Reset</button>
-        <span class="muted" id="ip-count"></span>
-      </div>
-      <div class="muted" style="margin:4px 0 8px 0;font-size:11px;"
-           title="Each node carries a {DEG, prG} badge marking the seed list that admitted the gene.">
-        Evidence-source badges:
-        <span style="display:inline-block;padding:0 4px;font-size:10px;font-family:ui-monospace,monospace;
-                     border-radius:2px;background:#e8eefc;color:#1f4ea3;">DEG</span>
-        = single-cell differentially-expressed gene ·
-        <span style="display:inline-block;padding:0 4px;font-size:10px;font-family:ui-monospace,monospace;
-                     border-radius:2px;background:#e7f4ec;color:#1f7a3a;">prG</span>
-        = proteomics-significant gene
-      </div>
-      <div id="ip-table-wrap"></div>
     </div>
   </div>
 </main>

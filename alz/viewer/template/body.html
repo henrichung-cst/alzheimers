@@ -62,7 +62,7 @@
             <input id="ke-filter-nsig-min" type="number" min="0" max="9" step="1" value="0" style="width:48px;"
                    aria-label="Minimum number of significant contrasts"/>
           </label>
-          <label class="ke-filter-label" title="Filter by NES trend across ordered timepoints. With no disease filter, any disease trajectory may match; with selected diseases, each selected disease must match. Requires a complete finite profile.">Trend
+          <label class="ke-filter-label" title="Filter by the per-genotype NES trend pill. With no disease filter, any genotype matching the trend qualifies; with selected diseases, each selected genotype must match. Requires ≥2 finite contrasts for that genotype.">Trend
             <select id="ke-filter-pattern" aria-label="NES trend">
               <option value="">Any</option>
               <option value="always_up">always up</option>
@@ -70,8 +70,6 @@
               <option value="monotonic_up">monotonic up</option>
               <option value="monotonic_down">monotonic down</option>
               <option value="mixed">mixed</option>
-              <option value="peak">single peak</option>
-              <option value="trough">single trough</option>
             </select>
           </label>
           <button id="ke-filter-reset" class="ke-filter-reset" title="Reset all kinase filters">Reset</button>
@@ -86,9 +84,9 @@
               <th data-col="family" data-metric="kinaseFamily" title="Display label: Family&#10;Raw column: family&#10;Definition: Kinase family from kinase-library metadata. Click to sort.">Family</th>
               <th data-col="nes_profile" data-metric="nesProfile" title="NES profile across 9 contrasts (3 diseases × 3 timepoints). Color = direction (red up, blue down), saturation = |NES|, black outline = FDR < threshold. Click to sort by max |NES| in scope.">NES Profile</th>
               <th data-col="agreement_profile" data-metric="agreementProfile" title="Bulk-vs-decomp agreement across 9 contrasts. Green = both pipelines significant, same direction; orange = disagreement (decomp_only / bulk_only / mixed / pure disagreement); empty = neither significant. Click to sort by count of disagreement contrasts (in scope).">Agreement</th>
-              <th data-col="peak_NES_App" title="MouseC1 App — signed peak NES (largest |NES| over App's timepoints). – = none. Click to sort.">App</th>
-              <th data-col="peak_NES_Tau" title="MouseC1 Tau — signed peak NES (largest |NES| over Tau's timepoints). – = none. Click to sort.">Tau</th>
-              <th data-col="peak_NES_ApTt" title="MouseC1 ApTt — signed peak NES (largest |NES| over ApTt's timepoints). – = none. Click to sort.">ApTt</th>
+              <th data-col="trend_App" title="MouseC1 App — NES trend across timepoints (always up/down, monotonic up/down, mixed). — = no readable trend. Click to sort.">App</th>
+              <th data-col="trend_Tau" title="MouseC1 Tau — NES trend across timepoints (always up/down, monotonic up/down, mixed). — = no readable trend. Click to sort.">Tau</th>
+              <th data-col="trend_ApTt" title="MouseC1 ApTt — NES trend across timepoints (always up/down, monotonic up/down, mixed). — = no readable trend. Click to sort.">ApTt</th>
               <th data-col="n_sig" data-metric="nSig" title="n_sig — count of contrasts where FDR < threshold, within the active disease/timepoint scope (or out of 9 if no scope). Click to sort.">n_sig</th>
               <th data-col="n_attributed_celltypes" data-metric="nAttributed" title="The cell type this kinase is exclusively expressed in (from the recalculated confidence). Over-split MouseC1 clusters of one cell type are collapsed into an expandable parent; distinct cell types stay separate. Blank when broadly expressed. Click to sort by exclusivity.">Cell type</th>
               <th data-col="song_spec" data-metric="songTau" title="MouseC1 location evidence, shown as fold over the even-split baseline (1/31 ≈ 0.032): ≥10× / ≥5× / ≥2× / ≥1×. The fold is the kinase's peak cell-type share; the concentration index τ and the cell type are in the tooltip. Click to sort.">MouseC1</th>
@@ -245,177 +243,193 @@
       </details>
     </div>
   </div>
-  <div id="tab-diseasedirection" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-diseasedirection" hidden>
-    <div class="card">
-      <h3 style="margin:0 0 8px 0; font-size:14px; font-weight:600;">Kinase directional ranking — MouseC1 (App / Tau / ApTt)</h3>
-      <p class="muted" style="margin:0 0 10px 0; font-size:12px;">One row per kinase. Signed peak-NES per genotype. Default sort: largest |NES| across genotypes. Header-click to sort and toggle direction.</p>
-      <div id="dd-kinase-wrap" style="overflow-x:auto;"></div>
-    </div>
-    <div class="card" style="margin-top:14px;">
-      <h3 style="margin:0 0 8px 0; font-size:14px; font-weight:600;">Candidate-biomarker table</h3>
-      <p class="muted" style="margin:0 0 8px 0; font-size:12px;">One row per substrate gene symbol. Secretome category from Human Protein Atlas (blank where absent). LFC from kinase-level evidence. Paste gene symbols below to filter.</p>
-      <div style="display:flex; gap:8px; align-items:flex-start; margin-bottom:8px; flex-wrap:wrap;">
-        <div>
-          <label class="ke-filter-label" style="flex-direction:column; align-items:flex-start;">
-            Gene list (one per line, or comma-separated)
-            <textarea id="dd-gene-filter" rows="4" cols="32"
-              placeholder="MAPT&#10;APP&#10;PSEN1"
-              style="font-family:var(--font-mono,monospace); font-size:12px; margin-top:4px; resize:vertical; padding:4px 6px; border:1px solid var(--border); border-radius:3px;"></textarea>
+  <div id="tab-incytr" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytr" hidden>
+    <div class="incytr-layout">
+
+      <!-- ===== LEFT FILTER PANEL ===== -->
+      <aside class="incytr-filter-panel">
+
+        <!-- Tissue (MouseC2 only; hidden by default; wired by wireFivexfadTissueToggle) -->
+        <label class="ke-filter-label" id="if-tissue-wrap" title="MouseC2 tissue. Switches the incytr dataset between cortex and hippocampus." hidden>Tissue
+          <select id="if-tissue" aria-label="MouseC2 tissue"></select>
+        </label>
+
+        <!-- Sparse cells: shared across both views; wired once in wireIncytrPanel() -->
+        <label class="ke-filter-label" title="Sensitivity mode: remove cell-cell interactions where either endpoint has median male pseudobulk n_cells &lt;= 3.">Sparse cells
+          <select id="if-low-signal" aria-label="Sparse cell-type filter">
+            <option value="include">Include all</option>
+            <option value="exclude">Exclude median n &lt;= 3</option>
+          </select>
+        </label>
+
+        <!-- HEATMAP-SPECIFIC CONTROLS (hidden when table pane is active) -->
+        <div id="incytr-hm-controls" hidden>
+          <label class="ke-filter-label">Disease
+            <select id="ih-disease" aria-label="Disease"></select>
           </label>
-          <div style="display:flex; gap:6px; margin-top:4px; align-items:center;">
-            <button id="dd-gene-clear" class="ke-filter-reset" title="Clear gene filter">Clear</button>
-            <button id="dd-open-explorer" class="ke-filter-reset" disabled title="Open matched kinases in Kinase Explorer tab">Open matched in Kinase Explorer</button>
-            <span class="muted" id="dd-bio-unmatched" hidden style="font-size:11px; color:#b71c1c;"></span>
-            <span class="muted" id="dd-bio-count" style="font-size:11px;"></span>
+          <label class="ke-filter-label">Timepoint
+            <select id="ih-timepoint" aria-label="Timepoint"></select>
+          </label>
+          <label class="ke-filter-label" title="Keep paths with pvalue &lt; threshold. Snapped to the precomputed grid (0.001 / 0.005 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0). Blank or 1.0 = no gate. (Per-animal SigProb Wald-t is unreliable in this cohort; prefer |PDS|.)">pvalue &lt;
+            <input id="ih-pvalue" type="number" step="0.005" min="0.001" max="1" style="width:100%;"/>
+          </label>
+          <label class="ke-filter-label" title="Keep paths with |PDS| ≥ threshold (composite multimodel effect-size magnitude). Snapped to the precomputed grid (0 / 0.001 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0). 0 = no gate.">|PDS| ≥
+            <input id="ih-abs-pds" type="number" step="0.01" min="0" max="2" style="width:100%;"/>
+          </label>
+          <label class="ke-filter-label" title="Filter heatmap cells by the sign of the composite PDS.">PDS
+            <select id="ih-pds-sign" aria-label="PDS direction">
+              <option value="both">Both</option>
+              <option value="up">Up</option>
+              <option value="down">Down</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Limit sender and receiver axes to the top cell types by visible path count under the active contrast and gates. Counts are not changed.">Axes
+            <select id="ih-axis-limit" aria-label="Heatmap axis limit">
+              <option value="all">All</option>
+              <option value="10">Top 10</option>
+              <option value="15">Top 15</option>
+              <option value="25">Top 25</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Color transform only. Log1p compresses saturated cells so weaker interactions remain visible; hover and click-through still use raw counts.">Color
+            <select id="ih-scale" aria-label="Heatmap color scale">
+              <option value="linear">Linear</option>
+              <option value="log1p">log1p</option>
+            </select>
+          </label>
+          <button id="ih-reset" class="ke-filter-reset" title="Reset heatmap filters">Reset</button>
+          <span class="muted" id="ih-count" style="font-size:11px;"></span>
+        </div>
+
+        <!-- TABLE-SPECIFIC CONTROLS (hidden when heatmap pane is active) -->
+        <div id="incytr-ip-controls">
+          <!-- J-3: Grain selector. Hidden when backbone_grains absent from payload. -->
+          <label class="ke-filter-label" id="ip-grain-wrap" title="Node grain: which nodes define the pathway entity. Full = L-R-EM-T (default). Backbone grains drop one or two nodes; dropped columns show '—'. Switches the entity source; scoring is identical on the surviving nodes." hidden>Grain
+            <select id="ip-grain" aria-label="Incytr node grain">
+              <option value="Full">Full (L-R-EM-T)</option>
+              <option value="L-R-EM">L-R-EM (drop Target)</option>
+              <option value="R-EM-T">R-EM-T (drop Ligand)</option>
+              <option value="R-EM">R-EM (drop Ligand+Target)</option>
+            </select>
+          </label>
+          <!-- B-6: drill-back button. Visible only during a drill navigation. -->
+          <button id="ip-drill-back" class="ke-filter-reset" hidden
+                  title="Restore the view from before the last drill (grain, mode, search, filters)">↩ Back</button>
+          <label class="ke-filter-label" title="Top overall ranks the packaged top pathway instances across all sender/receiver cell-type pairs. Cell Type loads one sender/receiver pair for detailed evidence inspection.">View
+            <select id="ip-mode" aria-label="Incytr pathway view">
+              <option value="top">Top overall</option>
+              <option value="pair">Cell Type</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="How many rows to display, ranked by |PDS| over every pathway that passes the active filters. A display budget, not a data cut: filters apply to the complete universe first, then the strongest N are shown.">Show
+            <select id="ip-top-limit" aria-label="Top pathway count">
+              <option value="500">Top 500</option>
+              <option value="1000">Top 1000</option>
+              <option value="5000">Top 5000</option>
+            </select>
+          </label>
+          <span id="ip-ms-sender" class="ke-filter-label"
+                title="Filter rows by sender cell type. Empty = any."></span>
+          <span id="ip-ms-receiver" class="ke-filter-label"
+                title="Filter rows by receiver cell type. Empty = any."></span>
+          <span id="ip-ms-disease" class="ke-filter-label"
+                title="Filter rows by disease contrast prefix. Empty = any."></span>
+          <span id="ip-ms-time" class="ke-filter-label"
+                title="Filter rows by timepoint contrast suffix. Empty = any."></span>
+          <!-- J-3: Timepoint-combination filter.
+               Multiselect for which timepoints must be covered + all/any toggle.
+               Entity-level recurrence predicate evaluated within a single disease. -->
+          <span id="ip-ms-tp-combine" class="ke-filter-label"
+                title="Keep entities present in the selected timepoints within at least one disease. 'All' = every selected timepoint must appear in the same disease (AND). 'Any' = at least one selected timepoint in some disease (OR). Evaluated per entity across contrasts, per disease — an entity at 2mo in App and 6mo in Tau does NOT qualify for 'all 2mo+6mo'."></span>
+          <label class="ke-filter-label" id="ip-tp-combine-mode-wrap" title="All = every selected timepoint must appear within the same disease. Any = at least one selected timepoint in some disease." hidden>Cover
+            <select id="ip-tp-combine-mode" aria-label="Timepoint combination mode">
+              <option value="all">All (AND)</option>
+              <option value="any">Any (OR)</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Filter rows by PDS trend across ordered timepoints within the row's disease group. Requires complete trajectory labels in the payload.">Trend
+            <select id="ip-trend" aria-label="Incytr PDS trend">
+              <option value="">Any</option>
+              <option value="always_up">always up</option>
+              <option value="always_down">always down</option>
+              <option value="monotonic_up">monotonic up</option>
+              <option value="monotonic_down">monotonic down</option>
+              <option value="mixed">mixed</option>
+            </select>
+          </label>
+          <span id="ip-ms-recur" class="ke-filter-label"
+                title="AND-filter: keep only pathways that appear as significant in ALL selected disease contrasts (at the active pvalue/|PDS| gates). Empty = no recur constraint."></span>
+          <label class="ke-filter-label" title="Keep rows with pvalue &lt; threshold. Blank = no constraint. (Per-animal SigProb Wald-t is unreliable in this cohort; prefer |PDS|.)">pvalue &lt;
+            <input id="ip-slider-p" type="number" step="0.005" min="0" max="1" style="width:100%;"/>
+          </label>
+          <label class="ke-filter-label" title="Keep rows with |PDS| &gt;= threshold. Blank = no constraint.">|PDS| ≥
+            <input id="ip-slider-pds" type="number" step="0.05" min="0" style="width:100%;"/>
+          </label>
+          <label class="ke-filter-label" title="Filter by the sign of the composite PDS. Up keeps positive PDS; Down keeps negative PDS.">PDS
+            <select id="ip-pds-sign" aria-label="Incytr PDS direction">
+              <option value="both">Both</option>
+              <option value="up">Up</option>
+              <option value="down">Down</option>
+            </select>
+          </label>
+          <span id="ip-score-filters"></span>
+          <label class="ke-filter-label" title="Substring search across Ligand / Receptor / EM / Target / Path / Sender / Receiver / contrast. Case-insensitive. Space-separated tokens are AND'd.">search
+            <input id="ip-search" type="search" placeholder="gene or path…" style="width:100%;"/>
+          </label>
+          <button id="ip-export" class="ke-filter-reset" title="Export every row that matches the active Incytr Pathways filters">Export CSV</button>
+          <button id="ip-reset" class="ke-filter-reset" title="Reset all pathway filters">Reset</button>
+          <span class="muted" id="ip-count" style="font-size:11px;"></span>
+        </div>
+
+      </aside>
+
+      <!-- ===== MAIN PANE ===== -->
+      <div class="incytr-main-pane">
+
+        <!-- View switch: Table / Heatmap -->
+        <div class="incytr-view-switch">
+          <button type="button" id="incytr-view-table" class="incytr-view-btn active"
+                  title="Show the pathway table">Table</button>
+          <button type="button" id="incytr-view-heatmap" class="incytr-view-btn"
+                  title="Show the sender × receiver path-count heatmap">Heatmap</button>
+        </div>
+
+        <!-- Heatmap pane (hidden by default) -->
+        <div id="incytr-pane-heatmap" class="incytr-pane" hidden>
+          <div id="ih-timeline-control" class="ih-timeline-control" style="display:none;">
+            <span class="muted ih-timeline-label" id="ih-timeline-label"></span>
+            <button id="ih-timeline-prev" class="ih-timeline-step" type="button" aria-label="Previous timeline frame">&lt;</button>
+            <div class="ih-timeline-scrubber">
+              <input id="ih-timeline-slider" type="range" min="0" max="0" step="1" value="0"
+                     aria-label="Timeline frame"/>
+              <div id="ih-timeline-ticks" class="muted ih-timeline-ticks"></div>
+            </div>
+            <button id="ih-timeline-next" class="ih-timeline-step" type="button" aria-label="Next timeline frame">&gt;</button>
+          </div>
+          <div id="ih-plot" role="img" aria-label="Incytr candidate-path heatmap"
+               style="width:100%;"></div>
+          <div id="ih-qc-wrap" style="margin-top:14px;display:none;">
+            <div id="ih-qc-plot" role="img" aria-label="Median cell count versus Incytr pathway burden"
+                 style="width:100%;"></div>
           </div>
         </div>
-      </div>
-      <div id="dd-bio-wrap" style="overflow-x:auto;"></div>
-    </div>
-  </div>
-  <div id="tab-incytrheatmap" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytrheatmap" hidden>
-    <div class="card">
-      <div class="ke-toolbar ke-toolbar-multi">
-        <label class="ke-filter-label" id="ih-tissue-wrap" title="MouseC2 tissue. Switches the incytr dataset between cortex and hippocampus." hidden>Tissue
-          <select id="ih-tissue" aria-label="MouseC2 tissue"></select>
-        </label>
-        <label class="ke-filter-label">Disease
-          <select id="ih-disease" aria-label="Disease"></select>
-        </label>
-        <label class="ke-filter-label">Timepoint
-          <select id="ih-timepoint" aria-label="Timepoint"></select>
-        </label>
-        <label class="ke-filter-label" title="Keep paths with pvalue &lt; threshold. Snapped to the precomputed grid (0.001 / 0.005 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0). Blank or 1.0 = no gate. (Per-animal SigProb Wald-t is unreliable in this cohort; prefer |PDS|.)">pvalue &lt;
-          <input id="ih-pvalue" type="number" step="0.005" min="0.001" max="1" style="width:64px;"/>
-        </label>
-        <label class="ke-filter-label" title="Keep paths with |PDS| ≥ threshold (composite multimodel effect-size magnitude). Snapped to the precomputed grid (0 / 0.001 / 0.01 / 0.05 / 0.1 / 0.25 / 0.5 / 1.0). 0 = no gate.">|PDS| ≥
-          <input id="ih-abs-pds" type="number" step="0.01" min="0" max="2" style="width:64px;"/>
-        </label>
-        <label class="ke-filter-label" title="Filter heatmap cells by the sign of the composite PDS. Both includes positive and negative pathway changes.">PDS
-          <select id="ih-pds-sign" aria-label="PDS direction">
-            <option value="both">Both</option>
-            <option value="positive">Positive</option>
-            <option value="negative">Negative</option>
-          </select>
-        </label>
-        <label class="ke-filter-label" title="Limit sender and receiver axes to the top cell types by visible path count under the active contrast and gates. Counts are not changed.">Axes
-          <select id="ih-axis-limit" aria-label="Heatmap axis limit">
-            <option value="all">All</option>
-            <option value="10">Top 10</option>
-            <option value="15">Top 15</option>
-            <option value="25">Top 25</option>
-          </select>
-        </label>
-        <label class="ke-filter-label" title="Color transform only. Log1p compresses saturated cells so weaker interactions remain visible; hover and click-through still use raw counts.">Color
-          <select id="ih-scale" aria-label="Heatmap color scale">
-            <option value="linear">Linear</option>
-            <option value="log1p">log1p</option>
-          </select>
-        </label>
-        <label class="ke-filter-label" title="Sensitivity mode: remove cell-cell interactions where either endpoint has median male pseudobulk n_cells <= 3.">Sparse cells
-          <select id="ih-low-signal" aria-label="Sparse cell-type filter">
-            <option value="include">Include all</option>
-            <option value="exclude">Exclude median n &lt;= 3</option>
-          </select>
-        </label>
-        <button id="ih-reset" class="ke-filter-reset" title="Reset heatmap filters">Reset</button>
-        <span class="muted" id="ih-count"></span>
-      </div>
-      <div id="ih-timeline-control" class="ih-timeline-control" style="display:none;">
-        <span class="muted ih-timeline-label" id="ih-timeline-label"></span>
-        <button id="ih-timeline-prev" class="ih-timeline-step" type="button" aria-label="Previous timeline frame">&lt;</button>
-        <div class="ih-timeline-scrubber">
-          <input id="ih-timeline-slider" type="range" min="0" max="0" step="1" value="0"
-                 aria-label="Timeline frame"/>
-          <div id="ih-timeline-ticks" class="muted ih-timeline-ticks"></div>
+
+        <!-- Table pane (visible by default) -->
+        <div id="incytr-pane-table" class="incytr-pane">
+          <div class="muted" style="margin:4px 0 8px 0;font-size:11px;"
+               title="Each node carries a {DEG, prG} badge marking the seed list that admitted the gene.">
+            Evidence-source badges:
+            <span style="display:inline-block;padding:0 4px;font-size:10px;font-family:ui-monospace,monospace;
+                         border-radius:2px;background:#e8eefc;color:#1f4ea3;">DEG</span>
+            = single-cell differentially-expressed gene ·
+            <span style="display:inline-block;padding:0 4px;font-size:10px;font-family:ui-monospace,monospace;
+                         border-radius:2px;background:#e7f4ec;color:#1f7a3a;">prG</span>
+            = proteomics-significant gene
+          </div>
+          <div id="ip-table-wrap"></div>
         </div>
-        <button id="ih-timeline-next" class="ih-timeline-step" type="button" aria-label="Next timeline frame">&gt;</button>
+
       </div>
-      <div id="ih-plot" role="img" aria-label="Incytr candidate-path heatmap"
-           style="width:100%;"></div>
-      <div id="ih-qc-wrap" style="margin-top:14px;display:none;">
-        <div id="ih-qc-plot" role="img" aria-label="Median cell count versus Incytr pathway burden"
-             style="width:100%;"></div>
-      </div>
-    </div>
-  </div>
-  <div id="tab-incytrpathways" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-incytrpathways" hidden>
-    <div class="card">
-      <div class="ke-toolbar ke-toolbar-multi">
-        <label class="ke-filter-label" id="ip-tissue-wrap" title="MouseC2 tissue. Switches the incytr dataset between cortex and hippocampus." hidden>Tissue
-          <select id="ip-tissue" aria-label="MouseC2 tissue"></select>
-        </label>
-        <label class="ke-filter-label" title="Top overall ranks the packaged top pathway instances across all sender/receiver cell-type pairs. Cell Type loads one sender/receiver pair for detailed evidence inspection.">View
-          <select id="ip-mode" aria-label="Incytr pathway view">
-            <option value="top">Top overall</option>
-            <option value="pair">Cell Type</option>
-          </select>
-        </label>
-        <label class="ke-filter-label" title="How many rows to display, ranked by |PDS| over every pathway that passes the active filters. A display budget, not a data cut: filters apply to the complete universe first, then the strongest N are shown.">Show
-          <select id="ip-top-limit" aria-label="Top pathway count">
-            <option value="500">Top 500</option>
-            <option value="1000">Top 1000</option>
-            <option value="5000">Top 5000</option>
-          </select>
-        </label>
-        <span id="ip-ms-sender"   class="ke-filter-label"
-              title="Filter rows by sender cell type. Empty = any. Picking values shards-load every matching (sender, receiver) pair."></span>
-        <span id="ip-ms-receiver" class="ke-filter-label"
-              title="Filter rows by receiver cell type. Empty = any."></span>
-        <span id="ip-ms-disease"  class="ke-filter-label"
-              title="Filter rows by disease contrast prefix. Empty = any."></span>
-        <span id="ip-ms-time"     class="ke-filter-label"
-              title="Filter rows by timepoint contrast suffix. Empty = any."></span>
-        <label class="ke-filter-label" title="Filter rows by PDS trend across ordered timepoints within the row's disease group. Requires complete trajectory labels in the payload.">Trend
-          <select id="ip-trend" aria-label="Incytr PDS trend">
-            <option value="">Any</option>
-            <option value="always_up">always up</option>
-            <option value="always_down">always down</option>
-            <option value="monotonic_up">monotonic up</option>
-            <option value="monotonic_down">monotonic down</option>
-            <option value="mixed">mixed</option>
-          </select>
-        </label>
-        <span id="ip-ms-recur"    class="ke-filter-label"
-              title="AND-filter: keep only pathways that appear as significant in ALL selected disease contrasts (at the active pvalue/|PDS| gates). Empty = no recur constraint."></span>
-        <label class="ke-filter-label" title="Keep rows with pvalue &lt; threshold. Blank = no constraint. (Per-animal SigProb Wald-t is unreliable in this cohort; prefer |PDS|.)">pvalue &lt;
-          <input id="ip-slider-p" type="number" step="0.005" min="0" max="1" style="width:64px;"/>
-        </label>
-        <label class="ke-filter-label" title="Keep rows with |PDS| &gt;= threshold. Blank = no constraint.">|PDS| ≥
-          <input id="ip-slider-pds" type="number" step="0.05" min="0" style="width:64px;"/>
-        </label>
-        <label class="ke-filter-label" title="Filter by the sign of the composite PDS. Up keeps positive PDS; Down keeps negative PDS.">PDS
-          <select id="ip-pds-sign" aria-label="Incytr PDS direction">
-            <option value="both">Both</option>
-            <option value="up">Up</option>
-            <option value="down">Down</option>
-          </select>
-        </label>
-        <span id="ip-score-filters"></span>
-        <label class="ke-filter-label" title="Substring search across Ligand / Receptor / EM / Target / Path / Sender / Receiver / contrast. Case-insensitive. Space-separated tokens are AND'd.">search
-          <input id="ip-search" type="search" placeholder="gene or path…" style="width:140px;"/>
-        </label>
-        <label class="ke-filter-label" title="Sensitivity mode: remove cell-cell interactions where either endpoint has median male pseudobulk n_cells <= 3.">Sparse cells
-          <select id="ip-low-signal" aria-label="Sparse cell-type filter">
-            <option value="include">Include all</option>
-            <option value="exclude">Exclude median n &lt;= 3</option>
-          </select>
-        </label>
-        <button id="ip-export" class="ke-filter-reset" title="Export every row that matches the active Incytr Pathways filters">Export CSV</button>
-        <button id="ip-reset" class="ke-filter-reset" title="Reset all pathway filters">Reset</button>
-        <span class="muted" id="ip-count"></span>
-      </div>
-      <div class="muted" style="margin:4px 0 8px 0;font-size:11px;"
-           title="Each node carries a {DEG, prG} badge marking the seed list that admitted the gene.">
-        Evidence-source badges:
-        <span style="display:inline-block;padding:0 4px;font-size:10px;font-family:ui-monospace,monospace;
-                     border-radius:2px;background:#e8eefc;color:#1f4ea3;">DEG</span>
-        = single-cell differentially-expressed gene ·
-        <span style="display:inline-block;padding:0 4px;font-size:10px;font-family:ui-monospace,monospace;
-                     border-radius:2px;background:#e7f4ec;color:#1f7a3a;">prG</span>
-        = proteomics-significant gene
-      </div>
-      <div id="ip-table-wrap"></div>
     </div>
   </div>
   <div id="tab-crosstable" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-crosstable" hidden>
@@ -570,8 +584,6 @@
               <option value="monotonic_up">monotonic up</option>
               <option value="monotonic_down">monotonic down</option>
               <option value="mixed">mixed</option>
-              <option value="peak">single peak</option>
-              <option value="trough">single trough</option>
             </select>
           </label>
           <button id="f5-filter-reset" class="ke-filter-reset" title="Reset all MouseC2 filters">Reset</button>
@@ -588,7 +600,7 @@
               <th data-col="residue_type" title="Phospho-residue track.">Res</th>
               <th data-col="profile" title="Age-wise TG-vs-WT NES profile. Color = direction, saturation = |NES|, outline = FDR below the header threshold.">NES Profile</th>
               <th data-col="agreement_profile" title="Bulk-vs-decomp agreement across MouseC2 ages. Green = bulk and per-cell decomposition are both significant in the same direction; orange = decomp-only, bulk-only, mixed, or opposing significant decomposition; empty = neither significant.">Agreement</th>
-              <th data-col="peakAbsNes" title="Signed NES at the age with the largest |NES| in the active age scope. Sorted by |NES|.">NES</th>
+              <th data-col="trend" title="NES trend across MouseC2 ages (always up/down, monotonic up/down, mixed). — = no readable trend (< 2 finite ages). Click to sort.">Trend</th>
               <th data-col="sigCount" title="Selected ages with FDR below the header threshold.">n_sig</th>
               <th data-col="n_attributed_celltypes" title="Cell types attributed at high or moderate confidence.">Cell types</th>
               <th data-col="fivexfad_spec" title="MouseC2 snRNA location evidence, shown as fold over the even-split baseline.">MouseC2 snRNA</th>

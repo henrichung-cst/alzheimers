@@ -1,6 +1,6 @@
 # Theme B4 — Kinase → Incytr pathway integration
 
-**TODO:** §B4. **Audit:** `b4_audit.md` (first pass had multiple FALSE claims — corrected by a second command-backed audit 2026-06-25 + direct verification; see "Audit correction" below). **Wave:** 2 (disjoint backend annotation; no Incytr regen, no heavy compute). **Collision class:** backend join + one small payload column per cohort; `song.py` collides with C1/C3 (after C1), `fivexfad.py` is collision-light. **Owns B5:** the R-EM-T backbone reduction is folded into this build (see `b5_plan.md` + `docs/plans/backbone_fold_into_build_2026-06-28.md`). **Couples to:** B3 (5xFAD `wide_ptm/`).
+**TODO:** §B4. **Audit:** `b4_audit.md` (first pass had multiple FALSE claims — corrected by a second command-backed audit 2026-06-25 + direct verification; see "Audit correction" below). **Wave:** 2 (disjoint backend annotation; no Incytr regen, no heavy compute). **Collision class:** backend join + one small payload column per cohort; `song.py` collides with C1/C3 (after C1), `fivexfad.py` is collision-light. **Couples to:** B3 (5xFAD `wide_ptm/`). (B4 owns only the per-kinase `#Backbones`/`#Paths` counts in `kinase_participation.csv`; the standalone R-EM-T reduction this build once folded in was removed by the backbone grain pivot — see `backbone_incytr_track.md`.)
 
 ## Audit correction (read first)
 The first audit falsely concluded "Song-only, expression-gate blocked, B3 aspirational." **All three are wrong**, verified directly:
@@ -30,12 +30,12 @@ The first audit falsely concluded "Song-only, expression-gate blocked, B3 aspira
 2. **`n_backbones`** — distinct (Sender, Receiver, Receptor, EM) **spines** the kinase acts on (the breadth number the kinase tab shows; Target fan-out collapsed).
 3. **`n_paths`** — distinct full (Sender, Receiver, Ligand, Receptor, EM, Target) **pathways** the kinase sits along (total routes; ~53× larger).
 
-The R-EM-T recurrence reduction B2's sankey needs is computed in the same build via `backbone_reduction.reduce()` (folded; no separate step). There is no parameterized `--backbone-key` — the grain is fixed.
+B4 produces only these per-kinase counts (`kinase_participation.csv`). Backbone grains are emitted separately by the scoring engine (`Cal_pairwise_grid`), not by this build — see `backbone_incytr_track.md`.
 
 **Q4 — Backend bridge ships in B4; viewer wiring is Phase 2 of the fold consolidation.** Two pre-existing orphaned stubs in `01_state.js`:
 - `nBackbones` — **kinase-explorer column** (`#Backbones`): now backed by `n_backbones` (+ a `#Paths` column for `n_paths`).
 - `drivingKinasesH` (+ `support`/`drivingDirection`/`trend`) — **pathway-detail panel** ("Driving kinases"): pathway → ranked kinases driving it.
-The kinase-tab intro *already ships* concrete counts ("CAMK2D 15,028 chains") backed by **no populated column** — these are the `n_backbones` spine count (CAMK2D 14,968); reconcile the intro literal when wiring. Wiring lands in **Phase 2** (`docs/plans/backbone_fold_into_build_2026-06-28.md`); B4 ships the backend (`kinase_participation.csv`).
+The kinase-tab intro *already ships* concrete counts ("CAMK2D 15,028 chains") backed by **no populated column** — these are the `n_backbones` spine count (CAMK2D 14,968); reconcile the intro literal when wiring. B4 ships the backend (`kinase_participation.csv`); the viewer wiring landed in B4.2.
 
 ## Stages
 
@@ -53,7 +53,7 @@ The kinase-tab intro *already ships* concrete counts ("CAMK2D 15,028 chains") ba
 - `kinase_participation.csv` (per kinase → `n_backbones`, `n_paths`).
 - `MANIFEST.md`: cohorts, contrasts, FDR cutoff, the canonical floor, the cluster-* exclusion, the Song expression-deferred note.
 
-**Stage 6 — Runner + task + fold.** `alz/cross_reference/kinase_incytr_bridge.py` (run via `pixi run kinase-incytr-bridge` → `python -m alz.cross_reference.kinase_incytr_bridge`, package-imported so the folded `backbone_reduction` resolves). The song branch additionally calls `backbone_reduction.reduce()` to write `backbone_rem_t.parquet` for B2. No viewer edit in B4 (the `#Backbones`/`#Paths` columns + both stubs land in Phase 2 of the fold consolidation).
+**Stage 6 — Runner + task.** `alz/cross_reference/kinase_incytr_bridge.py` (run via `pixi run kinase-incytr-bridge` → `python -m alz.cross_reference.kinase_incytr_bridge`). Emits `kinase_participation.csv` per cohort. No viewer edit in B4 (the `#Backbones`/`#Paths` columns + both stubs landed in B4.2).
 
 ## Build-time resolutions (verify, don't re-grill)
 - **5xFAD kinase cell-type attribution source** for the position-aware match: Song uses `kinase_hypothesis_table.top_celltype_{1,2,3}`; 5xFAD has no obvious kinase-level top_celltype table — resolve whether to derive the kinase's cell type(s) from `fivexfad_snrna_attribution` (cell types where its substrates are expressed/significant) or a 5xFAD attribution artifact. Confirm before Stage 3.
@@ -67,4 +67,4 @@ The kinase-tab intro *already ships* concrete counts ("CAMK2D 15,028 chains") ba
 - **Memory:** runs under cap; the wide parquets are DuckDB-streamed (participation count + the folded R-EM-T reduction), never whole-file pandas.
 
 ## Out of scope
-The viewer wiring (`#Backbones`/`#Paths` columns, `Driving kinases` panel, intro-literal reconciliation → Phase 2 of `backbone_fold_into_build_2026-06-28.md`, gated on browser verification), T-cell cohort (different MEA format), any Incytr regen, Song's expression layer (`snrna` prereq), Ack/KGG-driven node annotation (kinases don't drive those PTMs).
+The viewer wiring (`#Backbones`/`#Paths` columns, `Driving kinases` panel, intro-literal reconciliation — landed in B4.2, gated on browser verification), T-cell cohort (different MEA format), any Incytr regen, Song's expression layer (`snrna` prereq), Ack/KGG-driven node annotation (kinases don't drive those PTMs).

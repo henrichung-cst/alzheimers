@@ -64,7 +64,7 @@ Hard edges (consumer cannot start until producer is merged): `C2→C1`, `C2→C3
 | Wave | Themes (parallel agents) | Branch base | Within-wave serialization | Gate-compute (primary tree) |
 |---|---|---|---|---|
 | **1** | C2, B5, D1, B4, A, G2 | baseline tag | `pixi.toml` edited by B5+D1+B4 → merge the three branches **sequentially** at the gate (additions are non-overlapping table rows; keep all). Otherwise disjoint (C2=unified tree, A=tcell tree, B5/D1/B4/G2=backend). | `pixi run snrna` (B5); `nsclc_expression.py` regen + `state_mea.py` donor1 (A) — all memory-capped |
-| **2** | C1, C5 | `main` @ W1 | Disjoint (C1=unified viewer+pipeline, C5=backend; C5 appends its `pixi.toml` task onto the merged W1 additions) | bulk_mea recover (C1) → `peak_NES_{g}`, `n_sig_{g}`, `trajectory_{g}`; verify `summary.py` |
+| **2** | C1, C5 | `main` @ W1 | Disjoint (C1=unified viewer+pipeline, C5=backend; C5 appends its `pixi.toml` task onto the merged W1 additions) | bulk_mea recover (C1) → per-genotype NES split (trend pills classified client-side; the `peak_NES_{g}`/`trajectory_{g}` scalars were later dropped, see `kinase_trend_refactor.md`); verify `summary.py` |
 | **3** | C3 | `main` @ W2 | Solo (hard-needs C1's merged payload) | none (bounded reads) |
 | **4** | F1 **then** F2 | `main` @ W3 | **F1 and F2 edit the identical JS file set → not parallel.** One worktree, two atomic commits: F1 first (signed comparator / `numCmp`), F2 second (adopts F1's signed `_exportPeakAbsNes`). | none |
 | **tail** | B4.2, then B2, then G1 | `main` @ W4 | sequential, each its own gate | B4.2: none; B2: viewer rebuild; G1: confluence |
@@ -98,7 +98,7 @@ No two *concurrent* (same-wave) agents edit the same source file except `pixi.to
 3. **Verify:** `python alz/bulk_mea/summary.py` and/or the relevant harness; for viewer waves, `pixi run viewer` + **hard-refresh browser click-through (human)** — visual changes are authoritative.
 4. **Reconciliation checkpoints:**
    - *W1 gate:* compare B5's provisional backbone 6-tuple against B4's merged `recep_em_fan.csv`. If they disagree, schedule B5's key fix before B4.2.
-   - *W4 gate:* confirm the F1/F2 sweep covers C3's new `diseasedirection` table.
+   - *W4 gate:* confirm the F1/F2 sweep covers C3's surfaces in the Kinase Explorer (signed peak-NES sort, kinase CSV export) — C3 folded into the Explorer rather than shipping its own table.
 5. **Tag** the post-merge state (`orchestration-w<N>-2026-06-25`) so a later wave's failure can roll back to a clean wave boundary, not just the baseline.
 6. Cut the next wave's worktrees off the updated `main` tip, each via the full per-worktree setup (submodule init + `data/`+`outputs/` symlinks + own `pixi install`) from the infra rule above.
 
@@ -115,7 +115,7 @@ No two *concurrent* (same-wave) agents edit the same source file except `pixi.to
 
 - **B4.2** — viewer stubs (`#Backbones` column, `Driving kinases` panel) + reconcile orphaned preamble counts. Hard-needs B5's settled backbone key + C1's merged `song.py`. Gate after the W1 B4↔B5 reconciliation resolves.
 - **B2** — sankey viewer builder; gated after B5.
-- **C3-S4** — Disease Direction Stage 4: site-level early-change. New build step reads `site_level_ols.csv` (DuckDB/chunked, memory-safe), classifies each `site_id` per genotype as *early in g* iff `stoich_fdr_{g}_2mo < MEA_FDR_THRESH` AND not `< thresh` at `{g}_4mo`/`{g}_6mo`; emits a per-gene shard (`gene_symbol → early_sites[]` with genotype + 2mo LFC). The candidate-biomarker panel (C3 Stage 3) stays **one row per kinase** and gains an "early sites" sub-column — each kinase's own early-changing phosphosites (shard joined by gene symbol), shown alongside the existing secretome flag. Rows are never repopulated to substrate genes (the panel is consistent with the kinase-activity unit of analysis throughout the viewer). Spec: `theme_c/c3_plan.md §Stage 4`. Gated after W3 (C3 merged @ `orchestration-w3-2026-06-25`).
+- **C3-S4** — C3 Stage 4: site-level early-change. New build step reads `site_level_ols.csv` (DuckDB/chunked, memory-safe), classifies each `site_id` per genotype as *early in g* iff `stoich_fdr_{g}_2mo < MEA_FDR_THRESH` AND not `< thresh` at `{g}_4mo`/`{g}_6mo`; emits a per-gene shard (`gene_symbol → early_sites[]` with genotype + 2mo LFC). C3 folded into the Kinase Explorer, so the early-sites data extends the detail-pane translational-annotation strip (`kinase_detail.js` `_renderKinaseTranslation`) — each kinase's own early-changing phosphosites (shard joined by gene symbol), beside the existing secretome / LFC / SEA-AD-expr annotations. Stays **one row per kinase** (the kinase-activity unit of analysis throughout the viewer); never repopulated to substrate genes. Spec: `theme_c/c3_plan.md §Stage 4`. Gated after W3 (C3 merged @ `orchestration-w3-2026-06-25`).
 - **G1** — methods/workflow docs + diagrams; depends on everything; **last**; confluence skill.
 
 ---

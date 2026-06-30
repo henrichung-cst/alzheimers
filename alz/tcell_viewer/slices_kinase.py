@@ -630,9 +630,9 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
     """Columnar kinases table for one donor.
 
     Schema mirrors the mouse-cohort kinases slice: `id`, `name`, `gene_symbol`,
-    `residue_type`, `trajectory`, `peak_contrast`, `peak_NES`, `n_sig_contrasts`,
-    `NES_<contrast>`, `FDR_<contrast>` — with cell-type attribution fields
-    omitted (no per-cluster MEA on T-cells).
+    `residue_type`, `n_sig_contrasts`, `NES_<contrast>`, `FDR_<contrast>` — with
+    cell-type attribution fields omitted (no per-cluster MEA on T-cells). The NES
+    trend pill is classified client-side from the NES vector.
     """
     attribution = _load_donor_kinase_attribution(donor)
     if attribution is None:
@@ -685,9 +685,6 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
         "name": [k for k, _residue_type in rows],
         "gene_symbol": [gene_map.get(k, k) for k, _residue_type in rows],
         "residue_type": [residue_type for _k, residue_type in rows],
-        "trajectory": [""] * len(rows),
-        "peak_contrast": [],
-        "peak_NES": [],
         "n_sig_contrasts": [],
         "top_celltype_1": [""] * len(rows),
         "tcell_celltype": [""] * len(rows),
@@ -726,21 +723,12 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
             fdr_vec.append(f_val)
             cols[f"NES_{scn}"].append(n_val)
             cols[f"FDR_{scn}"].append(f_val)
-        # Peak: largest |NES| among contrasts with finite FDR.
-        finite = [(i, nes_vec[i]) for i in range(len(short_contrasts))
-                  if not (np.isnan(nes_vec[i]) or np.isnan(fdr_vec[i]))]
-        if finite:
-            i_peak = max(finite, key=lambda t: abs(t[1]))[0]
-            cols["peak_contrast"].append(short_contrasts[i_peak])
-            cols["peak_NES"].append(nes_vec[i_peak])
-            cols["n_sig_contrasts"].append(
-                int(sum(1 for j in range(len(short_contrasts))
-                        if not np.isnan(fdr_vec[j]) and fdr_vec[j] < fdr_thresh))
-            )
-        else:
-            cols["peak_contrast"].append("")
-            cols["peak_NES"].append(float("nan"))
-            cols["n_sig_contrasts"].append(0)
+        # Count significant contrasts (FDR < threshold) — feeds the n_sig column.
+        # The NES trend pill is classified client-side from the NES vector.
+        cols["n_sig_contrasts"].append(
+            int(sum(1 for j in range(len(short_contrasts))
+                    if not np.isnan(fdr_vec[j]) and fdr_vec[j] < fdr_thresh))
+        )
 
     gene_upper_map = _upper_gene_map(gene_map)
 

@@ -171,7 +171,6 @@ const METRIC_DEFS = {
   kinaseFamily:  { label: "Family",        short: "Kinase family annotation." },
   kinaseGene:    { label: "Gene",          short: "Gene symbol associated with the kinase." },
   nSig:          { label: "Sig vs WT",     short: "Number of contrasts where this kinase's MEA FDR is below the header threshold." },
-  peakNES:       { label: "Peak NES",      short: "Largest |NES| across contrasts. Sign indicates direction." },
   topCelltype:   { label: "Top cell type", short: "Top attributed receiver cell type from the attribution evidence table." },
   highConfAttr:  { label: "Location confidence", short: "Whether the kinase has high-confidence cell-type attribution." },
   nBackbones:    { label: "#Backbones",    short: "Distinct (Sender, Receiver, Receptor, EM) pathway spines this kinase acts on (any node) across all gated pair-mode contrasts. Target fan-out collapsed — a breadth signal." },
@@ -254,15 +253,16 @@ const TAB_GUIDE = {
     shows: {
       lead: "NES columns answer where in the disease landscape the kinase's substrates are most coherently shifted. Cell-type columns answer where in the cortex the kinase's transcript is concordantly differentially expressed in disease. #Backbones and #Paths answer how broadly the kinase participates in the gated signaling network — a structural prevalence signal, not a per-pathway magnitude. #Paths runs ~53× larger than #Backbones because each receptor-effector-target spine fans out across many downstream targets the kinase does not itself control.",
       bullets: [
-        "240 kinases pass FDR < 0.25 in at least one of nine disease contrasts. Of those, 124 (52%) follow a peaked trajectory — enrichment rises and falls across the time course — while only three remain sustained across all three timepoints of one genotype.",
-        "Peak enrichment concentrates in the double genotype: 125 kinases peak in an ApTt (App-Tau double knock-in) contrast versus 69 in App and four in Tau alone. The strongest individual signals by NES magnitude — AKT1, AKT2, AKT3 — are negative and peak at App_4mo (App genotype, 4 months), meaning their substrate phosphorylation is reduced relative to protein abundance specifically in amyloid disease at mid-disease. This AKT hypoactivity signature is absent from the Tau genotype.",
+        "240 kinases pass FDR < 0.25 in at least one of nine disease contrasts. The per-genotype columns (App / Tau / ApTt) read the NES trend across that genotype's three timepoints as a pill: always up / always down (sign never changes), monotonic up / down (sign crosses zero in an ordered rise or fall), or mixed (a sign reversal that is not monotonic). \"—\" means fewer than two finite contrasts for that genotype, so no trend is readable.",
+        "The strongest individual signals by NES magnitude — AKT1, AKT2, AKT3 — are negative and strongest at App_4mo (App genotype, 4 months), meaning their substrate phosphorylation is reduced relative to protein abundance specifically in amyloid disease at mid-disease; the App pill for these reads as a down trend. This AKT hypoactivity signature is weaker in the Tau genotype.",
         "The broadest participants — CAMK2D (14,968 backbones / 799,064 paths), CDK1 (14,402 / 972,289), CHK1 (13,950 / 575,798) — have moderate NES across many contrasts. They are structural participants in many pathways rather than strong disease-specific signals; their #Paths order differs from #Backbones (CDK1 leads on paths), because path count is dominated by downstream target fan-out the kinase does not itself control.",
         "High NES with weak cell-type attribution is not evidence against the kinase; it is evidence that the transcriptomic side has less to say about where it acts. The reverse is also true.",
+        "Read the trend pill alongside n_sig: a single-contrast genotype shows no pill (\"—\"), and a pill backed by only one significant timepoint is more fragile than one significant across all three. The pill describes the shape of the trend, not its statistical weight.",
       ],
     },
-    howTo: "Sort by any column to surface kinases by enrichment magnitude, cell-type direction support, or backbone breadth. Click a row to pin that kinase across the viewer — its trajectory across timepoints opens in the side panel, the Pathway tab restricts to chains it drives, and any cell-type filter on Signal Map or Sender × Receiver applies the same constraint. The global FDR slider (false-discovery rate) tightens upstream kinase selection: at 0.25, roughly one in four flagged kinases is a false positive, which is hypothesis-generation territory; at 0.10, the count falls but each remaining kinase is closer to a confirmatory call.",
+    howTo: "Sort by any column to surface kinases by enrichment magnitude, trend direction, cell-type support, or backbone breadth. Click a row to pin that kinase across the viewer — its NES across the nine contrasts opens in the side panel, the Pathway tab restricts to chains it drives, and any cell-type filter on Signal Map or Sender × Receiver applies the same constraint. The detail pane also carries the kinase's translational annotations where available: whether its protein is secreted in human (HPA secretome category), its disease log2 fold-change in the top attributed cell type, and its human SEA-AD MTG expression specificity — the entry point for biomarker / target-engagement prioritization. The global FDR slider (false-discovery rate) tightens upstream kinase selection: at 0.25, roughly one in four flagged kinases is a false positive, which is hypothesis-generation territory; at 0.10, the count falls but each remaining kinase is closer to a confirmatory call.",
     conclusions: [
-      "The peaked-trajectory majority is the headline structural feature of the kinase landscape — most disease-active kinases turn on and off with stage rather than accumulating. Concentration of peaks in the double genotype, combined with the App-specific AKT hypoactivity signature and the broad-but-moderate enrichment of CAMK2 / CDK1 / CHK1, points the first round of follow-up to two questions: what is the cell-type origin of the AKT suppression in App_4mo, and do the structural backbone supporters carry chain-level direction information that the per-kinase NES summary obscures. Both questions chain directly into the Pathway and Sender × Receiver tabs.",
+      "The App-specific AKT hypoactivity signature and the broad-but-moderate enrichment of CAMK2 / CDK1 / CHK1 point the first round of follow-up to two questions: what is the cell-type origin of the AKT suppression in App_4mo, and do the structural backbone supporters carry chain-level direction information that the per-kinase NES summary obscures. Both questions chain directly into the Pathway and Sender × Receiver tabs.",
     ],
     toggles: [
       { name: "FDR threshold (false-discovery rate)", desc: "sets the cutoff for which kinases enter the table. 0.25 is hypothesis generation; 0.10 is closer to confirmatory." },
@@ -290,23 +290,6 @@ const TAB_GUIDE = {
       { name: "State", desc: "filters rows by simple agreement groups: significant agree, agree, significant disagree, or disagree." },
       { name: "All samples", desc: "uses measured units for medians and direction instead of only FDR-significant units; leave off for significant agreement calls." },
     ],
-  },
-  diseasedirection: {
-    preamble: "A two-panel disease-direction view for the MouseC1 (Song) AD cohort. The top panel ranks kinases by their signed peak enrichment per genotype (App / Tau / ApTt double knock-in). The bottom panel lists substrate genes as candidate biomarkers, annotated with human secretome category and disease fold-change.",
-    method: [
-      "Top panel: each row is one kinase. The three MouseC1 columns show the signed peak NES (normalized enrichment score) for App, Tau, and ApTt separately — the NES at the time point with the largest absolute enrichment within that genotype. Trajectory badges encode the temporal shape (early = significant only at 2 months; peak = rises then falls; sustained = significant at every measured time point). n_sig counts contrasts significant at the active FDR threshold within each genotype.",
-      "Bottom panel: each row is a unique substrate gene symbol. The Secreted (human, HPA) column shows the Human Protein Atlas secretome category (e.g., Secreted to blood, Secreted in brain) — blank where HPA has no entry for that gene. LFC is the kinase-level top-cell-type log2 fold change (top_celltype_1_song_lfc) where available. SEA-AD expr is the human MTG expression location score (h_spec) from the SEA-AD reference.",
-    ],
-    shows: {
-      lead: "The top panel answers which kinases move in which direction and when, per genotype. The bottom panel answers which of those kinases' substrate genes are secreted in humans — the entry point for candidate biomarker or target-engagement prioritization.",
-      bullets: [
-        "Default sort is by overall signed peak NES (max |NES| across all three genotypes): the kinase with the largest absolute disease signal appears first; descending = most activated on top, ascending = most suppressed on top.",
-        "Header-click on any genotype column sorts by that genotype's signed NES, reaching the strongly-negative tail on the second click.",
-        "The Secreted (human, HPA) column is annotation only — it never filters rows. Blank indicates the gene is not in the HPA secretome list, not that it is confirmed non-secreted.",
-        "The gene-list textarea filters the biomarker table to pasted symbols and reports how many symbols had no match. Use Clear to reset.",
-      ],
-    },
-    howTo: "Sort the top panel by a genotype column to focus on App- or Tau-specific kinase activity. In the bottom panel, paste a gene list (one symbol per line) to filter to targets of interest; unmatched symbols are counted and reported. Click Open matched in Kinase Explorer to send the matched kinases to the Kinase Explorer tab for detailed trajectory and cell-type inspection.",
   },
   methods: {
     preamble: "This panel contains the long-form methods documentation: pipeline stages, statistical model specifications, metric definitions, and integration design decisions. It is a reference companion to the analytical tabs, not an analytical view itself.",

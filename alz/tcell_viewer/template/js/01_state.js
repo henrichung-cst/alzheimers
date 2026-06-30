@@ -144,7 +144,7 @@ const METRIC_DEFS = {
   kinaseFamily:  { label: "Family",        short: "Kinase family annotation." },
   kinaseGene:    { label: "Gene",          short: "Gene symbol associated with the kinase." },
   nSig:          { label: "Sig vs WT",     short: "Number of contrasts where this kinase's MEA FDR is below the header threshold." },
-  peakNES:       { label: "Peak NES",      short: "Largest |NES| across contrasts. Sign indicates direction." },
+  trend:         { label: "Trend",         short: "NES trend across timepoint contrasts: always up/down, monotonic up/down, or mixed (a sign reversal). — = fewer than two finite contrasts." },
   topCelltype:   { label: "Top cell type", short: "Top attributed receiver cell type from the attribution evidence table." },
   highConfAttr:  { label: "Location confidence", short: "Whether the kinase has high-confidence cell-type attribution." },
   nBackbones:    { label: "#Backbones",    short: "Number of distinct pathway backbones with significant support from this kinase, across all contrasts." },
@@ -234,30 +234,19 @@ const TAB_GUIDE = {
       { name: "FDR threshold", desc: "controls which contrasts count toward n_sig and which profile cells get the black outline." },
     ],
   },
-  incytrheatmap: {
-    preamble: "Sender × receiver candidate-path counts from pair-mode Incytr on the per-donor T-cell pseudobulk. One cell = number of pathways surviving the active pvalue / |PDS| gates for a chosen day-vs-baseline contrast; Timeline mode repeats the sender grid across all available days for the active donor.",
+  incytr: {
+    preamble: "Pair-mode Incytr on the per-donor T-cell pseudobulk. The left panel filters pathways or heatmap cells; the view-switch (Table / Heatmap) selects the main pane. One heatmap cell = number of pathways surviving the active pvalue / |PDS| gates for a chosen day-vs-baseline contrast.",
     method: [
-      "Pair-mode Incytr was run on each donor's ProjecTILs-annotated clusters, contrasting each day against the d2 baseline. The heatmap reads precomputed counts at every (sender, receiver, contrast, pvalue, |PDS|) gate combination from the payload, including Timeline mode — no on-the-fly aggregation.",
+      "Pair-mode Incytr was run on each donor's ProjecTILs-annotated clusters, contrasting each day against the d2 baseline. The heatmap reads precomputed counts at every (sender, receiver, contrast, pvalue, |PDS|) gate combination from the payload, including Timeline mode — no on-the-fly aggregation. Each pathway row is one Ligand → Receptor → EM → Target chain scored under pair-mode.",
     ],
     shows: {
-      lead: "Where signalling change concentrates across cell-type pairs at the chosen day, or how those pair-level counts change across days in Timeline mode. Darker = more paths surviving the gate.",
+      lead: "Where signalling change concentrates across cell-type pairs at the chosen day (heatmap), or the individual pathway rows behind a (sender, receiver, contrast) selection (table). Click a heatmap cell to switch to the table view for that pair.",
     },
-    howTo: "Use Single for one day, or Timeline to compare all days side by side for the active donor. Tune pvalue (default off — per-animal Wald-t is unreliable in this cohort) and |PDS|. Click any cell to drill into the (sender, receiver, day) slice on the Pathways tab.",
+    howTo: "Use the Table / Heatmap switch at top. In heatmap mode: use Single for one day, or Timeline to compare all days side by side for the active donor. In table mode: set sender/receiver/contrast filters. Use |PDS| as the primary gate — per-animal Wald-t is unreliable in this cohort.",
     toggles: [
-      { name: "Single / Timeline", desc: "single day versus all available day-vs-d2 contrasts for the active donor." },
-      { name: "Day", desc: "the day-vs-d2 contrast to show." },
-      { name: "pvalue / |PDS|", desc: "snapped to the precomputed grid; blank/0 = open gate." },
+      { name: "Table / Heatmap", desc: "switch the main pane between the pathway table and the sender × receiver heatmap." },
+      { name: "Sparse cells", desc: "exclude cell-type pairs where either endpoint has median n_cells ≤ 3." },
     ],
-  },
-  incytrpathways: {
-    preamble: "Per-pair pathway rows from pair-mode Incytr. Filterable by sender, receiver, contrast, pvalue, |PDS|, and free-text gene/path search.",
-    method: [
-      "Each row is one Ligand → Receptor → EM → Target chain scored under pair-mode for one day-vs-baseline contrast. Pvalue is per-animal SigProb Wald-t and is unreliable in this cohort — rank/filter on |PDS|.",
-    ],
-    shows: {
-      lead: "Drill into the pathway rows behind a (sender, receiver, contrast) cell.",
-    },
-    howTo: "Set sender/receiver/contrast filters or arrive via a heatmap click. Use the |PDS| floor as the primary gate. Search matches any of Ligand/Receptor/EM/Target/Path/Sender/Receiver/contrast.",
   },
   celltype: {
     preamble: "Per-donor ProjecTILs assignment summary for the single-cell input used by the T-cell Incytr runs.",

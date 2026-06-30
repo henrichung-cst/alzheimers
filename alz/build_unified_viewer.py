@@ -1016,29 +1016,11 @@ def load_all_data() -> UnifiedData:
 
 
 
-def _ensure_hpa_secretome() -> str | None:
-    canonical = os.path.join(_REPO_ROOT, "data", "external", "hpa", "hpa_secretome.tsv")
-    if os.path.exists(canonical):
-        return canonical
-    fallback = os.path.join(
-        _REPO_ROOT, "outputs", "reports", "kinase_attribution_human",
-        "ctrl_audit", "hpa_secretome.tsv",
-    )
-    if os.path.exists(fallback):
-        os.makedirs(os.path.dirname(canonical), exist_ok=True)
-        shutil.copy2(fallback, canonical)
-        print("  secretome: copied from outputs fallback", flush=True)
-        return canonical
-    print("  (warn) hpa_secretome.tsv not found; secretome_location will be blank", flush=True)
-    return None
-
-
 def build_payload(data: UnifiedData) -> dict:
     """Assemble the full JSON payload (no edges — that's the sidecar)."""
     from kinase_library.modules import data as kl_data
 
-    _hpa_secretome_path = _ensure_hpa_secretome()
-    sb = build_song_viewer_slice(data, secretome_path=_hpa_secretome_path)
+    sb = build_song_viewer_slice(data)
 
     # Kinase family map
     try:
@@ -1054,7 +1036,7 @@ def build_payload(data: UnifiedData) -> dict:
     # Song-share fold-pill baseline (song_uniform) is gone. wmb_uniform is kept
     # only for the still-share-based 5xFAD WMB cross-check column (its own
     # unmigrated surface; 5xFAD's primary attribution is presence-grounded OLS
-    # decomposition). See docs/plans/standard_attribution_metric.md.
+    # decomposition). See docs/plans/attribution/standard_attribution_metric.md.
     meta = {
         "schema_version": SCHEMA_VERSION,
         "viewer_payload_schema_version": 2,
@@ -1281,7 +1263,6 @@ _VIEWER_SPECIFIC_TAB_INCLUDES = [
     "js/tabs/kinase_human.js",
     "js/tabs/kinase_fivexfad.js",
     "js/tabs/kinase_crosstable.js",
-    "js/tabs/kinase_disease_direction.js",
 ]
 
 

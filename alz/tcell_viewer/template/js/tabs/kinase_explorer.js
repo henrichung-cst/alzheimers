@@ -154,9 +154,6 @@ function _buildKinaseRowModel() {
       gene_symbol: K.gene_symbol[i] || "",
       family: famMap[K.name[i]] || "",
       residue_type: (K.residue_type && K.residue_type[i]) || "ST",
-      trajectory: K.trajectory[i] || "",
-      peak_contrast: K.peak_contrast[i] || "",
-      peak_NES: K.peak_NES[i],
       top_celltype_1: K.top_celltype_1[i] || "",
       tcell_celltype: (K.tcell_celltype && K.tcell_celltype[i]) || "",
       tcell_celltype_tier: (K.tcell_celltype_tier && K.tcell_celltype_tier[i] != null)
@@ -243,19 +240,6 @@ function _refreshSigCounts(fdr) {
   _keSigFdr = fdr;
 }
 
-function _kineMaxAbsNesScoped(r, scopedCtxIds) {
-  // Returns max |NES| among contrast indices in scopedCtxIds (all if empty Set).
-  let best = null;
-  for (let ci = 0; ci < CONTRASTS.length; ci++) {
-    if (scopedCtxIds.size > 0 && !scopedCtxIds.has(ci)) continue;
-    const v = r._nes[ci];
-    if (v == null) continue;
-    const a = Math.abs(v);
-    if (best == null || a > best) best = a;
-  }
-  return best;
-}
-
 function _kineSignedPeakNesScoped(r, scopedCtxIds) {
   // Returns the signed NES at the max-|NES| contrast in scopedCtxIds (all if empty Set).
   // Selects the peak by magnitude; ranks by sign. Returns null when no values.
@@ -268,6 +252,22 @@ function _kineSignedPeakNesScoped(r, scopedCtxIds) {
     if (bestAbs == null || a > bestAbs) { bestAbs = a; bestSigned = v; }
   }
   return bestSigned;
+}
+
+// NES trend pill (t-cell has one genotype): classify the full ordered NES
+// vector into always up/down, monotonic up/down, or mixed. "—" when there are
+// < 2 finite contrasts.
+const _TK_TREND_RANK = { always_up: 0, monotonic_up: 1, mixed: 2, monotonic_down: 3, always_down: 4 };
+function _tkTrendRank(r) {
+  const lbl = TrendFilter.classify(r._nes);
+  return (lbl && _TK_TREND_RANK[lbl] != null) ? _TK_TREND_RANK[lbl] : 99;
+}
+function _tkTrendPillCell(r) {
+  const lbl = TrendFilter.classify(r._nes);
+  if (!lbl) return `<td class="ke-trend"><span class="muted">—</span></td>`;
+  const text = TrendFilter.label(lbl);
+  return `<td class="ke-trend"><span class="ke-trend-pill ke-trend-${lbl}" ` +
+    `title="NES trend across timepoints: ${_escapeHtml(text)}">${_escapeHtml(text)}</span></td>`;
 }
 
 // Peak within-cohort state enrichment across attribution rows for this kinase
@@ -387,11 +387,9 @@ function _makeKeCompare(scopedCtxIds) {
       va = _kineDisagreeCountScoped(a, scopedCtxIds);
       vb = _kineDisagreeCountScoped(b, scopedCtxIds);
     }
-    else if (col === "peak_NES") {
-      // Scope-aware signed sort — select peak by magnitude, rank by sign.
-      return numCmp(_kineSignedPeakNesScoped(a, scopedCtxIds),
-                    _kineSignedPeakNesScoped(b, scopedCtxIds),
-                    asc ? -1 : 1);
+    else if (col === "trend") {
+      // Categorical: rising → falling, no-trend last.
+      va = _tkTrendRank(a); vb = _tkTrendRank(b);
     }
     else { va = a[col]; vb = b[col]; }
     if (typeof va === "string" || typeof vb === "string") {
@@ -684,9 +682,9 @@ function renderKinaseExplorer() {
     // directive, docs/tcell_exhaustion_analysis_summary.md). Skipped
     // under text search so a targeted lookup always surfaces the kinase.
     if (!q && tcellMin > 0 && _kineMaxTcellEnrichScoped(r.id, kf) < tcellMin) continue;
-    // Trajectory-shape pattern. Skipped under text search so a targeted lookup
-    // still surfaces the kinase regardless of its NES shape.
-    if (!q && kf.pattern && !TrendFilter.vectorMatches(r._nes, kf.pattern)) continue;
+    // Trend pattern — match the displayed pill exactly. Skipped under text
+    // search so a targeted lookup still surfaces the kinase regardless of trend.
+    if (!q && kf.pattern && TrendFilter.classify(r._nes) !== kf.pattern) continue;
     visible.push(r);
   }
 
@@ -729,12 +727,11 @@ function renderKinaseExplorer() {
     const selCls = r.id === selKid ? " selected" : "";
     // sub-thresh: 0 sig contrasts in the scoped set.
     const scopedSig = _kineSigCountScoped(r, fdr, scopedCtxIds);
-    const peakAbsNes = _kineMaxAbsNesScoped(r, scopedCtxIds);
     const subCls = scopedSig === 0 ? " sub-thresh" : "";
 
     // Stamp export-friendly computed values onto the row for csvSerialize.
     r._exportScopedSig = scopedSig;
-    r._exportPeakNes = _kineSignedPeakNesScoped(r, scopedCtxIds);
+    r._exportTrend = TrendFilter.classify(r._nes) || "";
     r._exportTopCelltype = r.tcell_celltype || r.top_celltype_1 || "";
     const drvCls = (drvSet && drvSet.has(r.id)) ? " driver" : "";
 
@@ -756,7 +753,7 @@ function renderKinaseExplorer() {
       `<td>${r.gene_symbol}</td>` +
       `<td>${_escapeHtml(r.family || "")}</td>` +
       `<td>${profile}</td>` +
-      `<td class="attr-num">${r.peak_NES != null && isFinite(r.peak_NES) ? (r.peak_NES > 0 ? "+" : "") + r.peak_NES.toFixed(2) : '<span class="muted">—</span>'}</td>` +
+      _tkTrendPillCell(r) +
       `<td class="attr-num">${scopedSig}<span class="muted" style="font-size:10px;"> / ${sigDenom}</span></td>` +
       `<td>${cellTypeCell}</td>` +
       `<td>${specBadge}</td>` +
@@ -773,8 +770,8 @@ function renderKinaseExplorer() {
 
 function exportKinaseCsv() {
   const donor = (ViewerPayload.activeContext && ViewerPayload.activeContext()) || "donor1";
-  const headers = ["Kinase","Gene","Family","Residue","n_sig","peak_NES","tcell_top_celltype"];
-  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportPeakNes","_exportTopCelltype"];
+  const headers = ["Kinase","Gene","Family","Residue","n_sig","trend","tcell_top_celltype"];
+  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportTrend","_exportTopCelltype"];
   csvDownload(csvSerialize(headers, keys, _keVisible), exportFilename(donor, "kinase"));
 }
 

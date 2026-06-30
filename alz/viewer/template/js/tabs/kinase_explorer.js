@@ -274,19 +274,8 @@ function _buildKinaseRowModel() {
       gene_symbol: K.gene_symbol[i] || "",
       family: famMap[K.name[i]] || "",
       residue_type: (K.residue_type && K.residue_type[i]) || "ST",
-      // Per-genotype scalars (App/Tau/ApTt) — no pooled peak_NES/trajectory.
-      peak_NES_App:     K.peak_NES_App     ? K.peak_NES_App[i]     : null,
-      peak_NES_Tau:     K.peak_NES_Tau     ? K.peak_NES_Tau[i]     : null,
-      peak_NES_ApTt:    K.peak_NES_ApTt    ? K.peak_NES_ApTt[i]    : null,
-      peak_contrast_App:  K.peak_contrast_App  ? (K.peak_contrast_App[i]  || "") : "",
-      peak_contrast_Tau:  K.peak_contrast_Tau  ? (K.peak_contrast_Tau[i]  || "") : "",
-      peak_contrast_ApTt: K.peak_contrast_ApTt ? (K.peak_contrast_ApTt[i] || "") : "",
-      n_sig_App:  K.n_sig_App  ? (K.n_sig_App[i]  || 0) : 0,
-      n_sig_Tau:  K.n_sig_Tau  ? (K.n_sig_Tau[i]  || 0) : 0,
-      n_sig_ApTt: K.n_sig_ApTt ? (K.n_sig_ApTt[i] || 0) : 0,
-      trajectory_App:  K.trajectory_App  ? (K.trajectory_App[i]  || "") : "",
-      trajectory_Tau:  K.trajectory_Tau  ? (K.trajectory_Tau[i]  || "") : "",
-      trajectory_ApTt: K.trajectory_ApTt ? (K.trajectory_ApTt[i] || "") : "",
+      // Per-genotype trend is derived from the _nes vector on demand (no stored
+      // peak/trajectory scalars) — see _keTrendPillCell / _keGenotypeNesVec.
       top_celltype_1: K.top_celltype_1[i] || "",
       n_backbones: (K.n_backbones && K.n_backbones[i] != null) ? K.n_backbones[i] : null,
       n_paths:     (K.n_paths     && K.n_paths[i]     != null) ? K.n_paths[i]     : null,
@@ -299,20 +288,6 @@ function _buildKinaseRowModel() {
   return out;
 }
 
-// Shared transient helper: max-|NES| across the 3 per-genotype peaks.
-// Returns {nes, contrast, genotype} — computed on the fly, never stored.
-// Display stays genotype-explicit: peak_contrast_{g} already names the genotype.
-function songOverallPeak(row) {
-  const candidates = [
-    {genotype: "App",  nes: row.peak_NES_App,  contrast: row.peak_contrast_App},
-    {genotype: "Tau",  nes: row.peak_NES_Tau,  contrast: row.peak_contrast_Tau},
-    {genotype: "ApTt", nes: row.peak_NES_ApTt, contrast: row.peak_contrast_ApTt},
-  ].filter(c => c.nes != null && isFinite(c.nes));
-  if (!candidates.length) return {nes: null, contrast: CONTRASTS[0] || "", genotype: ""};
-  candidates.sort((a, b) => Math.abs(b.nes) - Math.abs(a.nes));
-  return candidates[0];
-}
-
 // Integer count cell with thousands separators; — when absent.
 function _keCountCell(v) {
   return v != null && isFinite(v)
@@ -321,10 +296,34 @@ function _keCountCell(v) {
 }
 
 // Per-genotype peak NES cell (signed); – when the genotype has no peak.
-function _kePeakNesCell(v) {
-  return v != null && isFinite(v)
-    ? `<td class="attr-num">${v > 0 ? "+" : ""}${v.toFixed(2)}</td>`
-    : `<td class="attr-num"><span class="muted">—</span></td>`;
+// Per-genotype ordered NES vector (timepoint order) for trend classification.
+function _keGenotypeNesVec(r, disease) {
+  const tps = _kineTrendTimeOrder();
+  const vals = [];
+  for (const t of tps) {
+    const ci = CONTRASTS.indexOf(`${disease}_${t}`);
+    if (ci >= 0) vals.push(r._nes[ci]);
+  }
+  return vals;
+}
+
+// Trend pill cell for one genotype — the classified NES trend across timepoints
+// (always up/down, monotonic up/down, mixed). "—" when there is no readable
+// trend (< 2 finite contrasts for that genotype).
+function _keTrendPillCell(r, disease) {
+  const lbl = TrendFilter.classify(_keGenotypeNesVec(r, disease));
+  if (!lbl) return `<td class="ke-trend"><span class="muted">—</span></td>`;
+  const text = TrendFilter.label(lbl);
+  return `<td class="ke-trend"><span class="ke-trend-pill ke-trend-${lbl}" ` +
+    `title="${_escapeHtml(disease)} NES trend across timepoints: ${_escapeHtml(text)}">` +
+    `${_escapeHtml(text)}</span></td>`;
+}
+
+// Categorical sort rank for a trend column: rising → falling, no-trend last.
+const _KE_TREND_RANK = { always_up: 0, monotonic_up: 1, mixed: 2, monotonic_down: 3, always_down: 4 };
+function _keTrendRank(r, disease) {
+  const lbl = TrendFilter.classify(_keGenotypeNesVec(r, disease));
+  return (lbl && _KE_TREND_RANK[lbl] != null) ? _KE_TREND_RANK[lbl] : 99;
 }
 
 function _ensureKinaseIdx() {
@@ -487,15 +486,12 @@ function _kineTrendMatches(r, filter) {
   if (!pattern) return true;
   const diseases = _kineTrendDiseaseOrder(filter);
   const selected = _filterSet(filter.disease);
-  const timepoints = _kineTrendTimeOrder();
+  // Match the displayed pill exactly: a genotype matches iff its classified
+  // trend equals the chosen pattern. With diseases selected, every selected
+  // genotype must match; with none selected, any genotype matching suffices.
   let any = false;
   for (const d of diseases) {
-    const vals = [];
-    for (const t of timepoints) {
-      const ci = CONTRASTS.indexOf(`${d}_${t}`);
-      if (ci >= 0) vals.push(r._nes[ci]);
-    }
-    const ok = TrendFilter.vectorMatches(vals, pattern);
+    const ok = TrendFilter.classify(_keGenotypeNesVec(r, d)) === pattern;
     if (selected.size && !ok) return false;
     if (ok) any = true;
   }
@@ -604,9 +600,9 @@ function _makeKeCompare(scopedCtxIds) {
       va = _kineDisagreeCountScoped(a, scopedCtxIds);
       vb = _kineDisagreeCountScoped(b, scopedCtxIds);
     }
-    else if (col === "peak_NES_App")  { va = a.peak_NES_App;  vb = b.peak_NES_App; }
-    else if (col === "peak_NES_Tau")  { va = a.peak_NES_Tau;  vb = b.peak_NES_Tau; }
-    else if (col === "peak_NES_ApTt") { va = a.peak_NES_ApTt; vb = b.peak_NES_ApTt; }
+    else if (col === "trend_App")  { va = _keTrendRank(a, "App");  vb = _keTrendRank(b, "App"); }
+    else if (col === "trend_Tau")  { va = _keTrendRank(a, "Tau");  vb = _keTrendRank(b, "Tau"); }
+    else if (col === "trend_ApTt") { va = _keTrendRank(a, "ApTt"); vb = _keTrendRank(b, "ApTt"); }
     else { va = a[col]; vb = b[col]; }
     if (typeof va === "string" || typeof vb === "string") {
       const sa = va == null ? "" : String(va), sb = vb == null ? "" : String(vb);
@@ -911,6 +907,9 @@ function renderKinaseExplorer() {
     r._exportSongTopCelltype = r.song ? r.song.topCelltype : null;
     r._exportWmbMaxTier = _kineMaxWmbTierScoped(r.id, colFilter);
     r._exportConf = hit ? hit.tier : "low";
+    r._exportTrendApp  = TrendFilter.classify(_keGenotypeNesVec(r, "App"))  || "";
+    r._exportTrendTau  = TrendFilter.classify(_keGenotypeNesVec(r, "Tau"))  || "";
+    r._exportTrendApTt = TrendFilter.classify(_keGenotypeNesVec(r, "ApTt")) || "";
 
     const residueBadge = r.residue_type === "Y"
       ? ' <span class="track-badge track-y" title="Tyrosine kinase (pY track)">pY</span>'
@@ -925,9 +924,9 @@ function renderKinaseExplorer() {
       `<td>${_escapeHtml(r.family || "")}</td>` +
       `<td>${profile}</td>` +
       `<td>${agreementProfile}</td>` +
-      _kePeakNesCell(r.peak_NES_App) +
-      _kePeakNesCell(r.peak_NES_Tau) +
-      _kePeakNesCell(r.peak_NES_ApTt) +
+      _keTrendPillCell(r, "App") +
+      _keTrendPillCell(r, "Tau") +
+      _keTrendPillCell(r, "ApTt") +
       `<td class="attr-num">${scopedSig}<span class="muted" style="font-size:10px;"> / ${sigDenom}</span></td>` +
       `<td>${_renderCellTypesCell(r, colFilter)}</td>` +
       `<td style="text-align:center;">${_keSongBadge(r.song)}</td>` +
@@ -944,8 +943,8 @@ function renderKinaseExplorer() {
 }
 
 function exportKinaseCsv() {
-  const headers = ["Kinase","Gene","Family","Residue","n_sig","peak_NES_App","peak_NES_Tau","peak_NES_ApTt","MouseC1_topCelltype","wmb_max_tier","conf","n_backbones","n_paths"];
-  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","peak_NES_App","peak_NES_Tau","peak_NES_ApTt","_exportSongTopCelltype","_exportWmbMaxTier","_exportConf","n_backbones","n_paths"];
+  const headers = ["Kinase","Gene","Family","Residue","n_sig","trend_App","trend_Tau","trend_ApTt","MouseC1_topCelltype","wmb_max_tier","conf","n_backbones","n_paths"];
+  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportTrendApp","_exportTrendTau","_exportTrendApTt","_exportSongTopCelltype","_exportWmbMaxTier","_exportConf","n_backbones","n_paths"];
   csvDownload(csvSerialize(headers, keys, _keVisible), exportFilename(COHORT_LABELS.song, "kinase"));
 }
 

@@ -1,5 +1,14 @@
 # B2 — Backbone sankey (per-genotype)
 
+> **STATUS: DEFERRED / STALE (2026-06-29).** This plan is built on `backbone_rem_t.parquet` and the
+> `backbone_rank` / `is_cholinergic_target` / `n_timepoints_present` schema — **all removed** by the
+> backbone grain pivot. The recurrence-reduction it consumes no longer exists. The merged Incytr
+> screen + grain selector + within-disease timepoint filter + the B-6/J-5 drill may make a separate
+> recurrence-ranked sankey redundant. **Do not implement from this spec as written.** The fate
+> (drop vs. rebuild on the engine `*_backbone_output.parquet` grains) is parked — see
+> [`backbone_incytr_track.md`](backbone_incytr_track.md) § Open threads. Everything below is the
+> pre-pivot design, retained only for the deferred decision.
+
 **Tail item** (gated after B5; `p4_dag.md` tail order B4.2 → **B2** → C3-S4 → G1). Consumes the
 artifact the backbone fold landed: `outputs/reports/incytr_pair_mode/backbone/backbone_rem_t.parquet`.
 **Contract:** `_contracts.md §B5`. **No regen / no heavy compute** — the reduction is already

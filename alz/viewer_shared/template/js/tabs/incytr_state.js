@@ -1,7 +1,12 @@
 // ---------------------------------------------------------------------------
 // IncytrFilter — shared filter state for the Incytr Heatmap + Pathways tabs.
 // Mirrors the KinaseFilter contract: localStorage-backed, get(k) / set(patch)
-// / reset() / subscribe(fn). Persistence key: incytrFilter.v10.
+// / reset() / subscribe(fn). Persistence key: incytrFilter.v11.
+//
+// v11 (J-3):
+//   grain               — "Full" | "L-R-EM" | "R-EM-T" | "R-EM" node grain.
+//   timepointCombine    — timepoints that must be covered (entity-level, per-disease).
+//   timepointCombineMode — "all" (AND) | "any" (OR).
 //
 // v10:
 //   pdsSign        — "both" | "up" | "down" pathway PDS direction filter.
@@ -17,7 +22,7 @@
 // ---------------------------------------------------------------------------
 
 window.IncytrFilter = (function() {
-  const _KEY = "incytrFilter.v10";
+  const _KEY = "incytrFilter.v11";
   const _defaults = {
     // Heatmap projection — timeline contrast scrubber, ordinal selects, and
     // pvalue + |PDS| gates (snapped to heatmap_counts.thresholds /
@@ -55,12 +60,26 @@ window.IncytrFilter = (function() {
     sortDir:        1,
     trend:          "",
 
+    // J-3: Node-grain selector.
+    // "Full" = L-R-EM-T (default, existing behavior).
+    // "L-R-EM" / "R-EM-T" / "R-EM" = backbone grain; entity is defined by
+    // the surviving nodes; dropped nodes render as "—".
+    grain:               "Full",
+
+    // J-3: Timepoint-combination filter.
+    // timepointCombine: which timepoints must be covered ([] = no constraint).
+    // timepointCombineMode: "all" (AND, every selected tp in the same disease)
+    //   or "any" (OR, at least one selected tp in some disease).
+    // Predicate is entity-level and evaluated per-disease, not across diseases.
+    timepointCombine:    [],
+    timepointCombineMode: "all",
+
     // CR-04 trajectory / recurrence filters.
     recurContrasts: [],            // [] = no gate; ["App","Tau"] = AND both
     detailRowKey:   null,          // expanded detail row key (ephemeral)
   };
   const _arrKeys = new Set(["disease","timepoint","senderIn","receiverIn",
-                             "recurContrasts"]);
+                             "recurContrasts","timepointCombine"]);
   let _state = Object.assign({}, _defaults);
   try {
     const saved = JSON.parse(localStorage.getItem(_KEY) || "null");
