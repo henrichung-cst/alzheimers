@@ -10,14 +10,23 @@ C5-stable public API
     build_profile(kinase, cohort, contrast, track, *, human_mode, human_m,
                   ad_donor_set=None)
         → Profile  (dict[motif_upper: ProfileEntry])
-    compare(profile_a, profile_b) → Decomposition
-    motif_similarity(m_a, m_b)    → SimilarityResult
+    substrate_overlap(profile_a, profile_b, *, universe_a, universe_b,
+                      sim_floor=SIM_FLOOR)
+        → SubstrateOverlap
+    substrate_similarity(profile_a, profile_b) → float
+    load_human_gene_universe(track='st') → set[str]
+    load_fivexfad_gene_universe(tissue, track='st') → set[str]
+    motif_similarity(m_a, m_b) → SimilarityResult
+    compare(profile_a, profile_b) → Decomposition  (standalone CLI use only)
 
 Profile key: uppercased 15-mer motif string.
 ProfileEntry: direction (+1/-1/0), support (int), gene (str),
               site_position (str, '' when not available), track (str).
 
-Decomposition: shared/a_only/b_only motif keys + direction agreement on shared.
+SubstrateOverlap: gene-identity-keyed partition of two profiles into
+  shared_sites (BLOSUM-matched residue, same gene), diff_site (same gene,
+  different engaged residue), human_only, mouse_only — with coverage tags
+  (engaged/unmeasured) relative to each cohort's measured-gene universe.
 
 Cohort identifiers
 ------------------
@@ -27,7 +36,8 @@ Cohort identifiers
     'mukesh'   — Human NBB (outputs/reports/kinase_attribution_human/)
 
 Memory: DuckDB-streamed, pool-filtered at scan.  No whole-file pandas reads
-of substrate-set CSVs or stoichiometry matrices.
+of substrate-set CSVs or stoichiometry matrices.  Universe loaders use
+SELECT DISTINCT — never load the full stoichiometry matrix into memory.
 
 CLI:  python -m alz.cross_reference.substrate_motif_compare [args]
 Task: pixi run substrate-compare
@@ -234,6 +244,309 @@ def motif_similarity(m_a: str, m_b: str, sim_floor: float = SIM_FLOOR) -> Simila
     )
 
 
+# ─── Gene-identity substrate overlap ─────────────────────────────────────────
+
+@dataclasses.dataclass
+class SharedSite:
+    """One BLOSUM-matched human↔mouse site pair on the same ortholog gene.
+
+    For diff-site entries (same gene, no site-level BLOSUM match) one side's
+    motif/site/direction/support will be blank/0; similarity will be 0.0.
+    """
+    gene: str
+    motif_a: str
+    site_a: str
+    direction_a: int
+    support_a: int
+    motif_b: str
+    site_b: str
+    direction_b: int
+    support_b: int
+    similarity: float
+    direction_agree: bool
+
+
+@dataclasses.dataclass
+class UniqueSub:
+    """Substrate present in one cohort but absent from the other.
+
+    coverage = 'engaged'   — gene IS in the other cohort's measured universe
+                              → biologically model-unique.
+    coverage = 'unmeasured' — gene NOT in the other cohort's measured universe
+                              → assay coverage gap, not biology.
+    """
+    gene: str
+    motif: str
+    site: str
+    direction: int
+    support: int
+    coverage: str   # 'engaged' | 'unmeasured'
+
+
+@dataclasses.dataclass
+class SubstrateOverlap:
+    """Gene-identity-keyed substrate set decomposition for one kinase × context.
+
+    shared_sites : human-mouse site pairs on the same gene, BLOSUM sim >= floor.
+    diff_site    : same-gene entries with no site-level BLOSUM match (one-sided
+                   SharedSite with blank fields on the unmatched side).
+    human_only   : genes present only in human profile, tagged by coverage.
+    mouse_only   : genes present only in mouse profile, tagged by coverage.
+    """
+    shared_sites: list   # list[SharedSite]
+    diff_site: list      # list[SharedSite] — per-side entries, one blank side
+    human_only: list     # list[UniqueSub]
+    mouse_only: list     # list[UniqueSub]
+
+    @property
+    def n_shared_gene(self) -> int:
+        genes = set(s.gene for s in self.shared_sites)
+        genes |= set(s.gene for s in self.diff_site)
+        return len(genes)
+
+    @property
+    def n_human_only_gene(self) -> int:
+        return len({s.gene for s in self.human_only})
+
+    @property
+    def n_mouse_only_gene(self) -> int:
+        return len({s.gene for s in self.mouse_only})
+
+    @property
+    def n_shared_site(self) -> int:
+        return len(self.shared_sites)
+
+    @property
+    def n_diffsite(self) -> int:
+        # Count genes with diff-site entries, not individual site rows
+        return len({s.gene for s in self.diff_site})
+
+    @property
+    def n_human_only_engaged(self) -> int:
+        return sum(1 for s in self.human_only if s.coverage == "engaged")
+
+    @property
+    def n_human_only_unmeasured(self) -> int:
+        return sum(1 for s in self.human_only if s.coverage == "unmeasured")
+
+    @property
+    def n_mouse_only_engaged(self) -> int:
+        return sum(1 for s in self.mouse_only if s.coverage == "engaged")
+
+    @property
+    def n_mouse_only_unmeasured(self) -> int:
+        return sum(1 for s in self.mouse_only if s.coverage == "unmeasured")
+
+    @property
+    def overlap_frac_gene(self) -> float:
+        denom = self.n_shared_gene + self.n_human_only_gene + self.n_mouse_only_gene
+        return self.n_shared_gene / denom if denom > 0 else 0.0
+
+    @property
+    def direction_agree_frac(self) -> float:
+        if not self.shared_sites:
+            return float("nan")
+        agree = sum(1 for s in self.shared_sites if s.direction_agree)
+        return agree / len(self.shared_sites)
+
+    @property
+    def direction_corr(self) -> float:
+        if not self.shared_sites:
+            return float("nan")
+        da = np.array([s.direction_a for s in self.shared_sites], dtype=float)
+        db = np.array([s.direction_b for s in self.shared_sites], dtype=float)
+        if np.std(da) == 0 or np.std(db) == 0:
+            return float("nan")
+        return float(np.corrcoef(da, db)[0, 1])
+
+
+def substrate_overlap(
+    profile_a: Profile,
+    profile_b: Profile,
+    *,
+    universe_a: set,
+    universe_b: set,
+    sim_floor: float = SIM_FLOOR,
+) -> SubstrateOverlap:
+    """Gene-identity-keyed substrate set decomposition.
+
+    Partitions profile_a (human) and profile_b (mouse) on ortholog gene key
+    (uppercased gene symbol).  Within shared genes, refines to same-site vs
+    diff-site using BLOSUM62 motif similarity >= sim_floor.  Tags unique-side
+    genes with coverage (engaged = gene in other cohort's measured universe;
+    unmeasured = not in universe).
+
+    Parameters
+    ----------
+    profile_a   : human Profile (motif_upper → ProfileEntry)
+    profile_b   : mouse Profile (motif_upper → ProfileEntry)
+    universe_a  : set[str] uppercased gene symbols measured in cohort A
+    universe_b  : set[str] uppercased gene symbols measured in cohort B
+    sim_floor   : BLOSUM62 site-match floor (default SIM_FLOOR)
+    """
+    # Build gene → [(motif, entry)] maps
+    genes_a: dict[str, list] = {}
+    for motif, entry in profile_a.items():
+        g = entry.gene.upper()
+        genes_a.setdefault(g, []).append((motif, entry))
+
+    genes_b: dict[str, list] = {}
+    for motif, entry in profile_b.items():
+        g = entry.gene.upper()
+        genes_b.setdefault(g, []).append((motif, entry))
+
+    keys_a = set(genes_a)
+    keys_b = set(genes_b)
+    shared_keys = keys_a & keys_b
+    a_only_keys = keys_a - keys_b
+    b_only_keys = keys_b - keys_a
+
+    shared_sites: list = []
+    diff_site: list = []
+
+    for g in shared_keys:
+        motifs_a = genes_a[g]
+        motifs_b = genes_b[g]
+        matched_b: set = set()
+
+        for ma, ea in motifs_a:
+            best_sr = None
+            best_mb = None
+            best_eb = None
+            for mb, eb in motifs_b:
+                sr = motif_similarity(ma, mb, sim_floor=sim_floor)
+                if sr.match_class == "unique":
+                    continue
+                if best_sr is None or sr.score > best_sr.score:
+                    best_sr = sr
+                    best_mb = mb
+                    best_eb = eb
+
+            if best_sr is not None and best_mb is not None:
+                matched_b.add(best_mb)
+                shared_sites.append(SharedSite(
+                    gene=g,
+                    motif_a=ma, site_a=ea.site_position,
+                    direction_a=ea.direction, support_a=ea.support,
+                    motif_b=best_mb, site_b=best_eb.site_position,
+                    direction_b=best_eb.direction, support_b=best_eb.support,
+                    similarity=best_sr.score,
+                    direction_agree=(ea.direction == best_eb.direction),
+                ))
+            else:
+                # Same gene, human motif has no BLOSUM-matching mouse residue
+                diff_site.append(SharedSite(
+                    gene=g,
+                    motif_a=ma, site_a=ea.site_position,
+                    direction_a=ea.direction, support_a=ea.support,
+                    motif_b="", site_b="",
+                    direction_b=0, support_b=0,
+                    similarity=0.0,
+                    direction_agree=False,
+                ))
+
+        # Mouse motifs on this gene with no human match
+        for mb, eb in motifs_b:
+            if mb not in matched_b:
+                diff_site.append(SharedSite(
+                    gene=g,
+                    motif_a="", site_a="",
+                    direction_a=0, support_a=0,
+                    motif_b=mb, site_b=eb.site_position,
+                    direction_b=eb.direction, support_b=eb.support,
+                    similarity=0.0,
+                    direction_agree=False,
+                ))
+
+    human_only: list = []
+    for g in a_only_keys:
+        cov = "engaged" if g in universe_b else "unmeasured"
+        for motif, entry in genes_a[g]:
+            human_only.append(UniqueSub(
+                gene=g, motif=motif, site=entry.site_position,
+                direction=entry.direction, support=entry.support,
+                coverage=cov,
+            ))
+
+    mouse_only: list = []
+    for g in b_only_keys:
+        cov = "engaged" if g in universe_a else "unmeasured"
+        for motif, entry in genes_b[g]:
+            mouse_only.append(UniqueSub(
+                gene=g, motif=motif, site=entry.site_position,
+                direction=entry.direction, support=entry.support,
+                coverage=cov,
+            ))
+
+    return SubstrateOverlap(
+        shared_sites=shared_sites,
+        diff_site=diff_site,
+        human_only=human_only,
+        mouse_only=mouse_only,
+    )
+
+
+def substrate_similarity(profile_a: Profile, profile_b: Profile) -> float:
+    """Symmetric mean best-match BLOSUM similarity in [0, 1].
+
+    sim(K) = 0.5 * (mean_a max_b blosum(a,b) + mean_b max_a blosum(a,b))
+
+    Returns 0.0 when either profile is empty.
+    """
+    ma = list(profile_a.keys())
+    mb = list(profile_b.keys())
+    if not ma or not mb:
+        return 0.0
+
+    def _mean_best(keys_a: list, keys_b: list) -> float:
+        total = 0.0
+        for a in keys_a:
+            best = 0.0
+            for b in keys_b:
+                s = motif_similarity(a, b, sim_floor=0.0).score
+                if s > best:
+                    best = s
+            total += best
+        return total / len(keys_a)
+
+    return 0.5 * (_mean_best(ma, mb) + _mean_best(mb, ma))
+
+
+# ─── Measured-gene universe loaders ──────────────────────────────────────────
+
+def load_human_gene_universe(track: str = "st") -> set:
+    """Return uppercased gene symbols in the human ST stoichiometry matrix.
+
+    DuckDB-streamed: SELECT DISTINCT upper(gene_symbol) — never reads full matrix.
+    """
+    path = _human_paths(track)["matrix"]
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Human stoichiometry matrix not found: {path}")
+    conn = duckdb.connect()
+    rows = conn.execute(
+        f"SELECT DISTINCT upper(gene_symbol) FROM read_csv_auto('{path}')"
+    ).fetchall()
+    return {r[0] for r in rows if r[0]}
+
+
+def load_fivexfad_gene_universe(tissue: str, track: str = "st") -> set:
+    """Return uppercased gene symbols in the 5xFAD stoichiometry matrix for tissue.
+
+    DuckDB-streamed: SELECT DISTINCT upper(gene_symbol) — never reads full matrix.
+    tissue: 'cortex' | 'hippocampus'
+    """
+    path = _fivexfad_paths(tissue, track)["matrix"]
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"5xFAD/{tissue} stoichiometry matrix not found: {path}"
+        )
+    conn = duckdb.connect()
+    rows = conn.execute(
+        f"SELECT DISTINCT upper(gene_symbol) FROM read_csv_auto('{path}')"
+    ).fetchall()
+    return {r[0] for r in rows if r[0]}
+
+
 # ─── Path helpers ─────────────────────────────────────────────────────────────
 
 def _repo_root() -> str:
@@ -417,13 +730,21 @@ def _build_fivexfad_profile(kinase: str, contrast: str, track: str) -> Profile:
     """Leading-edge substrates for 5xFAD at one tissue×contrast.
 
     contrast encodes tissue: 'cortex_TG_vs_WT_6mo' → tissue=cortex.
-    Direction = sign of stoich_lfc_{age_contrast} from site_level_ols.
+    Direction = per-replicate majority vote: wt_mean = nanmean(WT columns for
+    age), then sign majority of (TG_i - wt_mean) across TG replicate columns.
+    Symmetric with _build_human_perdonor_profile's AD-donor majority vote.
+    Replicate columns identified by token match: split on '_', check
+    tokens[1] == '{age}mo' and tokens[2] in ('TG','WT') (e.g. cortex_6mo_TG_16).
+    Falls back to direction=0 when TG or WT replicate columns are absent.
     """
     tissue, age_contrast = _fivexfad_parse_contrast(contrast)
     paths = _fivexfad_paths(tissue, track)
-    for p in paths.values():
-        if not os.path.exists(p):
-            raise FileNotFoundError(f"5xFAD/{tissue}/{track} artifact missing: {p}")
+    for key in ("mea", "matrix"):
+        if not os.path.exists(paths[key]):
+            raise FileNotFoundError(f"5xFAD/{tissue}/{track} artifact missing: {paths[key]}")
+
+    # Parse age tag from age_contrast, e.g. 'TG_vs_WT_6mo' → '6mo'
+    age_tag = age_contrast.split("_")[-1]   # last token after split on '_'
 
     conn = duckdb.connect()
     q = f"""
@@ -440,43 +761,88 @@ def _build_fivexfad_profile(kinase: str, contrast: str, track: str) -> Profile:
     if not leading:
         return {}
 
+    # Discover replicate columns for this tissue×age
+    desc = conn.execute(
+        f"DESCRIBE SELECT * FROM read_csv_auto('{paths['matrix']}') LIMIT 0"
+    ).fetchall()
+    matrix_cols = [r[0] for r in desc]
+    meta_col_set = {"site_id", "protein_id", "gene_symbol", "site_position",
+                    "motif", "matched_protein"}
+
+    tg_cols: list[str] = []
+    wt_cols: list[str] = []
+    for col in matrix_cols:
+        if col in meta_col_set:
+            continue
+        tokens = col.split("_")
+        # Expect at least 3 tokens: tissue_ageXmo_condition_rep
+        if len(tokens) < 3:
+            continue
+        if tokens[1] != age_tag:
+            continue
+        if tokens[2] == "TG":
+            tg_cols.append(col)
+        elif tokens[2] == "WT":
+            wt_cols.append(col)
+
+    # Select metadata + replicate columns for leading-edge motifs
     in_clause = _in_clause(leading)
+    rep_sel = ", ".join([f'"{c}"' for c in tg_cols + wt_cols])
+    rep_part = (", " + rep_sel) if rep_sel else ""
     meta_q = f"""
-        SELECT site_id, gene_symbol, motif, site_position
+        SELECT site_id, gene_symbol, motif, site_position{rep_part}
         FROM read_csv_auto('{paths['matrix']}')
         WHERE upper(motif) IN ({in_clause})
     """
-    meta_rows = conn.execute(meta_q).fetchall()
-    if not meta_rows:
+    meta_df = conn.execute(meta_q).fetchdf()
+    if meta_df.empty:
         return {}
 
-    site_ids = [r[0] for r in meta_rows]
-    site_in = _in_clause([str(s) for s in site_ids])
-    lfc_col = f"stoich_lfc_{age_contrast}"
-    ols_q = f"""
-        SELECT site_id, "{lfc_col}" as lfc
-        FROM read_csv_auto('{paths['ols']}')
-        WHERE CAST(site_id AS VARCHAR) IN ({site_in})
-    """
-    try:
-        lfc_rows = conn.execute(ols_q).fetchall()
-    except duckdb.CatalogException:
-        lfc_rows = []
-    lfc_map = {str(r[0]): float(r[1]) if r[1] is not None else 0.0
-               for r in lfc_rows}
+    tg_present = [c for c in tg_cols if c in meta_df.columns]
+    wt_present = [c for c in wt_cols if c in meta_df.columns]
 
     profile: Profile = {}
-    for site_id, gene, motif, site_pos in meta_rows:
-        mu = motif.upper()
-        if mu not in profile:
-            lfc = lfc_map.get(str(site_id), 0.0)
-            profile[mu] = ProfileEntry(
-                direction=_sign(lfc),
-                support=1,
-                gene=gene,
-                site_position=str(site_pos) if site_pos else "",
-                track=track,
-            )
+    for row_idx in range(len(meta_df)):
+        mu = str(meta_df.at[row_idx, "motif"]).upper()
+        if mu in profile:
+            continue
+
+        gene = str(meta_df.at[row_idx, "gene_symbol"])
+        site_pos = str(meta_df.at[row_idx, "site_position"]) if "site_position" in meta_df.columns else ""
+
+        # Direction: majority vote of (TG_i - wt_mean)
+        if wt_present and tg_present:
+            wt_block = [meta_df.at[row_idx, c] for c in wt_present]
+            wt_block_f = [float(v) for v in wt_block
+                          if v is not None and str(v) not in ("", "nan")]
+            wt_mean = float(np.nanmean(wt_block_f)) if wt_block_f else float("nan")
+
+            n_up, n_down = 0, 0
+            if not np.isnan(wt_mean):
+                for c in tg_present:
+                    val = meta_df.at[row_idx, c]
+                    try:
+                        fval = float(val)
+                    except (TypeError, ValueError):
+                        continue
+                    if np.isnan(fval):
+                        continue
+                    s = _sign(fval - wt_mean)
+                    if s > 0:
+                        n_up += 1
+                    elif s < 0:
+                        n_down += 1
+            direction = 1 if n_up > n_down else (-1 if n_down > n_up else 0)
+        else:
+            direction = 0
+
+        profile[mu] = ProfileEntry(
+            direction=direction,
+            support=1,
+            gene=gene,
+            site_position=site_pos if site_pos and site_pos != "nan" else "",
+            track=track,
+        )
     return profile
 
 
@@ -488,7 +854,10 @@ def _build_human_perdonor_profile(
 
     Motif is included if it appears in the leading edge of >= human_m donors in
     the active donor set.
-    direction = majority sign vote across donors that contributed the motif.
+    direction = AD-vs-CTRL majority sign vote across ALL AD donors at the site,
+        independent of which donors' leading edge selected the motif (voting over
+        only the selecting donors is circular — leading-edge membership is ranked
+        by the same donor-vs-ctrl sign, so it collapses to +1).
     support = number of donors in whose leading edge the motif appears.
 
     LFC per donor per site: donor_col - nanmean(ctrl_cols) from stoichiometry_matrix.
@@ -601,14 +970,18 @@ def _build_human_perdonor_profile(
             continue  # keep first-seen site per motif
 
         donors_with_motif = motif_donors.get(mu, set())
-        support = len(donors_with_motif)
+        support = len(donors_with_motif)  # recurrence: donors whose LE selected it
         row_ctrl_mean = float(ctrl_mean_arr[row_idx])
 
-        # Sign vote: per-donor LFC sign for this site's first occurrence
+        # Direction = AD-vs-CTRL sign across ALL AD donors at this site, NOT only
+        # the donors whose leading edge selected the motif.  Voting over the
+        # selecting donors is circular: leading-edge membership is itself ranked
+        # by (donor - ctrl_mean), so re-reading that same sign just returns the
+        # selection criterion and collapses to +1.  Polling every AD donor makes
+        # direction an independent per-site disease-vs-control measure, mirroring
+        # the mouse `sign(stoich_lfc)`.
         n_up, n_down = 0, 0
-        for donor in donors_with_motif:
-            if donor not in present_ad_cols:
-                continue
+        for donor in present_ad_cols:
             val = meta_rows.at[row_idx, donor]
             try:
                 fval = float(val)

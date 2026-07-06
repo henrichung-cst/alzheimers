@@ -62,7 +62,7 @@ from alz.bulk_mea.confidence import DECOMP_FDR_AGREEMENT  # noqa: E402
 import config_integration as icfg  # noqa: E402
 import normalize as kattr  # noqa: E402  (alz.bulk_mea.normalize — Stage 1 phospho-track + IRS helpers)
 from alz.viewer.shared.payload_helpers import (_sanitize, _configure_duckdb_tempdir, _json_clean_value, _INCYTR_FC_NODES, _build_incytr_gene_node_index, _build_kinase_motifs)  # noqa: E402
-from alz.viewer.shared.incytr_index import (_INCYTR_LABEL_NODES, _INCYTR_LABEL_COLS, _INCYTR_LABEL_VOCAB, _INCYTR_SCORE_COLS, _SIGN_VEC_LABELS, _idx_label_bits, _idx_traj_bits)  # noqa: E402
+from alz.viewer.shared.incytr_index import (_INCYTR_LABEL_NODES, _INCYTR_LABEL_COLS, _INCYTR_LABEL_VOCAB, _SIGN_VEC_LABELS, _idx_label_bits, _idx_traj_bits)  # noqa: E402
 from alz.viewer.shared.build_cache import _input_signature, _load_build_cache, _write_build_cache  # noqa: E402
 try:
     from human_celltype_attribution import build_celltype_specificity_payload  # noqa: E402
@@ -80,6 +80,9 @@ from alz.viewer.cohorts.mukesh import build_mukesh_viewer_slice  # noqa: E402
 from alz.viewer.cohorts.fivexfad import (  # noqa: E402
     build_5xfad_incytr_blocks,
     build_fivexfad_viewer_slice,
+)
+from alz.viewer.cohorts.substrate_compare import (  # noqa: E402
+    build_substrate_compare_slice,
 )
 from alz.viewer.shared.compose import compose_viewer_slices  # noqa: E402
 from alz.viewer.cohorts.song import (  # noqa: E402
@@ -1032,11 +1035,11 @@ def build_payload(data: UnifiedData) -> dict:
     contrasts = data.edge_metadata["contrasts"]
     context_id = "song_ad"
 
-    # The Song cohort's attribution is detection-gated (standard metric): its
-    # Song-share fold-pill baseline (song_uniform) is gone. wmb_uniform is kept
-    # only for the still-share-based 5xFAD WMB cross-check column (its own
-    # unmigrated surface; 5xFAD's primary attribution is presence-grounded OLS
-    # decomposition). See docs/plans/attribution/standard_attribution_metric.md.
+    # Attribution is detection-gated across cohorts (standard metric); the Song
+    # and WMB share fold-pill baselines (song_uniform) are gone. wmb_uniform is
+    # kept as the even-split baseline the viewer badge tooltip uses to translate
+    # the detection-based wmb_concentration_tier into its concentration threshold
+    # (tier × uniform). See docs/plans/attribution/standard_attribution_metric.md.
     meta = {
         "schema_version": SCHEMA_VERSION,
         "viewer_payload_schema_version": 2,
@@ -1112,6 +1115,15 @@ def build_payload(data: UnifiedData) -> dict:
     if fivexfad_slice is not None:
         meta["contexts"][0]["capabilities"]["supporting_5xfad"] = True
 
+    # Substrate Conservation (D1) — cross-cohort human↔5xFAD substrate comparison.
+    # Only when both cohorts are present, since the tab's direction glyphs join
+    # against the human + supporting_5xfad sections.
+    substrate_slice = None
+    if mukesh_slice is not None and fivexfad_slice is not None:
+        substrate_slice = build_substrate_compare_slice()
+        if substrate_slice is not None:
+            meta["contexts"][0]["capabilities"]["substrate_compare"] = True
+
     # 5xFAD incytr: build per-tissue blocks; merge into incytr_pathways.by_context
     # AFTER composition, since Song already owns the incytr_pathways owned section.
     fivexfad_incytr_blocks = build_5xfad_incytr_blocks()
@@ -1164,6 +1176,8 @@ def build_payload(data: UnifiedData) -> dict:
         slices.append(mukesh_slice)
     if fivexfad_slice is not None:
         slices.append(fivexfad_slice)
+    if substrate_slice is not None:
+        slices.append(substrate_slice)
 
     edge_slice_ref_base = {
         "schema_version": SCHEMA_VERSION,
@@ -1263,6 +1277,7 @@ _VIEWER_SPECIFIC_TAB_INCLUDES = [
     "js/tabs/kinase_human.js",
     "js/tabs/kinase_fivexfad.js",
     "js/tabs/kinase_crosstable.js",
+    "js/tabs/substrate_compare.js",
 ]
 
 

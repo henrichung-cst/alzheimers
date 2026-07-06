@@ -6,13 +6,25 @@ Orchestrates:
   Stage 1  — Load the frozen 60-kinase pool from overlap_AD8_sus_clean.csv.
   Stage 2  — Build the human per-donor profile over the b-donorset
               (AD8 excl AD-01/AD-03, plus CTRL-08/CTRL-10 as AD) at M=1.
-  Stage 3  — Sweep 8 mouse contexts (cortex/hippocampus × 3/6/9/12mo) via
-              D1 compare(human, mouse) in matched mode.
+            — Load measured-gene universes (human once; mouse per tissue).
+  Stage 3  — Sweep 8 mouse contexts (cortex/hippocampus × 3/6/9/12mo):
+              build mouse profile → substrate_overlap(human, mouse, universe_h,
+              universe_m) + substrate_similarity(human, mouse).
   Stage 4  — Assemble 60-kinase × 8-context summary matrix + MANIFEST.
 
+Overlap metric is gene-identity-keyed set decomposition:
+  shared_genes / human_only_genes / mouse_only_genes, refined by BLOSUM62 site
+  matching within shared genes (same-site vs diff-site), and tagged by coverage
+  (engaged = gene measurable in the other cohort; unmeasured = coverage gap).
+  overlap_frac_gene = shared_gene / (shared + human_only + mouse_only) genes.
+
 Output: outputs/reports/substrate_compare/c5_mukesh_5xfad_<YYYYMMDD_HHMMSS>/
-  kinase_summary.csv         — 60 × 8 matrix (one row per kinase × context)
-  kinase_pairs_<ctx>.csv     — per-context matched/a_only/b_only detail
+  kinase_summary.csv         — 60 × 8 matrix (one row per kinase × context),
+                                overlap_frac_gene / gene counts / coverage splits
+                                / n_shared_site / n_diffsite / direction_agree_frac
+                                / blosum_similarity / sim_hist
+  kinase_pairs_<ctx>.csv     — per-context substrate detail with partition +
+                                coverage columns
   manifest.json              — pool metadata, donor set, parameters, honesty notes
   support_distribution.csv   — human-side motif support counts (honesty guard)
 
@@ -49,11 +61,22 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from alz.cross_reference.substrate_motif_compare import (
-    build_profile,
-    compare,
-    Decomposition,
+    SIM_FLOOR,
     Profile,
+    SubstrateOverlap,
+    build_profile,
+    substrate_overlap,
+    substrate_similarity,
+    load_human_gene_universe,
+    load_fivexfad_gene_universe,
+    motif_similarity,
 )
+
+# BLOSUM-similarity histogram of per-human-motif best matches (viewer detail
+# panel). Fixed bins over the full [0, 1] range so the distribution spans
+# low-agreement motifs, not only the shared (>= SIM_FLOOR) subset.
+_HIST_N_BINS = 10
+_HIST_RANGE = (0.0, 1.0)
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -134,36 +157,98 @@ def _context_label(tissue: str, age: str) -> str:
     return f"{tissue}_{age}"
 
 
+def _sim_histogram(best_match: list) -> str:
+    """Fixed-bin histogram of per-human-motif best-match similarity, ';'-joined.
+
+    Every human substrate motif contributes its single best BLOSUM match against
+    this context's full mouse motif set, spanning [0, 1] — includes low-agreement
+    motifs, not only the shared (>= SIM_FLOOR) subset.
+    Feeds the viewer detail-panel histogram with no per-pair shard fetch.
+    Empty input (kinase absent in this context) yields all-zero bins.
+    """
+    vals = np.asarray(best_match, dtype=float) if best_match else np.array([])
+    counts, _ = np.histogram(vals, bins=_HIST_N_BINS, range=_HIST_RANGE)
+    return ";".join(str(int(c)) for c in counts)
+
+
+def _compute_best_match_hist(
+    human_profile: Profile,
+    mouse_profile: Profile,
+) -> str:
+    """Per-human-motif best-match BLOSUM similarity histogram for the detail pane.
+
+    O(H × M) motif_similarity calls; profiles are typically <500 × <200 motifs.
+    """
+    hkeys = list(human_profile.keys())
+    mkeys = list(mouse_profile.keys())
+    best_match: list[float] = []
+    for ha in hkeys:
+        best = 0.0
+        for mb in mkeys:
+            s = motif_similarity(ha, mb, sim_floor=0.0).score
+            if s > best:
+                best = s
+        best_match.append(best)
+    return _sim_histogram(best_match)
+
+
 def _summary_row(
     kinase: str,
     tissue: str,
     age: str,
-    d: Decomposition,
+    ov: SubstrateOverlap,
     human_profile: Profile,
+    mouse_profile: Profile,
+    blosum_sim: float,
 ) -> dict:
-    """Build one summary row for the kinase × context matrix."""
-    # Human-side support distribution over shared motifs
-    shared_motifs = [p.motif_a for p in d.pairs]
-    if shared_motifs:
-        supports = [human_profile[m].support for m in shared_motifs if m in human_profile]
-    else:
-        supports = []
+    """Build one summary row for the kinase × context matrix.
+
+    Overlap metric: gene-identity partition (shared / human_only / mouse_only),
+    refined by BLOSUM62 site matching within shared genes, tagged by coverage
+    (engaged vs unmeasured relative to each cohort's measured-gene universe).
+    """
+    # Support stats from shared-site human side
+    supports = [s.support_a for s in ov.shared_sites]
     support_min = int(min(supports)) if supports else 0
     support_med = float(np.median(supports)) if supports else float("nan")
 
+    # Direction correlation over shared sites
+    dir_corr: float
+    if ov.shared_sites:
+        da = np.array([s.direction_a for s in ov.shared_sites], dtype=float)
+        db = np.array([s.direction_b for s in ov.shared_sites], dtype=float)
+        if np.std(da) > 0 and np.std(db) > 0:
+            dir_corr = float(np.corrcoef(da, db)[0, 1])
+        else:
+            dir_corr = float("nan")
+    else:
+        dir_corr = float("nan")
+
+    def _num(v):
+        return round(float(v), 6) if v is not None and v == v else ""
+
+    daf = ov.direction_agree_frac
     return {
         "kinase": kinase,
         "tissue": tissue,
         "age": age,
         "context": _context_label(tissue, age),
-        "n_shared": d.n_shared,
-        "n_human_only": d.n_a_only,
-        "n_mouse_only": d.n_b_only,
-        "jaccard": round(d.jaccard, 6),
-        "direction_agree_frac": round(d.direction_agree_frac, 6) if not np.isnan(d.direction_agree_frac) else "",
-        "direction_corr": round(d.direction_corr, 6) if not np.isnan(d.direction_corr) else "",
+        "n_shared_gene": ov.n_shared_gene,
+        "n_human_only_gene": ov.n_human_only_gene,
+        "n_mouse_only_gene": ov.n_mouse_only_gene,
+        "n_human_only_engaged": ov.n_human_only_engaged,
+        "n_human_only_unmeasured": ov.n_human_only_unmeasured,
+        "n_mouse_only_engaged": ov.n_mouse_only_engaged,
+        "n_mouse_only_unmeasured": ov.n_mouse_only_unmeasured,
+        "n_shared_site": ov.n_shared_site,
+        "n_diffsite": ov.n_diffsite,
+        "overlap_frac_gene": _num(ov.overlap_frac_gene),
+        "blosum_similarity": _num(blosum_sim),
+        "direction_agree_frac": _num(daf) if daf == daf else "",
+        "direction_corr": _num(dir_corr) if dir_corr == dir_corr else "",
         "human_support_min": support_min,
         "human_support_median": round(support_med, 3) if not np.isnan(support_med) else "",
+        "sim_hist": _compute_best_match_hist(human_profile, mouse_profile),
     }
 
 
@@ -243,6 +328,31 @@ def run(
     if verbose:
         print(f"[C5]   output → {out_path}", flush=True)
 
+    # ── Load measured-gene universes (DuckDB DISTINCT — never full matrix) ─────
+    if verbose:
+        print("[C5] Loading measured-gene universes...", flush=True)
+    universe_human: set
+    try:
+        universe_human = load_human_gene_universe("st")
+        if verbose:
+            print(f"[C5]   human universe: {len(universe_human)} genes", flush=True)
+    except FileNotFoundError as exc:
+        if verbose:
+            print(f"[C5]   WARN human universe load failed: {exc}", flush=True)
+        universe_human = set()
+
+    universe_mouse: dict[str, set] = {}
+    for tissue in TISSUES:
+        try:
+            universe_mouse[tissue] = load_fivexfad_gene_universe(tissue, "st")
+            if verbose:
+                print(f"[C5]   mouse/{tissue} universe: "
+                      f"{len(universe_mouse[tissue])} genes", flush=True)
+        except FileNotFoundError as exc:
+            if verbose:
+                print(f"[C5]   WARN mouse/{tissue} universe load failed: {exc}", flush=True)
+            universe_mouse[tissue] = set()
+
     # ── Stage 3 + 4: sweep contexts ───────────────────────────────────────────
     if verbose:
         print("[C5] Stage 3/4: sweeping mouse contexts...", flush=True)
@@ -264,45 +374,57 @@ def run(
     for tissue, age in contexts:
         ctx_label = _context_label(tissue, age)
         mouse_contrast = _mouse_contrast(tissue, age)
+        u_mouse = universe_mouse.get(tissue, set())
         if verbose:
             print(f"[C5]   context {ctx_label}...", flush=True)
 
-        # Build mouse profiles + compare
-        ctx_decompositions: list[Decomposition] = []
+        mouse_profiles_ctx: dict[str, Profile] = {}
+        ctx_overlaps: list = []
         missing_for_ctx: list[str] = []
 
         for k in kinases:
             human_p = human_profiles[k]
             try:
-                mouse_p = build_profile(
-                    k, "fivexfad", mouse_contrast, "st"
-                )
+                mouse_p = build_profile(k, "fivexfad", mouse_contrast, "st")
             except Exception as exc:
                 if verbose:
                     print(f"[C5]     WARN mouse profile failed {k}/{ctx_label}: {exc}", flush=True)
                 mouse_p = {}
 
             if not mouse_p and not human_p:
-                # Both empty — kinase absent in this context; still emit zero row
                 missing_for_ctx.append(k)
 
-            d = compare(
+            ov = substrate_overlap(
                 human_p, mouse_p,
-                kinase_a=k, kinase_b=k,
-                cohort_a="mukesh", cohort_b="fivexfad",
-                contrast_a="b-donorset_perdonor_M1",
-                contrast_b=mouse_contrast,
-                track="st",
+                universe_a=universe_human,
+                universe_b=u_mouse,
             )
-            ctx_decompositions.append(d)
-            summary_rows.append(_summary_row(k, tissue, age, d, human_p))
+            sim = substrate_similarity(human_p, mouse_p)
+            ctx_overlaps.append((k, ov, sim, human_p, mouse_p))
+            mouse_profiles_ctx[k] = mouse_p
+
+        for k, ov, sim, human_p, mouse_p in ctx_overlaps:
+            summary_rows.append(
+                _summary_row(k, tissue, age, ov, human_p, mouse_p, sim)
+            )
+
+        if verbose:
+            n_any_shared = sum(1 for _, ov, _, _, _ in ctx_overlaps if ov.n_shared_gene > 0)
+            overlap_vals = [ov.overlap_frac_gene for _, ov, _, _, _ in ctx_overlaps
+                           if ov.n_shared_gene + ov.n_human_only_gene + ov.n_mouse_only_gene > 0]
+            mean_ov = float(np.mean(overlap_vals)) if overlap_vals else float("nan")
+            print(
+                f"[C5]     {ctx_label}: {n_any_shared}/{len(kinases)} kinases have "
+                f"≥1 shared gene  mean overlap_frac={mean_ov:.3f}",
+                flush=True,
+            )
 
         if missing_for_ctx:
             missing_kinases_per_ctx[ctx_label] = missing_for_ctx
 
         # Emit per-context pairs CSV
         pairs_path = out_path / f"kinase_pairs_{ctx_label}.csv"
-        _emit_pairs_csv(ctx_decompositions, pairs_path, kinases)
+        _emit_pairs_csv(ctx_overlaps, pairs_path, mouse_contrast)
         if verbose:
             n_miss = len(missing_for_ctx)
             print(
@@ -323,15 +445,14 @@ def run(
     if verbose:
         print(f"[C5]   support_distribution.csv written", flush=True)
 
-    # ── Headline table (cortex-12mo) ───────────────────────────────────────────
+    # ── Headline table (cortex-12mo) — ranked by overlap_frac_gene ────────────
     headline_rows = [r for r in summary_rows if r["context"] == "cortex_12mo"]
     if headline_rows:
         headline_rows_sorted = sorted(
             headline_rows,
-            key=lambda r: (
-                float(r["direction_agree_frac"]) if r["direction_agree_frac"] != "" else float("nan"),
-                float(r["jaccard"]),
-            ),
+            key=lambda r: (float(r["overlap_frac_gene"])
+                           if r["overlap_frac_gene"] != "" else -1.0),
+            reverse=True,
         )
         headline_path = out_path / "headline_cortex_12mo.csv"
         _emit_summary_csv(headline_rows_sorted, headline_path)
@@ -341,7 +462,7 @@ def run(
     # ── MANIFEST ──────────────────────────────────────────────────────────────
     if emit_manifest:
         manifest = {
-            "analysis": "C5 — Mukesh b-donorset vs 5xFAD substrate direction",
+            "analysis": "C5 — Mukesh b-donorset vs 5xFAD substrate overlap",
             "generated_at": _dt.datetime.now().isoformat(),
             "pool": {
                 "source": POOL_CSV,
@@ -362,17 +483,61 @@ def run(
                 "excluded_from_ad": sorted(BDONORSET_EXCLUDE),
                 "suspects_added": sorted(BDONORSET_SUSPECTS),
             },
+            "overlap_definition": {
+                "partition_key": (
+                    "Ortholog gene symbol (uppercased); human HGNC and mouse MGI "
+                    "symbols are identical for the 1:1 orthologs of these substrates. "
+                    "Caveat: no curated ortholog table — uppercase-symbol equality is v1."
+                ),
+                "site_refinement": (
+                    f"Within shared genes: BLOSUM62 motif similarity >= {SIM_FLOOR} "
+                    "(center-aligned, central-residue-type gated) distinguishes "
+                    "shared_site (matched residue) from shared_gene_diffsite (same "
+                    "protein, different engaged residue)."
+                ),
+                "coverage_aware_uniqueness": (
+                    "human_only / mouse_only genes split by the other cohort's "
+                    "measured-gene universe (SELECT DISTINCT gene_symbol from ST "
+                    "stoichiometry matrix). engaged = gene detectable in the other "
+                    "cohort but not engaged by this kinase → real model difference. "
+                    "unmeasured = gene not in the other cohort's universe → assay "
+                    "coverage gap. Universe is the cohort's full measured-gene set, "
+                    "not restricted to the 60-kinase candidate substrates (conservative "
+                    "detectable-at-all denominator)."
+                ),
+                "direction_concordance": (
+                    "Fraction of shared_site pairs where disease direction agrees. "
+                    "Computed over shared_site pairs only (BLOSUM-matched residue, "
+                    "same gene). NaN when no shared sites."
+                ),
+                "mouse_direction": (
+                    "Per-replicate majority vote: wt_mean = nanmean(WT replicates), "
+                    "direction = majority sign of (TG_i - wt_mean). Symmetric with "
+                    "the human per-donor majority vote. Falls back to 0 if TG or WT "
+                    "replicate columns are absent for a tissue × age."
+                ),
+                "blosum_similarity": (
+                    "Symmetric mean best-match: 0.5*(mean_a max_b sim(a,b) + "
+                    "mean_b max_a sim(a,b)) over all motif pairs. Descriptive "
+                    "secondary metric; not the partition key."
+                ),
+                "sim_floor": SIM_FLOOR,
+                "columns": [
+                    "n_shared_gene", "n_human_only_gene", "n_mouse_only_gene",
+                    "n_human_only_engaged", "n_human_only_unmeasured",
+                    "n_mouse_only_engaged", "n_mouse_only_unmeasured",
+                    "n_shared_site", "n_diffsite",
+                    "overlap_frac_gene", "blosum_similarity",
+                    "direction_agree_frac", "direction_corr",
+                ],
+            },
             "human_profile": {
                 "mode": "perdonor",
                 "M": 1,
                 "sparsity_caveat": (
                     "M=1 means any motif appearing in even one donor's leading edge "
-                    "is included.  Low jaccard vs mouse can reflect human-side sparsity "
-                    "(singleton motifs with support=1) rather than genuine cross-species "
-                    "divergence.  The support_distribution.csv and per-kinase "
-                    "human_support_min/median columns quantify this; interpret low-jaccard "
-                    "kinases in light of their support distribution before concluding "
-                    "divergence."
+                    "is included.  The support_distribution.csv and per-kinase "
+                    "human_support_min/median columns quantify human-side sparsity."
                 ),
                 "n_kinases_with_profile": len(kinases) - n_empty_human,
                 "n_kinases_empty": n_empty_human,
@@ -417,38 +582,78 @@ def _emit_summary_csv(rows: list[dict], path: Path) -> None:
 
 
 def _emit_pairs_csv(
-    decompositions: list[Decomposition],
+    ctx_overlaps: list,
     path: Path,
-    kinases: list[str],
+    mouse_contrast: str,
 ) -> None:
+    """Per-context substrate detail with gene-identity partition.
+
+    Each row carries a substrate from one side (or both for shared sites).
+    partition column: shared_site | shared_gene_diffsite |
+                      human_only_engaged | human_only_unmeasured |
+                      mouse_only_engaged | mouse_only_unmeasured
+    coverage column: engaged | unmeasured (unique-side rows only, blank for shared)
+    """
     header = [
         "kinase", "cohort_a", "contrast_a", "cohort_b", "contrast_b",
-        "motif_a", "motif_b", "gene_a", "gene_b",
-        "match_class", "similarity",
+        "gene_a", "site_a", "motif_a", "gene_b", "site_b", "motif_b",
+        "similarity", "partition", "coverage",
         "direction_a", "direction_b", "direction_agree",
         "support_a", "support_b",
     ]
     with path.open("w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(header)
-        for d, kinase in zip(decompositions, kinases):
-            for p in d.pairs:
+        for kinase, ov, _sim, _hp, _mp in ctx_overlaps:
+            ca = "b-donorset_perdonor_M1"
+            cb = mouse_contrast
+            for s in ov.shared_sites:
                 w.writerow([
-                    kinase, d.cohort_a, d.contrast_a, d.cohort_b, d.contrast_b,
-                    p.motif_a, p.motif_b, p.gene_a, p.gene_b,
-                    p.match_class, f"{p.similarity:.6f}",
-                    p.direction_a, p.direction_b, int(p.direction_agree),
-                    p.support_a, p.support_b,
+                    kinase, "mukesh", ca, "fivexfad", cb,
+                    s.gene, s.site_a, s.motif_a,
+                    s.gene, s.site_b, s.motif_b,
+                    f"{s.similarity:.6f}", "shared_site", "",
+                    s.direction_a, s.direction_b, int(s.direction_agree),
+                    s.support_a, s.support_b,
                 ])
-            for mu_a in d.a_only:
+            for s in ov.diff_site:
+                if s.motif_a:
+                    # human side entry — mouse motif blank
+                    w.writerow([
+                        kinase, "mukesh", ca, "fivexfad", cb,
+                        s.gene, s.site_a, s.motif_a,
+                        s.gene, "", "",
+                        "", "shared_gene_diffsite", "",
+                        s.direction_a, "", "",
+                        s.support_a, "",
+                    ])
+                else:
+                    # mouse side entry — human motif blank
+                    w.writerow([
+                        kinase, "mukesh", ca, "fivexfad", cb,
+                        s.gene, "", "",
+                        s.gene, s.site_b, s.motif_b,
+                        "", "shared_gene_diffsite", "",
+                        "", s.direction_b, "",
+                        "", s.support_b,
+                    ])
+            for u in ov.human_only:
                 w.writerow([
-                    kinase, d.cohort_a, d.contrast_a, d.cohort_b, d.contrast_b,
-                    mu_a, "", "", "", "a_only", "", "", "", "", "", "",
+                    kinase, "mukesh", ca, "fivexfad", cb,
+                    u.gene, u.site, u.motif,
+                    "", "", "",
+                    "", f"human_only_{u.coverage}", u.coverage,
+                    u.direction, "", "",
+                    u.support, "",
                 ])
-            for mu_b in d.b_only:
+            for u in ov.mouse_only:
                 w.writerow([
-                    kinase, d.cohort_a, d.contrast_a, d.cohort_b, d.contrast_b,
-                    "", mu_b, "", "", "b_only", "", "", "", "", "", "",
+                    kinase, "mukesh", ca, "fivexfad", cb,
+                    "", "", "",
+                    u.gene, u.site, u.motif,
+                    "", f"mouse_only_{u.coverage}", u.coverage,
+                    "", u.direction, "",
+                    "", u.support,
                 ])
 
 

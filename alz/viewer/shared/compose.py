@@ -48,6 +48,7 @@ TOP_LEVEL_ORDER: tuple[str, ...] = (
     "incytr_pathways",
     "human",
     "supporting_5xfad",
+    "substrate_compare",
 )
 
 
