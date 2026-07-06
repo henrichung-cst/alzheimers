@@ -26,19 +26,24 @@ The following modules are shared by both viewers:
 
 ```text
 js/00_payload_adapter.js
+js/02_ui_chrome_common.js
 js/03_filters_hash.js
 js/04_slice_cache.js
 js/05_header.js
+js/06_export_csv.js
 js/boot.js
 js/tabs/attribution_view.js
 js/tabs/incytr_state.js
+js/tabs/incytr_global_index.js
 js/tabs/incytr_heatmap.js
+js/tabs/incytr_chord.js
 js/tabs/incytr_pathways.js
 js/tabs/kinase_detail.js
 js/widgets/evidence_row.js
 js/widgets/multiselect.js
 js/widgets/sequence_logo.js
 js/widgets/transcript_trace.js
+js/widgets/trend_filter.js
 ```
 
 `attribution_view.js` is the shared Attribution verdict-table + inline-accordion
@@ -81,7 +86,8 @@ scaling. Axis limiting keeps the top sender and receiver cell types by visible p
 active gates; in timeline mode the axes are ranked across the full slider span so they stay stable
 while scrubbing. Log1p color scaling compresses saturated cells while hover text and pathway
 drill-down continue to use raw path counts. A shared sparse-cell sensitivity filter is also
-available when the active Incytr payload supplies `low_signal_celltypes`; it removes sender-receiver
+available when the active Incytr payload supplies `low_signal_celltypes` (either top-level or nested
+under `celltype_qc.low_signal_celltypes`); it removes sender-receiver
 interactions where either endpoint has median n_cells <= 3 from the heatmap, pathway table, and
 temporal pathway counts. Kinase detail and transcript trace
 modules are shared through capability/context checks so AD/Song keeps the audit workbench path while
@@ -204,8 +210,13 @@ configuration or small view-specific hooks:
 
 ```text
 js/01_state.js
-js/02_ui_chrome.js
 ```
+
+Note: `js/02_ui_chrome.js` was previously listed here. Its common chrome logic has
+been extracted to the shared `js/02_ui_chrome_common.js` (included before the
+per-viewer file); the residual per-viewer `02_ui_chrome.js` holds only
+viewer-specific TAB_MANIFEST entries and splitter registrations, which are
+intentional and not a consolidation target.
 
 Note: `kinase_audit.js` was previously listed here as a consolidation candidate.
 Its Attribution subtab has been consolidated — both viewers now call

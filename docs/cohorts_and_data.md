@@ -52,11 +52,11 @@ Cohort module: `alz/cohorts/fivexfad/`.
 
 On-disk outputs:
 - Kinase MEA: `outputs/reports/kinase_attribution_5xfad/{cortex,hippocampus}_{st,py}_mea_stoichiometry.csv` (both regions, both tracks).
-- Incytr inputs: `data/derived/5xfad_incytr_inputs/{cortex,hippocampus}/` — `incytr_obj.rds` (351M / 398M) + `pr/ps/py_deconvoluted.csv` (mass-identity passing).
+- Incytr inputs: `data/derived/5xfad_incytr_inputs/{cortex,hippocampus}/` — `incytr_obj.rds` (351M / 398M) + `pr/ps/py/ack/kgg_deconvoluted.csv` (mass-identity passing).
+- AcK (acetylation) + KGG (ubiquitination) are 5xFAD-only PTM channels, always scored alongside phospho into the single `wide/` pair-mode product.
 
 **Still pending:**
 - Incytr pair-mode run: `allmarkers.csv` needed first (`pixi run 5xfad-build-incytr-gene-list`), then the run. Uses DEG∪prG derivation (t-cell path; no sce4 frozen gene.use, no parity gate).
-- AcK/KGG PTM data exists for 5xFAD only — see `docs/plans/todo7_incytr_acetyl_ubiquitin.md`.
 
 Plan: `docs/plans/todo6_incytr_on_5xfad.md`.
 

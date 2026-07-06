@@ -68,16 +68,16 @@ Index assigned by primacy: C1 = primary IMAC + snRNA cohort, C2 = supporting tra
 
 Driver validates `CHANNELS ⊆ {pr,py,ps,Ack,KGG}` (`incytr_commandline.R:148`). Ack/KGG are env-gated (`ACK_FILE`/`KGG_FILE`); unset ⇒ byte-identical to a phospho-only run. No Incytr package changes required.
 
-**Output convention (anti-shim, codified in `run_pair_mode_5xfad.sh`).** Phospho-only → `wide/`; phospho+PTM → `wide_ptm/` (parallel dir, **never overwrites `wide/`**). The phospho-only result is *derived* from the PTM superset via `derive_phospho_from_ptm.py` (subtract Ack/KGG score contribution, drop the 12 PTM-only node columns), so the two are provably consistent rather than independently regenerated. Filtering (SigProb/PDS gate) runs in-place on both, AFTER derive.
+**Output convention (codified in `run_pair_mode_5xfad.sh`).** A single pair-mode product per tissue → `wide/`. For 5xFAD the PTM channels (`Ack`/`KGG`) are always scored into it, so `wide/` carries the `Ack_score`/`KGG_score` columns and the 12 PTM-only node columns alongside the phospho paths. Cohorts without acet/ubiq data (Song, T-cell) leave `ACK_FILE`/`KGG_FILE` unset and their `wide/` is byte-identical to a phospho-only run. Filtering (SigProb/PDS gate) runs in-place on `wide/`.
 
 **Cohort reality (corrects the TODO).**
-- **5xFAD** — has Ack + KGG; `wide_ptm/` built for cortex + hippocampus. **Done.**
-- **Song, T-cell** — no acet/ubiq data exists. A PTM run = byte-identical phospho-only. Nothing to generate.
+- **5xFAD** — has Ack + KGG; PTM-inclusive `wide/` built for cortex + hippocampus. **Done.**
+- **Song, T-cell** — no acet/ubiq data exists. `ACK_FILE`/`KGG_FILE` unset ⇒ `wide/` is phospho-only. Nothing to generate.
 - **Mukesh** — proteomics report *is* `STY-AcK-KGG` (data exists), but Mukesh has **no incytr_pair pathway at all** (bulk-MEA only, no snRNA spine). A Mukesh incytr pathway is not feasible, so PTM-on-Mukesh is out of scope.
 
-**Consumers.** B4 (kinase→pathway) and the viewer consume the 5xFAD `wide_ptm/` schema directly. The 12 PTM-only node columns and `Ack_score`/`KGG_score` are the surfaces a viewer PTM layer would read.
+**Consumers.** B4 (kinase→pathway) and the viewer consume the 5xFAD `wide/` schema directly. The 12 PTM-only node columns and `Ack_score`/`KGG_score` are the PTM surfaces the viewer reads (auto-surfaced when non-zero via the payload's `score_columns`).
 
-**Implication for agents / meta-plan.** B3 is NOT a Wave-1 contract producer with pending edits — it's a settled convention. Any theme adding PTM must use the channel names + `wide_ptm/` convention above verbatim.
+**Implication for agents / meta-plan.** B3 is NOT a Wave-1 contract producer with pending edits — it's a settled convention. Any theme adding PTM must use the channel names + `wide/` convention above verbatim.
 
 ## B5 — Backbone grain ✅ (pivoted — engine grain, not a reduction)
 

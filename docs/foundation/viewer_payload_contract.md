@@ -159,7 +159,7 @@ Each context record should contain:
     "incytr": true,
     "decomp_ols": false,
     "song_concordance": false,
-    "human_reference": false,
+    "human_reference": true,
     "transcript_trace": true,
     "omics_trace": false
   },
@@ -330,7 +330,7 @@ mode:
     "contrast_vocab": [],
     "gene_vocab": [],
     "traj_label_vocab": [],
-    "label_states": ["", "DEG", "prG"],
+    "label_states": ["", "DEG", "prG", "KsG"],
     "label_nodes": ["Ligand", "Receptor", "EM", "Target"],
     "score_columns": ["TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "SiK_score"],
     "columns": [
@@ -463,12 +463,15 @@ a missing path as an empty index.
 Run the payload contract verifier after rebuilding viewer payloads:
 
 ```bash
-python alz/viewer/verify_payload_contract.py \
-  outputs/reports/unified_viewer/unified_viewer.payload.json \
+pixi run python alz/viewer/verify_payload_contract.py \
+  outputs/reports/unified_viewer/unified_viewer.payload.json.gz \
   outputs/reports/tcell_viewer/tcell_viewer.payload.json
 ```
 
-The verifier checks schema version, context metadata, canonical `by_context` blocks, Incytr slice
+The unified builder writes only the gzipped sidecar (`unified_viewer.payload.json.gz`); the T-cell
+builder writes both `.json` and `.json.gz`. The verifier auto-detects `.gz` by suffix, so either
+form works for T-cell. The verifier checks schema version, context metadata, canonical `by_context`
+blocks, Incytr slice
 indexes, and context capability consistency. It also fails if the canonical shared blocks regress to
 deprecated `by_donor` aliases.
 
@@ -552,6 +555,11 @@ Current context target:
 }
 ```
 
+When 5xFAD Incytr blocks are present at build time, the unified builder appends two additional
+Incytr-only contexts — `fivexfad_cortex` and `fivexfad_hippocampus` (`cohort: "fivexfad"`,
+`axis_kind: "timepoint"`, `incytr`-only capabilities) — merged into `incytr_pathways.by_context`
+after Song composes its owned section.
+
 ### T-Cell Viewer
 
 Current context targets:
@@ -569,7 +577,7 @@ Current context targets:
       "incytr": true,
       "transcript_trace": true,
       "decomp_ols": false,
-      "human_reference": false
+      "human_reference": true
     }
   },
   {
@@ -583,9 +591,9 @@ Current context targets:
       "incytr": true,
       "transcript_trace": true,
       "decomp_ols": false,
-      "human_reference": false
+      "human_reference": true
     },
-    "notes": ["Donor 2 has no IMAC; kinase MEA is intentionally unavailable."]
+    "notes": ["No IMAC kinase MEA is available for this donor."]
   }
 ]
 ```
@@ -655,13 +663,13 @@ For the current repo, run:
 pixi run python alz/build_unified_viewer.py --payload --html --validate
 pixi run python alz/build_tcell_viewer.py --payload --html --validate
 pixi run python alz/viewer/verify_payload_contract.py \
-  outputs/reports/unified_viewer/unified_viewer.payload.json \
+  outputs/reports/unified_viewer/unified_viewer.payload.json.gz \
   outputs/reports/tcell_viewer/tcell_viewer.payload.json
 ```
 
-The expected contract-verifier result after the 2026-06-01 cleanup is:
+The expected contract-verifier result (canonical full build, with 5xFAD Incytr present) is:
 
 ```text
-outputs/reports/unified_viewer/unified_viewer.payload.json: schema=2 default=song_ad contexts=song_ad pass=True
+outputs/reports/unified_viewer/unified_viewer.payload.json.gz: schema=2 default=song_ad contexts=song_ad,fivexfad_cortex,fivexfad_hippocampus pass=True
 outputs/reports/tcell_viewer/tcell_viewer.payload.json: schema=2 default=donor1 contexts=donor1,donor2 pass=True
 ```

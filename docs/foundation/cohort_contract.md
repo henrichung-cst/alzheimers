@@ -4,7 +4,7 @@ Canonical input/output schemas for the four shared analysis modes. Anything
 listed here is **stable cross-cohort**: a new collaborator dataset becomes
 runnable by writing one ingest module that emits artifacts matching this
 contract, plus one `conf/<cohort>/parameters.yml`. No code below
-`alz/ingest_<cohort>.py` should know which cohort it is operating on.
+`alz/cohorts/<cohort>/ingest.py` should know which cohort it is operating on.
 
 This document codifies **today's de-facto schemas** (as of the 2026-05-21
 factorial vocab unification + repo-organization Phase 3 closeout). It is
@@ -56,8 +56,9 @@ case/control design.
 | `sample_id` | str | yes | matches a column in the bulk matrices; pattern `{group}-{N}` |
 | `group` | str | yes | factor level vocabulary in `conf/<cohort>/parameters.yml:group_levels` (e.g. `["CTRL","AD"]`) |
 
-Cohort code in `alz/ingest_<cohort>.py` decides which shape to emit; downstream
-nodes branch on `parameters.yml:cohort_design` ∈ `{"factorial","case_control"}`.
+Cohort code in `alz/cohorts/<cohort>/ingest.py` (or `alz/ingest/<name>.py` for
+the Song/Lucie originals) decides which shape to emit; downstream nodes branch on
+`parameters.yml:cohort_design` ∈ `{"factorial","case_control"}`.
 
 ### 2.2 Animal-ID parsing
 
@@ -65,7 +66,7 @@ nodes branch on `parameters.yml:cohort_design` ∈ `{"factorial","case_control"}
 timepoint, genotype)`. The canonical genotype vocabulary is
 `config.SAP_FACTORIAL.keys()` after applying `config.GENOTYPE_TO_SAP`. New
 cohorts use either `config.parse_animal_id` (if they share the SAP regex
-format) or supply their own parser exported as `ingest_<cohort>.parse_id`.
+format) or supply their own parser exported from `alz/cohorts/<cohort>/ingest.py`.
 
 ### 2.3 Contrast vocabulary
 
@@ -231,7 +232,7 @@ are forbidden — see [memory: direct_levy_t5_mapping].
 
 Checklist for adding cohort `<cohort>`:
 
-1. Write `alz/ingest/<cohort>.py` emitting:
+1. Write `alz/cohorts/<cohort>/ingest.py` emitting:
    - `outputs/reports/data_ingest_<cohort>/sample_mapping.csv` (§2.1 shape that matches the design)
    - `outputs/reports/kinase_attribution_<cohort>/{stoichiometry,raw_phospho}_matrix{,_pY}.csv`
    - `outputs/reports/kinase_attribution_<cohort>/total_proteome_normalized.csv`
@@ -243,8 +244,8 @@ Checklist for adding cohort `<cohort>`:
    run mode 3.
 
 No edits to `alz/bulk_mea/*`, `alz/decomposition_mea/*`, `alz/incytr_pair/*`, or
-`alz/integration/*` should be necessary. If they are, that's a contract gap
-to file under [`docs/plans/repo_cleanup_targets_2026-06-17.md`].
+`alz/integration/*` should be necessary. If they are, that's a contract gap —
+file it as a plan under `docs/plans/`.
 
 ## 8. Out of scope (deferred)
 
@@ -258,6 +259,6 @@ to file under [`docs/plans/repo_cleanup_targets_2026-06-17.md`].
 
 ## References
 
-- Current cleanup ledger: [`docs/plans/repo_cleanup_targets_2026-06-17.md`](../plans/repo_cleanup_targets_2026-06-17.md)
+- Active plans index: [`docs/plans/README.md`](../plans/README.md)
 - Live pipeline contract (runtime view, complementary): [`docs/foundation/live_pipeline_contract.md`](./live_pipeline_contract.md)
 - Analysis charter (scope, closed paths): [`docs/foundation/analysis_charter.md`](./analysis_charter.md)

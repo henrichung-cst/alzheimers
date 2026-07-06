@@ -40,7 +40,7 @@ Locate the IncytrDB database backing incytr pathway calculations. Determine: (a)
 Replace or supplement the current incytr pathway heatmap with a sankey or chord diagram that emphasizes cell-type connections over time. Collapse some excitatory neuron clusters to reduce visual complexity. (Also see B5 for backbone filtering before building this.)
 
 **B3. Incytr with acetylation and ubiquitination**
-Expand incytr to include acetylation and ubiquitination PTM data, handled identically to phosphorylation (minimal code changes — data extension, not new logic). Generate new results for song, 5xfad, and tcell **without overwriting** existing phospho-only outputs. Store in a parallel output directory (e.g., `wide_ptm/` pattern already used for 5xFAD).
+Expand incytr to include acetylation and ubiquitination PTM data, handled identically to phosphorylation (minimal code changes — data extension, not new logic). Only 5xFAD has acet/ubiq data (song + tcell have none); the `Ack`/`KGG` channels fold directly into 5xFAD's single `wide/` pair-mode product via the driver's `ACK_FILE`/`KGG_FILE` env gate.
 
 **B4. Kinase → incytr pathway integration**
 Insert kinase activity data into incytr pathways based on substrate activity. For the high-confidence substrates of each active kinase, identify which genes are those substrates, then link them into the pathway graph. Enrich with cell-type and timepoint information so pathway edges can be gated by expression and disease context.
@@ -200,7 +200,7 @@ A5, G1, G2, H1, D1 (substrate comparator design/scaffolding).
 10x Flex dataset (897,733 cells × 18,082 genes) annotated via ProjecTILs + marker lineages. 77,760 T cells in 14 states; non-T → 7 TME lineages. Two metrics per (kinase, cell_type): mean_log2(CPM+1) + fraction expressing. Audit: 79/339 covered kinases expressed nowhere in TME (tissue-restricted families = MEA false-positive candidates). Wired into viewer as NSCLC attribution tier. Commits: 1f2fa8e, dbae990. Plan: `docs/plans/todo2_tcell_specificity_reference.md`.
 
 **[DONE 2026-06-19] Incytr on 5xFAD**
-All 8 contrasts (cortex/hippocampus × 3/6/9/12mo) complete in `wide/` and `wide_ptm/`. One driver fix: `null_if_empty()` for optional PTM assays with no samples at a given timepoint. Viewer wired as `fivexfad_cortex` and `fivexfad_hippocampus` contexts. Plan: `docs/plans/todo6_incytr_on_5xfad.md`.
+All 8 contrasts (cortex/hippocampus × 3/6/9/12mo) complete in the single PTM-inclusive `wide/` product. One driver fix: `null_if_empty()` for optional PTM assays with no samples at a given timepoint. Viewer wired as `fivexfad_cortex` and `fivexfad_hippocampus` contexts. Plan: `docs/plans/todo6_incytr_on_5xfad.md`.
 
 **[DONE 2026-06-19] Unified viewer scaling audit**
 P1–P8 implemented: attribution-summary + celltype-MEA sidecars, payload 105→53 MB raw / 10.1→5.63 MB gzip. Crosstable lazy init, gene_node_index per-context sidecar, LRU cap on 5xFAD caches, T-cell viewer sidecar payload mode. Plan: `docs/plans/todo8_unified_viewer_scaling_audit.md`.

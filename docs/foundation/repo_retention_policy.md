@@ -36,6 +36,15 @@ Generated caches (`alz/__pycache__/`, etc.) are excluded from this index.
 - `docs/foundation/statistical_constraints.md`
 - `docs/foundation/live_pipeline_contract.md`
 - `docs/foundation/concordance.md`
+- `docs/foundation/specificity_confidence.md`
+- `docs/foundation/cohort_contract.md`
+- `docs/foundation/multiple_testing.md`
+- `docs/foundation/mechanism_attribution_contract.md`
+- `docs/foundation/projected_state_mea_contract.md`
+- `docs/foundation/kinase_explorer_attribution.md`
+- `docs/foundation/viewer_payload_contract.md`
+- `docs/foundation/viewer_frontend_contract.md`
+- `docs/foundation/mukesh_ingest_policies.yml`
 - `docs/foundation/repo_retention_policy.md` (this file)
 - `docs/INDEX.md`
 

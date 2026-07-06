@@ -24,6 +24,8 @@ Read by analytical role, not creation order.
 | [`foundation/viewer_payload_contract.md`](./foundation/viewer_payload_contract.md) | Shared frontend payload schema for current and future viewers; builders stay separate but emit a common context/capability contract |
 | [`foundation/viewer_frontend_contract.md`](./foundation/viewer_frontend_contract.md) | Frontend sharing policy for AD/Song and T-cell viewers; documents shared modules, intentional forks, and consolidation targets |
 | [`foundation/kinase_explorer_attribution.md`](./foundation/kinase_explorer_attribution.md) | Authoritative live contract for Kinase Explorer Attribution views across Song AD, human/Mukesh, 5xFAD, and T-cell viewer surfaces |
+| [`foundation/mechanism_attribution_contract.md`](./foundation/mechanism_attribution_contract.md) | Mechanism-annotation contract (Packet 0A): how mechanism labels merge into `unified_attribution.csv` |
+| [`foundation/projected_state_mea_contract.md`](./foundation/projected_state_mea_contract.md) | Projected-state MEA contract (Packet 0B): per-cluster decomposition → MEA substrate contract |
 | [`foundation/mukesh_ingest_policies.yml`](./foundation/mukesh_ingest_policies.yml) | Mukesh / NBB human ingest edge-case policies (consumed by `alz/cohorts/mukesh/ingest.py`) |
 
 ## Reference Guides
@@ -32,34 +34,58 @@ Stable docs that aren't authoritative specs but aren't plans either.
 
 | File | Role |
 |:---|:---|
+| [`cohorts_and_data.md`](./cohorts_and_data.md) | Per-cohort status + data conventions across Song, Mukesh, 5xFAD, T-cell |
+| [`pipeline_conventions.md`](./pipeline_conventions.md) | Cross-pipeline coding + naming conventions |
 | [`report_writing_checklist.md`](./report_writing_checklist.md) | Reviewer-facing report writing guidance |
-| [`result_analysis_plan.md`](./result_analysis_plan.md) | Interpretation framework: how to move from generated outputs to biological claims |
 | [`tcell_exhaustion_analysis_summary.md`](./tcell_exhaustion_analysis_summary.md) | Stable summary of the T-cell exhaustion cohort, attribution interpretation, and dedicated viewer |
 | [`allen_ctx_hpf_disagreement.md`](./allen_ctx_hpf_disagreement.md) | Reviewer FAQ: why our cell-type verdicts may differ from the Allen ctx+HPF Transcriptomics Explorer |
 | [`viewer_style.md`](./viewer_style.md) | Writing-style guide for unified-viewer copy (panels, drawers, tooltips) |
+| [`viewer_crosstable_agreement.md`](./viewer_crosstable_agreement.md) | Unified-viewer Crosstable Agreement view: semantics + wiring |
+| [`incytr_sce4_reproduction.md`](./incytr_sce4_reproduction.md) | sce4 reproduction status + closed dead ends (companion to CLAUDE.md parity constants) |
+| [`kedro_argo_reintroduction.md`](./kedro_argo_reintroduction.md) | Design note for reintroducing Kedro under Argo orchestration |
+| [`cohort_abstraction_refactor.md`](./cohort_abstraction_refactor.md) | Cohort-abstraction refactor phase history + carryover |
 
 ## Integrations
 
 | File | Role |
 |:---|:---|
 | [`integrations/kinase_incytr_integration.md`](./integrations/kinase_incytr_integration.md) | Current pair-mode integration architecture; in-tree file inventory; data-flow diagram |
+| [`integrations/5xfad-kinase-mea-viewer.md`](./integrations/5xfad-kinase-mea-viewer.md) | 5xFAD kinase-MEA + viewer integration notes |
 | [`integrations/5xfad-omics-status.md`](./integrations/5xfad-omics-status.md) | Current 5xFAD proteomics/transcriptomics availability, sample matching status, and unresolved label conflicts |
 | [`integrations/5xfad-lucie-manifest.json`](./integrations/5xfad-lucie-manifest.json) | Local inventory of Lucie 5xFAD upstream files |
 
-## Active Plans
+## Agent Operating Docs
 
-Live plans in `docs/plans/`. Superseded implementation plans were removed from
-the active plan directory during the 2026-06-17 cleanup pass. Use the cleanup
-ledger below as the active repo-organization tracker.
+Docs consumed by agent skills (see [`CLAUDE.md`](../CLAUDE.md) §Agent skills).
 
-| File | Status |
+| File | Role |
 |:---|:---|
-| [`plans/repo_cleanup_targets_2026-06-17.md`](./plans/repo_cleanup_targets_2026-06-17.md) | Active cleanup ledger: target list and pass status |
+| [`agents/issue-tracker.md`](./agents/issue-tracker.md) | GitHub issue-tracker workflow for the `henrichung-cst/alzheimers` repo |
+| [`agents/triage-labels.md`](./agents/triage-labels.md) | The five canonical triage labels + their roles |
+| [`agents/domain.md`](./agents/domain.md) | Single-context domain-docs convention (`CONTEXT.md` + `docs/adr/`) |
+
+## Audits & Vignettes
+
+| File | Role |
+|:---|:---|
+| [`audits/tcell_theme_a_audit.md`](./audits/tcell_theme_a_audit.md) | T-cell Theme-A audit write-up |
+| [`vignettes/tcells_input_rds_walkthrough.Rmd`](./vignettes/tcells_input_rds_walkthrough.Rmd) | Walkthrough: T-cell input RDS objects + matching ProjecTILs predictions back to cells |
+
+## Plans
+
+Live plans live in `docs/plans/`, indexed by [`plans/README.md`](./plans/README.md).
+Two bodies of work: the completed-but-live 4-wave **orchestration program** (Themes A–H,
+top-level docs + `theme_<x>/` subdirs) and **standalone topic plans** grouped under
+`attribution/`, `tcell/`, `fivexfad/`, `deployment/`. The only in-flight effort is the
+Theme-B Incytr regeneration ([`plans/incytr_rerun_ksg_ptm_backbone_2026-06-29.md`](./plans/incytr_rerun_ksg_ptm_backbone_2026-06-29.md)).
+Completed standalone plans are moved out to `archive/archived_plans/`. See
+[`plans/README.md`](./plans/README.md) for the full per-theme table and status legend.
 
 ## Archive
 
-`docs/archive/` is gitignored. Local files persist on disk for provenance but
-are not tracked. See [`foundation/repo_retention_policy.md`](./foundation/repo_retention_policy.md) §Archived for what's there and why.
+`docs/archive/` is gitignored and is not present in a fresh checkout; it holds
+provenance material only where it has been locally regenerated. See
+[`foundation/repo_retention_policy.md`](./foundation/repo_retention_policy.md) §Archived for what belongs there and why.
 
 Archived material includes:
 
@@ -69,11 +95,11 @@ Archived material includes:
 
 ## Reading Rule
 
-- **What should we do next?** → [`foundation/`](./foundation/analysis_charter.md) + [`plans/repo_cleanup_targets_2026-06-17.md`](./plans/repo_cleanup_targets_2026-06-17.md)
+- **What should we do next?** → [`foundation/`](./foundation/analysis_charter.md) + [`plans/README.md`](./plans/README.md)
 - **How do external inputs map into runtime?** → [`integrations/kinase_incytr_integration.md`](./integrations/kinase_incytr_integration.md)
 - **Why was a path closed?** → [`foundation/analysis_rationale.md`](./foundation/analysis_rationale.md)
-- **What plans are open?** → [`plans/`](./plans/)
-- **Historical context** → `archive/` (on disk; not tracked)
+- **What plans are open?** → [`plans/README.md`](./plans/README.md)
+- **Historical context** → `archive/` (gitignored; present only when locally regenerated)
 
 ---
 

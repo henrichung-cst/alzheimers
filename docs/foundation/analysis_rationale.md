@@ -44,36 +44,32 @@ This is why the live program separates abundance-coupled from activity-driven be
 ## 5. Cross-Species Inference Scope
 
 The unified attribution arm uses human SEA-AD transcriptomic data (139
-supertypes, 24 subclasses from the Allen Institute MTG dataset) to interpret
-mouse 5xFAD phosphoproteomics. This is a deliberate design choice, not an
-accidental conflation. The implicit assumption is that cell-type-specific
-transcriptomic changes in human AD are directionally conserved in the 5xFAD
-mouse model — that is, if a kinase gene is upregulated in human AD microglia,
-the corresponding kinase activity signal in mouse microglia should point the
-same way.
+supertypes, 24 subclasses from the Allen Institute MTG dataset) as a
+corroborating reference for the Song App/Tau AD-model mouse phosphoproteomics.
+This is a deliberate design choice, not an accidental conflation. The implicit
+assumption is that cell-type-specific transcriptomic changes in human AD are
+directionally conserved in the mouse model — that is, if a kinase gene is
+upregulated in human AD microglia, the corresponding kinase activity signal in
+mouse microglia should point the same way.
 
 This assumption is well-supported for certain pathways and cell types. The
 GSK3, MAPK/JNK, MAPK/ERK, and DYRK families that drive the strongest signals
 in this pipeline have established cross-species conservation in AD models.
 Microglial and astrocytic transcriptomic responses to amyloid pathology are
-among the most conserved features between human AD and 5xFAD mice. For other
-cell types and pathways, cross-species conservation is an open question.
+among the most conserved features between human AD and amyloid/tau model mice.
+For other cell types and pathways, cross-species conservation is an open
+question.
 
-To make this transparent, the final attribution table includes a
-`confidence_basis` column that classifies each attribution as:
-
-- `cross_species` — supported by both human SEA-AD concordance and mouse WMB
-  expression specificity
-- `mouse_expression_only` — supported only by WMB expression specificity (no
-  meaningful human SEA-AD signal)
-- `human_concordance_only` — supported only by SEA-AD concordance (WMB
-  specificity below threshold)
-- `weak` — positive concordance but both evidence sources below their strong
-  thresholds
-
-This lets downstream consumers identify which attributions depend on the
-cross-species assumption and which are supported by mouse-internal evidence
-alone.
+The pipeline keeps this dependence visible rather than hidden. The
+**within-cohort Song** snRNA-seq (same animals as the bulk MEA) is the primary
+evidence and sets the headline `confidence_tier`; the human SEA-AD/HBCA and
+mouse WMB references only **corroborate** and can never single-handedly produce
+a high call. A record whose support comes only from the human reference is
+therefore identifiable from its evidence-basis label, so downstream consumers
+can tell which attributions lean on the cross-species assumption and which rest
+on mouse-internal evidence. The per-source basis labels and the corroboration
+rules are specified in [`concordance.md`](./concordance.md) and
+[`specificity_confidence.md`](./specificity_confidence.md).
 
 ## 6. Resulting Project Logic
 

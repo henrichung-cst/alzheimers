@@ -250,8 +250,9 @@ honest consequence of dropping a gate that was both misleading and artificially 
 - `viewer/cohorts/song.py` — both builders emit the new fields.
 - JS (`kinase_explorer.js`, `kinase_audit.js`, `kinase_crosstable.js`, `styles.css`) — Song-tab
   share fold-pills (`_msTier`/`_msTierBadge`/`_KX_SONG_UNIFORM`) replaced with detection cells
-  (✓/✗ + frac%), `concentration_tier` badge, and `effective_n`. The shared `_wmbTier` /
-  `_wmbTierBadge` helpers are KEPT for the 5xFAD tab.
+  (✓/✗ + frac%), `concentration_tier` badge, and `effective_n`. The `_wmbTierBadge` helper is
+  shared with the 5xFAD tab, where it renders the detection-based `wmb_concentration_tier` (not a
+  share).
 
 Verified: `pixi run viewer` exit 0, payload 57.74 MB raw / 6.06 MB gz; attribution_index carries
 all 8 new detection fields, all 7 stale share fields absent (108,531 rows, 54,693 song-detected).
@@ -299,7 +300,7 @@ which is unchanged).
 ## Phase 3 — 5xFAD within-cohort detection metric — DONE 2026-06-22
 
 Closes the consistency pass: 5xFAD was the last cohort on legacy share/τ. Plan:
-[`fivexfad_detection_metric_migration.md`](../fivexfad/fivexfad_detection_metric_migration.md).
+[`fivexfad_detection_metric_migration.md`](../../../archive/archived_plans/standalone_done/fivexfad_detection_metric_migration.md).
 
 - **Producer** `alz/ingest/build_5xfad_snrna_attribution.R` is now a pseudobulk +
   detection exporter: per-(gene, tissue, cell type) `fraction_cells_expressing`
@@ -320,10 +321,11 @@ Closes the consistency pass: 5xFAD was the last cohort on legacy share/τ. Plan:
 - **Viewer** `kinase_fivexfad.js` + `kinase_crosstable.js` render the shared
   `_detGateCell` / `_concTierCell` widgets; share fold-pills and the `_F5_UNIFORM`
   baseline removed. `test_fivexfad.py` updated to assert the detection schema.
-- **Kept (still in use by the Song/WMB path, NOT orphaned):**
-  `config.wmb_specificity_uniform()` / `meta.wmb_uniform` / `_wmbTier` /
-  `_wmbTierBadge` — they drive the Song WMB share→tier conversion in
-  `kinase_explorer.js`. `wmb_expression.py --proteome` still emits a proteome-wide
+- **Kept (still in use, NOT orphaned):** `config.wmb_specificity_uniform()` /
+  `meta.wmb_uniform` / `_wmbTierBadge` — `_wmbTierBadge` renders the
+  detection-based `wmb_concentration_tier` (Song WMB export column +
+  5xFAD tab); the baseline only supplies the badge tooltip's threshold
+  (`tier × uniform`). `wmb_expression.py --proteome` still emits a proteome-wide
   share, a distinct surface unrelated to kinase attribution.
 
 **One metric, every cohort** is now literally true for the within-cohort and

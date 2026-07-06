@@ -5,6 +5,14 @@ weighted, and used throughout the kinase attribution pipeline. Concordance is
 the mechanism by which kinase activity changes (from phosphoproteomics) are
 linked to specific cell types (from snRNA-seq).
 
+> **Headline vs direction (read first).** The tiers this document computes are the
+> **disease-direction** concordance tiers. Since the exclusivity-pill refactor they
+> are snapshotted into `direction_tier` / `direction_basis` and are **info-only**.
+> The headline `confidence_tier` shown in the viewer is the **cell-type exclusivity
+> pill**, computed downstream in `alz/bulk_mea/specificity_class.py` and specified in
+> [`specificity_confidence.md`](./specificity_confidence.md). Everywhere below, read
+> "confidence tier" as the `direction_tier` computation (`alz/bulk_mea/confidence.py`).
+
 ## Core question
 
 For a given kinase showing altered activity in a disease model, *is the gene
@@ -101,17 +109,20 @@ The `concordance_source` is recorded as `"both"`, `"song"`, `"sea_ad"`, or
 kinase activity direction contradicts the expression evidence for this cell
 type.
 
-### Step 4: Canonical confidence tier
+### Step 4: Direction tier
 
-The final exported confidence value is the categorical `confidence_tier`. For
-display ordering, code sorts by that tier and then by explicit evidence columns:
-Song location specificity, decomposition agreement, WMB/human location support,
-and raw Song/SEA-AD LFC magnitudes. WMB no longer gates the evidence table or
-drives a synthetic score.
+The tier this computation exports is the categorical `direction_tier` (with
+`direction_basis`). `assign_confidence` writes it as `confidence_tier`, and
+`assign_specificity_class` then snapshots it into `direction_tier` before
+overwriting the headline `confidence_tier` with the exclusivity pill. For display
+ordering, code sorts by that tier and then by explicit evidence columns: Song
+location specificity, decomposition agreement, WMB/human location support, and raw
+Song/SEA-AD LFC magnitudes. WMB no longer gates the evidence table or drives a
+synthetic score.
 
-## Confidence tiers
+## Direction tiers
 
-After the internal direction gate passes, confidence is
+After the internal direction gate passes, the direction tier is
 assigned based on the strength and source of evidence:
 
 ### High confidence
@@ -199,28 +210,26 @@ symbol name, which holds for the conserved kinome.
 
 ## Cell type taxonomy
 
-All three evidence sources are mapped to a common spine of **34 WMB
-classes** defined in `config.WMB_CLASSES` and `data/external/allen_abc/
-wmb_class_manifest.csv`. Each evidence source provides what it can and
-contributes `n/a` for cell types it cannot witness, rather than being
-silently dropped.
+All three evidence sources land on the **levy_t5 31-cluster spine**
+(`config.CLUSTER_SPINE`, `CLUSTER_SPINE_NAME = "levy_t5"`) — the Song snRNA-seq
+cluster taxonomy. Each source provides what it can and contributes `n/a` for
+clusters it cannot witness, rather than being silently dropped. References attach
+to the spine through **1-hop** bridges only; chained mappings (e.g. SEA-AD → WMB →
+cluster) are forbidden — see [`cohort_contract.md`](./cohort_contract.md) §6.3.
 
-- **WMB (spine):** 338 region-specific subclasses → 34 classes via direct
-  group-by on `wmb_meta["class"]` (no keyword matching, no silent drops).
-  Subclass-level data preserved in `wmb_kinase_expression_subclass.csv`
-  for audit/tooltip.
-- **SEA-AD:** 139 supertypes → 9 WMB classes via the chained mapping
-  `var["Subclass"]` (24 SEA-AD subclasses) → `seaad_subclass_to_wmb_class.csv`
-  (cortical neurons + glia + vascular + immune). Median LFC across all
-  contributing supertypes per WMB class. SEA-AD has no MTG coverage of
-  hippocampal CA, dentate granule, striatum, olfactory bulb, or cerebellum,
-  so those classes carry `sea_ad_lfc = n/a`.
-- **Song:** Allen Cell Type Mapper `class_name` column maps directly into
-  the 34-class vocabulary (the prefix code is added via the manifest).
-  Approximately 21 of 34 classes pass Song's confidence + animal-count
-  gates; the rest carry `song_lfc = n/a` honestly. See
-  `outputs/reports/snrna_integration/active_classes.csv` for the per-class
-  Song coverage manifest.
+- **Song (spine):** native 31 clusters. For the exclusivity pill the clusters are
+  folded into 17 curated specificity units (see
+  [`specificity_confidence.md`](./specificity_confidence.md)); for direction
+  concordance the per-cluster disease LFC is used directly.
+- **WMB:** 338 region-specific subclasses → 34 WMB classes; corroborates at the
+  WMB **class** of the spine cluster's home, via
+  `data/derived/bridges/cluster_to_wmb_class.csv`.
+- **SEA-AD:** 139 MTG supertypes roll onto the spine via
+  `data/derived/bridges/cluster_to_seaad_supertype.csv` (weighted). SEA-AD has no
+  MTG coverage of hippocampal CA, dentate granule, striatum, olfactory bulb, or
+  cerebellum, so spine clusters that map only to those carry `sea_ad_lfc = n/a`.
+- **HBCA:** whole-brain superclusters roll onto the spine via
+  `data/derived/bridges/cluster_to_hbca_supercluster.csv` (weighted).
 
 ## Implementation locations
 

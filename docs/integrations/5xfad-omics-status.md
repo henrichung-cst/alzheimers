@@ -439,7 +439,8 @@ Design (locked):
 - **Cell types:** `new_clusters` with unnamed `^cluster-[0-9]+$` dropped → 31
   (set-equal to the levy_t5 31; the 46-name spine is a name cross-check only, never
   an `in_spine` whitelist).
-- **Channels:** `pr` (total) + `ps` (IMAC/ST) + `py` (pY). KGG/AcK excluded.
+- **Channels:** `pr` (total) + `ps` (IMAC/ST) + `py` (pY) + `Ack` (acetylation) +
+  `KGG` (ubiquitination). The PTM channels are 5xFAD-only and always included.
 - **gene.use:** derived live (`SCE4_GENEUSE_DIR` unset). No transgene force-include
   (the driver's hardcoded `App/Psen1/Mapt` list no-ops — 5xFAD rows are
   `TgAPP`/`TgPSEN1`).
@@ -451,7 +452,7 @@ Pipeline (pixi tasks, in order):
 |:---|:---|:---|
 | `5xfad-export-bulk` | `fivexfad.py --export-bulk` | `<tissue>/{pr,ps,py}_bulk_linear.csv` |
 | `5xfad-incytr-scrna-extract` | `fivexfad_scrna_extract.R` | `<tissue>/scrna/{aggexp_data,cell_counts}.csv` |
-| `5xfad-incytr-decompose` | `fivexfad_decompose.py` | `<tissue>/{pr,ps,py}_deconvoluted.csv` |
+| `5xfad-incytr-decompose` | `fivexfad_decompose.py` | `<tissue>/{pr,ps,py,ack,kgg}_deconvoluted.csv` |
 | `5xfad-build-incytr-seurat` | `build_5xfad_seurat.R` | `<tissue>/incytr_obj.rds` |
 | `5xfad-build-incytr-gene-list` | `build_5xfad_input_gene_list.R` | `<tissue>/allmarkers.csv` |
 | `5xfad-incytr` | `run_pair_mode_5xfad.sh` | `outputs/reports/incytr_pair_mode_5xfad/<tissue>/wide/` |

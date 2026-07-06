@@ -184,7 +184,7 @@ Inputs:
 - `outputs/reports/wmb_expression/wmb_kinase_expression.csv`
 - SEA-AD effect sizes under `config.SEA_AD_DIR`
 - `outputs/reports/snrna_integration/song_*.csv` (optional)
-- `data/datasets/song/analysis_cache/kinase_to_gene_mapping.csv`
+- `data/derived/caches/kinase_to_gene_mapping.csv` (`config.MAPPING_CACHE_FILE`)
 
 Canonical outputs:
 

@@ -6,12 +6,14 @@ Use [`analysis_rationale.md`](./analysis_rationale.md) for the pivot logic, [`st
 
 ## Scope
 
-The live program is the 72-sample pathway:
+The primary deliverable is the 72-sample Song mouse bulk pathway:
 
 1. integrate the 72-animal total proteome (data ingestion),
 2. compute phospho-to-protein stoichiometry and run MEA kinase enrichment,
-3. run unified cell-type attribution (SEA-AD concordance + WMB expression specificity),
-4. assemble the final attribution table with cross-contrast consistency.
+3. run unified cell-type attribution on the levy_t5 spine (Song within-cohort primary; WMB + human SEA-AD/HBCA corroborate),
+4. assemble the final hypothesis table with cross-contrast consistency.
+
+Three further layers extend the program on the same shared contracts: per-cluster proportional decomposition + per-cluster MEA (`alz/decomposition_mea/`), pair-mode Incytr intercellular signaling on the levy_t5 spine (`alz/incytr_pair/`), and parallel cohorts — human NBB/Mukesh (cross-species support), the T-cell exhaustion donors, and 5xFAD. Their canonical I/O schemas live in [`cohort_contract.md`](./cohort_contract.md).
 
 ## Closed Paths
 
@@ -21,7 +23,9 @@ These paths are closed and should not drive new code. See [`analysis_rationale.m
 |:---|:---|
 | Direct (statistical) cell-type deconvolution from the 24-group design | Closed — not identifiable |
 | Per-cluster stoichiometry | Closed — algebraically collapses to bulk under same-proportion-for-both numerator and denominator |
-| Proportional decomposition with snRNA-seq prior (`alz/decomposition_mea/`) | **Active branch (Levy-19 spine)** — forward projection only (`P_c = f_c × bulk`), not statistical recovery; consumed by per-cluster MEA (Stage 7) and the Incytr factorial wrapper (Stage 8). See [`../incytr_deconvolution_pivot.md`](../incytr_deconvolution_pivot.md) |
+| Proportional decomposition with snRNA-seq prior (`alz/decomposition_mea/`) | **Active branch (levy_t5 31-cluster spine)** — forward projection only (`P_c = f_c × bulk`), not statistical recovery; consumed by per-cluster MEA and the pair-mode Incytr inputs. See [`cohort_contract.md`](./cohort_contract.md) §4–5 |
+| Factorial Incytr engine | Closed — archived 2026-05-18; superseded by pair-mode Incytr (`Incytr::Cal_pairwise_grid`) |
+| Levy-19 / WMB-34 cluster spine | Closed — superseded by the levy_t5 31-cluster spine |
 | Joint kinase-activity factor model | Closed — composition bottleneck |
 | Two-compartment neuronal/glial simplification | Closed — failed validation |
 | Transcript-only rescue | Closed — no defensible attribution |
@@ -57,20 +61,18 @@ All stoichiometry beta values are submitted to MEA (Motif Enrichment Analysis, G
 
 ### 4. Unified cell-type attribution
 
-All MEA-significant kinases are evaluated against three evidence sources at the **WMB class level (34 classes)** — the published Allen Whole Mouse Brain class taxonomy, used directly to avoid silent dropping of cells outside cortical/glial coverage (e.g., hippocampal CA, dentate granule, striatal MSN, olfactory bulb, cerebellar):
+Every MEA-significant kinase is attributed on the **levy_t5 31-cluster spine** (`config.CLUSTER_SPINE`, `CLUSTER_SPINE_NAME = "levy_t5"`) — the active Song snRNA-seq cluster taxonomy. Three evidence sources feed the attribution; each reference rolls onto the spine through a 1-hop bridge (`data/derived/bridges/cluster_to_*`), never a chained mapping:
 
-1. **WMB expression specificity** (Allen WMB 10Xv3, ~4M cells brain-wide): cell-type mean log2 expression divided by the sum across all 34 WMB classes — a share-of-total measure of cell-type concentration. Spine evidence; always present.
+1. **Song within-cohort** (paired snRNA-seq, same animals as the bulk MEA): the **primary** signal — per-cluster expression specificity + disease LFC from factorial OLS. Sets both the confidence pill and the direction tier.
+2. **WMB expression specificity** (Allen WMB 10Xv3, ~4M cells brain-wide): mouse-atlas corroborator, rolled up at the WMB **class** level (`cluster_to_wmb_class`).
+3. **SEA-AD / HBCA cross-species** (human AD MTG + HBCA whole-brain): human corroborator; SEA-AD supertypes and HBCA classes roll directly onto the spine.
 
-2. **Song within-cohort concordance** (paired snRNA-seq, 28 animals): per-class disease LFC from factorial OLS. Present for ~21 of 34 classes (those Song's dissection captures with ≥10 male animals); `n/a` otherwise.
+Two orthogonal per-kinase outputs result:
 
-3. **SEA-AD cross-species concordance** (human AD MTG, 139 supertypes): supertypes aggregated to WMB class via `seaad_subclass_to_wmb_class.csv`. Present for ~9 of 34 classes (cortical neurons + glia + vascular + immune); `n/a` for non-MTG classes (hippocampal pyramidals, subcortical, brainstem, cerebellar).
+- **`confidence_tier`** — the headline **cell-type exclusivity pill** (`none…very_high`): how exclusively the kinase is expressed in one curated specificity unit, with references corroborating the home cell class. Full spec: [`specificity_confidence.md`](./specificity_confidence.md).
+- **`direction_tier`** — the disease-**direction** concordance tier (info-only): whether the kinase's activity moves with disease across bulk MEA, within-cohort expression, and the decomposition layer. Full spec: [`concordance.md`](./concordance.md).
 
-Combined confidence (thresholds expressed as multiples of the relevant uniform baseline):
-- **High**: Within-cohort Song supports the direction (|Song LFC| > 0.1) + Song cell-type specificity ≥ 2× uniform
-- **Moderate**: Song contributes but one strict Song gate is missing, or SEA-AD/WMB provides support without Song
-- **Low**: Weak evidence from all sources
-
-SEA-AD `n/a` (out-of-MTG classes) does not preclude high confidence — same-cohort Song direction plus Song location is the high-confidence route. WMB remains an independent mouse-atlas cross-check.
+Within-cohort Song alone can reach a high pill; references only ever raise it by one step. No source has veto power, and a cell type a source cannot witness carries `n/a` rather than being silently dropped.
 
 ### 5. Mechanism annotation (supplementary)
 
@@ -94,7 +96,7 @@ Code aligned to the live program should preserve:
 ## Rules For New Work
 
 1. Treat stoichiometry correction as part of the primary workflow, not as an optional sensitivity analysis.
-2. Attribution uses unified evidence (SEA-AD + WMB) for all significant kinases.
+2. Attribution uses unified evidence on the levy_t5 spine (Song within-cohort primary; WMB + human SEA-AD/HBCA corroborate) for all significant kinases.
 3. Do not reopen direct deconvolution or factor-model code paths for attribution.
 4. Treat old deconvolution outputs only as provenance.
 

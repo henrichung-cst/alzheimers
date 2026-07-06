@@ -18,7 +18,7 @@ and is out of scope for the shared engine.
 |---|---|---|---|
 | Song AD / mouse | `alz/viewer/template/js/tabs/kinase_audit.js` calling `AttributionView.render(..., SONG_MANIFEST)` | `PAYLOAD.attribution_index`, `PAYLOAD.specificity_units`, `PAYLOAD.decomposition_index`, lazy Song/decomp shards | sortable verdict table with inline expandable detail rows (accordion) |
 | Human / Mukesh | `alz/viewer/template/js/tabs/kinase_human.js` | `PAYLOAD.human.celltype_specificity`, `PAYLOAD.human.perdonor_index` | sortable table; no drawer |
-| 5xFAD supporting cohort | `alz/viewer/template/js/tabs/kinase_fivexfad.js` calling `AttributionView.render(..., F5_MANIFEST)` | `PAYLOAD.supporting_5xfad` rows plus attribution/decomp sidecars | sortable verdict table with inline accordion |
+| 5xFAD supporting cohort | `alz/viewer/template/js/tabs/kinase_fivexfad.js` calling `AttributionView.render(..., FIVEXFAD_MANIFEST)` | `PAYLOAD.supporting_5xfad` rows plus attribution/decomp sidecars | sortable verdict table with inline accordion |
 | T-cell donor viewer | `alz/tcell_viewer/template/js/tabs/kinase_audit.js` calling `AttributionView.render(..., TCELL_MANIFEST)` | T-cell-specific `PAYLOAD.attribution_index`; optional NSCLC reference joins | sortable verdict table with inline accordion |
 
 The UI must use categorical calls plus raw evidence columns with units. It must
@@ -312,7 +312,7 @@ Attribution data is split to control first-load size:
 Frontend:
 
 ```text
-alz/viewer/template/js/tabs/kinase_fivexfad.js  → AttributionView.render(host, ctx, F5_MANIFEST)
+alz/viewer/template/js/tabs/kinase_fivexfad.js  → AttributionView.render(host, ctx, FIVEXFAD_MANIFEST)
 alz/viewer/template/js/tabs/attribution_manifest_fivexfad.js
 alz/viewer_shared/template/js/tabs/attribution_view.js
 ```
@@ -346,7 +346,7 @@ by 5xFAD master-list functions outside the attribution subtab.
 Producer:
 
 ```text
-alz/build_tcell_viewer.py::_build_tcell_attribution_index
+alz/tcell_viewer/slices_kinase.py::_build_tcell_attribution_index
 ```
 
 The T-cell viewer emits a T-cell-specific `PAYLOAD.attribution_index`. It is not
@@ -359,7 +359,7 @@ Fields consumed by the T-cell frontend include:
 |---|---|
 | Identity | `kinase_id`, `contrast_id`, `cell_type` |
 | Categorical calls | `confidence_tier`, `confidence_basis` |
-| Within-cohort location | `tcell_detected`, `tcell_fraction_expressing`, `tcell_concentration`, `tcell_concentration_tier`, `tcell_effective_n`, `tcell_top_celltype`, `tcell_top_concentration` |
+| Within-cohort location | `tcell_detected`, `tcell_fraction_expressing`, `tcell_state_enrichment`, `tcell_effective_n`, `tcell_top_celltype` |
 | Direction/concordance | `tcell_lfc`, `tcell_concordance`, `tcell_concordant`, `tcell_consistency`, `nes`, `fdr` |
 | Independent reference | `nsclc_frac`, `nsclc_detected` |
 
@@ -391,7 +391,7 @@ The T-cell Attribution subtab:
 2. Shows one row per cell-type state for the selected day.
 3. Does not hide rows; all states remain visible and sorting only reorders.
 4. Shows the unified confidence pill (NSCLC corroborator), within-cohort
-   detection, concentration tier, day-vs-d2 transcript LFC, sign concordance
+   detection, state enrichment, day-vs-d2 transcript LFC, sign concordance
    with bulk NES, timecourse consistency, and NSCLC reference detection.
 5. Opens an inline accordion with the within-cohort transcript trace across days
    and an NSCLC reference detection strip by lineage.

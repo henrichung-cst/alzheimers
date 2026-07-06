@@ -78,9 +78,7 @@ T-cell concordance (`tcell_concordant`, `tcell_consistency`) is similarly
 info-only.
 
 Song's Song-specific wiring (`assign_specificity_class`) runs after
-`assign_confidence` in `alz/bulk_mea/attribute.py`. Design history of the Song
-model:
-[`docs/plans/attribution/cross_reference_exclusivity_regrouping.md`](../plans/attribution/cross_reference_exclusivity_regrouping.md).
+`assign_confidence` in `alz/bulk_mea/attribute.py`.
 
 ---
 
