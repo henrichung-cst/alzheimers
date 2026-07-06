@@ -96,10 +96,15 @@ function boot() {
     const tabChanged         = next.view.activeTab      !== prev.view.activeTab;
     const viewChanged        = next.view                !== prev.view;
 
-    if (!filtersChanged && !kinaseSelChanged && !celltypeSelChanged
-        && !backboneSelChanged && !kinaseHumanSelChanged
-        && !kinaseFiveXFADSelChanged && !contextChanged && !modeChanged
-        && !tabChanged && !viewChanged) return;
+    // Generic per-key selection diff. Any key a manifest lists in
+    // rerenderOn.selection is honored here without a bespoke flag, so a new
+    // tab's selection key (e.g. "substrate") does not silently fail to re-render.
+    const selectionKeysChanged = new Set();
+    for (const k of Object.keys(next.selection))
+      if (next.selection[k] !== prev.selection[k]) selectionKeysChanged.add(k);
+
+    if (!filtersChanged && !modeChanged && !tabChanged && !viewChanged
+        && selectionKeysChanged.size === 0) return;
 
     if (modeChanged) {
       // Clear cross-mode selections so a mouse kinase doesn't haunt the human panel.
@@ -161,10 +166,8 @@ function boot() {
         let need = tabChanged;
         if (filtersChanged && re.filters) need = true;
         if (re.selection) {
-          if (re.selection.includes("kinase")   && kinaseSelChanged)   need = true;
-          if (re.selection.includes("celltype") && celltypeSelChanged) need = true;
-          if (re.selection.includes("backbone") && backboneSelChanged) need = true;
-          if (re.selection.includes("kinaseFiveXFAD") && kinaseFiveXFADSelChanged) need = true;
+          for (const key of re.selection)
+            if (selectionKeysChanged.has(key)) { need = true; break; }
         }
         if (need) _activeTabRender();
       }

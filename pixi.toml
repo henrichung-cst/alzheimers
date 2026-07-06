@@ -94,6 +94,7 @@ verify-incytr-sce4-full = "Rscript alz/incytr_pair/verify_sce4_full.R"
 substrate-compare = "python -m alz.cross_reference.substrate_motif_compare"
 c5-mukesh-5xfad = "python -m alz.cross_reference.c5_mukesh_5xfad"
 kinase-incytr-bridge = "python -m alz.cross_reference.kinase_incytr_bridge"
+ksg-attribution = "python alz/incytr_pair/build_ksg_attribution.py"
 
 [dependencies]
 python = "3.11.*"

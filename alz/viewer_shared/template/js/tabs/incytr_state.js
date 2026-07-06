@@ -24,13 +24,12 @@
 window.IncytrFilter = (function() {
   const _KEY = "incytrFilter.v11";
   const _defaults = {
-    // Heatmap projection — timeline contrast scrubber, ordinal selects, and
-    // pvalue + |PDS| gates (snapped to heatmap_counts.thresholds /
-    // .abs_pds_thresholds). pvalue defaults to null (no gate) since the
-    // per-animal SigProb Wald-t is unreliable in this cohort; |PDS| is the
-    // recommended primary filter.
-    hmView:         "timeline",
-    hmTimelineIndex: 0,
+    // Heatmap / chord projection — contrasts render as side-by-side small
+    // multiples (no scrubber); the disease select chooses which disease's
+    // timepoints are laid out. pvalue + |PDS| gates snap to
+    // heatmap_counts.thresholds / .abs_pds_thresholds. pvalue defaults to null
+    // (no gate) since the per-animal SigProb Wald-t is unreliable in this
+    // cohort; |PDS| is the recommended primary filter.
     hmDisease:      "App",
     hmTimepoint:    "2mo",
     hmPvalue:       null,
@@ -38,6 +37,11 @@ window.IncytrFilter = (function() {
     hmAxisLimit:    "all",
     hmScale:        "linear",
     hmPdsSign:      "both",
+    // Heatmap axis grouping (heatmap-only): "tissue" collapses the native
+    // clusters to their WMB tissue category (~7 axes); "celltype" shows the full
+    // spine. Default "tissue" — the full 31×31 is too dense to read. Self-gates
+    // to "celltype" when the payload ships no celltype_groups map.
+    hmGroupBy:      "tissue",
     excludeLowSignalCelltypes: false,
 
     // Pathway table — multiselect filters (empty = any). sliderPds is the

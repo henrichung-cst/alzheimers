@@ -19,9 +19,27 @@ let CONTRASTS = null;
 let RECEIVERS = null;
 let DISEASE_COLORS = null;
 
+// Decode a fetched *.gz response tolerantly. Some hosting layers (e.g. the
+// bioplat voila-gateway) transparently decompress a gzip body and hand JS
+// already-plain bytes, while a plain HTTP server serves the raw gzip. Sniff the
+// gzip magic (0x1f 0x8b) and only run DecompressionStream when the bytes are
+// actually gzip; otherwise the transport already decoded them. Returns an
+// ArrayBuffer either way. A stale browser cache entry stored while the object
+// still carried Content-Encoding: gzip decodes correctly through this path too.
+async function _decodeGzipBuffer(resp) {
+  const buf = await resp.arrayBuffer();
+  const b = new Uint8Array(buf);
+  if (b.length >= 2 && b[0] === 0x1f && b[1] === 0x8b) {
+    const stream = new Response(buf).body.pipeThrough(new DecompressionStream("gzip"));
+    return await new Response(stream).arrayBuffer();
+  }
+  return buf;
+}
+window._decodeGzipBuffer = _decodeGzipBuffer;
+
 async function _loadPayload() {
   // 1) Hosted/S3 default: payload-data is null, so fetch raw
-  //    unified_viewer.payload.json.gz and manually decompress it.
+  //    unified_viewer.payload.json.gz and decompress it (transport-tolerant).
   // 2) Inline archival mode: --inline-payload embeds JSON in payload-data.
   // 3) Plain JSON remains a fallback for browsers without gzip stream support.
   let text = null;
@@ -35,9 +53,7 @@ async function _loadPayload() {
     try {
       const resp = await fetch("unified_viewer.payload.json.gz");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const blob = await resp.blob();
-      const stream = blob.stream().pipeThrough(new DecompressionStream("gzip"));
-      text = await new Response(stream).text();
+      text = new TextDecoder("utf-8").decode(await _decodeGzipBuffer(resp));
     } catch (e) {
       gzErr = e;
     }
@@ -76,9 +92,7 @@ async function _fetchJsonSidecar(path) {
   const resp = await fetch(path);
   if (!resp.ok) throw new Error(`HTTP ${resp.status} loading ${path}`);
   if (String(path).endsWith(".gz")) {
-    const blob = await resp.blob();
-    const stream = blob.stream().pipeThrough(new DecompressionStream("gzip"));
-    return JSON.parse(await new Response(stream).text());
+    return JSON.parse(new TextDecoder("utf-8").decode(await _decodeGzipBuffer(resp)));
   }
   return resp.json();
 }
@@ -173,8 +187,6 @@ const METRIC_DEFS = {
   nSig:          { label: "Sig vs WT",     short: "Number of contrasts where this kinase's MEA FDR is below the header threshold." },
   topCelltype:   { label: "Top cell type", short: "Top attributed receiver cell type from the attribution evidence table." },
   highConfAttr:  { label: "Location confidence", short: "Whether the kinase has high-confidence cell-type attribution." },
-  nBackbones:    { label: "#Backbones",    short: "Distinct (Sender, Receiver, Receptor, EM) pathway spines this kinase acts on (any node) across all gated pair-mode contrasts. Target fan-out collapsed — a breadth signal." },
-  nPaths:        { label: "#Paths",        short: "Distinct full (Sender, Receiver, Ligand, Receptor, EM, Target) pathways this kinase sits along across all gated pair-mode contrasts. Total end-to-end route involvement, ~53× #Backbones." },
 
   // Pathway browser columns
   receiverCol:     { label: "Receiver",         short: "Receiver cell type for the backbone." },
@@ -245,28 +257,27 @@ window.applyMetricTooltips = applyMetricTooltips;
 
 const TAB_GUIDE = {
   kinase: {
-    preamble: "A ranked table of the 240 kinases whose substrate phosphosites shift coherently in at least one disease contrast. Each row is one kinase. NES (normalized enrichment score) columns capture the direction and magnitude of that shift in each genotype-by-timepoint context. Cell-type columns place that activity onto cortical subclasses using independent transcriptomic evidence. The two count columns — #Backbones and #Paths — measure how broadly the kinase participates in the inferred signaling network: the number of distinct receptor → effector → target spines, and the number of distinct full ligand → … → target pathways, whose nodes include this kinase across all gated contrasts.",
+    preamble: "A ranked table of the 240 kinases whose substrate phosphosites shift coherently in at least one disease contrast. Each row is one kinase. NES (normalized enrichment score) columns capture the direction and magnitude of that shift in each genotype-by-timepoint context. Cell-type columns place that activity onto cortical subclasses using independent transcriptomic evidence.",
     method: [
       "Phosphoproteomics measured how much of each protein site is phosphorylated in App, Tau, and ApTt (App-Tau double knock-in) mice at each timepoint, normalized to the parent protein's abundance so changes in total protein do not show up as apparent kinase activity changes. For each disease contrast, the analysis ranked every measured site by its disease-versus-control change and asked, for each kinase in the reference library, whether that kinase's known substrate sites cluster toward the top or bottom of the ranking more strongly than they would if we drew sites at random — a positive NES means the substrates concentrate among the upregulated sites, a negative NES means they concentrate among the downregulated sites.",
-      "Independently, single-nucleus RNA-seq from a separate human Alzheimer's cohort and a mouse brain reference atlas provided per-cell-type expression and disease-direction support for each kinase; those become the cell-type columns. The #Backbones and #Paths columns come from the pair-mode pathway analysis used elsewhere in the viewer: every pathway clearing the canonical significance floor (signaling probability > 0.1 in either condition AND |PDS| ≥ 0.2) is scanned, and any pathway whose ligand, receptor, effector, or target gene is this kinase contributes to its counts — #Backbones counts the distinct receptor-effector-target spines (collapsing downstream target fan-out), #Paths counts the distinct full pathways. Both are pooled across the nine contrasts and, unlike the NES and cell-type columns, are network-wide totals that do not respond to the FDR slider or the filter bar.",
+      "Independently, single-nucleus RNA-seq from a separate human Alzheimer's cohort and a mouse brain reference atlas provided per-cell-type expression and disease-direction support for each kinase; those become the cell-type columns.",
     ],
     shows: {
-      lead: "NES columns answer where in the disease landscape the kinase's substrates are most coherently shifted. Cell-type columns answer where in the cortex the kinase's transcript is concordantly differentially expressed in disease. #Backbones and #Paths answer how broadly the kinase participates in the gated signaling network — a structural prevalence signal, not a per-pathway magnitude. #Paths runs ~53× larger than #Backbones because each receptor-effector-target spine fans out across many downstream targets the kinase does not itself control.",
+      lead: "NES columns answer where in the disease landscape the kinase's substrates are most coherently shifted. Cell-type columns answer where in the cortex the kinase's transcript is concordantly differentially expressed in disease.",
       bullets: [
         "240 kinases pass FDR < 0.25 in at least one of nine disease contrasts. The per-genotype columns (App / Tau / ApTt) read the NES trend across that genotype's three timepoints as a pill: always up / always down (sign never changes), monotonic up / down (sign crosses zero in an ordered rise or fall), or mixed (a sign reversal that is not monotonic). \"—\" means fewer than two finite contrasts for that genotype, so no trend is readable.",
         "The strongest individual signals by NES magnitude — AKT1, AKT2, AKT3 — are negative and strongest at App_4mo (App genotype, 4 months), meaning their substrate phosphorylation is reduced relative to protein abundance specifically in amyloid disease at mid-disease; the App pill for these reads as a down trend. This AKT hypoactivity signature is weaker in the Tau genotype.",
-        "The broadest participants — CAMK2D (14,968 backbones / 799,064 paths), CDK1 (14,402 / 972,289), CHK1 (13,950 / 575,798) — have moderate NES across many contrasts. They are structural participants in many pathways rather than strong disease-specific signals; their #Paths order differs from #Backbones (CDK1 leads on paths), because path count is dominated by downstream target fan-out the kinase does not itself control.",
         "High NES with weak cell-type attribution is not evidence against the kinase; it is evidence that the transcriptomic side has less to say about where it acts. The reverse is also true.",
         "Read the trend pill alongside n_sig: a single-contrast genotype shows no pill (\"—\"), and a pill backed by only one significant timepoint is more fragile than one significant across all three. The pill describes the shape of the trend, not its statistical weight.",
       ],
     },
-    howTo: "Sort by any column to surface kinases by enrichment magnitude, trend direction, cell-type support, or backbone breadth. Click a row to pin that kinase across the viewer — its NES across the nine contrasts opens in the side panel, the Pathway tab restricts to chains it drives, and any cell-type filter on Signal Map or Sender × Receiver applies the same constraint. The detail pane also carries the kinase's translational annotations where available: whether its protein is secreted in human (HPA secretome category), its disease log2 fold-change in the top attributed cell type, and its human SEA-AD MTG expression specificity — the entry point for biomarker / target-engagement prioritization. The global FDR slider (false-discovery rate) tightens upstream kinase selection: at 0.25, roughly one in four flagged kinases is a false positive, which is hypothesis-generation territory; at 0.10, the count falls but each remaining kinase is closer to a confirmatory call.",
+    howTo: "Sort by any column to surface kinases by enrichment magnitude, trend direction, or cell-type support. Click a row to pin that kinase across the viewer — its NES across the nine contrasts opens in the side panel, the Pathway tab restricts to chains it drives, and any cell-type filter on Signal Map or Sender × Receiver applies the same constraint. The detail pane also carries the kinase's translational annotations where available: whether its protein is secreted in human (HPA secretome category), its disease log2 fold-change in the top attributed cell type, and its human SEA-AD MTG expression specificity — the entry point for biomarker / target-engagement prioritization. The global FDR slider (false-discovery rate) tightens upstream kinase selection: at 0.25, roughly one in four flagged kinases is a false positive, which is hypothesis-generation territory; at 0.10, the count falls but each remaining kinase is closer to a confirmatory call.",
     conclusions: [
-      "The App-specific AKT hypoactivity signature and the broad-but-moderate enrichment of CAMK2 / CDK1 / CHK1 point the first round of follow-up to two questions: what is the cell-type origin of the AKT suppression in App_4mo, and do the structural backbone supporters carry chain-level direction information that the per-kinase NES summary obscures. Both questions chain directly into the Pathway and Sender × Receiver tabs.",
+      "The App-specific AKT hypoactivity signature points the first round of follow-up to the cell-type origin of the AKT suppression in App_4mo, which chains directly into the Pathway and Sender × Receiver tabs.",
     ],
     toggles: [
       { name: "FDR threshold (false-discovery rate)", desc: "sets the cutoff for which kinases enter the table. 0.25 is hypothesis generation; 0.10 is closer to confirmatory." },
-      { name: "Receiver, Support", desc: "when set in the global filter bar, narrow the NES and cell-type columns to the chosen contrast and receiver scope. #Backbones and #Paths are network-wide totals and do not respond to the filter bar." },
+      { name: "Receiver, Support", desc: "when set in the global filter bar, narrow the NES and cell-type columns to the chosen contrast and receiver scope." },
     ],
   },
   crosstable: {
@@ -308,7 +319,6 @@ const TAB_GUIDE = {
         "Cortex and hippocampus are not pooled statistically; the tissue filter only combines presentation.",
         "IMAC/ST and pY are kinase-library tracks. KGG and AcK remain provenance datasets and are not interpreted as kinase activity.",
         "Use stoichiometry as the primary readout and raw phospho as a sensitivity readout.",
-        "#Backbones and #Paths count how broadly the kinase participates in this tissue's gated pair-mode signaling network (canonical SigProb > 0.1 / |PDS| ≥ 0.2 floor): distinct receptor-effector-target spines and distinct full pathways, respectively. They are per-tissue network-wide totals and do not respond to the age or FDR filters.",
       ],
     },
     howTo: "Use tissue, assay, track, age, FDR, and significant-age filters to inspect kinase calls in each MouseC2 slice. Select a row to inspect MEA scores, preparation/QC, site-level details, and measurement-trace availability in the audit workbench.",
@@ -352,12 +362,34 @@ const MEA_CMP_COL_DEFS = {
   delta: {label:"Δ (stoich − raw)", definition:"Signed difference, stoichiometry minus raw. — for non-numeric metrics.", format:"text"},
 };
 
+// Early AD Kinases detail table (D1). cohort_a = human NBB/Mukesh,
+// cohort_b = 5xFAD mouse — the raw _a / _b suffixes are opaque, so label the
+// species explicitly.
+const SUBSTRATE_PAIRS_COL_DEFS = {
+  gene_a:  {label:"Human gene", definition:"Substrate gene symbol in the human NBB/Mukesh cohort.", format:"text"},
+  site_a:  {label:"Human site", definition:"Phosphosite position on the human substrate.", format:"text"},
+  motif_a: {label:"Human motif", definition:"±7-residue window centered on the human phosphosite.", format:"text"},
+  gene_b:  {label:"Mouse gene", definition:"Substrate gene symbol in the 5xFAD mouse cohort.", format:"text"},
+  site_b:  {label:"Mouse site", definition:"Phosphosite position on the mouse substrate.", format:"text"},
+  motif_b: {label:"Mouse motif", definition:"±7-residue window centered on the mouse phosphosite.", format:"text"},
+  similarity: {label:"BLOSUM sim", definition:"Center-aligned BLOSUM62 similarity between the human and mouse motif, normalized to [0,1]. Present for shared_site rows only.", format:"text"},
+  partition:  {label:"Partition", definition:"Gene-identity partition: shared_site (same gene, BLOSUM-matched residue ≥ 0.50), shared_gene_diffsite (same gene, no BLOSUM-matched residue), human_only_engaged (gene detectable in 5xFAD but not this kinase's mouse set), human_only_unmeasured (gene absent from 5xFAD ST universe), mouse_only_engaged, mouse_only_unmeasured.", format:"text"},
+  direction_a: {label:"Human dir", definition:"Disease direction of the human substrate site: up / down / flat.", format:"text"},
+  direction_b: {label:"Mouse dir", definition:"Disease direction of the mouse substrate site: up / down / flat.", format:"text"},
+  direction_agree: {label:"Dir agree", definition:"Whether human and mouse disease directions match on a shared pair.", format:"text"},
+  support_a: {label:"Human support", definition:"Number of AD donors with this phosphosite in the human leading edge.", format:"text"},
+  support_b: {label:"Mouse support", definition:"Number of 5xFAD replicates where the mouse phosphosite is detected.", format:"text"},
+};
+
 function _auditColMeta(tableKey, raw) {
   if (tableKey === "mea_input_derived" && MEA_PREP_COL_DEFS[raw]) {
     return {raw, ...MEA_PREP_COL_DEFS[raw]};
   }
   if (tableKey === "mea_track_comparison" && MEA_CMP_COL_DEFS[raw]) {
     return {raw, ...MEA_CMP_COL_DEFS[raw]};
+  }
+  if (tableKey === "substrate_pairs" && SUBSTRATE_PAIRS_COL_DEFS[raw]) {
+    return {raw, ...SUBSTRATE_PAIRS_COL_DEFS[raw]};
   }
   const t = tableKey === "measurement_trace" ? _measurementTraceManifest() : (_auditManifest()[tableKey] || {});
   const cols = t.columns || [];

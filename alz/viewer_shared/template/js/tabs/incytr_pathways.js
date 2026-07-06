@@ -81,6 +81,9 @@ const _IP_TRAJ_METRIC_COLORS = {
   "PhPDS_ps": "#7c3aed",
   "PhPDS_py": "#d97706",
   "SiK_score": "#0f766e",
+  "Ack_score": "#b5179e",   // acetylation (5xFAD PTM track)
+  "KGG_score": "#4361ee",   // ubiquitination (5xFAD PTM track)
+  "Rme1_score": "#3a5a40",  // methylation (reserved; no assay data today)
 };
 const _IP_TRAJ_GROUP_COLORS = {
   "App": "#c8261c",
@@ -93,14 +96,16 @@ const _IP_TRAJ_GROUP_COLORS = {
 const _IP_SCORE_COLS_FALLBACK = ["TPDS", "PPDS", "PhPDS_ps", "PhPDS_py", "SiK_score"];
 
 // Per-node evidence-source labels. Each of Ligand/Receptor/EM/Target carries a
-// {DEG, prG} tag indicating which seed list admitted the gene:
+// {DEG, prG, KsG} tag indicating which seed list admitted the gene:
 //   DEG → single-cell differentially-expressed gene (transcript evidence)
 //   prG → proteomics-significant gene (bulk-protein evidence)
+//   KsG → kinase-substrate gene (admitted via kinase→cell-type attribution)
 // Rendered inline next to the gene name as a small colored badge.
 const _IP_LABEL_NODES_FALLBACK = ["Ligand", "Receptor", "EM", "Target"];
 const _IP_LABEL_COLORS = {
   "DEG": { bg: "#e8eefc", fg: "#1f4ea3" },   // blue — single-cell
   "prG": { bg: "#e7f4ec", fg: "#1f7a3a" },   // green — proteomics
+  "KsG": { bg: "#fdeede", fg: "#9a5413" },   // amber — kinase-substrate
 };
 function _ipLabelNodes() {
   const block = _ipBlock();
@@ -116,6 +121,9 @@ const _IP_SCORE_TIPS = {
   "PhPDS_ps":         "Phosphoserine PDS — aggregated from factorial OLS β on pS site intensities.",
   "PhPDS_py":         "Phosphotyrosine PDS — aggregated from factorial OLS β on pY site intensities.",
   "SiK_score":        "Signaling-kinase composite — aggregates per-condition SiK_<X>_of_<Y> kinase-substrate evidence into a single per-path score (treatment condition only; WT side dropped during reshape). Pair-mode reshape only; NULL when source is the legacy factorial cache.",
+  "Ack_score":        "Acetylation PDS — aggregated from factorial OLS β on deconvoluted acetyl-lysine (AcK) site intensities. 5xFAD-only (surfaced only where the acetylation assay was run).",
+  "KGG_score":        "Ubiquitination PDS — aggregated from factorial OLS β on deconvoluted di-glycyl-lysine (KGG) site intensities. 5xFAD-only (surfaced only where the ubiquitination assay was run).",
+  "Rme1_score":       "Methylation PDS — reserved channel; no methylation assay feeds it today, so it is gated out of the surfaced columns.",
 };
 function _ipNodeCell(name, label) {
   const safeName = _escapeHtml(name == null ? "" : name);
@@ -139,8 +147,6 @@ const _ipRuntime = {
   trajSettings:   {},           // rk → { group: "<axis group>"|"__all__", metrics: [...], view: "both"|"line"|"bar" }
   trajRows:       {},           // rk → currently loaded sibling rows for drawer controls
   trajPromises:   {},           // rk → in-flight sibling-row load promises
-  widenKeys:      {},           // rk → boolean (widen-all-cell-types active in "Expands to")
-  drillReturn:    null,         // snapshot of IncytrFilter state + page before last drill (one-level Back)
   recurFallback:  null,         // { sig, map } cache for fallback recurPathMap
   pathIndex:      null,         // Map<pathStr, rows[]> — built at shard-load
   pathLabels:     null,         // Map<pathStr, Map<disease, Set<label>>> — for trend filter
@@ -261,8 +267,16 @@ function _ipContrastParts(contrast) {
   };
 }
 
+// Friendly column/series labels for the score columns. PTM tracks (5xFAD only)
+// render as "AcK"/"KGG" rather than the raw "Ack_score"/"KGG_score".
+const _IP_SCORE_SHORT = {
+  "SiK_score": "SiK",
+  "Ack_score": "AcK",
+  "KGG_score": "KGG",
+  "Rme1_score": "Rme1",
+};
 function _ipMetricLabel(metric) {
-  return metric === "SiK_score" ? "SiK" : metric;
+  return _IP_SCORE_SHORT[metric] || metric;
 }
 
 function _ipScoreCols() {
@@ -444,7 +458,7 @@ function _ipRenderScoreFilterControls() {
   const gates = _ipScoreMinAbs();
   const cols = _ipScoreCols();
   host.innerHTML = cols.map(col => {
-    const label = col === "SiK_score" ? "SiK" : col;
+    const label = _ipMetricLabel(col);
     const v = gates[col];
     return `<label class="ke-filter-label" title="Keep rows with |${_escapeHtml(col)}| greater than or equal to this value. Blank = no constraint.">${_escapeHtml(label)} |≥`
       + `<input data-ip-score-filter="${_escapeHtml(col)}" type="number" step="0.05" min="0" `
@@ -472,18 +486,6 @@ function _ipSyncControls(block) {
   if (grainWrap) grainWrap.hidden = !hasGrains;
   const grainSel = document.getElementById("ip-grain");
   if (grainSel) grainSel.value = f.grain || "Full";
-
-  // B-6: drill-back button — show when drillReturn snapshot is set.
-  const backBtn = document.getElementById("ip-drill-back");
-  if (backBtn) {
-    if (_ipRuntime.drillReturn) {
-      const fromGrain = _ipRuntime.drillReturn.grain || "Full";
-      backBtn.textContent = `↩ Back to ${fromGrain}`;
-      backBtn.hidden = false;
-    } else {
-      backBtn.hidden = true;
-    }
-  }
 
   // J-3: Timepoint-combination filter multiselect + all/any toggle.
   const tps = _ipTimepoints();
@@ -530,10 +532,17 @@ function _ipSyncControls(block) {
     limitSel.value = String(topLimit);
     if (limitSel.parentElement) limitSel.parentElement.style.display = (mode === "top") ? "" : "none";
   }
-  for (const id of ["ip-ms-sender", "ip-ms-receiver", "ip-ms-recur"]) {
+  // Sender/Receiver stay visible in both modes — filterRank honors senderIn/
+  // receiverIn in Top mode too, so hiding them there left an active filter with
+  // no control to discover or clear it (e.g. a stale persisted Microglia sender
+  // silently emptying Top overall). Recur-in is gated only in the pair-mode row
+  // filter (filterRank has no recur predicate), so it stays Cell-Type-only.
+  for (const id of ["ip-ms-sender", "ip-ms-receiver"]) {
     const el = document.getElementById(id);
-    if (el) el.style.display = (mode === "top") ? "none" : "";
+    if (el) el.style.display = "";
   }
+  const recurEl = document.getElementById("ip-ms-recur");
+  if (recurEl) recurEl.style.display = (mode === "top") ? "none" : "";
 }
 
 function _ipSameArray(a, b) {
@@ -646,13 +655,24 @@ function _ipEnsureGeneIndex(block) {
     if (gi.promise) return gi.promise;
   }
   gi = _ipRuntime.geneIndex = { url, data: null, error: null, promise: null };
-  // Mirror incytr_global_index.js: fetch blob -> DecompressionStream -> JSON.
+  // Transport-tolerant gunzip (mirrors 01_state.js:_decodeGzipBuffer): sniff the
+  // gzip magic (0x1f 0x8b) and only decompress when the bytes are actually
+  // gzip. Some hosting layers (bioplat voila-gateway) auto-decompress and hand
+  // back plain bytes; a stale cache entry stored while the object carried
+  // Content-Encoding: gzip lands here too.
   gi.promise = (async () => {
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`gene index fetch ${url} -> ${resp.status}`);
-    const blob = await resp.blob();
-    const stream = blob.stream().pipeThrough(new DecompressionStream("gzip"));
-    gi.data = JSON.parse(await new Response(stream).text());
+    const raw = await resp.arrayBuffer();
+    const magic = new Uint8Array(raw);
+    let text;
+    if (magic.length >= 2 && magic[0] === 0x1f && magic[1] === 0x8b) {
+      const stream = new Response(raw).body.pipeThrough(new DecompressionStream("gzip"));
+      text = await new Response(stream).text();
+    } else {
+      text = new TextDecoder("utf-8").decode(raw);
+    }
+    gi.data = JSON.parse(text);
     return gi.data;
   })();
   gi.promise.catch(e => { gi.error = String(e && e.message ? e.message : e); });
@@ -910,7 +930,10 @@ function _ipRenderTopTable() {
     + `(rows ${(startIdx + 1).toLocaleString()}–${endIdx.toLocaleString()}).`
     + (IncytrCelltypeQc.enabled(block) ? ` ${IncytrCelltypeQc.controlText(block)}.` : "");
 
-  const scoreCols = _ipScoreCols().map(k => ({ key: k, label: k, numeric: true, digits: 3 }));
+  const scoreCols = _ipScoreCols().map(k => ({
+    key: k, label: _ipMetricLabel(k), numeric: true, digits: 3,
+    tip: _IP_SCORE_TIPS[k] || `${k} score column from Incytr factorial scoring.`,
+  }));
   // J-3: pvalue absent for backbone grain indexes.
   const hasPvalue = !!(block && (!block._grain || block._grain === "Full"));
   // J-3: dropped nodes in the active grain show "—" in their column.
@@ -1040,7 +1063,6 @@ function _ipRenderTopTable() {
         delete _ipRuntime.trajSettings[rk];
         delete _ipRuntime.trajRows[rk];
         delete _ipRuntime.trajPromises[rk];
-        delete _ipRuntime.widenKeys[rk];
       } else {
         _ipRuntime.openKeys.add(rk);
         _ipRuntime.detailTab[rk] = "evidence";
@@ -1061,59 +1083,8 @@ function _ipRenderTopTable() {
       if (tdEl) tdEl.innerHTML = _ipRenderDetailPanel(r, rk, tab);
       if (tab === "trajectory") _ipRenderTrajChart(rk, r);
       if (tab === "evidence") _ipRenderEvidencePanel(rk, r);
-      // B-6: widen panel population is async; kick off if widen is already active.
-      if (tab === "expands-to" && _ipRuntime.widenKeys[rk]) {
-        const block = _ipBlock();
-        const grain = (block && block._grain) || "Full";
-        _ipApplyExpandsToWidenPanel(rk, grain, _ipSpineKey(r, grain));
-      }
-      return;
-    }
-    // B-6: drill buttons inside the "Expands to" tab.
-    const drillBtn = ev.target.closest("button[data-ip-drill]");
-    if (drillBtn) {
-      const action = drillBtn.dataset.ipDrill;
-      const drillRk = drillBtn.dataset.ipDrillRk;
-      const detailIdx = +drillBtn.closest("tr[data-ip-detail]").dataset.ipDetail;
-      const r = visible[detailIdx];
-      if (!r) return;
-      _ipNormalizeTopRow(r);
-      const sender   = r._sender   || r.sender   || "";
-      const receiver = r._receiver || r.receiver || "";
-      const block = _ipBlock();
-      const grain = (block && block._grain) || "Full";
-      if (action === "expand-full") {
-        // Space-separated spine genes + sender/receiver keep within-pair scope
-        // visible in the search box (no silent pair/mode flip).
-        const genes = _ipSpineKey(r, grain).split("|").filter(Boolean);
-        if (sender) genes.push(sender);
-        if (receiver) genes.push(receiver);
-        _ipNavigateDrill("Full", genes.join(" "));
-      } else if (action === "collapse") {
-        const targetGrain = drillBtn.dataset.ipDrillGrain || "L-R-EM";
-        const coarseTokens = _ipSpineKey(r, targetGrain).split("|").filter(Boolean).join(" ");
-        _ipNavigateDrill(targetGrain, coarseTokens);
-      } else if (action === "widen") {
-        // handled by checkbox below
-      }
-      return;
-    }
-    // B-6: widen toggle checkbox inside "Expands to" tab.
-    const widenCb = ev.target.closest("input[data-ip-drill='widen']");
-    if (widenCb) {
-      const drillRk = widenCb.dataset.ipDrillRk;
-      const detailIdx = +widenCb.closest("tr[data-ip-detail]").dataset.ipDetail;
-      const r = visible[detailIdx];
-      if (!r) return;
-      _ipNormalizeTopRow(r);
-      _ipRuntime.widenKeys[drillRk] = widenCb.checked;
-      const block = _ipBlock();
-      const grain = (block && block._grain) || "Full";
-      const tdEl = widenCb.closest("td");
-      if (tdEl) tdEl.innerHTML = _ipRenderDetailPanel(r, drillRk, "expands-to");
-      if (widenCb.checked) {
-        _ipApplyExpandsToWidenPanel(drillRk, grain, _ipSpineKey(r, grain));
-      }
+      // Related-pairs lookup is async; populate when the tab opens.
+      if (tab === "expands-to") _ipRenderRelatedPairs(rk, r);
       return;
     }
   });
@@ -1121,14 +1092,7 @@ function _ipRenderTopTable() {
     const idx = visible.findIndex(r => _ipRowKey(_ipNormalizeTopRow(r)) === rk);
     const tab = _ipRuntime.detailTab[rk] || "evidence";
     if (idx >= 0 && tab === "trajectory") _ipRenderTrajChart(rk, visible[idx]);
-    else if (idx >= 0 && tab === "expands-to") {
-      const r = visible[idx];
-      if (r && _ipRuntime.widenKeys[rk]) {
-        const block = _ipBlock();
-        const grain = (block && block._grain) || "Full";
-        _ipApplyExpandsToWidenPanel(rk, grain, _ipSpineKey(r, grain));
-      }
-    }
+    else if (idx >= 0 && tab === "expands-to") _ipRenderRelatedPairs(rk, visible[idx]);
     else if (idx >= 0) _ipRenderEvidencePanel(rk, visible[idx]);
   }
 }
@@ -1143,7 +1107,6 @@ function _ipCloseOpenPanels() {
   _ipRuntime.trajSettings = {};
   _ipRuntime.trajRows = {};
   _ipRuntime.trajPromises = {};
-  _ipRuntime.widenKeys = {};
 }
 
 // Debounce helper. Returns a wrapped function that fires `fn` only after
@@ -1586,7 +1549,7 @@ function _ipRenderTable() {
 
   const hasTrajIdx = _ipHasTraj();
   const scoreCols = _ipScoreCols().map(k => ({
-    key: k, label: k, numeric: true, digits: 3,
+    key: k, label: _ipMetricLabel(k), numeric: true, digits: 3,
     tip: _IP_SCORE_TIPS[k] || `${k} score column from Incytr factorial scoring.`,
   }));
   // J-3: dropped nodes in the active grain show "—" in their column.
@@ -1748,7 +1711,6 @@ function _ipRenderTable() {
         delete _ipRuntime.trajSettings[rk];
         delete _ipRuntime.trajRows[rk];
         delete _ipRuntime.trajPromises[rk];
-        delete _ipRuntime.widenKeys[rk];
       } else {
         _ipRuntime.openKeys.add(rk);
         if (!_ipRuntime.detailTab[rk]) _ipRuntime.detailTab[rk] = "evidence";
@@ -1771,52 +1733,8 @@ function _ipRenderTable() {
       // Re-wire Plotly if we switched to trajectory.
       if (tab === "trajectory") _ipRenderTrajChart(rk, r);
       if (tab === "evidence") _ipRenderEvidencePanel(rk, r);
-      // B-6: kick off async widen population if widen is already active.
-      if (tab === "expands-to" && _ipRuntime.widenKeys[rk]) {
-        const block = _ipBlock();
-        const grain = (block && block._grain) || "Full";
-        _ipApplyExpandsToWidenPanel(rk, grain, _ipSpineKey(r, grain));
-      }
-      return;
-    }
-    // B-6: drill buttons inside the "Expands to" tab.
-    const drillBtn = ev.target.closest("button[data-ip-drill]");
-    if (drillBtn) {
-      const action = drillBtn.dataset.ipDrill;
-      const detailIdx = +drillBtn.closest("tr[data-ip-detail]").dataset.ipDetail;
-      const r = visible[detailIdx];
-      if (!r) return;
-      const sender   = r._sender   || r.sender   || "";
-      const receiver = r._receiver || r.receiver || "";
-      const block2 = _ipBlock();
-      const grain2 = (block2 && block2._grain) || "Full";
-      if (action === "expand-full") {
-        const genes = _ipSpineKey(r, grain2).split("|").filter(Boolean);
-        if (sender) genes.push(sender);
-        if (receiver) genes.push(receiver);
-        _ipNavigateDrill("Full", genes.join(" "));
-      } else if (action === "collapse") {
-        const targetGrain = drillBtn.dataset.ipDrillGrain || "L-R-EM";
-        const coarseTokens = _ipSpineKey(r, targetGrain).split("|").filter(Boolean).join(" ");
-        _ipNavigateDrill(targetGrain, coarseTokens);
-      }
-      return;
-    }
-    // B-6: widen toggle checkbox inside "Expands to" tab.
-    const widenCb = ev.target.closest("input[data-ip-drill='widen']");
-    if (widenCb) {
-      const drillRk = widenCb.dataset.ipDrillRk;
-      const detailIdx = +widenCb.closest("tr[data-ip-detail]").dataset.ipDetail;
-      const r = visible[detailIdx];
-      if (!r) return;
-      _ipRuntime.widenKeys[drillRk] = widenCb.checked;
-      const block = _ipBlock();
-      const grain = (block && block._grain) || "Full";
-      const tdEl = widenCb.closest("td");
-      if (tdEl) tdEl.innerHTML = _ipRenderDetailPanel(r, drillRk, "expands-to");
-      if (widenCb.checked) {
-        _ipApplyExpandsToWidenPanel(drillRk, grain, _ipSpineKey(r, grain));
-      }
+      // Related-pairs lookup is async; populate when the tab opens.
+      if (tab === "expands-to") _ipRenderRelatedPairs(rk, r);
       return;
     }
   });
@@ -1831,14 +1749,8 @@ function _ipRenderTable() {
       const idx = visible.findIndex(r => _ipRowKey(r) === rk);
       if (idx >= 0) _ipRenderEvidencePanel(rk, visible[idx]);
     } else if (tab === "expands-to") {
-      // B-6: populate widen panel if active.
       const idx = visible.findIndex(r => _ipRowKey(r) === rk);
-      if (idx >= 0 && _ipRuntime.widenKeys[rk]) {
-        const r = visible[idx];
-        const block = _ipBlock();
-        const grain = (block && block._grain) || "Full";
-        _ipApplyExpandsToWidenPanel(rk, grain, _ipSpineKey(r, grain));
-      }
+      if (idx >= 0) _ipRenderRelatedPairs(rk, visible[idx]);
     }
   }
 }
@@ -1871,7 +1783,7 @@ function _ipRenderDetailPanel(r, rk, activeTab, allowTrajectory = true) {
     ? (`<div style="display:flex;gap:6px;margin-bottom:8px;">`
       + btn("evidence", "Evidence")
       + (hasTrajIdx ? btn("trajectory", "Scores") : "")
-      + (showExpandsTo ? btn("expands-to", "Expands to") : "")
+      + (showExpandsTo ? btn("expands-to", "Related pathways") : "")
       + `</div>`)
     : "";
   if (activeTab === "trajectory" && hasTrajIdx) {
@@ -1912,168 +1824,88 @@ function _ipRenderEvidencePanel(rk, r) {
 }
 
 // ---------------------------------------------------------------------------
-// B-6: Grain-drill / expansion navigation helpers.
+// "Related pathways" drawer tab — read-only. Reports two facts about the row:
+//   • backbone fan-out: how many Full pathways collapse into this backbone row
+//     (r.n_paths; Full rows are a single pathway and omit this);
+//   • the other (sender, receiver) cell-type pairs carrying this same pathway,
+//     enumerated from the per-grain global index (no sidecar, no navigation).
 // ---------------------------------------------------------------------------
 
-// Compute the spine key for a row at a given grain. Mirrors the SQL expr in
-// BACKBONE_GRAIN_SPINE_EXPR (Python).  Separator is '|' in both places.
-function _ipSpineKey(r, grain) {
-  if (!r) return "";
-  const L = r.Ligand   || "";
-  const R = r.Receptor || "";
-  const E = r.EM       || "";
-  const T = r.Target   || "";
-  if (grain === "R-EM")   return `${R}|${E}`;
-  if (grain === "L-R-EM") return `${L}|${R}|${E}`;
-  if (grain === "R-EM-T") return `${R}|${E}|${T}`;
-  return `${L}|${R}|${E}|${T}`;        // Full
-}
-
-// Ordered list of grains coarser than the given grain.
-// Partial order by node count:
-//   Full (4)  → L-R-EM (3), R-EM-T (3), R-EM (2)
-//   L-R-EM (3) → R-EM (2)
-//   R-EM-T (3) → R-EM (2)
-//   R-EM (2)   → (none)
-const _IP_GRAIN_COARSER = {
-  "Full":   ["L-R-EM", "R-EM-T", "R-EM"],
-  "L-R-EM": ["R-EM"],
-  "R-EM-T": ["R-EM"],
-  "R-EM":   [],
-};
-function _ipCoarserGrains(grain) {
-  const parentBlock = ViewerPayload.incytr ? ViewerPayload.incytr() : null;
-  const available = new Set(
-    ["Full", ...Object.keys((parentBlock && parentBlock.backbone_grains) || {})]
-  );
-  return (_IP_GRAIN_COARSER[grain] || []).filter(g => available.has(g));
-}
-
-// Navigate to targetGrain, inserting space-separated gene tokens into the
-// search box. The tokens (spine nodes + optionally sender/receiver) are visible
-// and user-editable — no silent mode or pair flip. Snapshots the full current
-// filter state into drillReturn for the Back button (one-level undo).
-function _ipNavigateDrill(targetGrain, searchText) {
-  // Snapshot BEFORE any state mutation.
-  _ipRuntime.drillReturn = Object.assign({}, IncytrFilter.get(), { _page: _ipRuntime.page });
-  _ipCloseOpenPanels();
-  const patch = { grain: targetGrain || "Full" };
-  if (typeof searchText === "string") patch.searchText = searchText;
-  IncytrFilter.set(patch);
-  _ipInvalidateScope();
-  _ipResetPage();
-  _ipEnsureShards();
-}
-
-// Render the "Expands to" drawer tab content for a row.
-// Shows:
-//  • Current grain label + spine key
-//  • "▸ Full" expand link (for backbone grain rows)
-//  • Collapse links to each available coarser grain (for Full rows)
-//  • Widen toggle + widen results
 function _ipRenderExpandsToPanel(r, rk) {
   const block = _ipBlock();
-  if (!r || !block) return '<div class="muted">No navigation data.</div>';
+  if (!r || !block) return '<div class="muted">No pathway data.</div>';
 
   const grain  = block._grain || "Full";
-  const sender   = r._sender   || r.sender   || "";
-  const receiver = r._receiver || r.receiver || "";
-  const spineKey = _ipSpineKey(r, grain);
-  const coarser  = _ipCoarserGrains(grain);
+  const esc     = _escapeHtml;
+  const safeRk  = rk.replace(/[^a-zA-Z0-9]/g, "_");
 
-  const esc = _escapeHtml;
-  let html = `<div style="font-size:12px;line-height:1.7;">`;
+  let html = `<div class="ip-related">`;
 
-  // Expand to Full (only for backbone grain rows).
-  if (grain !== "Full") {
-    const pair = (sender && receiver) ? { sender, receiver } : null;
-    html += `<div style="margin-bottom:8px;">`;
-    html += `<button type="button" data-ip-drill="expand-full"
-       data-ip-drill-rk="${esc(rk)}"
-       style="padding:2px 10px;border-radius:4px;font-size:12px;cursor:pointer;
-              border:1px solid #1f4ea3;background:#e8eef8;color:#1f4ea3;"
-     >▸ Expand to Full (add ${grain === "R-EM-T" ? "Ligand" : grain === "L-R-EM" ? "Target" : "Ligand + Target"})</button>`;
-    html += `</div>`;
+  // Backbone rows aggregate multiple Full pathways (distinct Target/Ligand
+  // nodes); surface that count. Full rows are already a single pathway.
+  const nPaths = Number(r.n_paths);
+  if (grain !== "Full" && isFinite(nPaths) && nPaths > 0) {
+    html += `<div class="ip-related__count"><strong>${nPaths.toLocaleString()}</strong> `
+      + `full pathway${nPaths === 1 ? "" : "s"} collapse into this backbone</div>`;
   }
 
-  // Collapse to coarser grains (only for Full rows when backbone grains present).
-  if (grain === "Full" && coarser.length > 0) {
-    html += `<div style="margin-bottom:8px;"><span style="color:#888;">Collapse ▴ to:</span><br>`;
-    for (const cg of coarser) {
-      const coarseSpine = _ipSpineKey(r, cg);
-      html += `<button type="button" data-ip-drill="collapse"
-         data-ip-drill-grain="${esc(cg)}"
-         data-ip-drill-rk="${esc(rk)}"
-         style="margin:2px 4px 2px 0;padding:2px 10px;border-radius:4px;font-size:12px;
-                cursor:pointer;border:1px solid #888;background:#f4f4f4;color:#444;"
-       >${esc(cg)}: <code>${esc(coarseSpine)}</code></button>`;
-    }
-    html += `</div>`;
-  }
-
-  // Widen toggle.
-  if (grain !== "Full") {
-    const parentBlock = ViewerPayload.incytr ? ViewerPayload.incytr() : null;
-    const grainMeta = parentBlock && parentBlock.backbone_grains && parentBlock.backbone_grains[grain];
-    const hasSpineIndex = !!(grainMeta && grainMeta.backbone_spine_index && grainMeta.backbone_spine_index.url);
-    if (hasSpineIndex) {
-      const widen = !!_ipRuntime.widenKeys[rk];
-      html += `<div style="margin-bottom:8px;">`;
-      html += `<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;">`;
-      html += `<input type="checkbox" data-ip-drill="widen" data-ip-drill-rk="${esc(rk)}"${widen ? " checked" : ""}/>`;
-      html += ` Widen → all cell types (loads spine index)</label>`;
-      html += `</div>`;
-
-      if (widen) {
-        html += `<div id="ip-widen-${esc(rk.replace(/[^a-zA-Z0-9]/g, "_"))}" style="margin-top:4px;">`;
-        html += `<span class="muted" style="font-size:11px;">Loading spine index…</span>`;
-        html += `</div>`;
-      }
-    }
-  }
-
-  html += `</div>`;
+  // Every (sender, receiver) pair carrying this pathway/spine at the active grain.
+  html += `<section class="ip-related-pairs">`;
+  html += `<div class="ip-related__head">Related cell-type pairs</div>`;
+  html += `<div id="ip-related-${esc(safeRk)}" class="ip-related-pairs__results">`;
+  html += `<span class="muted">Loading…</span></div>`;
+  html += `</section></div>`;
   return html;
 }
 
-// Populate the widen panel for a row after the spine index loads.
-async function _ipApplyExpandsToWidenPanel(rk, grain, spineKey) {
-  const safe = rk.replace(/[^a-zA-Z0-9]/g, "_");
-  const host = document.getElementById(`ip-widen-${safe}`);
-  if (!host) return;
+// Populate the read-only "Related cell-type pairs" panel: the distinct
+// (sender, receiver) pairs whose pathway matches this row at the active grain,
+// grouped by receiver. Backed by the per-grain global index — available in both
+// Top and Cell Type modes (the binary ships per grain; ensureLoaded fetches it
+// on demand). Re-queries the host after the await since the panel may re-render.
+async function _ipRenderRelatedPairs(rk, r) {
+  if (!r) return;
+  const hostId = `ip-related-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  if (typeof IncytrGlobalIndex === "undefined" || !IncytrGlobalIndex.available()) {
+    const host = document.getElementById(hostId);
+    if (host) host.innerHTML = `<div class="muted" style="font-size:11px;">Pair lookup unavailable in this view.</div>`;
+    return;
+  }
   try {
-    const spineMap = await SliceCache.loadBackboneSpineIndex(grain);
-    if (!spineMap) {
-      host.innerHTML = `<div class="muted" style="font-size:11px;">Spine index unavailable.</div>`;
-      return;
-    }
-    const pairs = spineMap.get(spineKey) || [];
+    if (!IncytrGlobalIndex.loaded()) await IncytrGlobalIndex.ensureLoaded();
+    const host = document.getElementById(hostId);
+    if (!host) return;   // panel closed/re-rendered while loading
+    const ident = _ipPathIdentity(r);
+    const pairs = IncytrGlobalIndex.pairsForPath(ident);
     if (!pairs.length) {
-      host.innerHTML = `<div class="muted" style="font-size:11px;">No pairs found for this spine.</div>`;
+      host.innerHTML = `<div class="muted" style="font-size:11px;">No cell-type pairs carry this pathway.</div>`;
       return;
     }
-    // Group by receiver cell type.
-    const byReceiver = new Map();
-    for (const [s, r_] of pairs) {
-      if (!byReceiver.has(r_)) byReceiver.set(r_, []);
-      byReceiver.get(r_).push(s);
-    }
+    // One row per pair (count == #rows). Heaviest pairs first; the parent pair is
+    // marked so the user can locate the row they opened the panel from.
+    pairs.sort((a, b) => (b[2] - a[2]) || a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]));
     let rows = "";
-    for (const [rec, senders] of [...byReceiver.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-      rows += `<tr><td style="padding:2px 6px;border-bottom:1px solid #eee;">${_escapeHtml(rec)}</td>`;
-      rows += `<td style="padding:2px 6px;border-bottom:1px solid #eee;color:#555;">${senders.map(_escapeHtml).join(", ")}</td></tr>`;
+    for (const [s, rec, cnt] of pairs) {
+      const self = s === ident.sender && rec === ident.receiver;
+      const tdBase = "padding:2px 6px;border-bottom:1px solid #eee;";
+      rows += `<tr style="${self ? "background:#eef4fb;font-weight:600;" : ""}">`
+        + `<td style="${tdBase}">${_escapeHtml(s)}</td>`
+        + `<td style="${tdBase}color:#555;">${_escapeHtml(rec)}</td>`
+        + `<td style="${tdBase}text-align:right;">${cnt.toLocaleString()}</td></tr>`;
     }
     host.innerHTML = `<div style="font-size:11px;color:#444;">
-      <div style="margin-bottom:4px;font-weight:600;">${pairs.length} pair(s) carry this spine:</div>
+      <div style="margin-bottom:4px;font-weight:600;">${pairs.length} cell-type pair(s) carry this pathway:</div>
       <table style="border-collapse:collapse;width:100%;">
         <thead><tr>
+          <th style="text-align:left;padding:2px 6px;border-bottom:2px solid #ddd;">Sender</th>
           <th style="text-align:left;padding:2px 6px;border-bottom:2px solid #ddd;">Receiver</th>
-          <th style="text-align:left;padding:2px 6px;border-bottom:2px solid #ddd;">Sender(s)</th>
+          <th style="text-align:right;padding:2px 6px;border-bottom:2px solid #ddd;">Pathways</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table></div>`;
   } catch (e) {
-    host.innerHTML = `<div class="muted" style="font-size:11px;">Spine index load error: ${_escapeHtml(String(e && e.message ? e.message : e))}</div>`;
+    const host = document.getElementById(hostId);
+    if (host) host.innerHTML = `<div class="muted" style="font-size:11px;">Pair lookup error: ${_escapeHtml(String(e && e.message ? e.message : e))}</div>`;
   }
 }
 
@@ -2568,6 +2400,13 @@ function wireIncytrPathways() {
       IncytrGlobalIndex.reset();
       _ipRuntime.loadedKey = null;   // invalidate pair-mode cache
       IncytrFilter.set({ grain: grainSel.value || "Full", pairPage: 0 });
+      // The grain selector is shared between the table, heatmap, and chord panes.
+      // Refresh whichever is active: the heatmap/chord re-read the grain's count
+      // tensors; the table re-scopes its shards/global index.
+      if (_ihVisPaneActive()) {
+        _ihRefreshActive();
+        return;
+      }
       _ipInvalidateScope();
       _ipResetPage();
       _ipEnsureShards();
@@ -2591,7 +2430,6 @@ function wireIncytrPathways() {
   // Reset.
   const resetBtn = document.getElementById("ip-reset");
   if (resetBtn) resetBtn.addEventListener("click", () => {
-    _ipRuntime.drillReturn = null;
     IncytrFilter.reset();
     const block = _ipBlock();
     if (block) _ipSyncControls(block);
@@ -2599,29 +2437,6 @@ function wireIncytrPathways() {
     _ipResetPage();
     _ipEnsureShards();
   });
-
-  // B-6: Back button — restore the one-level drill-return snapshot.
-  const drillBackBtn = document.getElementById("ip-drill-back");
-  if (drillBackBtn && !drillBackBtn._wired) {
-    drillBackBtn._wired = true;
-    drillBackBtn.addEventListener("click", () => {
-      const snap = _ipRuntime.drillReturn;
-      if (!snap) return;
-      _ipRuntime.drillReturn = null;
-      const page = typeof snap._page === "number" ? snap._page : 0;
-      const filterSnap = Object.assign({}, snap);
-      delete filterSnap._page;
-      // Restore the full filter state from snapshot, then sync controls.
-      IncytrGlobalIndex.reset();
-      IncytrFilter.set(filterSnap);
-      _ipRuntime.page = page;
-      const block = _ipBlock();
-      if (block) _ipSyncControls(block);
-      _ipInvalidateScope();
-      _ipResetPage();
-      _ipEnsureShards();
-    });
-  }
 
   const exportBtn = document.getElementById("ip-export");
   if (exportBtn) exportBtn.addEventListener("click", async () => {

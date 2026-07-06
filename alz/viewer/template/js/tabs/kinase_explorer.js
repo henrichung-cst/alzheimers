@@ -47,19 +47,11 @@ function _ensureAttributionRowsByKinase() {
   return m;
 }
 
-// WMB location tiers as multiples of the even-split baseline. WMB specificity
-// is a share normalized over the retained WMB classes that carry atlas cells (~9),
-// so the honest uniform is 1/N_retained, read canonically from meta.wmb_uniform
-// (matches the crosstable; see docs/foundation/concordance.md §6).
+// WMB even-split baseline (1/N over the ~9 retained WMB classes that carry atlas
+// cells), read canonically from meta.wmb_uniform. The WMB cross-check renders the
+// detection-based wmb_concentration_tier; this baseline only translates that tier
+// to its concentration threshold (tier × uniform) in the badge tooltip below.
 const _WMB_UNIFORM = (typeof PAYLOAD !== "undefined" && PAYLOAD && PAYLOAD.meta && PAYLOAD.meta.wmb_uniform) || (1 / 9);
-const _WMB_TIER_VALUES = [10, 5, 2, 1];
-function _wmbTier(s) {
-  if (s == null || !isFinite(s)) return 0;
-  for (const t of _WMB_TIER_VALUES) {
-    if (s >= t * _WMB_UNIFORM) return t;
-  }
-  return 0;
-}
 function _wmbTierLabel(t) { return t > 0 ? "≥" + t + "×" : ""; }
 function _wmbTierBadge(t) {
   if (!t) return '<span class="muted">—</span>';
@@ -277,8 +269,6 @@ function _buildKinaseRowModel() {
       // Per-genotype trend is derived from the _nes vector on demand (no stored
       // peak/trajectory scalars) — see _keTrendPillCell / _keGenotypeNesVec.
       top_celltype_1: K.top_celltype_1[i] || "",
-      n_backbones: (K.n_backbones && K.n_backbones[i] != null) ? K.n_backbones[i] : null,
-      n_paths:     (K.n_paths     && K.n_paths[i]     != null) ? K.n_paths[i]     : null,
       song: songByKid.get(K.id[i]) || null,
       _fdr: CONTRASTS.map(c => K["FDR_" + c][i]),
       _nes: CONTRASTS.map(c => K["NES_" + c][i]),
@@ -289,12 +279,6 @@ function _buildKinaseRowModel() {
 }
 
 // Integer count cell with thousands separators; — when absent.
-function _keCountCell(v) {
-  return v != null && isFinite(v)
-    ? `<td class="attr-num">${Number(v).toLocaleString()}</td>`
-    : `<td class="attr-num"><span class="muted">—</span></td>`;
-}
-
 // Per-genotype peak NES cell (signed); – when the genotype has no peak.
 // Per-genotype ordered NES vector (timepoint order) for trend classification.
 function _keGenotypeNesVec(r, disease) {
@@ -543,7 +527,21 @@ function _makeKeCompare(scopedCtxIds) {
   const col = kf.sortCol || "nes_profile";
   const asc = !!kf.sortAsc;
   const fdr = kf.fdr || Store.state.filters.fdr || 0.25;
+  // Cell-type-populated rows always rank above rows whose Cell type renders "—"
+  // (no scoped attribution, or tier none/low, or no label — see
+  // _renderCellTypesCell), regardless of the active sort column/direction. This
+  // keeps blank cell-type kinases from leading the table; the chosen sort key
+  // orders within each group.
+  const _hasCellType = (r) => {
+    const rows = getScopedAttribution(r.id, kf);
+    if (!rows.length) return false;
+    const k = rows[0];
+    const label = k.specificity_unit_label || k.specificity_celltype;
+    return !(k.confidence_tier === "none" || k.confidence_tier === "low" || !label);
+  };
   return function(a, b) {
+    const ha = _hasCellType(a), hb = _hasCellType(b);
+    if (ha !== hb) return ha ? -1 : 1;
     let va, vb;
     if (col === "nes_profile") {
       return numCmp(_kineSignedPeakNesScoped(a, scopedCtxIds),
@@ -931,8 +929,6 @@ function renderKinaseExplorer() {
       `<td>${_renderCellTypesCell(r, colFilter)}</td>` +
       `<td style="text-align:center;">${_keSongBadge(r.song)}</td>` +
       `<td style="text-align:center;">${_wmbTierBadge(r._exportWmbMaxTier)}</td>` +
-      _keCountCell(r.n_backbones) +
-      _keCountCell(r.n_paths) +
       `</tr>`
     );
   }
@@ -943,8 +939,8 @@ function renderKinaseExplorer() {
 }
 
 function exportKinaseCsv() {
-  const headers = ["Kinase","Gene","Family","Residue","n_sig","trend_App","trend_Tau","trend_ApTt","MouseC1_topCelltype","wmb_max_tier","conf","n_backbones","n_paths"];
-  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportTrendApp","_exportTrendTau","_exportTrendApTt","_exportSongTopCelltype","_exportWmbMaxTier","_exportConf","n_backbones","n_paths"];
+  const headers = ["Kinase","Gene","Family","Residue","n_sig","trend_App","trend_Tau","trend_ApTt","MouseC1_topCelltype","wmb_max_tier","conf"];
+  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportTrendApp","_exportTrendTau","_exportTrendApTt","_exportSongTopCelltype","_exportWmbMaxTier","_exportConf"];
   csvDownload(csvSerialize(headers, keys, _keVisible), exportFilename(COHORT_LABELS.song, "kinase"));
 }
 

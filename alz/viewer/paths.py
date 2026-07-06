@@ -55,6 +55,14 @@ EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_CORTEX_DIR = os.path.join(
 EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_HIPPO_DIR = os.path.join(
     UNIFIED_VIEWER_DIR, "edge_slices", "incytr_pathways_fivexfad_hippocampus"
 )
+# 5xFAD backbone-grain shards — one subdir per grain, per tissue (parallel to the
+# Song EDGE_SLICES_INCYTR_BACKBONE_DIR; tissue-separated so no rmtree collision).
+EDGE_SLICES_INCYTR_BACKBONE_5XFAD_CORTEX_DIR = os.path.join(
+    UNIFIED_VIEWER_DIR, "edge_slices", "incytr_backbone_fivexfad_cortex"
+)
+EDGE_SLICES_INCYTR_BACKBONE_5XFAD_HIPPO_DIR = os.path.join(
+    UNIFIED_VIEWER_DIR, "edge_slices", "incytr_backbone_fivexfad_hippocampus"
+)
 
 # Per-kinase shards for the human Audit drawer's leading-edge + substrate-motif
 # fields. These two columns dominated PAYLOAD.human.perdonor_index (~50 MB);
@@ -62,6 +70,22 @@ EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_HIPPO_DIR = os.path.join(
 EDGE_SLICES_HUMAN_PERDONOR_DIR = os.path.join(
     UNIFIED_VIEWER_DIR, "edge_slices", "human_perdonor"
 )
+
+# Substrate Conservation tab (D1 cross-cohort comparison). Per-kinase shards of
+# the shared human↔5xFAD substrate motif pairs (all 8 contexts in one shard);
+# the ~19 MB kinase_pairs_*.csv set is too large to inline. Fetched on kinase
+# selection to fill the detail-panel substrate table. Source: latest C5 run under
+# outputs/reports/substrate_compare/c5_mukesh_5xfad_<ts>/.
+EDGE_SLICES_SUBSTRATE_PAIRS_DIR = os.path.join(
+    UNIFIED_VIEWER_DIR, "edge_slices", "substrate_pairs"
+)
+SUBSTRATE_COMPARE_GLOB = os.path.join(
+    config.REPO_ROOT, "outputs", "reports", "substrate_compare",
+    "c5_mukesh_5xfad_*",
+)
+# Curated effector-tier list (repo root). #GREEN → Credible Effector,
+# #YELLOW → Plausible. Annotates the substrate-comparison kinase table.
+SUBSTRATE_TIER_FILE = os.path.join(config.REPO_ROOT, "kinases.txt")
 INCYTR_PAIR_MODE_OUTPUTS_DIR = os.path.join(
     config.REPO_ROOT, "outputs", "reports", "incytr_pair_mode"
 )

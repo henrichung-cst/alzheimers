@@ -3,6 +3,7 @@ function wireViewerSplitters() {
   wireTableDetailSplitter("kh-splitter", "humanTab.leftWidth");
   wireTableDetailSplitter("kx-splitter", "crosstableTab.leftWidth");
   wireTableDetailSplitter("f5-splitter", "fivexfadTab.leftWidth");
+  wireTableDetailSplitter("sub-splitter", "substrateTab.leftWidth");
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +88,16 @@ const TAB_MANIFEST = {
     wire: () => { wireIncytrHeatmap(); wireIncytrPathways(); wireIncytrPanel(); },
     render: () => _renderIncytrTab(),
     rerenderOn: { filters: false, selection: [] },
+  },
+  substrate: {
+    group: "reference", label: "Early AD Kinases",
+    filters: [], modes: ["mouse", "human"],
+    requires: [{type:"payload", key:"substrate_compare",
+      message:"Cross-cohort substrate comparison is not available in this viewer build.",
+      cta:"Use another tab"}],
+    wire: () => { if (typeof wireSubstrateCompare === "function") wireSubstrateCompare(); },
+    render: () => { if (typeof renderSubstrateCompare === "function") renderSubstrateCompare(); },
+    rerenderOn: { filters: false, selection: ["substrate"] },
   },
   methods: {
     group: "reference", label: "Methods",

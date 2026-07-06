@@ -64,10 +64,20 @@ window.IncytrGlobalIndex = (function() {
     _loadPromise = (async () => {
       const resp = await fetch(gi.url);
       if (!resp.ok) throw new Error(`incytr index fetch ${gi.url} -> ${resp.status}`);
-      // Mirror 01_state.js payload gunzip: blob -> DecompressionStream -> buffer.
-      const blob = await resp.blob();
-      const stream = blob.stream().pipeThrough(new DecompressionStream("gzip"));
-      const buf = await new Response(stream).arrayBuffer();
+      // Transport-tolerant gunzip (mirrors 01_state.js:_decodeGzipBuffer): sniff
+      // the gzip magic (0x1f 0x8b) and only decompress when the bytes are
+      // actually gzip. Some hosting layers (bioplat voila-gateway) auto-
+      // decompress and hand back plain bytes; a stale cache entry stored while
+      // the object carried Content-Encoding: gzip lands here too.
+      const raw = await resp.arrayBuffer();
+      const magic = new Uint8Array(raw);
+      let buf;
+      if (magic.length >= 2 && magic[0] === 0x1f && magic[1] === 0x8b) {
+        const stream = new Response(raw).body.pipeThrough(new DecompressionStream("gzip"));
+        buf = await new Response(stream).arrayBuffer();
+      } else {
+        buf = raw;
+      }
       const N = gi.nrows;
       const cols = {};
       let off = 0;
@@ -454,6 +464,9 @@ window.IncytrGlobalIndex = (function() {
       traj_labels: _decodeTraj(trj),
     };
     for (const sc of gi.score_columns) row[sc] = _f16(cols[sc][i]);
+    // Backbone grains carry n_paths (distinct Full pathways collapsed into the
+    // backbone row); Full grain has no such column.
+    if (cols.n_paths) row.n_paths = cols.n_paths[i];
     return row;
   }
 
@@ -512,5 +525,47 @@ window.IncytrGlobalIndex = (function() {
     return _cachePathRows(key, out);
   }
 
-  return { available, loaded, manifest, ensureLoaded, filterRank, materialize, pathRows, reset };
+  // Enumerate the distinct (sender, receiver) pairs whose pathway matches `ident`
+  // at the active grain — the read-only "Related cell-type pairs" lookup. Same
+  // node resolution as pathRows (absent nodes match-any via the "—" sentinel or a
+  // missing column), but the sender/receiver filter is dropped and contrast is
+  // ignored, so a backbone row matches by its surviving nodes (spine semantics)
+  // and a Full row matches by the exact 4-tuple. Each pair carries a count of the
+  // full pathways it contributes: n_paths on backbone grains (one matching row per
+  // pair, already aggregated), or 1 per matching row at Full grain. The parent
+  // pair (ident.sender/receiver) is included — no sender/receiver filter.
+  // Returns [[sender, receiver, nPathways], …].
+  function pairsForPath(ident) {
+    const d = _data;
+    if (!d || !ident) return [];
+    const { cols, gi } = d;
+    const parts = String(ident.path || "").split("|");
+    if (parts.length !== 4) return [];
+    const recWant = gi.gene_vocab.indexOf(parts[1]);
+    const emWant  = gi.gene_vocab.indexOf(parts[2]);
+    if (recWant < 0 || emWant < 0) return [];
+    const ligWant = (parts[0] === "—" || !cols.ligandId) ? -2 : gi.gene_vocab.indexOf(parts[0]);
+    const tgtWant = (parts[3] === "—" || !cols.targetId) ? -2 : gi.gene_vocab.indexOf(parts[3]);
+    if (ligWant === -1 || tgtWant === -1) return [];
+
+    const sid = cols.senderId, rid = cols.receiverId;
+    const lig = cols.ligandId, rec = cols.receptorId, em = cols.emId, tgt = cols.targetId;
+    const np = cols.n_paths;   // backbone grains only; Full grain counts 1 per row
+    const nRec = gi.receiver_vocab.length;
+    const byPair = new Map();
+    for (let i = 0; i < d.nrows; i++) {
+      if (rec[i] !== recWant || em[i] !== emWant) continue;
+      if (ligWant >= 0 && lig && lig[i] !== ligWant) continue;
+      if (tgtWant >= 0 && tgt && tgt[i] !== tgtWant) continue;
+      const k = sid[i] * nRec + rid[i];
+      const add = np ? (np[i] || 0) : 1;
+      const cur = byPair.get(k);
+      if (cur) cur[2] += add;
+      else byPair.set(k, [gi.sender_vocab[sid[i]], gi.receiver_vocab[rid[i]], add]);
+    }
+    return [...byPair.values()];
+  }
+
+  return { available, loaded, manifest, ensureLoaded, filterRank, materialize,
+           pathRows, pairsForPath, reset };
 })();

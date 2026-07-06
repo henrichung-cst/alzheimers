@@ -43,6 +43,7 @@ import os
 import re
 import sys
 import textwrap
+import uuid
 from pathlib import Path
 
 import duckdb
@@ -199,10 +200,13 @@ def gene_node_hits(
     if merged.empty:
         return pd.DataFrame()
     # owning_cluster: Ligand -> sender; Receptor/EM/Target -> receiver
-    merged["owning_cluster"] = merged.apply(
-        lambda r: r["sender"] if r["role"] == "Ligand" else r["receiver"],
-        axis=1,
+    merged["owning_cluster"] = merged["sender"].where(
+        merged["role"].eq("Ligand"),
+        merged["receiver"],
     )
+    for c in ("contrast", "channel", "role", "sender", "receiver", "owning_cluster"):
+        if c in merged.columns:
+            merged[c] = merged[c].astype("category")
     return merged
 
 
@@ -215,22 +219,46 @@ def _apply_celltype_ranks(
     ranks: pd.DataFrame,
     join_cols: list[str],
 ) -> pd.DataFrame:
-    """Left-join a long-form (join_cols..., celltype_match_rank) table onto hits.
+    """Annotate a long-form (join_cols..., celltype_match_rank) table onto hits.
 
     Adds celltype_match (bool) and celltype_match_rank (Int64, <NA> when no match).
     Join keys are string-cast on both sides to match the prior per-row str() compare.
+    The rank table is tiny compared with the hit table, so use a keyed map instead
+    of a pandas merge that duplicates every hit column in memory.
     """
-    hits = hits.copy()
-    for c in join_cols:
-        hits[c] = hits[c].astype(str)
-    if not ranks.empty:
-        ranks = ranks.copy()
-        for c in join_cols:
-            ranks[c] = ranks[c].astype(str)
-    hits = hits.merge(ranks, on=join_cols, how="left")
-    hits["celltype_match"] = hits["celltype_match_rank"].notna()
-    hits["celltype_match_rank"] = hits["celltype_match_rank"].astype("Int64")
+    if hits.empty:
+        hits["celltype_match"] = pd.Series(dtype=bool)
+        hits["celltype_match_rank"] = pd.Series(dtype="Int64")
+        return hits
+    if ranks.empty:
+        hits["celltype_match"] = False
+        hits["celltype_match_rank"] = pd.Series(pd.NA, index=hits.index, dtype="Int64")
+        return hits
+
+    rank_map = _rank_map(ranks, join_cols, "celltype_match_rank")
+    hit_key = _string_key(hits, join_cols)
+    hit_rank = hit_key.map(rank_map)
+    hits["celltype_match"] = hit_rank.notna().to_numpy()
+    hits["celltype_match_rank"] = pd.array(hit_rank, dtype="Int64")
     return hits
+
+
+def _string_key(df: pd.DataFrame, cols: list[str]) -> pd.Series:
+    """Build a stable string key without copying all payload columns."""
+    key = df[cols[0]].astype("string")
+    for col in cols[1:]:
+        key = key.str.cat(df[col].astype("string"), sep="\x1f", na_rep="")
+    return key
+
+
+def _rank_map(df: pd.DataFrame, cols: list[str], value_col: str) -> pd.Series:
+    key = _string_key(df, cols)
+    return pd.Series(df[value_col].to_numpy(), index=key).groupby(level=0).min()
+
+
+def _value_map(df: pd.DataFrame, cols: list[str], value_col: str) -> pd.Series:
+    key = _string_key(df, cols)
+    return pd.Series(df[value_col].to_numpy(), index=key).groupby(level=0).first()
 
 
 def annotate_celltype_match_song(
@@ -329,7 +357,11 @@ def annotate_fivexfad_expression(
     })
     # Only named clusters
     sub = sub[~sub["owning_cluster"].str.startswith("cluster-")]
-    return hits.merge(sub, on=["kinase", "owning_cluster"], how="left")
+    join_cols = ["kinase", "owning_cluster"]
+    hit_key = _string_key(hits, join_cols)
+    for out_col in ("expression_fraction", "concentration_tier"):
+        hits[out_col] = hit_key.map(_value_map(sub, join_cols, out_col)).to_numpy()
+    return hits
 
 
 def annotate_fivexfad_disease(
@@ -352,18 +384,17 @@ def annotate_fivexfad_disease(
     sub = sub.rename(columns={"cell_type": "owning_cluster"})
     sub = sub[~sub["owning_cluster"].str.startswith("cluster-")]
 
-    # Extract age from contrast for each hit row
-    hits = hits.copy()
-    hits["_age"] = hits["contrast"].apply(
-        lambda c: _fivexfad_age_from_contrast(c) if pd.notna(c) else None
-    )
-    hits = hits.merge(
-        sub.rename(columns={"fivexfad_lfc": "disease_lfc"}),
-        left_on=["kinase", "owning_cluster", "_age"],
-        right_on=["kinase", "owning_cluster", "age_months"],
-        how="left",
-    )
-    hits = hits.drop(columns=["_age", "age_months"], errors="ignore")
+    join_cols = ["kinase", "owning_cluster", "age_months"]
+    disease = sub.rename(columns={"fivexfad_lfc": "disease_lfc"})
+    age = hits["contrast"].astype("string").str.extract(r"(\d+)mo$", expand=False)
+    key_df = pd.DataFrame({
+        "kinase": hits["kinase"],
+        "owning_cluster": hits["owning_cluster"],
+        "age_months": age,
+    }, index=hits.index)
+    hits["disease_lfc"] = _string_key(key_df, join_cols).map(
+        _value_map(disease, join_cols, "disease_lfc")
+    ).to_numpy()
     return hits
 
 
@@ -446,6 +477,86 @@ def build_recep_em_fan(hits_all: pd.DataFrame) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
+def build_recep_em_fan_from_parquet(hits_parquet: Path, memory_limit: str = "4GB") -> pd.DataFrame:
+    """DuckDB-backed fan characterization for streamed 5xFAD bridge output."""
+    empty_fan = pd.DataFrame(columns=[
+        "Receptor", "EM", "n_ligands", "n_targets", "n_senders", "n_receivers",
+        "n_sender_receiver_pairs", "example_sender", "example_receiver",
+    ])
+    if not hits_parquet.exists():
+        return empty_fan
+
+    spill = os.environ.get(
+        "DUCKDB_TEMP_DIR",
+        os.path.join(os.path.expanduser("~"), ".cache", "duckdb"),
+    )
+    os.makedirs(spill, exist_ok=True)
+    con = duckdb.connect()
+    con.execute(f"PRAGMA memory_limit='{memory_limit}'")
+    con.execute(f"SET temp_directory='{spill}'")
+    safe = str(hits_parquet).replace("'", "''")
+    sql = f"""
+    WITH matched AS (
+        SELECT gene_symbol, role, sender, receiver
+        FROM read_parquet('{safe}')
+        WHERE celltype_match = true
+    ),
+    recep AS (
+        SELECT DISTINCT gene_symbol AS Receptor, sender, receiver
+        FROM matched WHERE role = 'Receptor'
+    ),
+    em AS (
+        SELECT DISTINCT gene_symbol AS EM, sender, receiver
+        FROM matched WHERE role = 'EM'
+    ),
+    spine AS (
+        SELECT DISTINCT r.Receptor, e.EM, r.sender, r.receiver
+        FROM recep r
+        JOIN em e USING (sender, receiver)
+    ),
+    base AS (
+        SELECT Receptor, EM,
+               COUNT(DISTINCT sender) AS n_senders,
+               COUNT(DISTINCT receiver) AS n_receivers,
+               COUNT(*) AS n_sender_receiver_pairs,
+               MIN(sender) AS example_sender,
+               MIN(receiver) AS example_receiver
+        FROM spine
+        GROUP BY Receptor, EM
+    ),
+    lig AS (
+        SELECT s.Receptor, s.EM, COUNT(DISTINCT m.gene_symbol) AS n_ligands
+        FROM spine s
+        JOIN matched m
+          ON s.sender = m.sender
+         AND s.receiver = m.receiver
+         AND m.role = 'Ligand'
+        GROUP BY s.Receptor, s.EM
+    ),
+    tgt AS (
+        SELECT s.Receptor, s.EM, COUNT(DISTINCT m.gene_symbol) AS n_targets
+        FROM spine s
+        JOIN matched m
+          ON s.sender = m.sender
+         AND s.receiver = m.receiver
+         AND m.role = 'Target'
+        GROUP BY s.Receptor, s.EM
+    )
+    SELECT b.Receptor, b.EM,
+           COALESCE(l.n_ligands, 0) AS n_ligands,
+           COALESCE(t.n_targets, 0) AS n_targets,
+           b.n_senders, b.n_receivers, b.n_sender_receiver_pairs,
+           b.example_sender, b.example_receiver
+    FROM base b
+    LEFT JOIN lig l USING (Receptor, EM)
+    LEFT JOIN tgt t USING (Receptor, EM)
+    ORDER BY n_ligands DESC, n_targets DESC
+    """
+    res = con.execute(sql).to_arrow_table().to_pandas()
+    con.close()
+    return res if not res.empty else empty_fan
+
+
 # ---------------------------------------------------------------------------
 # Step 7: per-kinase participation counts (n_backbones + n_paths)
 # ---------------------------------------------------------------------------
@@ -469,7 +580,7 @@ def _detect_sigprob_cols(con: duckdb.DuckDBPyConnection, path: str) -> tuple[str
 
 
 def compute_participation_counts(
-    hits_all: pd.DataFrame,
+    hits_all: pd.DataFrame | str | Path,
     wide_glob: str,
     memory_limit: str = "8GB",
 ) -> pd.DataFrame:
@@ -499,85 +610,189 @@ def compute_participation_counts(
     if not files:
         log.warning(f"participation: no wide parquets at {wide_glob}")
         return empty
-    if hits_all.empty:
+    if isinstance(hits_all, (str, Path)):
+        hits_parquet = Path(hits_all)
+        if not hits_parquet.exists():
+            log.warning(f"participation: hits parquet missing: {hits_parquet}")
+            return empty
+    elif hits_all.empty:
         return empty
+    else:
+        hits_parquet = None
 
     spill = os.environ.get(
         "DUCKDB_TEMP_DIR",
         os.path.join(os.path.expanduser("~"), ".cache", "duckdb"),
     )
     os.makedirs(spill, exist_ok=True)
-    con = duckdb.connect()
+    db_path = os.path.join(spill, f"kinase_bridge_participation_{os.getpid()}_{uuid.uuid4().hex}.duckdb")
+    con = duckdb.connect(db_path)
     con.execute(f"PRAGMA memory_limit='{memory_limit}'")
+    con.execute("PRAGMA threads=2")
+    con.execute("SET preserve_insertion_order=false")
     con.execute(f"SET temp_directory='{spill}'")
 
-    # Distinct kinase↔node attribution — ALL hits (matched or not): the preamble
-    # counts a kinase's chains by substrate-phosphorylator over-representation,
-    # not by cell-type match.
-    attr = hits_all[["kinase", "gene_symbol", "role", "sender", "receiver"]].drop_duplicates()
-    con.register("attr", attr)
+    try:
+        # Distinct kinase↔node attribution — ALL hits (matched or not): the
+        # preamble counts a kinase's chains by substrate-phosphorylator
+        # over-representation, not by cell-type match. Build it in DuckDB to
+        # avoid a pandas drop_duplicates copy of the 5xFAD cortex hit table.
+        if hits_parquet is None:
+            con.register("hits_all", hits_all)
+            con.execute("""
+                CREATE TABLE attr AS
+                SELECT DISTINCT kinase, gene_symbol, role, sender, receiver
+                FROM hits_all
+            """)
+            con.unregister("hits_all")
+        else:
+            safe_hits = str(hits_parquet).replace("'", "''")
+            con.execute(f"""
+                CREATE TABLE attr AS
+                SELECT DISTINCT kinase, gene_symbol, role, sender, receiver
+                FROM read_parquet('{safe_hits}')
+            """)
+        con.execute("""
+            CREATE TABLE kinase_dim AS
+            SELECT ROW_NUMBER() OVER (ORDER BY kinase) AS kinase_id, kinase
+            FROM (SELECT DISTINCT kinase FROM attr)
+        """)
+        for role in POSITIONS:
+            con.execute(f"""
+                CREATE TABLE attr_{role.lower()} AS
+                SELECT DISTINCT k.kinase_id, a.sender, a.receiver, a.gene_symbol
+                FROM attr a
+                JOIN kinase_dim k USING (kinase)
+                WHERE a.role = '{role}'
+            """)
 
-    parts: list[str] = []
-    for f in files:
-        sp1, sp2 = _detect_sigprob_cols(con, f)
-        safe = f.replace("'", "''")
-        parts.append(f"""
-            SELECT "Sender.group","Receiver.group",Ligand,Receptor,EM,Target
-            FROM read_parquet('{safe}')
-            WHERE ({_q(sp1)} > {SIGPROB_CUTOFF} OR {_q(sp2)} > {SIGPROB_CUTOFF})
-              AND ABS(PDS) >= {ABS_PDS_CUTOFF}""")
-    gated_union = "\n            UNION ALL".join(parts)
+        con.execute("CREATE SEQUENCE path_id_seq START 1")
+        con.execute("CREATE SEQUENCE spine_id_seq START 1")
+        con.execute("CREATE TABLE path_dim (path_id BIGINT, path_key VARCHAR)")
+        con.execute("CREATE TABLE spine_dim (spine_id BIGINT, spine_key VARCHAR)")
+        con.execute("""
+            CREATE TABLE path_touches (
+                kinase_id BIGINT,
+                path_id BIGINT
+            )
+        """)
+        con.execute("""
+            CREATE TABLE spine_touches (
+                kinase_id BIGINT,
+                spine_id BIGINT
+            )
+        """)
+        for f in files:
+            log.info(f"participation: processing {os.path.basename(f)}")
+            sp1, sp2 = _detect_sigprob_cols(con, f)
+            safe = f.replace("'", "''")
+            con.execute(f"""
+                CREATE OR REPLACE TEMP TABLE keyed_paths AS
+                WITH paths AS (
+                    SELECT DISTINCT
+                           "Sender.group" AS sender,
+                           "Receiver.group" AS receiver,
+                           Ligand, Receptor, EM, Target
+                    FROM read_parquet('{safe}')
+                    WHERE ({_q(sp1)} > {SIGPROB_CUTOFF} OR {_q(sp2)} > {SIGPROB_CUTOFF})
+                      AND ABS(PDS) >= {ABS_PDS_CUTOFF}
+                )
+                SELECT *,
+                       CONCAT(
+                           COALESCE(sender, ''), '\x1f',
+                           COALESCE(receiver, ''), '\x1f',
+                           COALESCE(Ligand, ''), '\x1f',
+                           COALESCE(Receptor, ''), '\x1f',
+                           COALESCE(EM, ''), '\x1f',
+                           COALESCE(Target, '')
+                       ) AS path_key,
+                       CONCAT(
+                           COALESCE(sender, ''), '\x1f',
+                           COALESCE(receiver, ''), '\x1f',
+                           COALESCE(Receptor, ''), '\x1f',
+                           COALESCE(EM, '')
+                       ) AS spine_key
+                FROM paths
+            """)
+            con.execute("""
+                INSERT INTO path_dim
+                SELECT nextval('path_id_seq'), k.path_key
+                FROM (SELECT DISTINCT path_key FROM keyed_paths) k
+                LEFT JOIN path_dim d USING (path_key)
+                WHERE d.path_key IS NULL
+            """)
+            con.execute("""
+                INSERT INTO spine_dim
+                SELECT nextval('spine_id_seq'), k.spine_key
+                FROM (SELECT DISTINCT spine_key FROM keyed_paths) k
+                LEFT JOIN spine_dim d USING (spine_key)
+                WHERE d.spine_key IS NULL
+            """)
+            for role, col in (
+                ("ligand", "Ligand"),
+                ("receptor", "Receptor"),
+                ("em", "EM"),
+                ("target", "Target"),
+            ):
+                con.execute(f"""
+                    INSERT INTO path_touches
+                    SELECT DISTINCT a.kinase_id, d.path_id
+                    FROM keyed_paths p
+                    JOIN attr_{role} a
+                      ON p.sender = a.sender
+                     AND p.receiver = a.receiver
+                     AND p.{_q(col)} = a.gene_symbol
+                    JOIN path_dim d USING (path_key)
+                    WHERE p.{_q(col)} IS NOT NULL
+                """)
+                con.execute(f"""
+                    INSERT INTO spine_touches
+                    SELECT DISTINCT a.kinase_id, d.spine_id
+                    FROM keyed_paths p
+                    JOIN attr_{role} a
+                      ON p.sender = a.sender
+                     AND p.receiver = a.receiver
+                     AND p.{_q(col)} = a.gene_symbol
+                    JOIN spine_dim d USING (spine_key)
+                    WHERE p.{_q(col)} IS NOT NULL
+                """)
+            con.execute("""
+                CREATE OR REPLACE TABLE path_touches AS
+                SELECT DISTINCT kinase_id, path_id
+                FROM path_touches
+            """)
+            con.execute("""
+                CREATE OR REPLACE TABLE spine_touches AS
+                SELECT DISTINCT kinase_id, spine_id
+                FROM spine_touches
+            """)
+            con.execute("DROP TABLE keyed_paths")
 
-    # Distinct full paths get a synthetic id, then are unpivoted into one row per
-    # occupied node so the kinase↔node match is a single 4-key equi-join
-    # (sender, receiver, role, gene) — a hash join, not the cross-product an
-    # OR-of-positions join over the (sender,receiver) bucket would produce.
-    sql = f"""
-    WITH gated AS ({gated_union}
-    ),
-    paths AS (
-        SELECT *, ROW_NUMBER() OVER () AS path_id
-        FROM (
-            SELECT DISTINCT "Sender.group","Receiver.group",Ligand,Receptor,EM,Target
-            FROM gated
+        sql = """
+        WITH nb AS (
+            SELECT kinase_id, COUNT(*) AS n_backbones
+            FROM spine_touches
+            GROUP BY kinase_id
+        ),
+        np AS (
+            SELECT kinase_id, COUNT(*) AS n_paths
+            FROM path_touches
+            GROUP BY kinase_id
         )
-    ),
-    nodes AS (
-        SELECT path_id, "Sender.group" AS sender, "Receiver.group" AS receiver,
-               'Ligand' AS role, Ligand AS gene FROM paths WHERE Ligand IS NOT NULL
-        UNION ALL
-        SELECT path_id, "Sender.group", "Receiver.group",
-               'Receptor', Receptor FROM paths WHERE Receptor IS NOT NULL
-        UNION ALL
-        SELECT path_id, "Sender.group", "Receiver.group",
-               'EM', EM FROM paths WHERE EM IS NOT NULL
-        UNION ALL
-        SELECT path_id, "Sender.group", "Receiver.group",
-               'Target', Target FROM paths WHERE Target IS NOT NULL
-    ),
-    touched AS (
-        SELECT DISTINCT a.kinase, n.path_id
-        FROM nodes n
-        JOIN attr a
-          ON n.sender = a.sender
-         AND n.receiver = a.receiver
-         AND n.role = a.role
-         AND n.gene = a.gene_symbol
-    ),
-    spine_touched AS (
-        SELECT DISTINCT t.kinase,
-               p."Sender.group", p."Receiver.group", p.Receptor, p.EM
-        FROM touched t
-        JOIN paths p ON t.path_id = p.path_id
-    ),
-    nb AS (SELECT kinase, COUNT(*) AS n_backbones FROM spine_touched GROUP BY kinase),
-    np AS (SELECT kinase, COUNT(*) AS n_paths FROM touched GROUP BY kinase)
-    SELECT np.kinase, nb.n_backbones, np.n_paths
-    FROM np JOIN nb USING (kinase)
-    ORDER BY n_backbones DESC, np.kinase
-    """
-    res = con.execute(sql).to_arrow_table().to_pandas()
-    con.close()
+        SELECT k.kinase, nb.n_backbones, np.n_paths
+        FROM np
+        JOIN nb USING (kinase_id)
+        JOIN kinase_dim k USING (kinase_id)
+        ORDER BY n_backbones DESC, k.kinase
+        """
+        res = con.execute(sql).to_arrow_table().to_pandas()
+    finally:
+        con.close()
+        for suffix in ("", ".wal"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
     return res
 
 
@@ -680,6 +895,188 @@ def run_fivexfad(tissue: str) -> pd.DataFrame:
     return hits
 
 
+def write_fivexfad_streamed(tissue: str, out_dir: Path, wide_glob: str) -> bool:
+    """Write 5xFAD bridge outputs without materializing the hit table in pandas."""
+    log.info(f"5xFAD {tissue}: loading MEA stoichiometry")
+    mea_st_path = FIVEXFAD_MEA_DIR / f"{tissue}_st_mea_stoichiometry.csv"
+    mea_py_path = FIVEXFAD_MEA_DIR / f"{tissue}_py_mea_stoichiometry.csv"
+    stoich_path = FIVEXFAD_MEA_DIR / f"{tissue}_st_stoichiometry_matrix.csv"
+
+    mea_st = pd.read_csv(mea_st_path)
+    mea_py = pd.read_csv(mea_py_path) if mea_py_path.exists() else pd.DataFrame()
+    stoich = pd.read_csv(stoich_path, usecols=["site_id", "gene_symbol", "motif"])
+
+    log.info(f"5xFAD {tissue}: building substrate bridge")
+    all_subs = [build_substrate_bridge(mea_st, stoich)]
+    if not mea_py.empty:
+        all_subs.append(build_substrate_bridge(mea_py, stoich))
+    subs = pd.concat(all_subs, ignore_index=True).drop_duplicates()
+    log.info(f"5xFAD {tissue}: {len(subs)} substrate rows")
+    if subs.empty:
+        return False
+
+    log.info(f"5xFAD {tissue}: loading gene_node_index")
+    idx_path = Path(str(FIVEXFAD_INDEX_TMPL).replace("{tissue}", tissue))
+    node_index = load_gene_node_index(idx_path).rename(columns={"gene": "gene_symbol"})
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    parquet_path = out_dir / "kinase_node_hits.parquet"
+
+    spill = os.environ.get(
+        "DUCKDB_TEMP_DIR",
+        os.path.join(os.path.expanduser("~"), ".cache", "duckdb"),
+    )
+    os.makedirs(spill, exist_ok=True)
+    db_path = os.path.join(spill, f"kinase_bridge_fivexfad_{tissue}_{os.getpid()}_{uuid.uuid4().hex}.duckdb")
+    con = duckdb.connect(db_path)
+    con.execute("PRAGMA memory_limit='4GB'")
+    con.execute(f"SET temp_directory='{spill}'")
+    try:
+        con.register("subs_df", subs)
+        con.register("node_index_df", node_index)
+        con.execute("CREATE TABLE subs AS SELECT * FROM subs_df")
+        con.execute("CREATE TABLE node_index AS SELECT * FROM node_index_df")
+        con.unregister("subs_df")
+        con.unregister("node_index_df")
+        del subs, node_index
+
+        safe_celltype = str(FIVEXFAD_CELLTYPE_MEA).replace("'", "''")
+        safe_expr = str(FIVEXFAD_EXPR_SPEC).replace("'", "''")
+        safe_snrna = str(FIVEXFAD_SNRNA_ATTR).replace("'", "''")
+        safe_parquet = str(parquet_path).replace("'", "''")
+
+        log.info(f"5xFAD {tissue}: writing kinase_node_hits")
+        con.execute(f"""
+            CREATE TABLE ranks AS
+            WITH ranked AS (
+                SELECT kinase, contrast, cell_type AS owning_cluster,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY kinase, contrast
+                           ORDER BY FDR ASC, NES DESC
+                       ) AS celltype_match_rank
+                FROM read_parquet('{safe_celltype}')
+                WHERE tissue = $tissue
+                  AND NOT starts_with(cell_type, 'cluster-')
+            )
+            SELECT kinase, contrast, owning_cluster, MIN(celltype_match_rank) AS celltype_match_rank
+            FROM ranked
+            WHERE celltype_match_rank <= 3
+            GROUP BY kinase, contrast, owning_cluster
+        """, {"tissue": tissue})
+        con.execute(f"""
+            CREATE TABLE expr AS
+            SELECT DISTINCT kinase,
+                   cell_type AS owning_cluster,
+                   fivexfad_fraction_cells_expressing AS expression_fraction,
+                   fivexfad_concentration_tier AS concentration_tier
+            FROM read_csv_auto('{safe_expr}')
+            WHERE tissue = $tissue
+              AND NOT starts_with(cell_type, 'cluster-')
+        """, {"tissue": tissue})
+        con.execute(f"""
+            CREATE TABLE disease AS
+            SELECT DISTINCT kinase,
+                   cell_type AS owning_cluster,
+                   CAST(age_months AS INTEGER) AS age_months,
+                   fivexfad_lfc AS disease_lfc
+            FROM read_csv_auto('{safe_snrna}')
+            WHERE tissue = $tissue
+              AND NOT starts_with(cell_type, 'cluster-')
+        """, {"tissue": tissue})
+
+        final_sql = f"""
+            WITH hits AS (
+                SELECT s.kinase, s.contrast, s.channel, s.NES, s.FDR,
+                       s.gene_symbol, n.role, n.sender, n.receiver,
+                       CASE WHEN n.role = 'Ligand' THEN n.sender ELSE n.receiver END AS owning_cluster,
+                       n.n_rows, n.best_abs_pds
+                FROM subs s
+                JOIN node_index n USING (gene_symbol)
+            ),
+            annotated AS (
+                SELECT 'fivexfad' AS cohort,
+                       $tissue AS tissue,
+                       h.kinase, h.contrast, h.channel, h.NES, h.FDR,
+                       h.gene_symbol, h.role, h.sender, h.receiver,
+                       h.owning_cluster,
+                       r.celltype_match_rank IS NOT NULL AS celltype_match,
+                       r.celltype_match_rank,
+                       h.n_rows, h.best_abs_pds,
+                       e.expression_fraction, e.concentration_tier,
+                       d.disease_lfc
+                FROM hits h
+                LEFT JOIN ranks r
+                  ON h.kinase = r.kinase
+                 AND h.contrast = r.contrast
+                 AND h.owning_cluster = r.owning_cluster
+                LEFT JOIN expr e
+                  ON h.kinase = e.kinase
+                 AND h.owning_cluster = e.owning_cluster
+                LEFT JOIN disease d
+                  ON h.kinase = d.kinase
+                 AND h.owning_cluster = d.owning_cluster
+                 AND CAST(regexp_extract(h.contrast, '(\\d+)mo$', 1) AS INTEGER) = d.age_months
+            )
+            SELECT {", ".join(_q(c) for c in FINAL_COLS)}
+            FROM annotated
+        """
+        con.execute(f"COPY ({final_sql}) TO '{safe_parquet}' (FORMAT PARQUET)", {"tissue": tissue})
+        stats = con.execute(f"""
+            SELECT COUNT(*) AS n_total,
+                   COUNT(DISTINCT kinase || '\x1f' || contrast) AS n_active,
+                   SUM(CASE WHEN celltype_match THEN 1 ELSE 0 END) AS n_matched
+            FROM read_parquet('{safe_parquet}')
+        """).fetchone()
+    finally:
+        con.close()
+        for suffix in ("", ".wal"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+
+    n_total, n_active, n_matched = stats
+    log.info(f"Wrote {n_total} rows to {parquet_path}")
+
+    fan_df = build_recep_em_fan_from_parquet(parquet_path)
+    fan_path = out_dir / "recep_em_fan.csv"
+    fan_df.to_csv(fan_path, index=False)
+    log.info(f"Wrote fan characterization ({len(fan_df)} Receptor-EM spines) to {fan_path}")
+
+    part_df = compute_participation_counts(parquet_path, wide_glob)
+    part_path = out_dir / "kinase_participation.csv"
+    part_df.to_csv(part_path, index=False)
+    log.info(f"Wrote participation (n_backbones + n_paths) for {len(part_df)} kinases to {part_path}")
+
+    manifest = textwrap.dedent(f"""\
+    # kinase_incytr_bridge — 5xFAD {tissue}
+
+    Generated by alz/cross_reference/kinase_incytr_bridge.py (B4)
+
+    ## Parameters
+    - MEA_FDR_THRESH: {MEA_FDR_THRESH}
+    - Backbone floor: SigProb > {SIGPROB_CUTOFF} (either side) AND |PDS| >= {ABS_PDS_CUTOFF}
+
+    ## Counts
+    - Active (kinase,contrast) pairs: {n_active}
+    - Total node hit rows: {n_total}
+    - Cell-type-matched hits: {int(n_matched or 0)}
+
+    ## Pathway set
+    - 5xFAD: outputs/reports/incytr_pair_mode_5xfad/{tissue}/wide/
+
+    ## Output files
+    - kinase_node_hits.parquet : flat hit table
+    - recep_em_fan.csv : per Receptor-EM spine fan characterization
+    - kinase_participation.csv : per-kinase participation over gated paths
+    - MANIFEST.md : this file
+    """)
+    manifest_path = out_dir / "MANIFEST.md"
+    manifest_path.write_text(manifest)
+    log.info(f"Wrote MANIFEST to {manifest_path}")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Output + manifest
 # ---------------------------------------------------------------------------
@@ -697,15 +1094,28 @@ def write_outputs(hits_all: pd.DataFrame, out_dir: Path, cohort_label: str,
                   wide_glob: str) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Reorder and fill missing columns
+    # Reorder and fill missing columns in place. Avoid materializing a full copy of
+    # the hit table; 5xFAD cortex can be millions of rows after KsG admission.
     for c in FINAL_COLS:
         if c not in hits_all.columns:
             hits_all[c] = None
-    hits_out = hits_all[[c for c in FINAL_COLS if c in hits_all.columns]].copy()
+    hit_cols = [c for c in FINAL_COLS if c in hits_all.columns]
 
     parquet_path = out_dir / "kinase_node_hits.parquet"
-    hits_out.to_parquet(parquet_path, index=False, engine="pyarrow")
-    log.info(f"Wrote {len(hits_out)} rows to {parquet_path}")
+    spill = os.environ.get(
+        "DUCKDB_TEMP_DIR",
+        os.path.join(os.path.expanduser("~"), ".cache", "duckdb"),
+    )
+    os.makedirs(spill, exist_ok=True)
+    con = duckdb.connect()
+    con.execute("PRAGMA memory_limit='8GB'")
+    con.execute(f"SET temp_directory='{spill}'")
+    con.register("hits_all", hits_all)
+    col_sql = ", ".join(_q(c) for c in hit_cols)
+    safe_parquet = str(parquet_path).replace("'", "''")
+    con.execute(f"COPY (SELECT {col_sql} FROM hits_all) TO '{safe_parquet}' (FORMAT PARQUET)")
+    con.close()
+    log.info(f"Wrote {len(hits_all)} rows to {parquet_path}")
 
     # Receptor-EM fan characterization
     fan_df = build_recep_em_fan(hits_all)
@@ -778,6 +1188,7 @@ def main() -> None:
     args = parser.parse_args()
 
     all_hits: list[pd.DataFrame] = []
+    produced_any = False
 
     if args.cohort in ("song", "all"):
         con = duckdb.connect()
@@ -788,25 +1199,24 @@ def main() -> None:
             wide_glob = str(SONG_WIDE_DIR / "*_incytr_output.parquet")
             write_outputs(song_hits, out_dir, "Song cohort", wide_glob)
             all_hits.append(song_hits)
+            produced_any = True
         else:
             log.warning("Song: no hits produced")
 
     if args.cohort in ("fivexfad", "all"):
         tissues = ["cortex", "hippocampus"] if args.tissue == "both" else [args.tissue]
         for tissue in tissues:
-            fx_hits = run_fivexfad(tissue)
-            if not fx_hits.empty:
-                out_dir = OUT_ROOT / f"fivexfad_{tissue}"
-                wide_glob = str(FIVEXFAD_WIDE_DIR / tissue / "wide" / "*_incytr_output.parquet")
-                write_outputs(fx_hits, out_dir, f"5xFAD {tissue}", wide_glob)
-                all_hits.append(fx_hits)
+            out_dir = OUT_ROOT / f"fivexfad_{tissue}"
+            wide_glob = str(FIVEXFAD_WIDE_DIR / tissue / "wide" / "*_incytr_output.parquet")
+            if write_fivexfad_streamed(tissue, out_dir, wide_glob):
+                produced_any = True
             else:
                 log.warning(f"5xFAD {tissue}: no hits produced")
 
     if all_hits:
         combined = pd.concat(all_hits, ignore_index=True)
         log.info(f"Combined: {len(combined)} total rows across all cohorts/tissues")
-    else:
+    elif not produced_any:
         log.warning("No hits produced for any cohort")
 
 

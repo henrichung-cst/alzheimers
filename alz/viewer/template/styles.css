@@ -369,17 +369,6 @@ ul.spec-unit-children li.muted { color:#9aa5b1; }
 .ke-filter-reset { padding:2px 8px; font-size:11px; border:1px solid #b0bec5;
   border-radius:3px; background:#fff; color:#546e7a; cursor:pointer; }
 .ke-filter-reset:hover { background:#eceff1; }
-.ih-timeline-control { align-items:center; gap:8px; margin:8px 0 2px; }
-.ih-timeline-label { flex:0 0 92px; font-weight:600; color:#37474f; }
-.ih-timeline-scrubber { flex:0 1 280px; min-width:160px; max-width:280px; }
-.ih-timeline-scrubber input[type=range] { width:100%; accent-color:#1976d2; cursor:pointer; }
-.ih-timeline-ticks { display:flex; font-size:10px; line-height:1.1; margin-top:1px; }
-.ih-timeline-ticks span.active { color:#263238; font-weight:600; }
-.ih-timeline-step { width:24px; height:24px; padding:0; border:1px solid #b0bec5;
-  border-radius:3px; background:#fff; color:#37474f; cursor:pointer; font-size:13px;
-  line-height:22px; }
-.ih-timeline-step:hover:not(:disabled) { background:#e3f2fd; border-color:#90caf9; }
-.ih-timeline-step:disabled { opacity:0.35; cursor:not-allowed; }
 /* ---------------------------------------------------------------------------
  * Incytr unified screen layout (J-1)
  * Left filter panel + right main pane with Table/Heatmap switch.
@@ -392,6 +381,18 @@ ul.spec-unit-children li.muted { color:#9aa5b1; }
   gap:3px; width:100%; }
 .incytr-filter-panel .ke-filter-label select,
 .incytr-filter-panel .ke-filter-label input { width:100%; max-width:none; box-sizing:border-box; }
+/* Multiselect buttons must fill the column like the sibling select/input
+   controls — the default inline-block min/max-width (compact, correct for the
+   Kinase tab's horizontal toolbar) left them narrow and left-aligned here, with
+   dead space to the right. Stretch the wrap, button, and popover to the column. */
+.incytr-filter-panel .ms-wrap { display:block; width:100%; }
+.incytr-filter-panel .ms-button { width:100%; min-width:0; max-width:none; box-sizing:border-box; }
+.incytr-filter-panel .ms-panel { width:100%; box-sizing:border-box; }
+/* The width:100% input rule above is for the pvalue/|PDS|/search fields. It also
+   matches the checkbox <input>s inside the multiselect popover (the host carries
+   .ke-filter-label) and outranks .ms-opt's width:auto, inflating each checkbox to
+   the full row and shoving its label off the right edge. Restore compact boxes. */
+.incytr-filter-panel .ms-opt input { width:auto; min-width:0; max-width:none; flex:none; box-sizing:border-box; }
 .incytr-main-pane { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; padding:10px 14px; }
 .incytr-view-switch { display:flex; gap:4px; margin-bottom:8px; }
 .incytr-view-btn { padding:4px 14px; font-size:12px; border:1px solid #b0bec5;
@@ -401,11 +402,6 @@ ul.spec-unit-children li.muted { color:#9aa5b1; }
 .incytr-pane { flex:1 1 auto; min-height:0; }
 #incytr-hm-controls, #incytr-ip-controls { display:flex; flex-direction:column; gap:6px; }
 #incytr-hm-controls .ke-filter-reset, #incytr-ip-controls .ke-filter-reset { width:100%; text-align:center; }
-@media (max-width:720px) {
-  .ih-timeline-control { flex-wrap:wrap; }
-  .ih-timeline-label { flex:1 0 100%; }
-  .ih-timeline-scrubber { flex:1 1 220px; max-width:none; }
-}
 .ms-wrap { position:relative; display:inline-block; }
 .ms-button { padding:2px 18px 2px 6px; border:1px solid var(--border);
   border-radius:3px; background:#fff; font-size:11px; cursor:pointer;
@@ -705,6 +701,14 @@ ul.spec-unit-children li.muted { color:#9aa5b1; }
 .ev-note .ev-meta-sep { color:#b0bec5; margin:0 6px; }
 .ev-col-loading { font-style:italic; color:#9e9e9e; font-size:11px; }
 
+/* Incytr Pathways — "Related pathways" drawer tab (read-only data panel). */
+.ip-related { font-size:12px; }
+.ip-related section { margin-bottom:12px; }
+.ip-related section:last-child { margin-bottom:0; }
+.ip-related__head { font-weight:600; color:#37474f; margin-bottom:2px; }
+.ip-related__count { margin-bottom:10px; color:#37474f; }
+.ip-related-pairs__results { margin-top:4px; font-size:11px; color:#444; }
+
 .ev-matrix { display:grid;
   grid-template-columns: minmax(140px, 1.1fr) repeat(4, minmax(170px, 1fr));
   gap:0; background:#ffffff; border:1px solid #e0e0e0; border-radius:3px;
@@ -796,3 +800,72 @@ ul.spec-unit-children li.muted { color:#9aa5b1; }
 .ke-trend-always_down    { background:#2b6cb0; color:#fff; }
 .ke-trend-monotonic_down { background:#dbeafe; color:#2c5282; }
 .ke-trend-mixed          { background:#edf2f7; color:#4a5568; }
+
+/* --- Early AD Kinases tab (D1 cross-cohort comparison) --------------------- */
+.sub-table th[data-sort] { cursor:pointer; user-select:none; }
+.sub-table tbody tr.sub-row { cursor:pointer; }
+.sub-table tbody tr.sub-row:hover { background:#f0f4f8; }
+.sub-table tbody tr.sub-row.selected { background:#e3f2fd; box-shadow:inset 3px 0 0 var(--selected-border); }
+
+/* 1×4 enrichment mini-heatmap per tissue (four age columns) */
+.sub-profile { display:inline-grid; grid-template-columns:repeat(4, 15px);
+  grid-auto-rows:15px; gap:3px; vertical-align:middle; }
+.sub-zc { width:15px; height:15px; box-sizing:border-box; border:1px solid #e0e0e0;
+  background:rgba(46,125,50, var(--op, 0)); }
+.sub-zc.na  { background:repeating-linear-gradient(45deg,#f5f5f5,#f5f5f5 3px,#eaeaea 3px,#eaeaea 6px); }
+/* Coverage-gap rows in the substrate pairs table (human-only / mouse-only unmeasured). */
+.sub-unmeasured { opacity:0.45; font-style:italic; }
+
+.sub-dir { font-weight:700; }
+.sub-dir.up   { color:#c62828; }
+.sub-dir.down { color:#1565c0; }
+
+/* curated effector-tier pills */
+.sub-tier { display:inline-block; padding:1px 7px; border-radius:9px; font-size:10px;
+  font-weight:600; line-height:1.5; white-space:nowrap; }
+.sub-tier-green  { background:#2e7d32; color:#fff; }
+.sub-tier-yellow { background:#f6c445; color:#5a4600; }
+
+/* age (mo) ticks aligned exactly over the 1×4 heatmap cells (in the header) */
+.sub-age-ticks { display:grid; grid-template-columns:repeat(4, 15px); gap:3px;
+  margin-top:4px; font-size:10px; font-weight:600; line-height:1; color:#455a64;
+  font-variant-numeric:tabular-nums; }
+.sub-age-ticks span { text-align:center; }
+
+/* detail pane */
+.sub-detail-head h3 { margin:0 0 4px; font-size:15px; }
+.sub-detail-dir { display:flex; gap:14px; align-items:center; font-size:12.5px; }
+.sub-detail-note { font-size:11.5px; margin:8px 0 10px; line-height:1.5; }
+.sub-detail-ctxbar { display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+  margin-bottom:10px; }
+.sub-ctx-stats { font-family:var(--font-mono); font-size:11px; }
+
+.sub-hist-wrap { margin:6px 0 14px; }
+.sub-hist { display:flex; align-items:flex-end; gap:2px; height:90px;
+  padding:4px 2px; background:#fafafa; border:1px solid var(--border); border-radius:4px; }
+.sub-bar { flex:1 1 0; min-width:4px; background:#2e7d32; opacity:0.85;
+  border-radius:2px 2px 0 0; }
+.sub-bar:hover { opacity:1; }
+.sub-hist-axis { display:flex; justify-content:space-between; font-size:10px;
+  color:var(--text-muted); margin-top:3px; }
+.sub-hist-total { font-size:11px; margin-top:2px; }
+.sub-pairs-host { margin-top:8px; }
+.sub-pairs-section { margin-top:16px; }
+.sub-pairs-h { margin:0; font-size:12.5px; font-weight:600; }
+.sub-pairs-h .muted { font-weight:400; }
+
+/* detail pane sub-tabs */
+.sub-detail-tabs { display:flex; gap:4px; margin:4px 0 10px;
+  border-bottom:1px solid var(--border); }
+.sub-tab { appearance:none; background:none; border:1px solid transparent; border-bottom:none;
+  padding:5px 12px; margin-bottom:-1px; font-size:12px; cursor:pointer;
+  color:var(--text-muted); border-radius:4px 4px 0 0; }
+.sub-tab:hover { background:#f0f4f8; }
+.sub-tab.active { color:var(--text); background:#fff; font-weight:600;
+  border-color:var(--border); border-bottom:1px solid #fff; }
+
+.sub-z-table { margin:2px 0 6px; }
+.sub-z-table tbody tr.sub-z-peak { background:#e3f2fd; }
+.sub-z-table td.sub-z-sig { font-weight:700; }
+.sub-z-peaktag { font-size:9px; font-weight:700; color:#1565c0; text-transform:uppercase;
+  letter-spacing:0.04em; margin-left:5px; }

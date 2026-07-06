@@ -219,52 +219,48 @@ const SliceCache = (function(){
     return p;
   }
 
-  // B-6: backbone spine index — grain -> Map<spine_key, [[sender,receiver],...]>.
-  // Loaded on-demand only when widen mode is activated in the "Expands to" drawer.
-  // Each grain has its own sidecar (backbone_spine_index.json.gz) fetched once
-  // and cached per grain; URL sourced from payload backbone_grains[grain].backbone_spine_index.url.
-  const siCache = new Map();     // grain -> Map<spine_key, [[s,r],...]>
-  const siInflight = new Map();  // grain -> Promise<Map|null>
-
-  async function loadBackboneSpineIndex(grain) {
+  // Substrate-pair shards: one parquet per kinase (Early AD Kinases tab),
+  // holding that kinase's shared human↔5xFAD motif pairs across all 8 contexts.
+  // Filename sanitizes non-alphanumeric runs to '_' (matches the Python builder).
+  const pbCache = new Map();             // KINASE -> rows[]
+  const pbInflight = new Map();          // KINASE -> Promise<rows[]>
+  let pbPresent = null;
+  function _sanitizeKinase(name) {
+    return String(name || "").replace(/[^A-Za-z0-9]+/g, "_");
+  }
+  async function loadSubstratePairs(kinase) {
     _ensureInit();
-    if (siCache.has(grain)) {
-      const v = siCache.get(grain); _lruTouch(siCache, grain, v); return v;
+    const k = String(kinase || "");
+    if (pbPresent === null) {
+      pbPresent = new Set((ESR.present_substrate_pairs_kinases || []).map(String));
     }
-    if (siInflight.has(grain)) return siInflight.get(grain);
-    // Resolve URL from payload — read lazily so SliceCache works before PAYLOAD loads.
-    const block = (typeof ViewerPayload !== "undefined" && ViewerPayload.incytr)
-      ? ViewerPayload.incytr() : null;
-    const grainBlock = block && block.backbone_grains && block.backbone_grains[grain];
-    const meta = grainBlock && grainBlock.backbone_spine_index;
-    const url = meta && meta.url;
-    if (!url) return null;
-    const p = (async () => {
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`spine index fetch ${url} -> ${resp.status}`);
-      // Same DecompressionStream pattern as gene_node_index_shard and IncytrGlobalIndex.
-      const blob = await resp.blob();
-      const stream = blob.stream().pipeThrough(new DecompressionStream("gzip"));
-      const data = JSON.parse(await new Response(stream).text());
-      const map = new Map(Object.entries(data.spine_to_pairs || {}));
-      _lruTouch(siCache, grain, map);
-      siInflight.delete(grain);
-      return map;
-    })();
-    siInflight.set(grain, p);
-    p.catch(() => { siInflight.delete(grain); });
+    if (!k || !pbPresent.has(k)) return [];
+    if (pbCache.has(k)) {
+      const v = pbCache.get(k); _lruTouch(pbCache, k, v); return v;
+    }
+    if (pbInflight.has(k)) return pbInflight.get(k);
+    if (!ESR.substrate_pairs_url) return [];
+    const url = `${ESR.substrate_pairs_url}${encodeURIComponent(_sanitizeKinase(k))}.parquet`;
+    const p = _fetchParquet(url).then(rows => {
+      _lruTouch(pbCache, k, rows);
+      pbInflight.delete(k);
+      return rows;
+    }).catch(err => {
+      pbInflight.delete(k);
+      throw err;
+    });
+    pbInflight.set(k, p);
     return p;
   }
 
   return { loadBackboneBucket, backboneEdges, loadDecompOls, loadIncytrShard,
-           loadBackboneSpineIndex,
-           loadSongConcordance, loadHumanPerdonorSubstrate,
+           loadSongConcordance, loadHumanPerdonorSubstrate, loadSubstratePairs,
            get backboneCacheSize(){ return bCache.size; },
            get decompOlsCacheSize(){ return dCache.size; },
            get incytrCacheSize(){ return iCache.size; },
            get songConcordanceCacheSize(){ return sCache.size; },
            get humanPerdonorCacheSize(){ return hCache.size; },
-           get backboneSpineIndexCacheSize(){ return siCache.size; } };
+           get substratePairsCacheSize(){ return pbCache.size; } };
 })();
 window.SliceCache = SliceCache;
 

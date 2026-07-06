@@ -26,8 +26,7 @@
 #     contrast's two conditions' DEG (one-vs-rest markers from allmarkers.csv,
 #     avg_log2FC > 1) ∪ prG (genes with |aFC| > 1 in the cluster's deconvoluted
 #     proteome). Per-contrast (NOT the union over all 12 genotype x age splits).
-#     NO HEG: sce4 used DEG ∪ prG only (zero HEG labels in its reference);
-#     HEG was a leaky patch for an over-strict DEG cutoff and is removed.
+#     NO HEG: sce4 used DEG ∪ prG only (zero HEG labels in its reference).
 #   - pmax(pr_*, 1) floor on deconvoluted proteomics (just below)
 # Receiver gene.use = DEG ∪ prG per cluster (t-cells) / sce4's frozen per-pair
 # node sets (AD, §6.7). Investigation history:
@@ -263,7 +262,7 @@ if (USE_KLDATA) {
 #                   table. DEG = the two contrast conditions' markers
 #                   (avg_log2FC > 1 & p_val < 1e-4).
 # sce4 used DEG ∪ prG, NO HEG (zero HEG labels across its ma_2mo + ma_4mo
-# reference); HEG was a leaky patch for an over-strict DEG cutoff and is removed.
+# reference).
 # See archive/sce4_reproduction_2026-06-08/README.md §6.5.
 # Gene.use SOURCE (per-cohort, not a fallback toggle). When SCE4_GENEUSE_DIR is
 # set and holds this contrast's reconstructed sce4 gene.use, the AD run CONSUMES
@@ -442,15 +441,61 @@ if (use_frozen_geneuse) {
               as.integer(median(lengths(gur_by_cluster))), max(lengths(gur_by_cluster))))
 }
 
+# =====================================================================
+# KsG — kinase-substrate gene layer (TOGGLE = kinase-data presence).
+# When KSG_MEA_FILE is unset the whole block is skipped and the driver is
+# byte-identical to a no-kinase run (this is the path verify-incytr-sce4
+# exercises — it supplies no kinase inputs, so sce4 parity is untouched).
+# When supplied, kinase-supported substrate genes (Incytr::kinase_substrate_gene,
+# the method in the package) are admitted into gene.use per cluster (unioned in
+# process_pair, so it applies to both frozen and derived bases). The selector is
+# data presence, never a mode flag (mirrors SCE4_GENEUSE_DIR / ACK_FILE).
+# =====================================================================
+KSG_MEA_FILE   <- Sys.getenv("KSG_MEA_FILE", unset = "")
+use_ksg        <- nzchar(KSG_MEA_FILE) && file.exists(KSG_MEA_FILE)
+ksg_by_cluster <- NULL
+if (use_ksg) {
+  KSG_MEA_PY_FILE <- Sys.getenv("KSG_MEA_PY_FILE",      unset = "")
+  KSG_MOTIF_FILE  <- Sys.getenv("KSG_MOTIF_FILE",       unset = "")
+  KSG_ATTR_FILE   <- Sys.getenv("KSG_ATTRIBUTION_FILE", unset = "")
+  KSG_CONTRAST    <- Sys.getenv("KSG_CONTRAST",         unset = "")
+  if (!nzchar(KSG_MOTIF_FILE) || !nzchar(KSG_ATTR_FILE) || !nzchar(KSG_CONTRAST)) {
+    stop("KsG active (KSG_MEA_FILE set) but KSG_MOTIF_FILE / KSG_ATTRIBUTION_FILE / KSG_CONTRAST missing",
+         call. = FALSE)
+  }
+  mea <- as.data.frame(read_csv(KSG_MEA_FILE))
+  if (nzchar(KSG_MEA_PY_FILE) && file.exists(KSG_MEA_PY_FILE)) {
+    mea <- rbind(mea, as.data.frame(read_csv(KSG_MEA_PY_FILE)))
+  }
+  mea <- mea[!is.na(mea$contrast) & mea$contrast == KSG_CONTRAST, , drop = FALSE]
+  motif_map   <- as.data.frame(read_csv(KSG_MOTIF_FILE))[, c("motif", "gene_symbol")]
+  attribution <- as.data.frame(read_csv(KSG_ATTR_FILE))[, c("kinase", "cell_type")]
+
+  ksg <- Incytr::kinase_substrate_gene(
+    mea = mea, motif_map = motif_map, attribution = attribution,
+    cell_group = clusters, fdr_cutoff = 0.25)
+  # self-gate to the data matrix (same as prG/DEG); split per cluster.
+  ksg <- ksg[ksg$gene_symbol %in% rownames(Data.input), , drop = FALSE]
+  .by <- split(ksg$gene_symbol, ksg$cluster)
+  ksg_by_cluster <- lapply(setNames(clusters, clusters), function(cl) unique(.by[[cl]]))
+  cat(sprintf("[pair-driver] KsG active: contrast=%s  %d (gene,cluster) admitted across %d clusters\n",
+              KSG_CONTRAST, nrow(ksg), sum(lengths(ksg_by_cluster) > 0)))
+}
+
 # Every pair's pathway genes are bounded by the union of all gene.use sets, so the
 # per-(gene, cluster, condition) trimean — which is pair-invariant — is computed
 # ONCE over that union below and injected into each per-pair grid call
 # (Improvement 3), replacing 961 redundant Expr_bygroup passes per contrast.
+# KsG genes are added here because per-pair KsG widening (lines below) expands
+# gene_use_S/R beyond DEG∪prG; inject_precomputed_expr requires the substrate
+# to cover every pathway node that enumerate_paths_dt can produce.
+ksg_extra <- if (use_ksg) unlist(ksg_by_cluster, use.names = FALSE) else character(0)
 gene_union <- if (use_frozen_geneuse) {
-  intersect(unique(gu$gene), rownames(Data.input))
+  intersect(unique(c(unique(gu$gene), ksg_extra)), rownames(Data.input))
 } else {
   intersect(unique(c(unlist(gus_by_cluster, use.names = FALSE),
-                     unlist(gur_by_cluster, use.names = FALSE))),
+                     unlist(gur_by_cluster, use.names = FALSE),
+                     ksg_extra)),
             rownames(Data.input))
 }
 cat(sprintf("[pair-driver] precompute-trimean gene union: %d genes\n",
@@ -543,11 +588,17 @@ dir.create(shard_dir, recursive = TRUE, showWarnings = FALSE)
 # Per-pair DEG/prG node labels. Pair-mode Export_results does not track
 # per-node provenance; the upstream factorial path emitted these via
 # assign_path_labels().
+# Precedence DEG > prG > KsG: a "KsG" label marks a node admitted ONLY by
+# kinase evidence (not a DEG/prG candidate). When use_ksg is FALSE, ksg is NULL,
+# `set` reduces to union(deg, prg) and every member is overwritten to DEG/prG —
+# so the output is byte-identical to the prior two-tier labelling.
 label_node <- function(node_genes, cluster) {
   deg <- deg_by_cluster[[cluster]]
   prg <- prg_by_cluster[[cluster]]
-  set <- union(deg, prg)
-  lbl <- setNames(rep("prG", length(set)), set)
+  ksg <- if (use_ksg) ksg_by_cluster[[cluster]] else NULL
+  set <- Reduce(union, list(deg, prg, ksg))
+  lbl <- setNames(rep("KsG", length(set)), set)
+  lbl[prg] <- "prG"
   lbl[deg] <- "DEG"
   unname(lbl[node_genes])
 }
@@ -609,6 +660,13 @@ process_pair <- function(i) {
   }
   if (is.null(gene_use_S)) gene_use_S <- character(0)
   if (is.null(gene_use_R)) gene_use_R <- character(0)
+  # KsG admission (toggle): union the kinase-supported genes for this pair's
+  # sender (-> Ligand candidates) and receiver (-> Receptor/EM/Target). Placed
+  # before the empty-gene.use check so KsG can also mint a pair sce4 never had.
+  if (use_ksg) {
+    if (!is.null(ksg_by_cluster[[s]])) gene_use_S <- union(gene_use_S, ksg_by_cluster[[s]])
+    if (!is.null(ksg_by_cluster[[r]])) gene_use_R <- union(gene_use_R, ksg_by_cluster[[r]])
+  }
   if (length(gene_use_S) == 0L || length(gene_use_R) == 0L) {
     cat(sprintf("[pair-driver] pair %d/%d  %s -> %s  empty gene.use (0 paths)\n",
                 i, nrow(pairs), s, r))

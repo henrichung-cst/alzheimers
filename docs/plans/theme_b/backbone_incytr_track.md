@@ -121,7 +121,7 @@ full 961-pair run drops in with zero code change (nothing hardcodes pair name/co
 path — adversarially audited). Built artifacts: `outputs/reports/unified_viewer/index.html`,
 `.../tcell_viewer/index.html`.
 
-The full data comes from the overnight runner **`alz/incytr_pair/run_backbone_overnight.sh`**
+The full data comes from the overnight runner **`alz/incytr_pair/regeneration/run_backbone_overnight.sh`**
 (`tmux new -s incytr` → `bash …`): pair-mode grid → viewer build → kinase-incytr bridge → viewer
 build, memory-capped via `systemd-run`, logged, resumable.
 

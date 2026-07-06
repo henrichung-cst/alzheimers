@@ -4,7 +4,10 @@ function populateHeader() {
     fileNotice.classList.add("show");
   document.getElementById("f-fdr").addEventListener("change", e =>
     Store.dispatch({type:"SET_FILTER", key:"fdr", value:parseFloat(e.target.value)}));
-  document.getElementById("glossary-toggle").addEventListener("click", () =>
+  // Optional glossary slide-out toggle. Viewers that surface the glossary as a
+  // tab instead (T-cell) omit the button and no-op here.
+  const glossaryToggle = document.getElementById("glossary-toggle");
+  if (glossaryToggle) glossaryToggle.addEventListener("click", () =>
     Store.dispatch({type:"SET_VIEW", key:"glossaryOpen",
       value:!Store.state.view.glossaryOpen}));
   const skClear = document.getElementById("f-selection-kinase-clear");

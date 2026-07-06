@@ -9,7 +9,20 @@
 // ---------------------------------------------------------------------------
 
 function _ihBlock() {
-  return ViewerPayload.incytr();
+  // Grain-aware: when a backbone grain is active, _ipGrainBlock() overlays that
+  // grain's heatmap_counts / heatmap_counts_signed. The build aligns grid indices
+  // to Full (same sender × receiver × contrast × pvalue × |PDS| axes), so the
+  // decoder (_ihCountAt) and every axis/threshold helper work unchanged — the
+  // cell value just becomes a distinct-backbone count instead of a full-path count.
+  return (typeof window._ipGrainBlock === "function")
+    ? window._ipGrainBlock()
+    : ViewerPayload.incytr();
+}
+
+// "paths" at Full grain, "backbones" at any backbone grain — the counted entity.
+function _ihEntityNoun() {
+  const block = _ihBlock();
+  return (block && block._grain && block._grain !== "Full") ? "backbones" : "paths";
 }
 
 function _ihAxisParts() {
@@ -44,10 +57,6 @@ function _ihContrastFromState() {
   return `${f.hmDisease}_${f.hmTimepoint}`;
 }
 
-function _ihViewMode() {
-  return "timeline";
-}
-
 function _ihScaleMode() {
   const f = IncytrFilter.get();
   return f.hmScale === "log1p" ? "log1p" : "linear";
@@ -58,7 +67,8 @@ function _ihScaleValue(n) {
 }
 
 function _ihColorbarTitle() {
-  return _ihScaleMode() === "log1p" ? "log1p(n paths)" : "n paths";
+  const noun = _ihEntityNoun();
+  return _ihScaleMode() === "log1p" ? `log1p(n ${noun})` : `n ${noun}`;
 }
 
 function _ihPdsSignMode() {
@@ -103,59 +113,6 @@ function _ihTimelinePanels(f) {
   return panels.filter(p => block.contrasts.indexOf(p.contrast) >= 0);
 }
 
-function _ihTimelineIndex(f, panels) {
-  const raw = parseInt((f && f.hmTimelineIndex) || 0, 10);
-  if (!panels || !panels.length) return 0;
-  if (!Number.isFinite(raw)) return 0;
-  return Math.max(0, Math.min(raw, panels.length - 1));
-}
-
-function _ihTimelinePatch(panel, idx) {
-  return {
-    hmTimelineIndex: idx,
-    hmDisease: panel.disease,
-    hmTimepoint: panel.timepoint,
-  };
-}
-
-function _ihSetTimelineIndex(idx) {
-  const panels = _ihTimelinePanels(IncytrFilter.get());
-  if (panels.length <= 1) return;
-  const clamped = Math.max(0, Math.min(idx, panels.length - 1));
-  IncytrFilter.set(_ihTimelinePatch(panels[clamped], clamped));
-  _ihSyncControls();
-  _ihRenderPlot();
-}
-
-function _ihSyncTimelineControl(panels, mode) {
-  const wrap = document.getElementById("ih-timeline-control");
-  if (!wrap) return;
-  const slider = document.getElementById("ih-timeline-slider");
-  const label = document.getElementById("ih-timeline-label");
-  const ticks = document.getElementById("ih-timeline-ticks");
-  const prev = document.getElementById("ih-timeline-prev");
-  const next = document.getElementById("ih-timeline-next");
-  const show = mode === "timeline" && panels.length > 1;
-  wrap.style.display = show ? "flex" : "none";
-  if (!show || !slider) return;
-
-  const f = IncytrFilter.get();
-  const idx = _ihTimelineIndex(f, panels);
-  slider.min = "0";
-  slider.max = String(panels.length - 1);
-  slider.step = "1";
-  slider.value = String(idx);
-  if (label) label.textContent = panels[idx].contrast;
-  if (prev) prev.disabled = idx <= 0;
-  if (next) next.disabled = idx >= panels.length - 1;
-  if (ticks) {
-    ticks.innerHTML = panels.map((p, i) =>
-      `<span class="${i === idx ? "active" : ""}" style="flex:1;text-align:${i === 0 ? "left" : (i === panels.length - 1 ? "right" : "center")};">`
-      + `${_escapeHtml(p.label)}</span>`
-    ).join("");
-  }
-}
-
 function _ihAxisLimitN(f) {
   const raw = String((f && f.hmAxisLimit) || "all");
   if (raw === "all") return null;
@@ -169,10 +126,47 @@ function _ihTopIndices(scores, limit) {
   return idx.slice(0, Math.min(limit, idx.length)).map(x => x.i).sort((a, b) => a - b);
 }
 
+// Heatmap axis-grouping (heatmap-only). The payload ships a cluster → tissue
+// category map; "tissue" mode collapses axes to ~7 groups, "celltype" keeps the
+// native spine. Counts are additive across a merged axis (subtype-A→X and
+// subtype-B→X are distinct paths), so a grouped cell = Σ over member index pairs.
+function _ihGroupMap() {
+  const block = _ihBlock();
+  return (block && block.celltype_groups) || null;
+}
+
+function _ihGroupMode() {
+  if (!_ihGroupMap()) return "celltype";           // no map → ungrouped, selector hidden
+  const f = IncytrFilter.get();
+  return f.hmGroupBy === "celltype" ? "celltype" : "tissue";
+}
+
+// Bucket the (sparse-filtered) axis indices into ordered groups. At celltype
+// mode each index is its own singleton group, so the rest of the render path is
+// uniform: every axis entry carries a member-index list (length 1 when ungrouped).
+function _ihAxisMembers(allNames, keepIdx, grouped, groupOf, order) {
+  if (!grouped) {
+    return { labels: keepIdx.map(i => allNames[i]), members: keepIdx.map(i => [i]) };
+  }
+  const buckets = new Map();
+  for (const i of keepIdx) {
+    const g = groupOf[allNames[i]] || allNames[i];
+    if (!buckets.has(g)) buckets.set(g, []);
+    buckets.get(g).push(i);
+  }
+  const labels = (order || []).filter(g => buckets.has(g));
+  for (const g of buckets.keys()) if (labels.indexOf(g) < 0) labels.push(g);
+  return { labels, members: labels.map(g => buckets.get(g)) };
+}
+
+// A grouped axis entry is "empty" only when every member cell type is empty-DEG.
+function _ihGroupEmpty(members, names, emptySet) {
+  return members.length > 0 && members.every(i => emptySet.has(names[i]));
+}
+
 function _ihVisibleAxes(block, f, snap, snapAp, panels) {
   const allSenders = block.senders || [];
   const allReceivers = block.receivers || [];
-  const limit = _ihAxisLimitN(f);
   const dropLow = IncytrCelltypeQc.enabled(block);
   const low = dropLow ? IncytrCelltypeQc.lowSignalSet(block) : new Set();
   const allSenderIdx = allSenders
@@ -183,13 +177,30 @@ function _ihVisibleAxes(block, f, snap, snapAp, panels) {
     .map((name, i) => ({ name, i }))
     .filter(x => !low.has(x.name))
     .map(x => x.i);
+
+  // Grouped (tissue) mode: collapse to canonical categories, all groups shown
+  // (the top-N axis limiter is meaningless over ~7 groups and is hidden in the UI).
+  if (_ihGroupMode() === "tissue") {
+    const gm = _ihGroupMap();
+    const groupOf = (gm && gm.tissue) || {};
+    const order = (gm && gm.tissue_order) || [];
+    const sAxis = _ihAxisMembers(allSenders, allSenderIdx, true, groupOf, order);
+    const rAxis = _ihAxisMembers(allReceivers, allReceiverIdx, true, groupOf, order);
+    return {
+      senders: sAxis.labels, receivers: rAxis.labels,
+      senderMembers: sAxis.members, receiverMembers: rAxis.members,
+      limited: false, grouped: true,
+    };
+  }
+
+  const limit = _ihAxisLimitN(f);
   if (!limit) {
     return {
-      senderIdx: allSenderIdx,
-      receiverIdx: allReceiverIdx,
       senders: allSenderIdx.map(i => allSenders[i]),
       receivers: allReceiverIdx.map(i => allReceivers[i]),
-      limited: false,
+      senderMembers: allSenderIdx.map(i => [i]),
+      receiverMembers: allReceiverIdx.map(i => [i]),
+      limited: false, grouped: false,
     };
   }
 
@@ -212,11 +223,11 @@ function _ihVisibleAxes(block, f, snap, snapAp, panels) {
   const senderIdx = _ihTopIndices(senderScores, limit);
   const receiverIdx = _ihTopIndices(receiverScores, limit);
   return {
-    senderIdx,
-    receiverIdx,
     senders: senderIdx.map(i => allSenders[i]),
     receivers: receiverIdx.map(i => allReceivers[i]),
-    limited: true,
+    senderMembers: senderIdx.map(i => [i]),
+    receiverMembers: receiverIdx.map(i => [i]),
+    limited: true, grouped: false,
   };
 }
 
@@ -318,18 +329,42 @@ function _ihSyncControls() {
       `<option value="${_escapeHtml(t)}">${_escapeHtml(t)}</option>`
     ).join("");
     tSel.value = f.hmTimepoint;
-    if (tSel.parentElement) tSel.parentElement.style.display = timepoints.length > 1 ? "" : "none";
   }
   const pInput = document.getElementById("ih-pvalue");
-  if (pInput) pInput.value = (f.hmPvalue == null) ? "" : f.hmPvalue;
+  if (pInput) {
+    pInput.value = (f.hmPvalue == null) ? "" : f.hmPvalue;
+    // Backbones carry no pvalue (the count is pvalue-invariant — every band is
+    // identical), so hide the gate to avoid implying it filters. |PDS| stays.
+    if (pInput.parentElement) {
+      const isBb = !!(block._grain && block._grain !== "Full");
+      pInput.parentElement.style.display = isBb ? "none" : "";
+    }
+  }
   const apInput = document.getElementById("ih-abs-pds");
   if (apInput) apInput.value = (f.hmAbsPds == null) ? "" : f.hmAbsPds;
   const signSel = document.getElementById("ih-pds-sign");
   if (signSel) signSel.value = _ihPdsSignMode();
+  // Axis grouping: selector hidden when the payload ships no group map; the
+  // top-N axis limiter is hidden under grouping (meaningless over ~7 groups).
+  const grouped = _ihGroupMode() === "tissue";
+  const groupSel = document.getElementById("ih-group");
+  if (groupSel) {
+    groupSel.value = _ihGroupMode();
+    if (groupSel.parentElement)
+      groupSel.parentElement.style.display = _ihGroupMap() ? "" : "none";
+  }
   const axisSel = document.getElementById("ih-axis-limit");
-  if (axisSel) axisSel.value = _ihAxisLimitN(f) ? String(_ihAxisLimitN(f)) : "all";
+  if (axisSel) {
+    axisSel.value = _ihAxisLimitN(f) ? String(_ihAxisLimitN(f)) : "all";
+    if (axisSel.parentElement) axisSel.parentElement.style.display = grouped ? "none" : "";
+  }
   const scaleSel = document.getElementById("ih-scale");
-  if (scaleSel) scaleSel.value = _ihScaleMode();
+  if (scaleSel) {
+    scaleSel.value = _ihScaleMode();
+    // log1p is a color transform — heatmap-only. The chord re-hides this in
+    // _icSyncControls; restore it here so it reappears when the heatmap is shown.
+    if (scaleSel.parentElement) scaleSel.parentElement.style.display = "";
+  }
   const lowSel = document.getElementById("if-low-signal");
   if (lowSel) {
     const hasLow = IncytrCelltypeQc.hasLowSignal(block);
@@ -337,44 +372,33 @@ function _ihSyncControls() {
     if (lowSel.parentElement) lowSel.parentElement.style.display = hasLow ? "" : "none";
   }
 
-  const panels = _ihTimelinePanels(f);
-  let mode = _ihViewMode();
-  if (mode === "timeline" && panels.length <= 1) mode = "single";
-  const idx = _ihTimelineIndex(f, panels);
-  if (f.hmTimelineIndex !== idx) {
-    IncytrFilter.set({ hmTimelineIndex: idx });
-    f = IncytrFilter.get();
-  }
-  if (dSel && dSel.parentElement) {
+  // Contrasts are rendered as side-by-side small multiples (the same panels
+  // _ihTimelinePanels enumerates), so there is no per-contrast picker. The
+  // disease selector is shown only when it actually narrows the panel set —
+  // i.e. both dimensions vary, so it chooses which disease's timepoints to lay
+  // out. The timepoint selector is never needed (timepoints are the panels).
+  if (dSel && dSel.parentElement)
     dSel.parentElement.style.display =
-      (mode === "timeline" && timepoints.length <= 1 && diseases.length > 1) ? "none" : "";
-  }
-  if (tSel && tSel.parentElement) {
-    if (mode === "timeline") {
-      tSel.parentElement.style.display = "none";
-    } else {
-      tSel.parentElement.style.display = timepoints.length > 1 ? "" : "none";
-    }
-  }
-  _ihSyncTimelineControl(panels, mode);
+      (diseases.length > 1 && timepoints.length > 1) ? "" : "none";
+  if (tSel && tSel.parentElement) tSel.parentElement.style.display = "none";
 }
 
 function wireIncytrHeatmap() {
   const dSel = document.getElementById("ih-disease");
   if (dSel) dSel.addEventListener("change", () => {
     IncytrFilter.set({ hmDisease: dSel.value });
-    _ihRenderPlot();
+    _ihRenderActive();
   });
   const tSel = document.getElementById("ih-timepoint");
   if (tSel) tSel.addEventListener("change", () => {
     IncytrFilter.set({ hmTimepoint: tSel.value });
-    _ihRenderPlot();
+    _ihRenderActive();
   });
   const pInput = document.getElementById("ih-pvalue");
   if (pInput) pInput.addEventListener("change", () => {
     if (pInput.value === "") {
       IncytrFilter.set({ hmPvalue: null });
-      _ihRenderPlot();
+      _ihRenderActive();
       return;
     }
     const raw = parseFloat(pInput.value);
@@ -384,7 +408,7 @@ function wireIncytrHeatmap() {
       return;
     }
     IncytrFilter.set({ hmPvalue: raw });
-    _ihRenderPlot();
+    _ihRenderActive();
   });
   const apInput = document.getElementById("ih-abs-pds");
   if (apInput) apInput.addEventListener("change", () => {
@@ -395,51 +419,41 @@ function wireIncytrHeatmap() {
       return;
     }
     IncytrFilter.set({ hmAbsPds: raw });
-    _ihRenderPlot();
+    _ihRenderActive();
   });
   const signSel = document.getElementById("ih-pds-sign");
   if (signSel) signSel.addEventListener("change", () => {
     const v = (signSel.value === "up" || signSel.value === "down") ? signSel.value : "both";
     IncytrFilter.set({ hmPdsSign: v });
-    _ihRenderPlot();
+    _ihRenderActive();
   });
   const axisSel = document.getElementById("ih-axis-limit");
   if (axisSel) axisSel.addEventListener("change", () => {
     IncytrFilter.set({ hmAxisLimit: axisSel.value || "all" });
-    _ihRenderPlot();
+    _ihRenderActive();
   });
   const scaleSel = document.getElementById("ih-scale");
   if (scaleSel) scaleSel.addEventListener("change", () => {
     IncytrFilter.set({ hmScale: scaleSel.value === "log1p" ? "log1p" : "linear" });
-    _ihRenderPlot();
+    _ihRenderActive();
+  });
+  const groupSel = document.getElementById("ih-group");
+  if (groupSel) groupSel.addEventListener("change", () => {
+    IncytrFilter.set({ hmGroupBy: groupSel.value === "celltype" ? "celltype" : "tissue" });
+    _ihRefreshActive();
   });
   // if-low-signal is wired once in wireIncytrPanel() to avoid double-wiring.
-  const timelineSlider = document.getElementById("ih-timeline-slider");
-  if (timelineSlider) timelineSlider.addEventListener("input", () => {
-    const raw = parseInt(timelineSlider.value || "0", 10);
-    _ihSetTimelineIndex(Number.isFinite(raw) ? raw : 0);
-  });
-  const timelinePrev = document.getElementById("ih-timeline-prev");
-  if (timelinePrev) timelinePrev.addEventListener("click", () => {
-    _ihSetTimelineIndex(_ihTimelineIndex(IncytrFilter.get(), _ihTimelinePanels(IncytrFilter.get())) - 1);
-  });
-  const timelineNext = document.getElementById("ih-timeline-next");
-  if (timelineNext) timelineNext.addEventListener("click", () => {
-    _ihSetTimelineIndex(_ihTimelineIndex(IncytrFilter.get(), _ihTimelinePanels(IncytrFilter.get())) + 1);
-  });
   const resetBtn = document.getElementById("ih-reset");
   if (resetBtn) resetBtn.addEventListener("click", () => {
     const ds = _ihDiseases(), ts = _ihTimepoints();
     IncytrFilter.set({
       hmDisease: ds[0] || null, hmTimepoint: ts[0] || null,
-      hmView: "timeline",
-      hmTimelineIndex: 0,
       hmPvalue: null, hmAbsPds: 0.01,
       hmAxisLimit: "all", hmScale: "linear", hmPdsSign: "both",
+      hmGroupBy: "tissue",
       excludeLowSignalCelltypes: false,
     });
-    _ihSyncControls();
-    _ihRenderPlot();
+    _ihRefreshActive();
   });
 }
 
@@ -512,6 +526,41 @@ function _ihSeedPathwayFilters(sender, receiver, disease, timepoint, snap, snapA
   });
   // Switch the unified Incytr pane to the table in-place (no tab jump).
   _setIncytrPane("table");
+}
+
+// Grouped (tissue) cell → the table can't pin a single (sender,receiver) shard,
+// so seed the sender/receiver multiselects with every member cluster and load
+// the ranked Top view filtered to them, rather than pair mode.
+function _ihSeedGroupedFilters(senderNames, receiverNames, disease, timepoint, snap, snapAp) {
+  IncytrFilter.set({
+    ipMode:     "top",
+    pair:       null,
+    senderIn:   senderNames,
+    receiverIn: receiverNames,
+    disease:    disease ? [disease] : [],
+    timepoint:  timepoint ? [timepoint] : [],
+    sliderP:    snap.open ? null : snap.value,
+    sliderPds:  (snapAp.value != null && snapAp.value > 0) ? snapAp.value : null,
+  });
+  _setIncytrPane("table");
+}
+
+// Dispatch a heatmap-cell click. Grouped axes seed the table's multiselects with
+// the group's member clusters (Top mode); ungrouped axes pin the single pair.
+function _ihHandleCellClick(axes, block, empty, sLabel, rLabel, disease, timepoint, snap, snapAp) {
+  const si = axes.senders.indexOf(sLabel);
+  const ri = axes.receivers.indexOf(rLabel);
+  if (si < 0 || ri < 0) return;
+  if (_ihGroupEmpty(axes.senderMembers[si], block.senders, empty)
+      || _ihGroupEmpty(axes.receiverMembers[ri], block.receivers, empty)) return;
+  if (axes.grouped) {
+    _ihSeedGroupedFilters(
+      axes.senderMembers[si].map(i => block.senders[i]),
+      axes.receiverMembers[ri].map(i => block.receivers[i]),
+      disease, timepoint, snap, snapAp);
+  } else {
+    _ihSeedPathwayFilters(sLabel, rLabel, disease, timepoint, snap, snapAp);
+  }
 }
 
 function _ihQcRows(block) {
@@ -629,113 +678,90 @@ function _ihRenderQcPlot(block) {
   Plotly.react(el, traces, layout, { displaylogo: false, responsive: true });
 }
 
-function _ihRenderTimelinePlot(block, el, countEl, f, snap, snapAp, totalAtThr) {
-  const panels = _ihTimelinePanels(f);
-  if (panels.length <= 1) return false;
-  const panelIdx = _ihTimelineIndex(f, panels);
-  const panel = panels[panelIdx];
-  const axes = _ihVisibleAxes(block, f, snap, snapAp, panels);
+// One contrast's count matrix over the shared axes (Z + hover text), the
+// empty-cell overlay coordinates, and the panel's max/total. Z is the
+// color-scaled value; maxN/visibleN are raw counts.
+function _ihPanelData(block, axes, empty, cIdx, snap, snapAp) {
   const senders = axes.senders, receivers = axes.receivers;
   const nS = senders.length, nR = receivers.length;
-  const empty = new Set(block.empty_deg_celltypes || []);
-  el.style.overflowX = "";
-  const cIdx = block.contrasts.indexOf(panel.contrast);
-
-  const Z = [];
-  const text = [];
-  let maxN = 0;
-  let visibleN = 0;
+  const noun = _ihEntityNoun();
+  const gate = _ihGateText(snap, snapAp);
+  const Z = [], text = [];
+  const hx = [], hy = [], htxt = [];
+  let maxN = 0, visibleN = 0;
   for (let r = 0; r < nR; r++) {
-    const row = [];
-    const tRow = [];
+    const row = [], tRow = [];
+    const memR = axes.receiverMembers[r];
     for (let s = 0; s < nS; s++) {
-      const isEmpty = empty.has(senders[s]) || empty.has(receivers[r]);
-      const senderIdx = axes.senderIdx[s];
-      const receiverIdx = axes.receiverIdx[r];
-      if (isEmpty || cIdx < 0 || senderIdx < 0 || receiverIdx < 0) {
+      const memS = axes.senderMembers[s];
+      const isEmpty = _ihGroupEmpty(memS, block.senders, empty)
+        || _ihGroupEmpty(memR, block.receivers, empty);
+      if (isEmpty || cIdx < 0 || !memS.length || !memR.length) {
         row.push(null);
         tRow.push("no candidate paths");
+        hx.push(senders[s]); hy.push(receivers[r]); htxt.push("no candidate paths");
       } else {
-        const n = _ihCountAt(senderIdx, receiverIdx, cIdx, snap.index, snapAp.index);
+        let n = 0;
+        for (const a of memS) for (const b of memR)
+          n += _ihCountAt(a, b, cIdx, snap.index, snapAp.index);
         row.push(_ihScaleValue(n));
         if (n > maxN) maxN = n;
         visibleN += n;
-        const gate = _ihGateText(snap, snapAp);
-        tRow.push(`${panel.contrast}: ${n.toLocaleString()} paths · ${_ihSignText()} · ${gate.pTxt}${gate.apTxt}`);
+        tRow.push(`${n.toLocaleString()} ${noun} · ${_ihSignText()} · ${gate.pTxt}${gate.apTxt}`);
       }
     }
-    Z.push(row);
-    text.push(tRow);
+    Z.push(row); text.push(tRow);
   }
+  return { Z, text, hx, hy, htxt, maxN, visibleN };
+}
 
+// Render one small-multiple heatmap into `plotDiv`. zmax is shared across panels
+// so cell colors are comparable; the leftmost panel keeps the receiver labels,
+// the rightmost carries the shared colorbar.
+function _ihRenderHeatmapPanel(plotDiv, axes, data, opts) {
+  const senders = axes.senders, receivers = axes.receivers;
+  const nS = senders.length, nR = receivers.length;
   const traces = [{
     type: "heatmap",
-    x: senders, y: receivers, z: Z,
-    text, hoverinfo: "x+y+text",
+    x: senders, y: receivers, z: data.Z,
+    text: data.text, hoverinfo: "x+y+text",
     colorscale: _IH_COLORSCALE,
-    zmin: 0, zmax: Math.max(1, _ihScaleValue(maxN)),
-    colorbar: { title: _ihColorbarTitle(), thickness: 12, len: 0.7 },
+    zmin: 0, zmax: opts.zmax,
+    showscale: !!opts.showColorbar,
+    colorbar: opts.showColorbar ? { title: _ihColorbarTitle(), thickness: 12, len: 0.7 } : undefined,
     xgap: 1, ygap: 1,
   }];
-  const hx = [], hy = [], htxt = [];
-  for (let r = 0; r < nR; r++) for (let s = 0; s < nS; s++) {
-    if (empty.has(senders[s]) || empty.has(receivers[r])) {
-      hx.push(senders[s]); hy.push(receivers[r]);
-      htxt.push("no candidate paths");
-    }
-  }
-  if (hx.length) {
+  if (data.hx.length) {
     traces.push({
       type: "scatter", mode: "markers",
-      x: hx, y: hy, text: htxt, hoverinfo: "x+y+text",
+      x: data.hx, y: data.hy, text: data.htxt, hoverinfo: "x+y+text",
       marker: { symbol: "x-thin-open", color: "#9aa0a6", size: 8, line: { width: 1.2 } },
       showlegend: false,
     });
   }
-
-  const layoutParts = _ihLayoutParts(senders, receivers, 30);
-
+  // automargin: false + explicit category tickvals/range — see the long note in
+  // git history; Plotly 2.35 otherwise post-thins category labels every-other.
   const layout = {
-    margin: { l: layoutParts.leftMargin, r: 30, t: 30, b: layoutParts.bottomMargin },
-    height: layoutParts.height,
-    xaxis: { title: "Sender", type: "category", tickangle: -45,
-             automargin: false, categoryorder: "array", categoryarray: senders,
+    margin: { l: opts.leftMargin, r: opts.showColorbar ? 60 : 12, t: 16, b: opts.bottomMargin },
+    height: opts.height,
+    xaxis: { title: "Sender", type: "category", tickangle: -45, automargin: false,
+             categoryorder: "array", categoryarray: senders,
              tickmode: "array", tickvals: senders, ticktext: senders,
-             range: [-0.5, nS - 0.5], fixedrange: true,
-             tickfont: { size: 11 } },
-    yaxis: { title: "Receiver", type: "category", automargin: false,
+             range: [-0.5, nS - 0.5], fixedrange: true, tickfont: { size: 11 } },
+    yaxis: { title: opts.showY ? "Receiver" : "", type: "category", automargin: false,
              categoryorder: "array", categoryarray: receivers,
              tickmode: "array", tickvals: receivers, ticktext: receivers,
-             range: [nR - 0.5, -0.5], fixedrange: true,
-             tickfont: { size: 11 } },
+             showticklabels: !!opts.showY,
+             range: [nR - 0.5, -0.5], fixedrange: true, tickfont: { size: 11 } },
     plot_bgcolor: "#fafafa",
   };
-  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true });
-
-  el.removeAllListeners && el.removeAllListeners("plotly_click");
-  el.on && el.on("plotly_click", ev => {
+  Plotly.react(plotDiv, traces, layout, { displaylogo: false, responsive: true });
+  plotDiv.removeAllListeners && plotDiv.removeAllListeners("plotly_click");
+  plotDiv.on && plotDiv.on("plotly_click", ev => {
     if (!ev.points || !ev.points.length) return;
     const p = ev.points[0];
-    const sender = p.x, receiver = p.y;
-    if (empty.has(sender) || empty.has(receiver)) return;
-    _ihSeedPathwayFilters(sender, receiver, panel.disease, panel.timepoint, snap, snapAp);
+    opts.onClick(p.x, p.y);
   });
-
-  if (countEl) {
-    const gate = _ihGateText(snap, snapAp);
-    const axesTxt = axes.limited ? ` · showing top ${senders.length}×${receivers.length} axes` : "";
-    const scaleTxt = _ihScaleMode() === "log1p" ? " · log1p color" : "";
-    const signTxt = ` · ${_ihSignText()}`;
-    const lowTxt = IncytrCelltypeQc.enabled(block)
-      ? ` · ${IncytrCelltypeQc.controlText(block)}` : "";
-    countEl.textContent =
-      `Timeline · ${panel.contrast} (${panelIdx + 1}/${panels.length}) · `
-      + `${visibleN.toLocaleString()} paths at ${gate.pTxt}${gate.apTxt}`
-      + ` · ${totalAtThr.toLocaleString()} across all contrasts at this threshold.`
-      + `${axesTxt}${scaleTxt}${signTxt}${lowTxt}`;
-  }
-  _ihRenderQcPlot(block);
-  return true;
 }
 
 function _ihRenderPlot() {
@@ -744,132 +770,88 @@ function _ihRenderPlot() {
   const countEl = document.getElementById("ih-count");
   if (!block || !el) return;
   const f = IncytrFilter.get();
-  const contrast = _ihContrastFromState();
-  const cIdx = block.contrasts.indexOf(contrast);
   const snap = _ihSnapPvalue(f.hmPvalue);
   const snapAp = _ihSnapAbsPds(f.hmAbsPds);
-  const axes = _ihVisibleAxes(block, f, snap, snapAp, null);
+
+  // Contrasts are rendered as side-by-side small multiples (the same panels the
+  // chord uses). Falls back to the single active contrast for a 1-contrast cohort.
+  let panels = _ihTimelinePanels(f);
+  if (!panels.length) {
+    panels = [{
+      label: _ihContrastFromState(), contrast: _ihContrastFromState(),
+      disease: f.hmDisease, timepoint: f.hmTimepoint,
+    }];
+  }
+
+  const axes = _ihVisibleAxes(block, f, snap, snapAp, panels);
   const senders = axes.senders, receivers = axes.receivers;
-  const nS = senders.length, nR = receivers.length;
   const empty = new Set(block.empty_deg_celltypes || []);
+  const noun = _ihEntityNoun();
   const totalAtThr = _ihTotalAtThreshold(block, snap, snapAp);
 
-  if (_ihViewMode() === "timeline"
-      && _ihRenderTimelinePlot(block, el, countEl, f, snap, snapAp, totalAtThr)) {
-    return;
-  }
-  el.style.overflowX = "";
+  // Build every panel's matrix first so the color scale (zmax) is shared and the
+  // per-timepoint cell colors are directly comparable across panels.
+  const datas = panels.map(p =>
+    _ihPanelData(block, axes, empty, block.contrasts.indexOf(p.contrast), snap, snapAp));
+  const globalMax = Math.max(1, ...datas.map(d => d.maxN));
+  const zmax = Math.max(1, _ihScaleValue(globalMax));
 
-  const Z = [];
-  const text = [];
-  let maxN = 0;
-  let visibleN = 0;
-  for (let r = 0; r < nR; r++) {
-    const row = [];
-    const tRow = [];
-    for (let s = 0; s < nS; s++) {
-      const isEmpty = empty.has(senders[s]) || empty.has(receivers[r]);
-      const senderIdx = axes.senderIdx[s];
-      const receiverIdx = axes.receiverIdx[r];
-      if (isEmpty || cIdx < 0) {
-        row.push(null);
-        tRow.push("no candidate paths (empty-DEG cell type)");
-      } else {
-        const n = _ihCountAt(senderIdx, receiverIdx, cIdx, snap.index, snapAp.index);
-        row.push(_ihScaleValue(n));
-        if (n > maxN) maxN = n;
-        visibleN += n;
-        const gate = _ihGateText(snap, snapAp);
-        tRow.push(`${n.toLocaleString()} paths · ${_ihSignText()} · ${gate.pTxt}${gate.apTxt}`);
-      }
-    }
-    Z.push(row);
-    text.push(tRow);
-  }
+  const lp = _ihLayoutParts(senders, receivers, 16);
+  const firstLeft = lp.leftMargin;   // wide enough for the receiver labels
+  const restLeft = 40;               // later panels drop the y labels
+  const cellPx = 34;
 
-  const traces = [{
-    type: "heatmap",
-    x: senders, y: receivers, z: Z,
-    text, hoverinfo: "x+y+text",
-    colorscale: _IH_COLORSCALE,
-    zmin: 0, zmax: Math.max(1, _ihScaleValue(maxN)),
-    colorbar: { title: _ihColorbarTitle(), thickness: 12, len: 0.7 },
-    xgap: 1, ygap: 1,
-  }];
-  const hx = [], hy = [], htxt = [];
-  for (let r = 0; r < nR; r++) for (let s = 0; s < nS; s++) {
-    if (empty.has(senders[s]) || empty.has(receivers[r])) {
-      hx.push(senders[s]); hy.push(receivers[r]);
-      htxt.push("no candidate paths");
-    }
-  }
-  if (hx.length) {
-    traces.push({
-      type: "scatter", mode: "markers",
-      x: hx, y: hy, text: htxt, hoverinfo: "x+y+text",
-      marker: { symbol: "x-thin-open", color: "#9aa0a6", size: 10, line: { width: 1.5 } },
-      showlegend: false,
+  // One horizontal row of panels; scroll if wider than the pane.
+  el.innerHTML = "";
+  el.style.display = "flex";
+  el.style.flexWrap = "nowrap";
+  el.style.alignItems = "flex-start";
+  el.style.overflowX = "auto";
+
+  panels.forEach((panel, pi) => {
+    const showY = pi === 0;
+    const showColorbar = pi === panels.length - 1;
+    const leftMargin = showY ? firstLeft : restLeft;
+    const w = leftMargin + senders.length * cellPx + (showColorbar ? 60 : 12);
+
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "display:inline-flex;flex-direction:column;flex:0 0 auto;";
+    const lbl = document.createElement("div");
+    lbl.style.cssText = "font-size:12px;font-weight:600;color:#333;text-align:center;margin:2px 0 1px;";
+    lbl.textContent = panel.contrast;
+    const sub = document.createElement("div");
+    sub.className = "muted";
+    sub.style.cssText = "font-size:10px;text-align:center;margin-bottom:2px;";
+    sub.textContent = `${datas[pi].visibleN.toLocaleString()} ${noun}`;
+    const plotDiv = document.createElement("div");
+    plotDiv.style.cssText = `width:${w}px;height:${lp.height}px;`;
+    wrap.appendChild(lbl); wrap.appendChild(sub); wrap.appendChild(plotDiv);
+    el.appendChild(wrap);
+
+    _ihRenderHeatmapPanel(plotDiv, axes, datas[pi], {
+      zmax, showY, showColorbar, height: lp.height,
+      leftMargin, bottomMargin: lp.bottomMargin,
+      onClick: (x, y) =>
+        _ihHandleCellClick(axes, block, empty, x, y, panel.disease, panel.timepoint, snap, snapAp),
     });
-  }
-  // Plotly auto-thins category labels to every-other when the per-row pixel
-  // budget drops below ~font-line-height. With 19 cell types and the prior
-  // 22 px/row, ~12 px font + descender/ascender + cell-padding overflowed and
-  // Plotly silently dropped every other label. Fixes:
-  //   - Explicit type: "category" so tick0/dtick are unambiguous category indices
-  //   - 32 px/row floor for the heatmap canvas (was 22)
-  //   - Larger left/bottom margins to seat the longest cell-type names
-  //   - tickfont size 11 so labels fit without breaking the row pitch
-  const layoutParts = _ihLayoutParts(senders, receivers, 20);
-  const layout = {
-    margin: { l: layoutParts.leftMargin, r: 30, t: 20, b: layoutParts.bottomMargin },
-    height: layoutParts.height,
-    // automargin: false because Plotly 2.35's automargin pass interacts
-    // badly with category axes — even with tickmode:"array" + explicit
-    // tickvals, it post-thins labels to nticks=10 stride=2 during the
-    // remeasure. nticks: 100 also explicitly overrides the auto-nticks
-    // fallback. tickvals as the category strings themselves (not numeric
-    // indices) is the contract Plotly category axes honor in 2.35.
-    // Lock the range to the category bounds. Plotly's autoscale otherwise
-    // pads each end and the wider range triggers the auto-tick-thinning
-    // (every-other label drops) regardless of tickmode/nticks. fixedrange
-    // disables user zoom-out, which would re-introduce the same effect.
-    xaxis: { title: "Sender", type: "category", tickangle: -45, automargin: false,
-             categoryorder: "array", categoryarray: senders,
-             tickmode: "array", tickvals: senders, ticktext: senders,
-             range: [-0.5, nS - 0.5], fixedrange: true,
-             tickfont: { size: 11 } },
-    yaxis: { title: "Receiver", type: "category", automargin: false,
-             categoryorder: "array", categoryarray: receivers,
-             tickmode: "array", tickvals: receivers, ticktext: receivers,
-             range: [nR - 0.5, -0.5], fixedrange: true,
-             tickfont: { size: 11 } },
-    plot_bgcolor: "#fafafa",
-  };
-  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true });
-
-  el.removeAllListeners && el.removeAllListeners("plotly_click");
-  el.on && el.on("plotly_click", ev => {
-    if (!ev.points || !ev.points.length) return;
-    const p = ev.points[0];
-    const sender = p.x, receiver = p.y;
-    if (empty.has(sender) || empty.has(receiver)) return;
-    // Seed the table tab via shared filter state, then switch tabs.
-    // Propagate |PDS| into the table's sliderPds so the pathway-table view
-    // starts at the same effect-size gate the user was looking at.
-    _ihSeedPathwayFilters(sender, receiver, f.hmDisease, f.hmTimepoint, snap, snapAp);
   });
 
   if (countEl) {
+    const tps = _ihTimepoints();
+    const header = tps.length > 1 ? f.hmDisease : (f.hmTimepoint || "all");
     const gate = _ihGateText(snap, snapAp);
-    const axesTxt = axes.limited ? ` · showing top ${senders.length}×${receivers.length} axes` : "";
+    const axesTxt = axes.grouped ? ` · grouped to ${senders.length}×${receivers.length} tissue axes`
+      : (axes.limited ? ` · showing top ${senders.length}×${receivers.length} axes` : "");
     const scaleTxt = _ihScaleMode() === "log1p" ? " · log1p color" : "";
-    const signTxt = ` · ${_ihSignText()}`;
     const lowTxt = IncytrCelltypeQc.enabled(block)
       ? ` · ${IncytrCelltypeQc.controlText(block)}` : "";
-    countEl.textContent =
-      `${contrast} · ${visibleN.toLocaleString()} paths at ${gate.pTxt}${gate.apTxt.replace(" · ", " & ")}`
-      + ` · ${totalAtThr.toLocaleString()} across all contrasts at this threshold.`
-      + `${axesTxt}${scaleTxt}${signTxt}${lowTxt}`;
+    const perPanel = panels.map((p, i) => `${p.label}: ${datas[i].visibleN.toLocaleString()}`);
+    const lead = panels.length > 1
+      ? `${header} · ${panels.length} contrasts side by side (${perPanel.join(" · ")})`
+      : `${panels[0].contrast} · ${datas[0].visibleN.toLocaleString()} ${noun}`;
+    countEl.textContent = `${lead} at ${gate.pTxt}${gate.apTxt.replace(" · ", " & ")}`
+      + ` · ${totalAtThr.toLocaleString()} across all contrasts at this threshold`
+      + `${axesTxt}${scaleTxt} · ${_ihSignText()}${lowTxt}.`;
   }
   _ihRenderQcPlot(block);
 }
@@ -896,30 +878,53 @@ function renderIncytrHeatmap() {
 // the view-switch buttons and the shared if-low-signal control.
 // ---------------------------------------------------------------------------
 
-let _incytrPane = "table"; // "table" | "heatmap"
+let _incytrPane = "table"; // "table" | "heatmap" | "chord"
+
+// The heatmap and chord panes share the same sidebar controls (incytr-hm-controls)
+// and the same count-tensor data layer, differing only in render. These dispatch
+// a sync/render to whichever of the two is active so the shared control handlers
+// don't need to know which view they're driving.
+function _ihSyncActive() {
+  if (_incytrPane === "chord") _icSyncControls();
+  else _ihSyncControls();
+}
+function _ihRenderActive() {
+  if (_incytrPane === "chord") _icRenderChord();
+  else _ihRenderPlot();
+}
+// Heatmap and chord are the two "vis" panes (table is the third); they share the
+// controls + data layer, so most handlers refresh whichever is active.
+function _ihVisPaneActive() { return _incytrPane !== "table"; }
+function _ihRefreshActive() { _ihSyncActive(); _ihRenderActive(); }
 
 function _syncIncytrPane() {
   const isHeatmap = _incytrPane === "heatmap";
+  const isChord = _incytrPane === "chord";
+  const isTable = !isHeatmap && !isChord;
   const hp = document.getElementById("incytr-pane-heatmap");
+  const cp = document.getElementById("incytr-pane-chord");
   const tp = document.getElementById("incytr-pane-table");
   const hc = document.getElementById("incytr-hm-controls");
   const ic = document.getElementById("incytr-ip-controls");
   const tb = document.getElementById("incytr-view-table");
   const hb = document.getElementById("incytr-view-heatmap");
+  const cb = document.getElementById("incytr-view-chord");
   if (hp) hp.hidden = !isHeatmap;
-  if (tp) tp.hidden = isHeatmap;
-  if (hc) hc.hidden = !isHeatmap;
-  if (ic) ic.hidden = isHeatmap;
-  if (tb) tb.classList.toggle("active", !isHeatmap);
+  if (cp) cp.hidden = !isChord;
+  if (tp) tp.hidden = !isTable;
+  // The heatmap controls drive both the heatmap and the chord.
+  if (hc) hc.hidden = isTable;
+  if (ic) ic.hidden = !isTable;
+  if (tb) tb.classList.toggle("active", isTable);
   if (hb) hb.classList.toggle("active", isHeatmap);
+  if (cb) cb.classList.toggle("active", isChord);
 }
 
 function _setIncytrPane(pane) {
-  _incytrPane = pane === "heatmap" ? "heatmap" : "table";
+  _incytrPane = (pane === "heatmap" || pane === "chord") ? pane : "table";
   _syncIncytrPane();
-  if (_incytrPane === "heatmap") {
-    _ihSyncControls();
-    _ihRenderPlot();
+  if (_ihVisPaneActive()) {
+    _ihRefreshActive();
   } else {
     // renderIncytrPathways is defined in incytr_pathways.js — loaded in same scope.
     if (typeof renderIncytrPathways === "function") renderIncytrPathways();
@@ -931,16 +936,17 @@ function wireIncytrPanel() {
   if (tableBtn) tableBtn.addEventListener("click", () => _setIncytrPane("table"));
   const heatmapBtn = document.getElementById("incytr-view-heatmap");
   if (heatmapBtn) heatmapBtn.addEventListener("click", () => _setIncytrPane("heatmap"));
+  const chordBtn = document.getElementById("incytr-view-chord");
+  if (chordBtn) chordBtn.addEventListener("click", () => _setIncytrPane("chord"));
 
-  // Unified sparse-cell control: wired once here so both views share it without
+  // Unified sparse-cell control: wired once here so all views share it without
   // double-event firing. Handler behaviour differs per active pane.
   const lowSel = document.getElementById("if-low-signal");
   if (lowSel) lowSel.addEventListener("change", () => {
     const excluded = lowSel.value === "exclude";
-    if (_incytrPane === "heatmap") {
+    if (_ihVisPaneActive()) {
       IncytrFilter.set({ excludeLowSignalCelltypes: excluded });
-      _ihSyncControls();
-      _ihRenderPlot();
+      _ihRefreshActive();
     } else {
       IncytrFilter.set({ excludeLowSignalCelltypes: excluded, pair: null });
       if (typeof _ipBlock === "function") {

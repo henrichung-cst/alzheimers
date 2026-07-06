@@ -47,6 +47,7 @@ per-tab branches to `boot.js`.
 | `js/tabs/temporal_v2.js` | 820 | Decomp series builder |
 | `js/tabs/kinase_crosstable.js` | 1576 | Decomp/SEA-AD/5xFAD cross-table |
 | `js/tabs/kinase_human.js` | 1600 | Human (Mukesh/NBB) per-donor kinase explorer (active when PAYLOAD.human present) |
+| `js/tabs/substrate_compare.js` | 590 | Early AD Kinases (D1 cross-cohort): per-kinase rows with 1×4 age strips shaded by within-kinase-normalized conserved-substrate breadth (n_shared_gene) over the 5xFAD disease timeline; detail = per-context overlap/coverage table, BLOSUM histogram + paginated substrate-pair table (lazy `substrate_pairs` shards). Gated on `PAYLOAD.substrate_compare`. |
 
 ## Shared fallback
 
@@ -63,6 +64,7 @@ Current shared modules used by this viewer:
 - `js/boot.js`
 - `js/tabs/incytr_state.js`
 - `js/tabs/incytr_heatmap.js`
+- `js/tabs/incytr_chord.js`
 - `js/tabs/incytr_pathways.js`
 - `js/tabs/kinase_detail.js`
 - `js/widgets/multiselect.js`

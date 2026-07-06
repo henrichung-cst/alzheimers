@@ -91,8 +91,6 @@
               <th data-col="n_attributed_celltypes" data-metric="nAttributed" title="The cell type this kinase is exclusively expressed in (from the recalculated confidence). Over-split MouseC1 clusters of one cell type are collapsed into an expandable parent; distinct cell types stay separate. Blank when broadly expressed. Click to sort by exclusivity.">Cell type</th>
               <th data-col="song_spec" data-metric="songTau" title="MouseC1 location evidence, shown as fold over the even-split baseline (1/31 ≈ 0.032): ≥10× / ≥5× / ≥2× / ≥1×. The fold is the kinase's peak cell-type share; the concentration index τ and the cell type are in the tooltip. Click to sort.">MouseC1</th>
               <th data-col="wmb_max_tier" data-metric="wmbMaxTier" title="WMB cross-check — maximum WMB location tier reached by any attribution row in scope, as a multiple of the retained-class uniform (1/9 ≈ 0.111). Independent atlas check on the MouseC1 call. Click to sort by max tier.">WMB</th>
-              <th data-col="n_backbones" data-metric="nBackbones" title="#Backbones — distinct (Sender, Receiver, Receptor, EM) pathway spines this kinase acts on (any node) across all gated pair-mode contrasts. Breadth signal; Target fan-out collapsed. Click to sort.">#Backbones</th>
-              <th data-col="n_paths" data-metric="nPaths" title="#Paths — distinct full (Sender, Receiver, Ligand, Receptor, EM, Target) pathways this kinase sits along across all gated pair-mode contrasts. Total end-to-end route involvement (~53× #Backbones). Click to sort.">#Paths</th>
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -262,6 +260,17 @@
           </select>
         </label>
 
+        <!-- J-3: Grain selector — shared across table + heatmap (entity-level).
+             Hidden when backbone_grains absent from payload. -->
+        <label class="ke-filter-label" id="ip-grain-wrap" title="Node grain: which nodes define the pathway/backbone entity, in the table and the heatmap. Full = L-R-EM-T (default). Backbone grains drop one or two nodes; dropped columns show '—'. Switches the entity source; scoring is identical on the surviving nodes." hidden>Grain
+          <select id="ip-grain" aria-label="Incytr node grain">
+            <option value="Full">Full (L-R-EM-T)</option>
+            <option value="L-R-EM">L-R-EM (drop Target)</option>
+            <option value="R-EM-T">R-EM-T (drop Ligand)</option>
+            <option value="R-EM">R-EM (drop Ligand+Target)</option>
+          </select>
+        </label>
+
         <!-- HEATMAP-SPECIFIC CONTROLS (hidden when table pane is active) -->
         <div id="incytr-hm-controls" hidden>
           <label class="ke-filter-label">Disease
@@ -281,6 +290,12 @@
               <option value="both">Both</option>
               <option value="up">Up</option>
               <option value="down">Down</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Group the sender/receiver axes. Tissue collapses the native clusters to their WMB tissue category (~7 axes; e.g. the inhibitory-neuron subtypes merge into 'Interneurons') — counts are summed, not changed. Cell type shows the full spine. Heatmap-only; the table keeps the native clusters.">Group
+            <select id="ih-group" aria-label="Heatmap axis grouping">
+              <option value="tissue">Tissue (~7)</option>
+              <option value="celltype">Cell type (full)</option>
             </select>
           </label>
           <label class="ke-filter-label" title="Limit sender and receiver axes to the top cell types by visible path count under the active contrast and gates. Counts are not changed.">Axes
@@ -303,18 +318,6 @@
 
         <!-- TABLE-SPECIFIC CONTROLS (hidden when heatmap pane is active) -->
         <div id="incytr-ip-controls">
-          <!-- J-3: Grain selector. Hidden when backbone_grains absent from payload. -->
-          <label class="ke-filter-label" id="ip-grain-wrap" title="Node grain: which nodes define the pathway entity. Full = L-R-EM-T (default). Backbone grains drop one or two nodes; dropped columns show '—'. Switches the entity source; scoring is identical on the surviving nodes." hidden>Grain
-            <select id="ip-grain" aria-label="Incytr node grain">
-              <option value="Full">Full (L-R-EM-T)</option>
-              <option value="L-R-EM">L-R-EM (drop Target)</option>
-              <option value="R-EM-T">R-EM-T (drop Ligand)</option>
-              <option value="R-EM">R-EM (drop Ligand+Target)</option>
-            </select>
-          </label>
-          <!-- B-6: drill-back button. Visible only during a drill navigation. -->
-          <button id="ip-drill-back" class="ke-filter-reset" hidden
-                  title="Restore the view from before the last drill (grain, mode, search, filters)">↩ Back</button>
           <label class="ke-filter-label" title="Top overall ranks the packaged top pathway instances across all sender/receiver cell-type pairs. Cell Type loads one sender/receiver pair for detailed evidence inspection.">View
             <select id="ip-mode" aria-label="Incytr pathway view">
               <option value="top">Top overall</option>
@@ -392,26 +395,25 @@
                   title="Show the pathway table">Table</button>
           <button type="button" id="incytr-view-heatmap" class="incytr-view-btn"
                   title="Show the sender × receiver path-count heatmap">Heatmap</button>
+          <button type="button" id="incytr-view-chord" class="incytr-view-btn"
+                  title="Show the sender → receiver relationships as a circular chord diagram">Chord</button>
         </div>
 
         <!-- Heatmap pane (hidden by default) -->
         <div id="incytr-pane-heatmap" class="incytr-pane" hidden>
-          <div id="ih-timeline-control" class="ih-timeline-control" style="display:none;">
-            <span class="muted ih-timeline-label" id="ih-timeline-label"></span>
-            <button id="ih-timeline-prev" class="ih-timeline-step" type="button" aria-label="Previous timeline frame">&lt;</button>
-            <div class="ih-timeline-scrubber">
-              <input id="ih-timeline-slider" type="range" min="0" max="0" step="1" value="0"
-                     aria-label="Timeline frame"/>
-              <div id="ih-timeline-ticks" class="muted ih-timeline-ticks"></div>
-            </div>
-            <button id="ih-timeline-next" class="ih-timeline-step" type="button" aria-label="Next timeline frame">&gt;</button>
-          </div>
           <div id="ih-plot" role="img" aria-label="Incytr candidate-path heatmap"
                style="width:100%;"></div>
           <div id="ih-qc-wrap" style="margin-top:14px;display:none;">
             <div id="ih-qc-plot" role="img" aria-label="Median cell count versus Incytr pathway burden"
                  style="width:100%;"></div>
           </div>
+        </div>
+
+        <!-- Chord pane (hidden by default) — circular sender → receiver diagram -->
+        <div id="incytr-pane-chord" class="incytr-pane" hidden>
+          <div id="ic-plot" role="img" aria-label="Incytr sender to receiver chord diagram"
+               style="width:100%;display:flex;justify-content:center;"></div>
+          <div class="muted" id="ic-count" style="font-size:11px;margin-top:8px;"></div>
         </div>
 
         <!-- Table pane (visible by default) -->
@@ -527,6 +529,31 @@
       <section class="detail-card" id="kx-detail" aria-live="polite"></section>
     </div>
   </div>
+  <div id="tab-substrate" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-substrate" hidden>
+    <div class="explorer-layout kinase-audit-layout">
+      <div class="card">
+        <div class="ke-toolbar ke-toolbar-multi" id="sub-toolbar">
+          <label class="ke-filter-label">
+            <input id="sub-search" aria-label="Search kinase or gene" placeholder="Search kinase or gene…" style="width:160px;"/>
+          </label>
+          <label class="ke-filter-label" title="Minimum peak count of substrate genes hit in both human AD and 5xFAD, across the 8 contexts (tissue × age). Peak is the highest shared-substrate count for the kinase.">Min shared
+            <select id="sub-min-shared" aria-label="Minimum peak shared substrate genes">
+              <option value="0">Any</option>
+              <option value="5">&geq;5</option>
+              <option value="10">&geq;10</option>
+              <option value="25">&geq;25</option>
+            </select>
+          </label>
+          <button id="sub-reset" class="ke-filter-reset" title="Reset search, filters, sort, and selection">Reset</button>
+          <button id="sub-export" class="ke-filter-reset" title="Export current table as CSV">Export CSV</button>
+          <span class="muted" id="sub-count"></span>
+        </div>
+        <div id="sub-table-wrap" class="ke-table-wrap"></div>
+      </div>
+      <div class="ka-splitter" id="sub-splitter" title="Drag to resize"></div>
+      <section class="detail-card" id="sub-detail" aria-live="polite"></section>
+    </div>
+  </div>
   <div id="tab-fivexfadkinase" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-fivexfadkinase" hidden>
     <div class="explorer-layout kinase-audit-layout">
       <div class="card">
@@ -605,8 +632,6 @@
               <th data-col="n_attributed_celltypes" title="Cell types attributed at high or moderate confidence.">Cell types</th>
               <th data-col="fivexfad_spec" title="MouseC2 snRNA location evidence, shown as fold over the even-split baseline.">MouseC2 snRNA</th>
               <th data-col="wmb_max_tier" title="WMB location cross-check tier.">WMB</th>
-              <th data-col="n_backbones" data-metric="nBackbones" title="#Backbones — distinct (Sender, Receiver, Receptor, EM) pathway spines this kinase acts on (any node) across all gated pair-mode contrasts for this tissue. Breadth signal; Target fan-out collapsed. Click to sort.">#Backbones</th>
-              <th data-col="n_paths" data-metric="nPaths" title="#Paths — distinct full (Sender, Receiver, Ligand, Receptor, EM, Target) pathways this kinase sits along across all gated pair-mode contrasts for this tissue. Total end-to-end route involvement. Click to sort.">#Paths</th>
             </tr></thead>
             <tbody></tbody>
           </table>

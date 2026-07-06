@@ -424,8 +424,6 @@ function _f5EnsureIndexes() {
         assay: row.assay || "",
         residue_type: row.residue_type || "",
         analysis_track: row.analysis_track || "",
-        n_backbones: (row.n_backbones != null) ? row.n_backbones : null,
-        n_paths:     (row.n_paths     != null) ? row.n_paths     : null,
         rows: new Map(),
       };
       byKey.set(key, rec);
@@ -566,6 +564,11 @@ function _f5FilteredRows() {
   const col = _F5State.sortCol;
   const asc = _F5State.sortAsc;
   out.sort((a, b) => {
+    // Cell-type-populated rows always rank above rows whose Cell type renders
+    // "—" (_f5CellTypesCell → no scoped attribution at tier ≥ moderate),
+    // regardless of sort column/direction; the sort key orders within groups.
+    const ha = _f5CellTypeCount(a) > 0, hb = _f5CellTypeCount(b) > 0;
+    if (ha !== hb) return ha ? -1 : 1;
     let va, vb;
     if (col === "profile" || col === "peakAbsNes") {
       return numCmp(a.peakNes, b.peakNes, asc ? -1 : 1);
@@ -702,8 +705,8 @@ function _f5SyncControls() {
 }
 
 function exportFiveXFADCsv() {
-  const headers = ["Kinase","Gene","Family","Tissue","Residue","n_sig","trend","MouseC2_snrna","WMB_tier","Conf","n_backbones","n_paths"];
-  const keys    = ["kinase","gene_symbol","family","tissue","residue_type","sigCount","trend","_exportF5Snrna","_exportWmbTier","_exportConf","n_backbones","n_paths"];
+  const headers = ["Kinase","Gene","Family","Tissue","Residue","n_sig","trend","MouseC2_snrna","WMB_tier","Conf"];
+  const keys    = ["kinase","gene_symbol","family","tissue","residue_type","sigCount","trend","_exportF5Snrna","_exportWmbTier","_exportConf"];
   csvDownload(csvSerialize(headers, keys, _f5Visible), exportFilename(COHORT_LABELS.fivexfad, "kinase"));
 }
 
@@ -839,11 +842,9 @@ function renderFiveXFADKinase() {
       <td>${_f5CellTypesCell(r)}</td>
       <td style="text-align:center;">${_f5NativeBadge(r)}</td>
       <td style="text-align:center;">${_f5WmbBadge(r)}</td>
-      <td class="attr-num">${r.n_backbones == null ? '<span class="muted">—</span>' : Number(r.n_backbones).toLocaleString()}</td>
-      <td class="attr-num">${r.n_paths == null ? '<span class="muted">—</span>' : Number(r.n_paths).toLocaleString()}</td>
     </tr>`;
   }).join("");
-  tbody.innerHTML = html || `<tr><td colspan="14" class="muted">No ${COHORT_LABELS.fivexfad} rows match the active filters.</td></tr>`;
+  tbody.innerHTML = html || `<tr><td colspan="12" class="muted">No ${COHORT_LABELS.fivexfad} rows match the active filters.</td></tr>`;
   _f5SyncSortIndicators();
   renderFiveXFADKinaseDetail();
 }

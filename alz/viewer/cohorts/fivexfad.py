@@ -28,6 +28,8 @@ from alz.bulk_mea.exclusivity_tier import (
 from alz.bulk_mea.confidence import HUMAN_STRONG_LOG2_SPECIFICITY as _F5_HUMAN_STRONG
 from alz.shared import config
 from alz.viewer.paths import (
+    EDGE_SLICES_INCYTR_BACKBONE_5XFAD_CORTEX_DIR,
+    EDGE_SLICES_INCYTR_BACKBONE_5XFAD_HIPPO_DIR,
     EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_CORTEX_DIR,
     EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_HIPPO_DIR,
     FIVEXFAD_KINASE_DIR,
@@ -38,6 +40,7 @@ from alz.viewer.paths import (
 from alz.viewer.shared.build_cache import _input_signature, _load_build_cache, _write_build_cache
 from alz.viewer.shared.cohort_slice import CohortViewerSlice
 from alz.viewer.shared.incytr_index import (
+    BACKBONE_GRAIN_NODES,
     _INCYTR_FC_COLS,
     _INCYTR_GENE_NODE_INDEX_FILENAME,
     _INCYTR_INDEX_FILENAME,
@@ -47,10 +50,14 @@ from alz.viewer.shared.incytr_index import (
     _INCYTR_LABEL_VOCAB,
     _INCYTR_PATHWAY_ABS_PDS,
     _INCYTR_PATHWAY_PVALUES,
-    _INCYTR_SCORE_COLS,
+    _INCYTR_SCORE_COLS_BASE,
+    _INCYTR_SCORE_COLS_OPTIONAL,
     _SIGN_VEC_LABELS,
+    _active_optional_score_cols,
     _idx_label_bits,
     _idx_traj_bits,
+    incytr_celltype_groups,
+    write_incytr_backbone_grains,
 )
 from alz.viewer.shared.payload_helpers import (
     _INCYTR_FC_NODES,
@@ -1714,11 +1721,13 @@ _5XFAD_TRAJ_VALID_DISEASES = {"TG"}
 _5XFAD_INCYTR_TISSUE = {
     "cortex": {
         "edge_dir": EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_CORTEX_DIR,
+        "backbone_edge_dir": EDGE_SLICES_INCYTR_BACKBONE_5XFAD_CORTEX_DIR,
         "context_id": "fivexfad_cortex",
         "url_prefix": "edge_slices/incytr_pathways_fivexfad_cortex/",
     },
     "hippocampus": {
         "edge_dir": EDGE_SLICES_INCYTR_PATHWAYS_5XFAD_HIPPO_DIR,
+        "backbone_edge_dir": EDGE_SLICES_INCYTR_BACKBONE_5XFAD_HIPPO_DIR,
         "context_id": "fivexfad_hippocampus",
         "url_prefix": "edge_slices/incytr_pathways_fivexfad_hippocampus/",
     },
@@ -1732,6 +1741,14 @@ def _5xfad_incytr_sanitize(name: str) -> str:
 def _5xfad_pair_mode_contrast_from_filename(fname: str) -> str | None:
     """`TG_3mo_WT_3mo_incytr_output.parquet` → `TG_3mo`."""
     m = re.match(r"(TG)_(\d+)mo_WT_\d+mo_incytr_output\.parquet$", fname)
+    if not m:
+        return None
+    return f"TG_{m.group(2)}mo"
+
+
+def _5xfad_backbone_contrast_from_filename(fname: str) -> str | None:
+    """`TG_3mo_WT_3mo_backbone_output.parquet` → `TG_3mo`."""
+    m = re.match(r"(TG)_(\d+)mo_WT_\d+mo_backbone_output\.parquet$", fname)
     if not m:
         return None
     return f"TG_{m.group(2)}mo"
@@ -1758,25 +1775,32 @@ def _5xfad_annotate_trajectory_columns(
 def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
     """Shard the 5xFAD pair-mode Incytr output for one tissue.
 
-    Reads `outputs/reports/incytr_pair_mode_5xfad/{tissue}/wide/*.parquet`
-    and emits one parquet per (sender, receiver) pair under a tissue-specific
-    edge_slices subdirectory. Returns the block for `incytr_pathways.by_context`
-    or None when the input dir is absent.
+    Reads `outputs/reports/incytr_pair_mode_5xfad/{tissue}/wide/*.parquet` — the
+    canonical PTM-inclusive pair-mode output, which carries the Ack/KGG
+    acetylation + ubiquitination score columns alongside the phospho paths. Emits
+    one parquet per (sender, receiver) pair under a tissue-specific edge_slices
+    subdirectory. Returns the block for `incytr_pathways.by_context` or None when
+    the input dir is absent.
     """
     if tissue not in _5XFAD_INCYTR_TISSUE:
         raise ValueError(f"unknown 5xFAD tissue: {tissue!r}")
 
     out_dir = _5XFAD_INCYTR_TISSUE[tissue]["edge_dir"]
+    backbone_edge_dir = _5XFAD_INCYTR_TISSUE[tissue]["backbone_edge_dir"]
     url_prefix = _5XFAD_INCYTR_TISSUE[tissue]["url_prefix"]
 
-    input_dir = os.path.join(
-        config.REPO_ROOT, "outputs", "reports",
-        "incytr_pair_mode_5xfad", tissue, "wide",
+    base = os.path.join(
+        config.REPO_ROOT, "outputs", "reports", "incytr_pair_mode_5xfad", tissue,
     )
+    backbone_dir = os.path.join(base, "backbone")
+    input_dir = os.path.join(base, "wide")
     if not os.path.isdir(input_dir):
-        print(f"  (warn) 5xFAD incytr input dir not found: {input_dir}; "
-              f"skipping {tissue}", flush=True)
+        print(f"  (warn) 5xFAD incytr input dir not found: "
+              f"{os.path.relpath(input_dir, config.REPO_ROOT)}; skipping {tissue}",
+              flush=True)
         return None
+    print(f"  5xfad incytr ({tissue}): reading "
+          f"{os.path.relpath(input_dir, config.REPO_ROOT)}", flush=True)
 
     parquet_files = sorted(glob.glob(os.path.join(input_dir, "*_incytr_output.parquet")))
     if not parquet_files:
@@ -1794,10 +1818,20 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
               f"skipping {tissue}", flush=True)
         return None
 
+    # Backbone grain parquets feed write_incytr_backbone_grains() below; fold
+    # them into the signature so backbone data changes bust the cache.
+    backbone_input_files: list[str] = []
+    for _grain in BACKBONE_GRAIN_NODES:
+        _gdir = os.path.join(backbone_dir, _grain)
+        if os.path.isdir(_gdir):
+            backbone_input_files.extend(
+                sorted(glob.glob(os.path.join(_gdir, "*_backbone_output.parquet")))
+            )
+
     _incytr_5xfad_sig = _input_signature(
         f"fivexfad_incytr_{tissue}",
-        [__file__] + [fp for fp, _ in file_to_contrast],
-        {"tissue": tissue, "builder_version": 1},
+        [__file__] + [fp for fp, _ in file_to_contrast] + backbone_input_files,
+        {"tissue": tissue, "builder_version": 3},  # v3: backbone grains (B-3/B-4)
     )
     _incytr_5xfad_cached = _load_build_cache(
         f"fivexfad_incytr_{tissue}", _incytr_5xfad_sig, out_dir
@@ -1823,6 +1857,10 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
                                   "py_up", "py_down")
                      if c in src_cols]
     extra_path_cols = [c for c in ("log2FC",) if c in src_cols]
+    # Optional PTM-track score columns (Ack/KGG/Rme1) present in this tissue's
+    # schema. Value-based gating (non-zero check) runs after the view is created;
+    # 5xFAD is the only cohort that carries real Ack/KGG data.
+    optional_in_schema = [c for c in _INCYTR_SCORE_COLS_OPTIONAL if c in src_cols]
     if not dir_flag_cols:
         print(f"    (warn) no direction-flag columns in {tissue}; "
               f"downstream UI badges will be empty", flush=True)
@@ -1860,11 +1898,14 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
         path_clauses = ",\n          ".join(
             f"CAST({c} AS DOUBLE) AS {c}" for c in extra_path_cols
         )
-        generic_scores = [c for c in _INCYTR_SCORE_COLS if c != "SiK_score"]
+        # Base non-SiK scores + optional PTM cols present in this file. Missing
+        # base cols are NULL-filled; missing optional cols are simply excluded.
+        base_nonsik = [c for c in _INCYTR_SCORE_COLS_BASE if c != "SiK_score"]
+        generic_scores = base_nonsik + [c for c in optional_in_schema if c in names]
         score_clauses = ",\n          ".join(
             f"CAST({c} AS DOUBLE) AS {c}" for c in generic_scores if c in names
         )
-        missing_scores = [c for c in generic_scores if c not in names]
+        missing_scores = [c for c in base_nonsik if c not in names]
         missing_score_clauses = ",\n          ".join(
             f"CAST(NULL AS DOUBLE) AS {c}" for c in missing_scores
         )
@@ -1904,6 +1945,18 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
     n_src = con.execute("SELECT COUNT(*) FROM src").fetchone()[0]
     print(f"  5xfad incytr ({tissue}): loaded {n_src:,} rows across "
           f"{len(file_to_contrast)} contrast(s)", flush=True)
+
+    # Which optional PTM score cols have any non-zero value in this tissue?
+    # Only these enter the binary index, shards, and score_columns; all-zero
+    # cols (e.g. Rme1 — no methylation assay) are dropped (honesty rule).
+    active_optional = _active_optional_score_cols(set(optional_in_schema), con, "src")
+    effective_score_cols: tuple[str, ...] = _INCYTR_SCORE_COLS_BASE + active_optional
+    if active_optional:
+        print(f"    score_columns ({tissue}): {len(active_optional)} PTM channel(s) "
+              f"active: {list(active_optional)}", flush=True)
+    else:
+        print(f"    score_columns ({tissue}): no PTM channels active "
+              f"(Ack/KGG/Rme1 absent or all-zero)", flush=True)
 
     senders_canonical = sorted({r[0] for r in con.execute(
         "SELECT DISTINCT sender FROM src").fetchall()})
@@ -2036,7 +2089,7 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
 
     INCYTR_INDEX_COLUMNS = (
         [("PDS", "f4"), ("pvalue", "f4")]
-        + [(sc, "u2") for sc in _INCYTR_SCORE_COLS]
+        + [(sc, "u2") for sc in effective_score_cols]
         + [("ligandId", "u2"), ("receptorId", "u2"),
            ("emId", "u2"), ("targetId", "u2")]
         + [("senderId", "u1"), ("receiverId", "u1"), ("contrastId", "u1"),
@@ -2070,7 +2123,7 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
             "PDS":        frame["PDS"].to_numpy(dtype="<f4"),
             "pvalue":     frame["pvalue"].to_numpy(dtype="<f4"),
         }
-        for sc in _INCYTR_SCORE_COLS:
+        for sc in effective_score_cols:
             chunk[sc] = (frame[sc].to_numpy(dtype="float16").view("<u2")
                          if sc in frame.columns else np.zeros(n, dtype="<u2"))
         idx_chunks.append(chunk)
@@ -2095,7 +2148,7 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
     ]
     shard_select_cols = (
         ["Ligand", "Receptor", "EM", "Target", "contrast", "pvalue", "PDS"]
-        + list(_INCYTR_SCORE_COLS)
+        + list(effective_score_cols)
         + dir_flag_cols
         + extra_path_cols
         + list(_INCYTR_FC_COLS)
@@ -2103,7 +2156,7 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
     )
     float_cols = (
         ["pvalue", "PDS"]
-        + list(_INCYTR_SCORE_COLS)
+        + list(effective_score_cols)
         + dir_flag_cols
         + extra_path_cols
         + list(_INCYTR_FC_COLS)
@@ -2255,7 +2308,7 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
             "traj_label_vocab": list(_SIGN_VEC_LABELS),
             "label_states": ["", *_INCYTR_LABEL_VOCAB],
             "label_nodes": list(_INCYTR_LABEL_NODES),
-            "score_columns": list(_INCYTR_SCORE_COLS),
+            "score_columns": list(effective_score_cols),
             "columns": columns_manifest,
             "raw_bytes": len(raw_bin),
             "gzip_bytes": len(gz_bin),
@@ -2265,11 +2318,27 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
               f"{len(raw_bin)/1e6:.1f} MB raw → {len(gz_bin)/1e6:.1f} MB gz",
               flush=True)
 
+    # B-3 / B-4: backbone grain payload blocks (same builder as Song), keyed to
+    # this tissue's backbone parquets + output dir.  Uses the Full-grain sender/
+    # receiver/contrast vocabs so grid indices align across grains.
+    backbone_grains = write_incytr_backbone_grains(
+        backbone_pair_mode_dir=backbone_dir,
+        edge_slices_backbone_dir=backbone_edge_dir,
+        unified_viewer_dir=UNIFIED_VIEWER_DIR,
+        contrast_from_filename=_5xfad_backbone_contrast_from_filename,
+        senders_canonical=senders_canonical,
+        receivers_canonical=receivers_canonical,
+        present_contrasts=present_contrasts,
+        contrast_to_idx=contrast_to_idx,
+        schema_version=SCHEMA_VERSION,
+    )
+
     celltypes = sorted(set(senders_canonical) | set(receivers_canonical))
+    celltype_groups = incytr_celltype_groups(set(celltypes))
     block = {
         "schema_version": SCHEMA_VERSION,
-        "version": 3,
-        "source": f"pair_mode (5xfad/{tissue}/wide)",
+        "version": 4,   # v4: backbone_grains (B-3/B-4)
+        "source": f"pair_mode (5xfad/{tissue}/{os.path.basename(input_dir)})",
         "source_mode": "pair_mode",
         "contrasts": list(present_contrasts),
         "senders": senders_canonical,
@@ -2280,10 +2349,13 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
         "low_signal_celltypes": [],
         "heatmap_counts": heatmap_counts,
         "heatmap_counts_signed": heatmap_counts_signed,
+        # Heatmap-only axis-grouping filter: cluster → WMB tissue category.
+        # Absent (selector hidden) when the crosswalk doesn't cover every axis.
+        **({"celltype_groups": celltype_groups} if celltype_groups else {}),
         "pathway_counts": pathway_counts,
         "pathway_counts_low_signal_excluded": None,
         "slice_index": index,
-        "score_columns": list(_INCYTR_SCORE_COLS),
+        "score_columns": list(effective_score_cols),
         "label_columns": list(_INCYTR_LABEL_COLS),
         "label_nodes": list(_INCYTR_LABEL_NODES),
         "label_vocab": list(_INCYTR_LABEL_VOCAB),
@@ -2296,6 +2368,9 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
             url_prefix=url_prefix,
         ),
         "trajectory_summary": traj_summary,
+        # B-3 / B-4: per-grain backbone entity tables + heatmap tensors.
+        # Absent when backbone parquets have not been produced for this tissue.
+        **({"backbone_grains": backbone_grains} if backbone_grains else {}),
     }
     _incytr_5xfad_output_files = (
         [os.path.basename(p) for p in os.listdir(out_dir) if p.endswith(".parquet")]
