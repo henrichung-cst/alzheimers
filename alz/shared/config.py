@@ -227,24 +227,25 @@ def __getattr__(name):                 # PEP 562
         return _lazy(name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-# WMB specificity even-split baseline — see wmb_specificity_uniform(). The share
-# is normalized over the retained WMB classes the spine maps onto (N≈9), so the
-# honest "above even-split" threshold is 1/N, NOT 1/N_CELL_TYPES. One ruler for
-# the recover.py gate, attribute.py confidence flags, and the viewer WMB tier.
+# WMB even-split baseline (1/N) — see wmb_specificity_uniform(). N is the retained
+# WMB classes the spine maps onto that actually carry atlas cells (N≈9), so the
+# "above even-split" threshold is 1/N, NOT 1/N_CELL_TYPES. The viewer WMB badge
+# tooltip uses it to render the concentration tier's threshold (tier × uniform).
 
 def wmb_specificity_uniform():
-    """Even-split baseline (1/N) for ``wmb_specificity``.
+    """Even-split baseline (1/N) for the WMB concentration tier.
 
-    The WMB specificity share (``wmb_expression.py``) is normalized per gene over
-    the retained WMB classes that actually carry atlas cells — empirically **9**,
-    not the 11 declared by the crosswalk: two retained classes ('07 CTX-MGE GABA',
+    The detection-gated WMB metric (``wmb_expression.py``) reports
+    ``wmb_concentration_tier`` as multiples of an even split over the retained WMB
+    classes that actually carry atlas cells — empirically **9**, not the 11
+    declared by the crosswalk: two retained classes ('07 CTX-MGE GABA',
     '13 CNU-HYa Glut') have no cells in the whole-brain scope, so they never enter
-    any gene's denominator and every gene's share sums to 1 over 9. The honest
-    "above even-split" threshold is therefore ``1/N`` with N = present retained
-    classes — NOT ``1/N_CELL_TYPES`` (the 31-cluster count, which made the share
-    read ~3x more enriched than it is). Derived from the expression artifact so
-    the gate, the confidence flags, and the viewer tier all use one ruler; falls
-    back to the crosswalk's distinct-class count before the artifact is built.
+    any gene's denominator. The even-split threshold is therefore ``1/N`` with
+    N = present retained classes — NOT ``1/N_CELL_TYPES`` (the 31-cluster count,
+    which read ~3x more enriched than it is). The sole consumer is the viewer
+    badge tooltip (``meta.wmb_uniform``), which shows ``tier × uniform`` as the
+    concentration threshold each tier represents; falls back to the crosswalk's
+    distinct-class count before the expression artifact is built.
     """
     retained = set(load_cluster_to_wmb_class_map().values())
     try:

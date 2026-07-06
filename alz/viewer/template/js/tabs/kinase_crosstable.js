@@ -40,11 +40,6 @@ let _KX_INITIALIZED = false;
 let _KX_F5_ATTR_READY = false;     // 5xFAD attribution-summary sidecar (P2) loaded + indexed
 let _kxVisible = [];
 
-// Uniform baseline for the WMB cross-check tier. WMB specificity is a share
-// normalized over the retained WMB classes that carry atlas cells (~9), so the
-// honest "even split" is 1/N_retained, emitted canonically as meta.wmb_uniform.
-let _KX_WMB_UNIFORM = (PAYLOAD && PAYLOAD.meta && PAYLOAD.meta.wmb_uniform) || (1 / 9);
-
 function _kxState() {
   if (!Store.state.view.crosstable) {
     Store.state.view.crosstable = {
