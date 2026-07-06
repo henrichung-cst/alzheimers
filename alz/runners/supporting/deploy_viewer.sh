@@ -44,6 +44,13 @@ deploy_viewer() {
 
     # --- Pass 2: payload sidecar (.json.gz) — short cache ---
     # Payload changes on every full viewer build.
+    # NO Content-Encoding: gzip. The viewer fetches these .gz objects as opaque
+    # bytes and decompresses them client-side via DecompressionStream("gzip")
+    # (01_state.js:_loadPayload, incytr_global_index.js, incytr_pathways.js).
+    # Setting Content-Encoding makes the browser/gateway transparently
+    # decompress first, so the manual gunzip then fails on plain JSON
+    # ("incorrect header check") and _loadPayload silently falls back to a stale
+    # uncompressed payload.
     echo "  [2/3] payload sidecar (max-age=300)…"
     aws s3 sync "$local_dir" "$s3_prefix" \
         --profile "$PROFILE" \
@@ -51,7 +58,6 @@ deploy_viewer() {
         --include "*.payload.json.gz" \
         --include "*_gene_node_index.json.gz" \
         --cache-control "max-age=300, public" \
-        --content-encoding "gzip" \
         --no-progress
 
     # --- Pass 3: index.html + pipeline_overview.html — always revalidate ---

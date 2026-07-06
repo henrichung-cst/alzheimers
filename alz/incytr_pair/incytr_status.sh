@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Live progress monitor for the 5xFAD --ptm + derive run (run_5xfad_ptm_derive.sh).
+# Live progress monitor for the 5xFAD pair-mode run (run_5xfad.sh).
 #
 #   bash alz/incytr_pair/incytr_status.sh            one snapshot, then exit
 #   bash alz/incytr_pair/incytr_status.sh --watch    refresh every 15s (Ctrl-C to stop)
@@ -29,10 +29,10 @@ epoch() { date -d "$1" +%s 2>/dev/null || echo 0; }
 
 snapshot() {
   local now; now=$(date +%s)
-  local log; log=$(ls -t "$BASE"/ptm_derive_run_*.log 2>/dev/null | head -1)
+  local log; log=$(ls -t "$BASE"/run_*.log 2>/dev/null | head -1)
   local scope astate
   scope=$(systemctl --user list-units --type=scope --all --no-legend 2>/dev/null \
-            | g -oE 'incytr-5xfad-ptm-derive-[0-9_]+\.scope' | head -1)
+            | g -oE 'incytr-5xfad-[0-9_]+\.scope' | head -1)
   astate=$([ -n "$scope" ] && systemctl --user is-active "$scope" 2>/dev/null || echo gone)
 
   # Per-contrast START times from the SCORE log markers. The .status file is
@@ -52,7 +52,7 @@ snapshot() {
   for t in "${TISSUES[@]}"; do
     local cells; cells="$(printf '%-12s' "$t")"
     for a in "${AGES[@]}"; do
-      local pq="$BASE/$t/wide_ptm/TG_${a}mo_WT_${a}mo_incytr_output.parquet"
+      local pq="$BASE/$t/wide/TG_${a}mo_WT_${a}mo_incytr_output.parquet"
       local started=${START["${t}_${a}"]:-0}
       ((started > 0 && (first_started == 0 || started < first_started))) && first_started=$started
       if [ -s "$pq" ]; then
@@ -71,9 +71,8 @@ snapshot() {
   done
 
   # Phase + current-contrast pair progress (from the log tail).
-  local phase="1/3 SCORE (unfiltered)"
-  [ -n "$log" ] && g -q '=== 2/3 DERIVE' "$log" && phase="2/3 DERIVE phospho-only"
-  [ -n "$log" ] && g -q '=== 3/3 FILTER' "$log" && phase="3/3 FILTER (gate, in place)"
+  local phase="SCORE"
+  [ -n "$log" ] && g -q 'significance filter' "$log" && phase="FILTER (gate, in place)"
   local pairline pn pt ppct=""
   pairline=$([ -n "$log" ] && g -oE 'pair [0-9]+/[0-9]+' "$log" | tail -1)
   if [ -n "$pairline" ]; then
@@ -106,7 +105,7 @@ snapshot() {
     gone)   state_disp=$([ "$done" -eq "$TOTAL" ] && echo $'\033[32mDONE\033[0m' || echo $'\033[31mSTOPPED\033[0m') ;;
     *)      state_disp=$'\033[31m'"$astate"$'\033[0m' ;;
   esac
-  printf '\033[1m incytr 5xFAD  --ptm + derive\033[0m      %b      elapsed %s\n' \
+  printf '\033[1m incytr 5xFAD  pair-mode\033[0m      %b      elapsed %s\n' \
     "$state_disp" "$(dur "$elapsed")"
   printf ' ─────────────────────────────────────────────────────────────────\n'
   printf ' Phase: %s        scored %d/%d contrasts\n\n' "$phase" "$done" "$TOTAL"
@@ -123,10 +122,9 @@ snapshot() {
       "$(dur "$eta")" "$(date -d "@$((now + eta))" '+%a %H:%M')"
   fi
   if [ "$astate" = gone ]; then
-    local nptm nwide
-    nptm=$(find "$BASE" -path '*/wide_ptm/*_incytr_output.parquet' ! -path '*smoke*' 2>/dev/null | wc -l)
+    local nwide
     nwide=$(find "$BASE" -path '*/wide/*_incytr_output.parquet' ! -path '*smoke*' 2>/dev/null | wc -l)
-    printf ' Final:   wide_ptm=%s/%s  wide(derived)=%s/%s parquets\n' "$nptm" "$TOTAL" "$nwide" "$TOTAL"
+    printf ' Final:   wide=%s/%s parquets\n' "$nwide" "$TOTAL"
   fi
   [ -n "$log" ] && printf '\033[2m last: %s\033[0m\n' "$(tail -1 "$log" | cut -c1-78)"
 }

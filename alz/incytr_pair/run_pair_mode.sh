@@ -73,6 +73,18 @@ run_one() {
   local c2="ma_${age}_WTyp"
   local out_parquet="$out_subdir/${c1}_${c2}_incytr_output.parquet"
 
+  # KsG admission: map geno to contrast label when KsG is active (KSG_MEA_FILE set).
+  # Smoke path never sets KSG_MEA_FILE, so this block never fires there.
+  if [[ -n "${KSG_MEA_FILE:-}" ]]; then
+    local contrast_prefix
+    case "$geno" in
+      AppP) contrast_prefix="App" ;;
+      Ttau) contrast_prefix="Tau" ;;
+      ApTt) contrast_prefix="ApTt" ;;
+    esac
+    export KSG_CONTRAST="${contrast_prefix}_${age}"
+  fi
+
   # Resumable at the contrast level: a finished contrast's final parquet exists
   # (its per-pair shards were deleted after the concat), so re-run would redo it
   # from scratch. Skip it. Within an unfinished contrast the driver still
@@ -126,6 +138,15 @@ fi
 
 LOG="$LOG_DIR/pair_run.log"
 FULL_NBOOT="${FULL_NBOOT:-100}"
+
+# KsG admission-only: widen gene.use for kinase-substrate genes on the
+# production path only. Toggle = KSG_MEA_FILE being set; unset = byte-identical
+# to pre-KsG. KSG_CONTRAST is computed per-iteration inside run_one.
+export KSG_MEA_FILE="outputs/reports/kinase_attribution/mea_stoichiometry.csv"
+export KSG_MEA_PY_FILE="outputs/reports/kinase_attribution/mea_stoichiometry_pY.csv"
+export KSG_MOTIF_FILE="outputs/reports/kinase_attribution/stoichiometry_matrix.csv"
+export KSG_ATTRIBUTION_FILE="data/derived/ksg/song_attribution_long.csv"
+
 {
   echo "=== Full run: nboot=$FULL_NBOOT, 9 comparisons ==="
   failed=()
@@ -142,19 +163,13 @@ FULL_NBOOT="${FULL_NBOOT:-100}"
     echo "All 9 comparisons succeeded."
   fi
 
-  # Gate the run on sce4 parity BEFORE filtering: the engine must still
-  # reproduce sce4's pre-cap Allpathway universe, else we do not ship output.
-  # Self-contained (regenerates the two reference pairs unfiltered) — it does
-  # NOT read wide/, so it is independent of production storage policy.
-  # See verify_incytr_sce4.sh.
-  echo "=== $(date -Is) sce4 parity gate ==="
-  bash alz/incytr_pair/verify_incytr_sce4.sh
-
-  # Full reproduction gate over all 9 unfiltered wide parquets against sce4's
-  # pre-cap pairwise RDS files. This MUST run before filter_significant_paths.py,
-  # which rewrites wide/ in place and destroys ungated path-set evidence.
-  echo "=== $(date -Is) full sce4 path-set gate ==="
-  pixi run verify-incytr-sce4-full
+  # No inline sce4 parity gate here. This is a KsG-ON production burn: KsG
+  # widens gene.use beyond sce4's frozen per-pair node sets by design, so a
+  # byte-identical sce4 comparison necessarily diverges (extra paths) and would
+  # always "fail". The engine-regression invariant (the six fixes reproduce
+  # sce4 with KsG OFF) is validated separately and KsG-OFF via
+  # `pixi run verify-incytr-sce4` — run it when touching the engine, not on
+  # every production run.
 
   # Apply the canonical significance floors to wide/ in place (the driver emits
   # all paths at cutoff=0; this is the downstream half): SigProb > 0.1 (either)

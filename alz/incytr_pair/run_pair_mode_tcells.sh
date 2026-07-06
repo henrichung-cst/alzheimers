@@ -67,21 +67,36 @@ run_one() {
   local status_file="$out_subdir/.status_${c1}_${c2}.txt"
   echo "started $(date -Is)" > "$status_file"
 
-  INPUTS_DIR_OVERRIDE="$indir" \
-  OUTPUT_DIR_OVERRIDE="$out_subdir" \
-  CHANNELS="${DONOR_CHANNELS[$donor]}" \
-  PR_FILE="pr_deconvoluted.csv" \
-  PY_FILE="py_deconvoluted.csv" \
-  PS_FILE="ps_deconvoluted.csv" \
-  PR_GENE_COL="gene_symbol" \
-  PY_GENE_COL="gene_symbol" \
-  PS_GENE_COL="gene_symbol" \
-  USE_KLDATA="TRUE" \
-  SPECIES="human" \
-  NBOOT="$nboot" \
-  NPAIR_WORKERS="${NPAIR_WORKERS:-1}" \
-  N_CHUNK_MULT="${N_CHUNK_MULT:-8}" \
-  NPERM_WORKERS="${NPERM_WORKERS:-1}" \
+  # KsG: admission-only, donor1 only (donor2 is pY-only, no ST, no attribution)
+  local -a ksg_env=()
+  if [[ "$donor" == "donor1" ]]; then
+    mkdir -p data/derived/ksg
+    ksg_env=(
+      KSG_MEA_FILE="outputs/reports/kinase_attribution_tcells/donor1/mea/mea_timecourse.csv"
+      KSG_MOTIF_FILE="outputs/reports/kinase_attribution_tcells/donor1/stoichiometry_matrix.csv"
+      KSG_ATTRIBUTION_FILE="data/derived/ksg/tcells_donor1_attribution_long.csv"
+      KSG_CONTRAST="D1_d${later}_vs_d2"
+    )
+  fi
+
+  env \
+    INPUTS_DIR_OVERRIDE="$indir" \
+    OUTPUT_DIR_OVERRIDE="$out_subdir" \
+    BACKBONE_OUT_DIR="outputs/reports/incytr_pair_mode_tcells/${donor}/backbone" \
+    CHANNELS="${DONOR_CHANNELS[$donor]}" \
+    PR_FILE="pr_deconvoluted.csv" \
+    PY_FILE="py_deconvoluted.csv" \
+    PS_FILE="ps_deconvoluted.csv" \
+    PR_GENE_COL="gene_symbol" \
+    PY_GENE_COL="gene_symbol" \
+    PS_GENE_COL="gene_symbol" \
+    USE_KLDATA="TRUE" \
+    SPECIES="human" \
+    NBOOT="$nboot" \
+    NPAIR_WORKERS="${NPAIR_WORKERS:-1}" \
+    N_CHUNK_MULT="${N_CHUNK_MULT:-8}" \
+    NPERM_WORKERS="${NPERM_WORKERS:-1}" \
+    "${ksg_env[@]}" \
     pixi run Rscript "$DRIVER" "$c1" "$c2" \
     || { echo "FAIL $(date -Is)" > "$status_file"; echo "  FAIL: [$donor] $c1 vs $c2 (continuing)"; return 1; }
   echo "done $(date -Is)" > "$status_file"

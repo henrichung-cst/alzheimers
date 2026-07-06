@@ -8,10 +8,9 @@
 # Reuses alz/incytr_pair/incytr_commandline.R with env-parameterized inputs:
 #   INPUTS_DIR_OVERRIDE  → per-tissue data/derived/5xfad_incytr_inputs/<tissue>
 #   OUTPUT_DIR_OVERRIDE  → per-tissue outputs/reports/incytr_pair_mode_5xfad/<tissue>/wide
-#                          or …/<tissue>/wide_ptm  (--ptm mode, never overwrites wide/)
-#   CHANNELS             → "pr,ps,py"           (default) or "pr,ps,py,Ack,KGG" (--ptm)
+#   CHANNELS             → "pr,ps,py,Ack,KGG"  (phospho + acetylation + ubiquitination)
 #   PR/PS/PY_FILE        → <track>_deconvoluted.csv ; gene key column = gene_symbol
-#   ACK_FILE/KGG_FILE    → ack_deconvoluted.csv / kgg_deconvoluted.csv  (--ptm only)
+#   ACK_FILE/KGG_FILE    → ack_deconvoluted.csv / kgg_deconvoluted.csv
 #   USE_KLDATA=TRUE      → mouse kldata.csv symlinked per tissue to the Song
 #                          kinase library (data/datasets/song/kinase/kldata_pspy.csv)
 #   SPECIES=mouse
@@ -19,22 +18,14 @@
 #                          live as DEG ∪ prG (the t-cell path).
 #
 # Modes:
-#   (no flag)            all contrasts, CHANNELS=pr,ps,py, NBOOT=100,
-#                        resumable, significance filter applied.
-#                        Output: …/<tissue>/wide/      (canonical phospho results)
+#   (no flag)            all contrasts, NBOOT=100, resumable, significance filter
+#                        applied. Output: …/<tissue>/wide/
 #
-#   --ptm                all contrasts, CHANNELS=pr,ps,py,Ack,KGG, NBOOT=100,
-#                        resumable, significance filter applied.
-#                        Output: …/<tissue>/wide_ptm/  (PTM-extended results;
-#                        NEVER writes to wide/ — the two are independent products)
+#   --smoke [tissue]     one age (3mo) at NBOOT=2, output → …/<tissue>/wide_smoke/
 #
-#   --smoke [tissue]     one age (3mo) at NBOOT=2, current mode's channels,
-#                        output → wide_smoke/ or wide_ptm_smoke/
-#
-# Anti-shim note: phospho-only (wide/) and phospho+PTM (wide_ptm/) are two
-# coexisting data products the user explicitly wants kept separate. They are NOT
-# an old/new toggle — the phospho result is the canonical AD-parity product;
-# the PTM result is an additive 5xFAD-specific extension. Both are permanent.
+# The PTM channels (Ack = acetylation, KGG = ubiquitination) are the canonical
+# 5xFAD product; there is no phospho-only variant. Cohorts without acet/ubiq data
+# (Song, t-cells) leave ACK_FILE/KGG_FILE unset and the driver runs phospho-only.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -46,26 +37,17 @@ AGES=(3 6 9 12)
 TISSUES=(cortex hippocampus)
 
 MODE="full"
-PTM="no"
 SMOKE_TISSUE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --ptm)   PTM="yes";                                          shift 1 ;;
     --smoke) MODE="smoke"; SMOKE_TISSUE="${2:-cortex}"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 
-# Resolve channel set and output subdirectory from mode flags.
-if [[ "$PTM" == "yes" ]]; then
-  CHANNELS_ENV="pr,ps,py,Ack,KGG"
-  WIDE_SUBDIR="wide_ptm"
-  SMOKE_SUBDIR="wide_ptm_smoke"
-else
-  CHANNELS_ENV="pr,ps,py"
-  WIDE_SUBDIR="wide"
-  SMOKE_SUBDIR="wide_smoke"
-fi
+CHANNELS_ENV="pr,ps,py,Ack,KGG"
+WIDE_SUBDIR="wide"
+SMOKE_SUBDIR="wide_smoke"
 
 LOG_DIR="outputs/reports/incytr_pair_mode_5xfad"
 mkdir -p "$LOG_DIR"
@@ -85,14 +67,12 @@ preflight() {
   local need=( "$DRIVER" "$indir/incytr_obj.rds" "$indir/allmarkers.csv"
                "$indir/kldata.csv"
                "$indir/pr_deconvoluted.csv" "$indir/ps_deconvoluted.csv"
-               "$indir/py_deconvoluted.csv" )
-  if [[ "$PTM" == "yes" ]]; then
-    need+=( "$indir/ack_deconvoluted.csv" "$indir/kgg_deconvoluted.csv" )
-  fi
+               "$indir/py_deconvoluted.csv"
+               "$indir/ack_deconvoluted.csv" "$indir/kgg_deconvoluted.csv" )
   for f in "${need[@]}"; do
     test -e "$f" || { echo "missing: $f"; return 1; }
   done
-  echo "[$tissue] preflight OK (mode: ${PTM:+ptm}${PTM:-phospho-only})"
+  echo "[$tissue] preflight OK"
 }
 
 run_one() {
@@ -110,20 +90,10 @@ run_one() {
   local status_file="$out_subdir/.status_${c1}_${c2}.txt"
   echo "started $(date -Is)" > "$status_file"
 
-  # Core phospho env vars are always set.
-  local ptm_env=()
-  if [[ "$PTM" == "yes" ]]; then
-    ptm_env=(
-      "ACK_FILE=ack_deconvoluted.csv"
-      "KGG_FILE=kgg_deconvoluted.csv"
-      "ACK_GENE_COL=gene_symbol"
-      "KGG_GENE_COL=gene_symbol"
-    )
-  fi
-
   env \
     INPUTS_DIR_OVERRIDE="$indir" \
     OUTPUT_DIR_OVERRIDE="$out_subdir" \
+    BACKBONE_OUT_DIR="outputs/reports/incytr_pair_mode_5xfad/${tissue}/backbone" \
     CHANNELS="$CHANNELS_ENV" \
     PR_FILE="pr_deconvoluted.csv" \
     PS_FILE="ps_deconvoluted.csv" \
@@ -137,7 +107,15 @@ run_one() {
     NPAIR_WORKERS="${NPAIR_WORKERS:-1}" \
     N_CHUNK_MULT="${N_CHUNK_MULT:-8}" \
     NPERM_WORKERS="${NPERM_WORKERS:-1}" \
-    "${ptm_env[@]}" \
+    KSG_MEA_FILE="outputs/reports/kinase_attribution_5xfad/${tissue}_st_mea_stoichiometry.csv" \
+    KSG_MEA_PY_FILE="outputs/reports/kinase_attribution_5xfad/${tissue}_py_mea_stoichiometry.csv" \
+    KSG_MOTIF_FILE="outputs/reports/kinase_attribution_5xfad/${tissue}_st_stoichiometry_matrix.csv" \
+    KSG_ATTRIBUTION_FILE="data/derived/ksg/5xfad_${tissue}_attribution_long.csv" \
+    KSG_CONTRAST="TG_vs_WT_${age}mo" \
+    ACK_FILE="ack_deconvoluted.csv" \
+    KGG_FILE="kgg_deconvoluted.csv" \
+    ACK_GENE_COL="gene_symbol" \
+    KGG_GENE_COL="gene_symbol" \
     pixi run Rscript "$DRIVER" "$c1" "$c2" \
     || { echo "FAIL $(date -Is)" > "$status_file"; echo "  FAIL: [$tissue] $c1 vs $c2 (continuing)"; return 1; }
   echo "done $(date -Is)" > "$status_file"
@@ -171,11 +149,8 @@ LOG="$LOG_DIR/pair_run.log"
 
     # Canonical significance floor (uncapped; no p_adj/FDR arm):
     # (SigProb_TG > 0.1 OR SigProb_WT > 0.1) AND |PDS| >= 0.2
-    # SKIP_FILTER=yes defers this final gate to an external orchestrator. The
-    # phospho-only product is DERIVED from the unfiltered --ptm superset
-    # (derive_phospho_from_ptm.py), and the phospho PDS differs from the PTM PDS,
-    # so the gate must run AFTER derive, on each superset — not inline here, which
-    # would destroy the unfiltered rows the derive reads. Standalone runs filter.
+    # SKIP_FILTER=yes defers this final gate to an external orchestrator (e.g. the
+    # backbone-grain build, which reads the unfiltered rows). Standalone runs filter.
     if [[ "${SKIP_FILTER:-no}" == "yes" ]]; then
       echo "=== $(date -Is) [$tissue] significance filter DEFERRED (SKIP_FILTER=yes) ==="
     else
