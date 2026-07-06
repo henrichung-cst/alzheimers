@@ -50,4 +50,10 @@ const TAB_MANIFEST = {
     render: () => _renderIncytrTab(),
     rerenderOn: { filters: false, selection: [] },
   },
+  glossary: {
+    group: "reference", label: "Glossary",
+    filters: [], requires: [], modes: ["mouse"],
+    // Static content — panel markup lives in body.html; no wire/render.
+    rerenderOn: { filters: false, selection: [] },
+  },
 };

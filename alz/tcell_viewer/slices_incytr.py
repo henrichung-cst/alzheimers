@@ -27,7 +27,9 @@ from alz.viewer.shared.incytr_index import (  # noqa: E402
     _INCYTR_LABEL_NODES,
     _INCYTR_LABEL_COLS,
     _INCYTR_LABEL_VOCAB,
-    _INCYTR_SCORE_COLS,
+    _INCYTR_SCORE_COLS_BASE,
+    _INCYTR_SCORE_COLS_OPTIONAL,
+    _active_optional_score_cols,
     _idx_label_bits,
 )
 from alz.tcell_viewer.paths import (  # noqa: E402
@@ -268,6 +270,11 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
     dir_flag_cols = [c for c in ("pr_up", "pr_down", "ps_up", "ps_down",
                                   "py_up", "py_down") if c in src_cols]
     extra_path_cols = [c for c in ("log2FC",) if c in src_cols]
+    # Optional PTM-track score columns (Ack/KGG/Rme1). The t-cell cohort has no
+    # acetylation/ubiquitination assay, so this self-gates empty; the wiring is
+    # kept symmetric with the 5xFAD/Song builders so it surfaces automatically
+    # if a donor ever carries PTM tracks.
+    optional_in_schema = [c for c in _INCYTR_SCORE_COLS_OPTIONAL if c in src_cols]
 
     selects = []
     has_pvalue = False
@@ -293,11 +300,12 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
                   f"{os.path.basename(fpath)}; using NULL", flush=True)
             sik_clause = "CAST(NULL AS DOUBLE) AS SiK_score"
 
-        generic_scores = [c for c in _INCYTR_SCORE_COLS if c != "SiK_score"]
+        base_nonsik = [c for c in _INCYTR_SCORE_COLS_BASE if c != "SiK_score"]
+        generic_scores = base_nonsik + [c for c in optional_in_schema if c in names]
         score_clauses = ",\n          ".join(
             f"CAST({c} AS DOUBLE) AS {c}" for c in generic_scores if c in names
         )
-        missing_scores = [c for c in generic_scores if c not in names]
+        missing_scores = [c for c in base_nonsik if c not in names]
         missing_score_clauses = ",\n          ".join(
             f"CAST(NULL AS DOUBLE) AS {c}" for c in missing_scores
         )
@@ -336,6 +344,12 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
     n_src = con.execute("SELECT COUNT(*) FROM src").fetchone()[0]
     print(f"  ({donor}) loaded {n_src:,} rows across "
           f"{len(file_to_contrast)} contrast(s)", flush=True)
+
+    # Which optional PTM score cols have any non-zero value for this donor?
+    # Only these enter the index, shards, and score_columns; all-zero/absent
+    # cols are dropped (honesty rule). Empty for every current t-cell donor.
+    active_optional = _active_optional_score_cols(set(optional_in_schema), con, "src")
+    effective_score_cols: tuple[str, ...] = _INCYTR_SCORE_COLS_BASE + active_optional
 
     senders_canonical = sorted({r[0] for r in con.execute(
         "SELECT DISTINCT sender FROM src").fetchall()})
@@ -481,7 +495,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
     # every row instead of a pre-capped top_instances table.
     incytr_index_columns = (
         [("PDS", "f4"), ("pvalue", "f4")]
-        + [(sc, "u2") for sc in _INCYTR_SCORE_COLS]
+        + [(sc, "u2") for sc in effective_score_cols]
         + [("ligandId", "u2"), ("receptorId", "u2"),
            ("emId", "u2"), ("targetId", "u2")]
         + [("senderId", "u1"), ("receiverId", "u1"), ("contrastId", "u1"),
@@ -516,7 +530,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
             "PDS": frame["PDS"].to_numpy(dtype="<f4"),
             "pvalue": frame["pvalue"].to_numpy(dtype="<f4"),
         }
-        for sc in _INCYTR_SCORE_COLS:
+        for sc in effective_score_cols:
             chunk[sc] = (
                 frame[sc].to_numpy(dtype="float16").view("<u2")
                 if sc in frame.columns else np.zeros(n, dtype="<u2")
@@ -527,7 +541,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         SELECT
           sender, receiver, Path, Ligand, Receptor, EM, Target,
           contrast, pvalue, PDS, ABS(PDS) AS abs_pds,
-          {", ".join(_INCYTR_SCORE_COLS)},
+          {", ".join(effective_score_cols)},
           {", ".join(f'"{c}"' for c in _INCYTR_LABEL_COLS)}
         FROM src
         WHERE PDS IS NOT NULL
@@ -548,7 +562,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
     top_cols = [
         "rank", "sender", "receiver", "Path", "Ligand", "Receptor", "EM",
         "Target", "contrast", "pvalue", "PDS", "abs_pds", "traj_labels",
-        "sign_vec", "low_signal_endpoint", *_INCYTR_SCORE_COLS,
+        "sign_vec", "low_signal_endpoint", *effective_score_cols,
         *_INCYTR_LABEL_COLS,
     ]
     top_instances = {
@@ -567,11 +581,11 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
     # Shard the long table per (sender, receiver) — donor-scoped output dir.
     shard_select_cols = (
         ["Ligand", "Receptor", "EM", "Target", "contrast", "pvalue", "PDS"]
-        + list(_INCYTR_SCORE_COLS) + list(dir_flag_cols)
+        + list(effective_score_cols) + list(dir_flag_cols)
         + list(extra_path_cols) + list(_INCYTR_FC_COLS) + list(_INCYTR_LABEL_COLS)
     )
     float32_cols = ["pvalue"]
-    float16_cols = (["PDS"] + list(_INCYTR_SCORE_COLS) + list(_INCYTR_FC_COLS)
+    float16_cols = (["PDS"] + list(effective_score_cols) + list(_INCYTR_FC_COLS)
                     + list(dir_flag_cols) + list(extra_path_cols))
     float_cols = float32_cols + float16_cols
 
@@ -690,7 +704,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
             "traj_label_vocab": [],
             "label_states": ["", *_INCYTR_LABEL_VOCAB],
             "label_nodes": list(_INCYTR_LABEL_NODES),
-            "score_columns": list(_INCYTR_SCORE_COLS),
+            "score_columns": list(effective_score_cols),
             "columns": columns_manifest,
             "raw_bytes": len(raw_bin),
             "gzip_bytes": len(gz_bin),
@@ -734,7 +748,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         "present_pairs": sorted(present_pairs),
         "n_total_rows": total_rows,
         "pair_row_counts": pair_row_counts,
-        "score_columns": list(_INCYTR_SCORE_COLS),
+        "score_columns": list(effective_score_cols),
         "label_columns": list(_INCYTR_LABEL_COLS),
         "label_nodes": list(_INCYTR_LABEL_NODES),
         "label_vocab": list(_INCYTR_LABEL_VOCAB),
@@ -789,6 +803,13 @@ def _write_tcell_pair_pathways() -> dict:
     with open(os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, "index.json"), "w") as f:
         json.dump(index, f)
 
+    # Merged score-column contract = base + any optional PTM channel active for
+    # at least one donor (self-gates to base-5 for the current PTM-free cohort).
+    agg_score_cols = list(_INCYTR_SCORE_COLS_BASE) + [
+        c for c in _INCYTR_SCORE_COLS_OPTIONAL
+        if any(c in b.get("score_columns", []) for b in by_context.values())
+    ]
+
     return {
         "schema_version": SCHEMA_VERSION,
         "version": 1,
@@ -800,7 +821,7 @@ def _write_tcell_pair_pathways() -> dict:
         "senders": sorted(all_senders),
         "receivers": sorted(all_receivers),
         "contrasts": sorted(all_contrasts, key=lambda x: int(x.split("_")[0][1:])),
-        "score_columns": list(_INCYTR_SCORE_COLS),
+        "score_columns": agg_score_cols,
         "label_columns": list(_INCYTR_LABEL_COLS),
         "label_nodes": list(_INCYTR_LABEL_NODES),
         "label_vocab": list(_INCYTR_LABEL_VOCAB),

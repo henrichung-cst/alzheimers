@@ -936,15 +936,22 @@ async function renderActiveKinaseAuditTab(kinase_id) {
       }
     } else if (tab === "attribution") {
       // Attribution subtab: shared accordion engine + TCELL_MANIFEST.
+      // Table is DAY-INVARIANT (localization is pooled across all scRNA days,
+      // so it does not depend on ctx.contrast) — the header therefore drops
+      // the "/ {day}" suffix. Day-varying quantities (transcript LFC, per-state
+      // Decomp NES, bulk NES) render as heat-strips inside each row's expand
+      // detail; scRNA-less days (d15/d19) draw as gap cells. See plan
+      // docs/plans/tcell/tcell_attribution_decouple_contrast.md.
       // Raw attribution rows table retained below the accordion as an audit
       // reference (it is a genuinely separate view of the raw shard, not the
       // drawer's backing data).
       body.innerHTML =
         `<section class="audit-panel audit-wide">` +
         `<div style="display:flex;align-items:baseline;gap:.6em;margin-bottom:.4em;">` +
-        `<h4 style="margin:0;">Verdict across cell types <span class="muted">for ${_escapeHtml(ctx.name)} / ${_escapeHtml(ctx.contrast)}</span></h4>` +
+        `<h4 style="margin:0;">Cell-state localization <span class="muted">for ${_escapeHtml(ctx.name)}</span></h4>` +
         `<button id="attr-verdict-export" class="export-btn" title="Export visible verdict rows as CSV">Export CSV</button>` +
         `</div>` +
+        `<div class="muted" style="font-size:11px;margin-bottom:.5em;">pooled across all scRNA days · per-day transcript &amp; activity in each row's detail</div>` +
         `<div id="attr-verdict"></div></section>` +
         `<section class="audit-panel"><h4>Raw attribution rows <span class="muted">(unified_attribution.csv)</span></h4>` +
         `<div id="audit-attribution"></div></section>`;
@@ -967,15 +974,19 @@ function exportVerdictCsv() {
   const rows = AttributionView.getLastVisible("attr-verdict");
   if (!rows.length) { alert("No verdict rows to export."); return; }
   const donor = (ViewerPayload.activeContext && ViewerPayload.activeContext()) || "donor1";
+  // Localization-only: the verdict table is now day-invariant, so exporting
+  // day-varying fields (tcell_lfc / tcell_concordance) would leak the
+  // arbitrary dedup-winner's day. Exact per-day values remain available in
+  // the Raw attribution rows table (audit-attribution) below.
   const headers = [
     "cell_type", "confidence_tier",
     "tcell_detected", "tcell_fraction_expressing", "tcell_state_enrichment",
-    "tcell_lfc", "tcell_concordance", "tcell_consistency",
+    "tcell_consistency",
   ];
   const keys = [
     "cell_type", "confidence_tier",
     "tcell_detected", "tcell_fraction_expressing", "tcell_state_enrichment",
-    "tcell_lfc", "tcell_concordance", "tcell_consistency",
+    "tcell_consistency",
   ];
   csvDownload(csvSerialize(headers, keys, rows), exportFilename(donor, "attribution"));
 }

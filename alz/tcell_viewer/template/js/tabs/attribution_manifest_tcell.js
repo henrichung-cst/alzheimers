@@ -79,49 +79,6 @@ const TCELL_MANIFEST = (() => {
       },
     },
     {
-      key: "tcell_lfc", label: "LFC", type: "num", group: "attr",
-      sub: "within", subLabel: "Within-cohort attribution (vs bulk direction)",
-      subTitle: "Within-cohort standard detection metric, pooled across all scRNA days. Computed in alz/cross_reference/tcell_within_cohort.py.",
-      title: "Pseudobulk transcript log2 fold change vs the d2 baseline at this contrast day (mean per-cell log-expression difference). Color: red = up, blue = down. No p-value — a single donor has no biological replicates (see Methods). INFO ONLY: OR≈1 between transcript direction and bulk NES.",
-      render(r, _numFmt, _ctx) {
-        return r.tcell_lfc == null || !isFinite(r.tcell_lfc)
-          ? `<td class="attr-num attr-empty" title="Transcript absent at this day or the d2 baseline — no fold-change defined. Expected where the kinase is not expressed in this state.">—</td>`
-          : `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(r.tcell_lfc)}">${_num(r.tcell_lfc, 3)}</td>`;
-      },
-    },
-    {
-      key: "_decomp_state_nes", label: "Decomp NES", type: "num", group: "attr",
-      sub: "within", subLabel: "Within-cohort attribution (vs bulk direction)",
-      subTitle: "Per-state deconvoluted kinase NES from the raw (non-stoichiometry-corrected) projected-state MEA (mea_projected_state_raw.csv). Available after the state_mea gate run.",
-      title: "Deconvoluted per-state NES: the kinase MEA NES for this T-cell state from the raw projected-state ssGSEA decomposition. The raw (not stoichiometry-corrected) track is used because stoich correction cancels the per-state decomposition share, collapsing NES to the bulk value. Empty until the state_mea gate run completes and produces mea_projected_state_raw.csv.",
-      render(r, _numFmt, ctx) {
-        // Read from the decomposition_index via _decompByKey, keyed by
-        // (kinase_id | contrast_id | cell_type). kinase_id is the per-donor
-        // integer index carried on ctx (== attribution_index.kinase_id); cell_type
-        // is this row's ProjecTILs state.
-        if (typeof _decompByKey === "undefined" || !_decompByKey) {
-          return `<td class="attr-num attr-empty" title="No projected-state MEA data (gate dependency).">—</td>`;
-        }
-        if (typeof _ensureKinaseIndexes === "function") _ensureKinaseIndexes();
-        const kinase_id = ctx && ctx.kinase_id;
-        const CONTRASTS_ARR = (typeof CONTRASTS !== "undefined") ? CONTRASTS : [];
-        const cid = CONTRASTS_ARR.indexOf(ctx && ctx.contrast);
-        const state = r.cell_type || r.state || "";
-        if (kinase_id == null || cid < 0 || !state) {
-          return `<td class="attr-num attr-empty" title="No decomp data for this kinase/contrast/state.">—</td>`;
-        }
-        const key = `${kinase_id}|${cid}|${state}`;
-        const entry = _decompByKey.get(key);
-        if (!entry || entry.nes == null || !isFinite(entry.nes)) {
-          return `<td class="attr-num attr-empty" title="No decomp NES for ${state} (state MEA pending).">—</td>`;
-        }
-        const fdrStr = (entry.fdr != null && isFinite(entry.fdr))
-          ? ` FDR ${entry.fdr.toExponential(1)}` : "";
-        return `<td class="attr-num attr-num-lfc" style="background:${_attrLfcColor(entry.nes)}"
-          title="Decomp NES ${entry.nes.toFixed(2)}${fdrStr}">${_num(entry.nes, 2)}</td>`;
-      },
-    },
-    {
       key: "tcell_consistency", label: "Timecourse", type: "num", group: "attr",
       sub: "within", subLabel: "Within-cohort attribution (vs bulk direction)",
       subTitle: "Within-cohort standard detection metric, pooled across all scRNA days. Computed in alz/cross_reference/tcell_within_cohort.py.",
@@ -154,12 +111,21 @@ const TCELL_MANIFEST = (() => {
   // ---- Data hooks -----------------------------------------------------------
 
   function getRows(ctx) {
+    // Day-invariant: fetch all contrasts. The verdict table renders one row per
+    // cell_type; per-day quantities (LFC, Decomp NES, bulk NES) live in each
+    // row's expand detail as heat-strips over the 5-day MEA axis. This lets the
+    // table render for the scRNA-less days (d15/d19) too — localization is
+    // pooled across all scRNA days and does not depend on the day selector.
     return ctx.kinase_id != null
-      ? getScopedAttribution(ctx.kinase_id, { day: ctx.contrast || "", celltype: "" })
+      ? getScopedAttribution(ctx.kinase_id, { day: "", celltype: "" })
       : [];
   }
 
-  function dedupKey(r) { return `${r.contrast_id}|${r.cell_type}`; }
+  // Dedup on cell_type only: the surviving row's day-invariant columns
+  // (tcell_detected, tcell_fraction_expressing, tcell_state_enrichment,
+  // confidence_tier) are byte-identical across contrasts, so which contrast
+  // wins the dedupCmp is lossless for those columns.
+  function dedupKey(r) { return `${r.cell_type}`; }
 
   const _enr = r => (r.tcell_state_enrichment != null && isFinite(r.tcell_state_enrichment))
     ? r.tcell_state_enrichment : 0;
@@ -301,6 +267,53 @@ const TCELL_MANIFEST = (() => {
   // Per-state timecourse: all contrast days for this cell type.
   // No p-value — single donor, no biological replicates.
 
+  // Heat-strip renderer over the full CONTRASTS axis. `valuesByCid` is a
+  // dense array of length CONTRASTS.length whose entries are the numeric
+  // value for that contrast index, or `null` for a "no scRNA library" gap.
+  // Diverging red (≥0) / blue (<0) with per-strip saturation normalized to
+  // `maxAbs`. The cell whose contrast == `selCid` (a CONTRASTS index) gets a
+  // `.npc.sel` outline so the global contrast selector keeps a tie-in
+  // without gating the strip. Reuses the existing .tcell-nes-profile CSS
+  // grammar (kinase_explorer.js:_renderNesProfile — but no fdr/sig here,
+  // since attribution has no per-day p-values).
+  function _renderAttrHeatStrip(valuesByCid, opts) {
+    const {maxAbs = 0, selCid = -1, gapTitle = "", tipLabel = "value", tipFmt = (v) => v.toFixed(2)} = opts || {};
+    const cells = [];
+    const colLabels = [];
+    for (let ci = 0; ci < CONTRASTS.length; ci++) {
+      const c = CONTRASTS[ci];
+      const v = valuesByCid[ci];
+      const isGap = v == null;
+      const isSel = ci === selCid;
+      const dayLabel = String(c).replace(/_d2$/, "");
+      let bg = "#fff", cls = "npc", tip;
+      if (isGap) {
+        cls += " gap";
+        tip = gapTitle
+          ? `${c}: ${gapTitle}`
+          : `${c}: no scRNA library at ${dayLabel} — ${tipLabel} undefined`;
+      } else if (isFinite(v)) {
+        if (maxAbs > 0) {
+          const a = Math.min(1, Math.abs(v) / maxAbs);
+          const rgb = v >= 0 ? [197,48,48] : [43,108,176];
+          bg = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${(0.15 + 0.85 * a).toFixed(3)})`;
+        }
+        tip = `${c}: ${tipLabel} ${tipFmt(v)}`;
+      } else {
+        cls += " gap";
+        tip = `${c}: ${tipLabel} n/a`;
+      }
+      if (isSel) cls += " sel";
+      cells.push(`<div class="${cls}" style="background:${bg};" title="${_escapeHtml(tip)}"></div>`);
+      colLabels.push(`<span title="${_escapeHtml(c)}">${_escapeHtml(dayLabel)}</span>`);
+    }
+    const countStyle = `--nes-profile-count:${CONTRASTS.length};`;
+    return `<div class="nes-profile-wrap tcell-nes-profile attr-heat-strip" style="${countStyle}">` +
+      `<div class="nes-profile-col-labels">${colLabels.join("")}</div>` +
+      `<div class="nes-profile-cell">${cells.join("")}</div>` +
+      `</div>`;
+  }
+
   function _renderTcellTranscriptTrace(secHostId, ctx, row) {
     const host = document.getElementById(secHostId);
     if (!host) return;
@@ -316,6 +329,96 @@ const TCELL_MANIFEST = (() => {
       const detected = cellRows[0].tcell_detected;
       const frac = cellRows[0].tcell_fraction_expressing;
       const enr = cellRows[0].tcell_state_enrichment;
+
+      // ---- Heat-strips over the full MEA axis ---------------------------
+      // The bulk NES / bulk FDR live on PAYLOAD.kinases keyed by contrast; we
+      // pull one value per CONTRASTS entry so the strip is populated at all 5
+      // MEA days (there is no scRNA gap for bulk activity).
+      const _K = ViewerPayload.kinases();
+      const kid = ctx.kinase_id;
+      const bulkByCid = new Array(CONTRASTS.length).fill(null);
+      const bulkFdrByCid = new Array(CONTRASTS.length).fill(null);
+      if (kid != null && _K) {
+        for (let ci = 0; ci < CONTRASTS.length; ci++) {
+          const c = CONTRASTS[ci];
+          const arrN = _K["NES_" + c];
+          const arrF = _K["FDR_" + c];
+          if (arrN && arrN[kid] != null && isFinite(arrN[kid])) bulkByCid[ci] = arrN[kid];
+          if (arrF && arrF[kid] != null && isFinite(arrF[kid])) bulkFdrByCid[ci] = arrF[kid];
+        }
+      }
+
+      // LFC (per-state, per-day) — only defined on scRNA days. Days without
+      // an attribution row (d15/d19) stay null → rendered as gap cells.
+      const lfcByCid = new Array(CONTRASTS.length).fill(null);
+      for (const r of cellRows) {
+        if (r.contrast_id != null && r.tcell_lfc != null && isFinite(r.tcell_lfc)) {
+          lfcByCid[r.contrast_id] = r.tcell_lfc;
+        }
+      }
+
+      // Decomp NES (per-state, per-day) from the decomposition_index. Same
+      // gapping rule: scRNA-less days → null → gap.
+      const decByCid = new Array(CONTRASTS.length).fill(null);
+      const decFdrByCid = new Array(CONTRASTS.length).fill(null);
+      if (typeof _ensureKinaseIndexes === "function") _ensureKinaseIndexes();
+      if (typeof _decompByKey !== "undefined" && _decompByKey && kid != null) {
+        for (let ci = 0; ci < CONTRASTS.length; ci++) {
+          const entry = _decompByKey.get(`${kid}|${ci}|${cellType}`);
+          if (entry && entry.nes != null && isFinite(entry.nes)) {
+            decByCid[ci] = entry.nes;
+            if (entry.fdr != null && isFinite(entry.fdr)) decFdrByCid[ci] = entry.fdr;
+          }
+        }
+      }
+
+      // maxAbs is normalized PER KINASE (max |v| across that kinase's
+      // states×days for LFC/Decomp; across the 5 days for bulk NES) so a
+      // flat state reads flat and cross-state magnitude is comparable.
+      const bulkMax = Math.max(0, ...bulkByCid.filter(v => v != null && isFinite(v)).map(Math.abs));
+      let lfcMax = 0, decMax = 0;
+      if (kid != null) {
+        for (const r of getScopedAttribution(kid, { day: "", celltype: "" })) {
+          if (r.tcell_lfc != null && isFinite(r.tcell_lfc)) lfcMax = Math.max(lfcMax, Math.abs(r.tcell_lfc));
+        }
+        if (typeof _decompByKey !== "undefined" && _decompByKey) {
+          for (const [k, v] of _decompByKey.entries()) {
+            if (!k.startsWith(`${kid}|`)) continue;
+            if (v && v.nes != null && isFinite(v.nes)) decMax = Math.max(decMax, Math.abs(v.nes));
+          }
+        }
+      }
+
+      const selCid = (typeof CONTRASTS !== "undefined" && ctx && ctx.contrast)
+        ? CONTRASTS.indexOf(ctx.contrast) : -1;
+
+      const bulkStrip = _renderAttrHeatStrip(bulkByCid, {
+        maxAbs: bulkMax, selCid,
+        tipLabel: "bulk NES",
+        tipFmt: (v) => v.toFixed(2),
+        gapTitle: "no bulk NES for this contrast",
+      });
+      const lfcStrip = _renderAttrHeatStrip(lfcByCid, {
+        maxAbs: lfcMax, selCid,
+        tipLabel: "transcript log2FC",
+        tipFmt: (v) => v.toFixed(3),
+        gapTitle: "no scRNA library at this day — transcript LFC undefined",
+      });
+      const decStrip = _renderAttrHeatStrip(decByCid, {
+        maxAbs: decMax, selCid,
+        tipLabel: "decomp NES",
+        tipFmt: (v) => v.toFixed(2),
+        gapTitle: "no scRNA library at this day — decomp NES undefined",
+      });
+
+      const stripsHtml =
+        `<div class="attr-heat-strip-stack">` +
+          `<div class="attr-heat-strip-row"><span class="attr-heat-strip-label" title="Kinase-level bulk MEA activity (per-kinase, per-day) — the anchor the transcript is asked to concord with. Populated at all 5 MEA days.">Bulk NES</span>${bulkStrip}</div>` +
+          `<div class="attr-heat-strip-row"><span class="attr-heat-strip-label" title="Pseudobulk transcript log2 fold change for ${_escapeHtml(cellType)} vs the d2 baseline. Only defined on scRNA days (d13/d17/d20); d15/d19 are ✗ gap cells.">LFC</span>${lfcStrip}</div>` +
+          `<div class="attr-heat-strip-row"><span class="attr-heat-strip-label" title="Per-state deconvoluted kinase NES for ${_escapeHtml(cellType)} from the raw projected-state MEA. Only defined on scRNA days.">Decomp NES</span>${decStrip}</div>` +
+        `</div>`;
+
+      // ---- Exact-value numeric table (kept below the strips) ------------
       const byDay = cellRows.slice().sort((a, b) =>
         String(CONTRASTS[a.contrast_id]).localeCompare(String(CONTRASTS[b.contrast_id])));
       const trRows = byDay.map(r => {
@@ -331,8 +434,12 @@ const TCELL_MANIFEST = (() => {
       const enrHtml = _tcellEnrichCell(enr);
       traceBody =
         `<p class="muted attr-caption">Within-cohort: ${detHtml} ${enrHtml} ` +
-        `(detection shown separately; state enrichment = fold over the kinase's baseline mean state). ` +
-        `Each row is one contrast day: bulk NES, the pseudobulk transcript LFC, and their sign concordance. No p-value (single-donor timecourse).</p>` +
+        `(detection and enrichment are pooled across all scRNA days; both are day-invariant). ` +
+        `Below: bulk NES / transcript LFC / decomp NES over the full 5-day MEA axis. ` +
+        `d15/d19 have no scRNA library — LFC/decomp render as gap cells; bulk NES is populated at all 5 days. ` +
+        `The currently-selected contrast is outlined.</p>` +
+        stripsHtml +
+        `<p class="muted attr-caption" style="margin-top:.8em;">Exact per-day values (scRNA days only):</p>` +
         `<table class="attr-verdict-table"><thead><tr>` +
           `<th>Contrast</th><th>Bulk NES</th><th>Transcript LFC</th><th>Concordance</th>` +
         `</tr></thead><tbody>${trRows}</tbody></table>`;

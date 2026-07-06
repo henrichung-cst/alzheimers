@@ -7,7 +7,6 @@
   </div>
   <label class="filter-label" data-filter="fdr" data-metric="fdr">FDR &lt; <input id="f-fdr" aria-label="FDR threshold" type="number" step="0.05" min="0" max="1"
     value="0.25" style="width:60px;"></label>
-  <button id="glossary-toggle" aria-controls="glossary-panel" aria-expanded="false" title="Open metric definitions and abbreviations">Glossary</button>
   <button id="f-selection-kinase-clear" class="chip" hidden>Clear kinase selection</button>
   <button id="f-selection-celltype-clear" class="chip" hidden>Clear cell-type selection</button>
 </header>
@@ -71,7 +70,7 @@
               <th data-col="trend" data-metric="trend" title="NES trend across timepoint contrasts (always up/down, monotonic up/down, mixed). — = no readable trend (< 2 finite contrasts). Click to sort.">Trend</th>
               <th data-col="n_sig" data-metric="nSig" title="n_sig — count of contrasts where FDR < threshold. Click to sort.">n_sig</th>
               <th data-col="tcell_celltype" data-metric="tcellCelltype" title="Cell type — within-cohort cell-type confidence. The dominant T-cell type (CD8 / CD4 / Treg) the kinase concentrates in, from the donor's own scRNA. A ✓ tier badge marks concentration ≥2× the even 1/3 share (concentrated in one cell type); otherwise the kinase is broad across CD8/CD4/Treg. Distinct from Enrichment (which activation state) and the NSCLC spec column (beyond-T cell-type breadth). Click to sort.">Cell type</th>
-              <th data-col="tcell_max_enrich" data-metric="tcellMaxEnrich" title="Enrichment — peak within-cohort T-cell-state enrichment (fold of the most-enriched eligible state over the kinase's baseline mean state) across states in scope. Only states detected in ≥10% of cells with ≥50 cells are eligible; an undetected kinase has no badge. Localizes a kinase among the ProjecTILs T-cell states; sortable, never gated. Click to sort.">Enrichment</th>
+              <th data-col="tcell_max_enrich" data-metric="tcellMaxEnrich" title="Enrichment — peak within-cohort T-cell-state enrichment (fold of the most-enriched eligible state over the kinase's baseline mean state) across states in scope, with the most-enriched state named beside the fold. Only states detected in ≥10% of cells with ≥50 cells are eligible; an undetected kinase has no badge. Localizes a kinase among the ProjecTILs T-cell states; sortable, never gated. Click to sort.">Enrichment</th>
               <th data-col="n_attributed_celltypes" data-metric="nAttributedCelltypes" title="T-cell states this kinase is detected in (fraction expressing ≥10%), out of 14 — breadth of detection within the cohort, parallel to the NSCLC spec column. Enrichment is the Enrichment column. Click to sort by count.">Cell states</th>
               <th data-col="nsclc_specificity_count" data-metric="nsclcSpecificity" title="NSCLC specificity (N/7, fewer = more specific) — how many of the 7 coarse cell types (T_NK + non-T: B_plasma, Myeloid, Epithelial, Endothelial, Fibroblast, Mast) express this kinase in ≥10% of their cells (cell-weighted prevalence, at the shared 10% detection floor), with the dominant cell type badged. Fewer = more cell-type-restricted in the independent NSCLC reference (10x 897k-cell). n/a = outside the NSCLC probe panel. Click to sort.">NSCLC spec</th>
             </tr></thead>
@@ -115,6 +114,17 @@
           </select>
         </label>
 
+        <!-- J-3: Grain selector — shared across table + heatmap (entity-level).
+             Hidden when backbone_grains absent from payload. -->
+        <label class="ke-filter-label" id="ip-grain-wrap" title="Node grain: which nodes define the pathway/backbone entity, in the table and the heatmap. Full = L-R-EM-T (default). Backbone grains drop one or two nodes; dropped columns show '—'." hidden>Grain
+          <select id="ip-grain" aria-label="Incytr node grain">
+            <option value="Full">Full (L-R-EM-T)</option>
+            <option value="L-R-EM">L-R-EM (drop Target)</option>
+            <option value="R-EM-T">R-EM-T (drop Ligand)</option>
+            <option value="R-EM">R-EM (drop Ligand+Target)</option>
+          </select>
+        </label>
+
         <!-- HEATMAP-SPECIFIC CONTROLS (hidden when table pane is active) -->
         <div id="incytr-hm-controls" hidden>
           <label class="ke-filter-label" title="Day vs d2 baseline. Per-donor vocabulary: donor1 = d13/d17/d20; donor2 = d5/d7/d9/d11.">Day
@@ -134,6 +144,12 @@
               <option value="both">Both</option>
               <option value="up">Up</option>
               <option value="down">Down</option>
+            </select>
+          </label>
+          <label class="ke-filter-label" title="Group the sender/receiver axes by tissue category. Heatmap-only; hidden when the payload ships no grouping map.">Group
+            <select id="ih-group" aria-label="Heatmap axis grouping">
+              <option value="tissue">Tissue (~7)</option>
+              <option value="celltype">Cell type (full)</option>
             </select>
           </label>
           <label class="ke-filter-label" title="Limit sender and receiver axes to the top cell types by visible path count.">Axes
@@ -156,18 +172,6 @@
 
         <!-- TABLE-SPECIFIC CONTROLS (hidden when heatmap pane is active) -->
         <div id="incytr-ip-controls">
-          <!-- J-3: Grain selector. Hidden when backbone_grains absent from payload. -->
-          <label class="ke-filter-label" id="ip-grain-wrap" title="Node grain: Full = L-R-EM-T (default). Backbone grains drop one or two nodes; dropped columns show '—'." hidden>Grain
-            <select id="ip-grain" aria-label="Incytr node grain">
-              <option value="Full">Full (L-R-EM-T)</option>
-              <option value="L-R-EM">L-R-EM (drop Target)</option>
-              <option value="R-EM-T">R-EM-T (drop Ligand)</option>
-              <option value="R-EM">R-EM (drop Ligand+Target)</option>
-            </select>
-          </label>
-          <!-- B-6: drill-back button. Visible only during a drill navigation. -->
-          <button id="ip-drill-back" class="ke-filter-reset" hidden
-                  title="Restore the view from before the last drill (grain, mode, search, filters)">↩ Back</button>
           <label class="ke-filter-label" title="Top overall ranks the packaged top pathway instances across all sender/receiver cell-type pairs. Cell Type loads one sender/receiver pair for detailed evidence inspection.">View
             <select id="ip-mode" aria-label="Incytr pathway view">
               <option value="top">Top overall</option>
@@ -237,32 +241,31 @@
       <!-- ===== MAIN PANE ===== -->
       <div class="incytr-main-pane">
 
-        <!-- View switch: Table / Heatmap -->
+        <!-- View switch: Table / Heatmap / Chord -->
         <div class="incytr-view-switch">
           <button type="button" id="incytr-view-table" class="incytr-view-btn active"
                   title="Show the pathway table">Table</button>
           <button type="button" id="incytr-view-heatmap" class="incytr-view-btn"
                   title="Show the sender × receiver path-count heatmap">Heatmap</button>
+          <button type="button" id="incytr-view-chord" class="incytr-view-btn"
+                  title="Show the sender → receiver relationships as a circular chord diagram">Chord</button>
         </div>
 
         <!-- Heatmap pane (hidden by default) -->
         <div id="incytr-pane-heatmap" class="incytr-pane" hidden>
-          <div id="ih-timeline-control" class="ih-timeline-control" style="display:none;">
-            <span class="muted ih-timeline-label" id="ih-timeline-label"></span>
-            <button id="ih-timeline-prev" class="ih-timeline-step" type="button" aria-label="Previous timeline frame">&lt;</button>
-            <div class="ih-timeline-scrubber">
-              <input id="ih-timeline-slider" type="range" min="0" max="0" step="1" value="0"
-                     aria-label="Timeline frame"/>
-              <div id="ih-timeline-ticks" class="muted ih-timeline-ticks"></div>
-            </div>
-            <button id="ih-timeline-next" class="ih-timeline-step" type="button" aria-label="Next timeline frame">&gt;</button>
-          </div>
           <div id="ih-plot" role="img" aria-label="Incytr candidate-path heatmap"
                style="width:100%;"></div>
           <div id="ih-qc-wrap" style="margin-top:14px;display:none;">
             <div id="ih-qc-plot" role="img" aria-label="Median cell count versus Incytr pathway burden"
                  style="width:100%;"></div>
           </div>
+        </div>
+
+        <!-- Chord pane (hidden by default) — circular sender → receiver diagram -->
+        <div id="incytr-pane-chord" class="incytr-pane" hidden>
+          <div id="ic-plot" role="img" aria-label="Incytr sender to receiver chord diagram"
+               style="width:100%;display:flex;justify-content:center;"></div>
+          <div class="muted" id="ic-count" style="font-size:11px;margin-top:8px;"></div>
         </div>
 
         <!-- Table pane (visible by default) -->
@@ -283,26 +286,36 @@
       </div>
     </div>
   </div>
+  <div id="tab-glossary" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-glossary" hidden>
+    <div class="card glossary-card">
+      <section class="glossary-section">
+        <h2>Cell-state nomenclature</h2>
+        <p class="muted">ProjecTILs human T-cell state labels used across the donor scRNA, attribution, and pathway views.</p>
+        <h3>CD8<sup>+</sup> T-cells</h3>
+        <dl>
+          <dt>NaiveLike</dt><dd>T cells with a naive-like phenotype.</dd>
+          <dt>CM</dt><dd>Central memory.</dd>
+          <dt>EM</dt><dd>Effector memory.</dd>
+          <dt>TEMRA</dt><dd>Effector memory re-expressing CD45RA.</dd>
+          <dt>TPEX</dt><dd>Precursor exhausted T cells.</dd>
+          <dt>TEX</dt><dd>Terminally exhausted T cells.</dd>
+          <dt>MAIT</dt><dd>Mucosal-associated invariant T cells.</dd>
+        </dl>
+        <h3>CD4<sup>+</sup> T-cells</h3>
+        <dl>
+          <dt>NaiveLike</dt><dd>T cells with a naive-like phenotype.</dd>
+          <dt>Tfh</dt><dd>T follicular helper cells.</dd>
+          <dt>Th17</dt><dd>Th17 helper cells.</dd>
+          <dt>Treg</dt><dd>T regulatory cells.</dd>
+          <dt>CTL_EOMES</dt><dd>Cytotoxic CD4 T cells expressing EOMES and GZMK.</dd>
+          <dt>CTL_GNLY</dt><dd>Cytotoxic CD4 T cells expressing GNLY.</dd>
+          <dt>CTL_Exh</dt><dd>Cytotoxic CD4 T cells with an exhaustion phenotype.</dd>
+        </dl>
+      </section>
+    </div>
+  </div>
 </main>
 <div id="drawer-resizer" title="Drag to resize"></div>
 <button id="howto-drawer-toggle" type="button" aria-label="Toggle how-to drawer" aria-expanded="false" title="Show/hide the 'How to read' drawer">?</button>
 <aside id="howto-drawer"></aside>
 </div>
-<aside id="glossary-panel" aria-hidden="true">
-  <h3>Glossary</h3>
-  <dl>
-    <dt>Backbone</dt><dd>A receiver-specific Receptor &rarr; EM &rarr; Target route. It summarizes the receiver-side signaling route shared across one or more sender ligands.</dd>
-    <dt>Receiver</dt><dd>The cell type whose receptor, EM, and target genes define the intracellular side of the modeled pathway.</dd>
-    <dt>Sender</dt><dd>The cell type providing the ligand side of a sender-to-receiver pathway.</dd>
-    <dt>TPDS</dt><dd>Transcript-level pathway differential score: modeled disease-associated change in log signaling probability. Positive and negative signs indicate opposite directions of modeled signaling change.</dd>
-    <dt>Passed both nulls</dt><dd>For a specific backbone and contrast, both permutation checks passed: kinase enrichment and receiver-specific wiring.</dd>
-    <dt>Passing contrasts</dt><dd>Count of genotype-by-timepoint contrasts, out of 9, where the backbone passed both nulls. A value of 3 means three contrasts passed, not three null models.</dd>
-    <dt>NES</dt><dd>Normalized Enrichment Score from bulk kinase MEA on ForPerseus log2FC.</dd>
-    <dt>FDR</dt><dd>False discovery rate used to threshold kinase MEA significance.</dd>
-    <dt>n_sig</dt><dd>Count of contrasts where FDR &lt; the active threshold.</dd>
-    <dt>Pathway support</dt><dd>Backbone-level provenance derived from full pathways: expression-confirmed, kinase-imputed, or mixed when both appear across contributing paths or contrasts.</dd>
-    <dt>Support</dt><dd>Kinase contribution to a pathway backbone edge; larger absolute values indicate stronger phosphoproteomic support for that modeled route.</dd>
-    <dt>Observed score</dt><dd>Permutation-tested pathway score used for backbone-level additivity and graph edge summaries.</dd>
-    <dt>Contrast</dt><dd>Day vs d2 baseline. Kinase MEA contrasts are donor1-only (no IMAC for donor2); Incytr pair-mode contrasts vary per donor. Active vocabulary is set by the donor toggle.</dd>
-  </dl>
-</aside>

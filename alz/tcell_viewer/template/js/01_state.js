@@ -68,7 +68,7 @@ const INITIAL_STATE = {
   selection: { kinase:null, backbone:null, celltype:null, kinaseHuman:null,
                context:"donor1" },
   filters:   { contrast:"ALL", fdr:0.25 },
-  view:      { mode:"mouse", activeTab:"kinase", glossaryOpen:false,
+  view:      { mode:"mouse", activeTab:"kinase",
                kinaseAuditTab:"measurement-trace",
                temporalLevel:"kinase" },
 };

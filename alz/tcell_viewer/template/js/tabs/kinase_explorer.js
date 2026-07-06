@@ -42,13 +42,19 @@ function _confPass(rowConf, threshold) {
 // ~14 ProjecTILs states are transcriptionally homogeneous, so it cannot localize
 // a kinase along the activation continuum. Enrichment uses the full state set and
 // discriminates. The location-confidence pill still uses the per-gene effective # of states.
-function _tcellEnrichBadge(fold) {
+function _tcellEnrichBadge(fold, state) {
   const v = Number(fold);
   if (fold == null || !isFinite(v)) return '<span class="muted">—</span>';
   const lbl = v.toFixed(1) + "×";
   const cls = v >= 3 ? "hi" : (v >= 2 ? "mid" : (v >= 1.5 ? "lo" : ""));
   if (!cls) return `<span class="muted" title="Within ~1.5× of the kinase's baseline (mean) T-cell state — broadly expressed, not state-enriched">${lbl}</span>`;
-  return `<span class="badge ${cls}" title="${lbl} the kinase's baseline (mean-state) expression — enriched in this state vs a typical T-cell state">${lbl}</span>`;
+  // Name the state the fold refers to, but only when the kinase is actually
+  // state-enriched (≥1.5×). Below that the argmax state is a near-tie and would
+  // misread as a home — same rule as the Cell type column's "broad".
+  const statePill = state
+    ? ` <span class="ke-state-pill" title="Most-enriched T-cell state (all timepoints): ${_escapeHtml(state)}">${_escapeHtml(state)}</span>`
+    : "";
+  return `<span class="badge ${cls}" title="${lbl} the kinase's baseline (mean-state) expression — enriched in this state vs a typical T-cell state">${lbl}</span>${statePill}`;
 }
 
 function getScopedAttribution(kinaseId, filter) {
@@ -274,12 +280,19 @@ function _tkTrendPillCell(r) {
   // under the active filter scope (fold over the baseline mean state). Returns 0
 // when no qualifying rows. This is the T-cell state-enrichment signal.
 function _kineMaxTcellEnrichScoped(kinaseId, filter) {
-  let best = 0;
+  return _kineMaxTcellEnrichWithState(kinaseId, filter).fold;
+}
+
+// Peak within-cohort state enrichment AND the state that achieves it, so the
+// Enrichment cell can name the state the fold refers to. State enrichment is
+// day-invariant, so the winning state is stable across the scoped contrasts.
+function _kineMaxTcellEnrichWithState(kinaseId, filter) {
+  let best = 0, state = "";
   for (const e of getScopedAttribution(kinaseId, filter)) {
     const v = e.tcell_state_enrichment;
-    if (v != null && isFinite(v) && v > best) best = v;
+    if (v != null && isFinite(v) && v > best) { best = v; state = e.cell_type; }
   }
-  return best;
+  return { fold: best, state };
 }
 
 function _kineSigCountScoped(r, fdr, scopedCtxIds) {
@@ -738,7 +751,8 @@ function renderKinaseExplorer() {
     // Within-cohort cell-type badge + state-enrichment badge + cell-states pill +
     // NSCLC specificity (single N/7 metric at the shared ≥10% prevalence floor).
     const cellTypeCell = _renderCellTypeCell(r);
-    const specBadge = _tcellEnrichBadge(_kineMaxTcellEnrichScoped(r.id, colFilter));
+    const _enr = _kineMaxTcellEnrichWithState(r.id, colFilter);
+    const specBadge = _tcellEnrichBadge(_enr.fold, _enr.state);
     const cellStatesCell = _renderCellTypesCell(r, colFilter);
     const nsclcSpecCell = _renderNSCLCSpecificityCountCell(r);
 
