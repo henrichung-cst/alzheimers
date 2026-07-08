@@ -692,7 +692,7 @@ function renderKinaseExplorer() {
     // if any state in scope reaches the requested enrichment fold (≥ tcellMin ×
     // the kinase's baseline mean state). Enrichment only — concordance is
     // never used to filter (de-gate
-    // directive, docs/tcell_exhaustion_analysis_summary.md). Skipped
+    // directive, docs/reference/tcell_exhaustion_analysis_summary.md). Skipped
     // under text search so a targeted lookup always surfaces the kinase.
     if (!q && tcellMin > 0 && _kineMaxTcellEnrichScoped(r.id, kf) < tcellMin) continue;
     // Trend pattern — match the displayed pill exactly. Skipped under text

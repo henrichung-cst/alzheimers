@@ -720,10 +720,18 @@ def _linear_group_bulk(
 
 def _read_ptm_bulk_linear(
     tissue: str, assay: str, manifest: pd.DataFrame, group_map: dict[str, str]
-) -> pd.DataFrame | None:
+) -> tuple[pd.DataFrame, pd.DataFrame] | None:
     """Read a PTM Spectronaut report for `assay` and collapse to linear per-group
-    bulk. Returns None (with a warning) if the report file is missing — the
-    5xFAD hippocampus AcK report covers Mo6-12 only so callers must tolerate None.
+    bulk. Returns ``None`` (with a warning) if the report file is missing — the
+    5xFAD hippocampus AcK report covers Mo6-12 only so callers must tolerate
+    ``None``.
+
+    Returns ``(raw_out, bulk)`` where ``raw_out`` is the per-sample
+    median-centered log2 site matrix (site_id, gene_symbol, motif +
+    ``biological_sample_id`` columns) — the same substrate `_linear_group_bulk`
+    consumes — and ``bulk`` is that matrix collapsed to per-``<geno>_<age>mo``
+    linear bulk. ``run_export_bulk`` persists both so the Evidence panel can
+    render per-animal AcK/KGG dot-bars at parity with the phospho tracks.
 
     Keyed by (site_id, gene_symbol, motif) matching the ps/py convention.
     No residue-type filter is applied: AcK and KGG reports are already
@@ -739,6 +747,18 @@ def _read_ptm_bulk_linear(
         print(f"  [export-bulk] {tissue}/{assay} report missing ({spec.path.name}) — skip")
         return None
     df = pd.read_csv(spec.path, sep="\t")
+    # AcK/KGG Spectronaut site reports are NOT single-PTM-type: alongside the
+    # enriched-for Acetyl(K)/GlyGly(K) rows they emit Carbamidomethyl(C) and
+    # Oxidation(M) background-modification rows on the same peptides (up to ~half
+    # the report). Averaging those into the acetyl/ubiquitin gene-mean inflates
+    # the signal. Both target modifications are on lysine, so keep only K-site
+    # rows — the same residue filter build_track_matrices applies to the phospho
+    # tracks (PTM.SiteAA ∈ residue_type).
+    # ponytail: K-only is correct for the two current lysine PTM assays (ack,
+    # kgg); generalize to a per-assay residue/ModificationTitle map if an R/other
+    # PTM track (e.g. Rme1) is ever routed through here.
+    site_aa = df["PTM.SiteAA"].fillna("").astype(str).str.upper()
+    df = df[site_aa == "K"].reset_index(drop=True)
     qcols = _quantity_columns(df.columns, assay)
     rows = manifest[
         (manifest["tissue"] == tissue)
@@ -771,7 +791,7 @@ def _read_ptm_bulk_linear(
     keep = meta["gene_symbol"].astype(bool)
     raw_out = raw_out.loc[keep].reset_index(drop=True)
     bulk = _linear_group_bulk(raw_out, site_keys, group_map)
-    return bulk
+    return raw_out, bulk
 
 
 def run_export_bulk() -> None:
@@ -806,11 +826,25 @@ def run_export_bulk() -> None:
         # omics layers. Self-gating: returns None and prints a warning when the
         # report is absent (hippocampus AcK covers Mo6-12 only; 3mo samples may
         # be missing from that tissue's AcK deconvolution).
-        for assay, out_name in (("ack", "ack_bulk_linear.csv"), ("kgg", "kgg_bulk_linear.csv")):
-            bulk = _read_ptm_bulk_linear(tissue, assay, manifest, group_map)
-            if bulk is not None:
-                bulk.to_csv(outdir / out_name, index=False)
-                print(f"  [export-bulk] {tissue}/{assay}: {len(bulk)} rows -> {out_name}")
+        #
+        # We also persist the per-sample median-centered log2 site matrix
+        # (`{tissue}_{assay}_raw_ptm_normalized.csv`) that `_linear_group_bulk`
+        # consumed to build the bulk. The Incytr Evidence panel's AcK/KGG
+        # dot-bars read it (via `alz/integration/build_omics_trace_fivexfad.py`)
+        # and forward-project it per sample so the bars reconcile to the
+        # condition-level `{ack,kgg}_deconvoluted.csv` values behind the
+        # matching LFC chips.
+        for assay, bulk_name, raw_name in (
+            ("ack", "ack_bulk_linear.csv", f"{tissue}_ack_raw_ptm_normalized.csv"),
+            ("kgg", "kgg_bulk_linear.csv", f"{tissue}_kgg_raw_ptm_normalized.csv"),
+        ):
+            result = _read_ptm_bulk_linear(tissue, assay, manifest, group_map)
+            if result is not None:
+                raw_out, bulk = result
+                bulk.to_csv(outdir / bulk_name, index=False)
+                raw_out.to_csv(OUTPUT_DIR / raw_name, index=False)
+                print(f"  [export-bulk] {tissue}/{assay}: {len(bulk)} rows -> {bulk_name}; "
+                      f"per-sample matrix -> {raw_name}")
 
         groups = sorted(set(group_map.values()))
         print(f"[5xfad-export-bulk] {tissue}: pr={len(pr_bulk)} genes, "

@@ -1831,7 +1831,7 @@ def _write_5xfad_incytr_pair_pathways(tissue: str) -> dict | None:
     _incytr_5xfad_sig = _input_signature(
         f"fivexfad_incytr_{tissue}",
         [__file__] + [fp for fp, _ in file_to_contrast] + backbone_input_files,
-        {"tissue": tissue, "builder_version": 3},  # v3: backbone grains (B-3/B-4)
+        {"tissue": tissue, "builder_version": 4},  # v4: Ack/KGG_log2FC (Evidence)
     )
     _incytr_5xfad_cached = _load_build_cache(
         f"fivexfad_incytr_{tissue}", _incytr_5xfad_sig, out_dir

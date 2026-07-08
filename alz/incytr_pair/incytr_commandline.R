@@ -31,7 +31,6 @@
 # Receiver gene.use = DEG ∪ prG per cluster (t-cells) / sce4's frozen per-pair
 # node sets (AD, §6.7). Investigation history:
 # bench/bench.md A31–A33; archive/sce4_reproduction_2026-06-08/README.md §6.5/§6.7.
-# Verification gate: `pixi run verify-incytr-sce4`.
 #
 # Usage (from any working directory):
 #   Rscript alz/incytr_pair/incytr_commandline.R <condition1> <condition2>
@@ -66,8 +65,8 @@ if (!nzchar(OUTPUT_DIR)) {
 dir.create(OUTPUT_DIR, recursive = TRUE, showWarnings = FALSE)
 
 # BACKBONE_OUT_DIR: root dir for backbone grain shards, parallel to wide/.
-# Set to empty string to disable backbone emission (used by verify-incytr-sce4
-# which only checks path parity).  When not set at all, defaults to the
+# Set to empty string to disable backbone emission (for runs that only check
+# path parity).  When not set at all, defaults to the
 # canonical backbone path.  Distinction between "not set" (NA) and "set to
 # empty string" (deliberate disable) is made via unset=NA_character_.
 .backbone_env <- Sys.getenv("BACKBONE_OUT_DIR", unset = NA_character_)
@@ -336,9 +335,8 @@ if (!use_frozen_geneuse) {
 # Depdc5 — the Target of C1qa|Cr1l|Cbfb|Depdc5 — which lands at aFC=0.9974 vs sce4's
 # recorded 1.000, a 0.003 input-provenance gap of the SAME class as Acvr1/App (our
 # deconvolution differs from sce4's off-box pr at the third decimal on a boundary
-# gene). This drops Micro->Cholin recall 573->572; the verify-incytr-sce4 recall
-# floor was lowered 595->572 to accept this documented residual. We adopt aFC as
-# the canonical (paper-default) style despite the modest narrowing. See §6i.
+# gene). This drops Micro->Cholin recall 573->572, a documented residual. We adopt
+# aFC as the canonical (paper-default) style despite the modest narrowing. See §6i.
 clusters <- as.character(unique(Data.input@meta.data$Type))
 
 if (use_frozen_geneuse) {
@@ -444,8 +442,7 @@ if (use_frozen_geneuse) {
 # =====================================================================
 # KsG — kinase-substrate gene layer (TOGGLE = kinase-data presence).
 # When KSG_MEA_FILE is unset the whole block is skipped and the driver is
-# byte-identical to a no-kinase run (this is the path verify-incytr-sce4
-# exercises — it supplies no kinase inputs, so sce4 parity is untouched).
+# byte-identical to a no-kinase run.
 # When supplied, kinase-supported substrate genes (Incytr::kinase_substrate_gene,
 # the method in the package) are admitted into gene.use per cluster (unioned in
 # process_pair, so it applies to both frozen and derived bases). The selector is
@@ -824,7 +821,7 @@ unlink(shard_dir, recursive = TRUE)
 # Backbone shard concat — one parquet per grain, parallel to wide/ output.
 # Shards written by .emit_backbone_shards inside Cal_pairwise_grid are
 # concatenated here in the same DuckDB-stream pattern as path shards.
-# Skipped when BACKBONE_OUT_DIR is empty (e.g. during verify-incytr-sce4).
+# Skipped when BACKBONE_OUT_DIR is empty (path-parity-only runs).
 # =====================================================================
 if (nzchar(BACKBONE_OUT_DIR)) {
   contrast_key    <- paste(condition1, condition2, sep = "_")

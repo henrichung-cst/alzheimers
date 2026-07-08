@@ -83,7 +83,8 @@ BACKBONE_GRAIN_MODE: dict[str, str] = {
 _BACKBONE_INDEX_FILENAME = "incytr_backbone_index.bin.gz"
 
 # FC metric suffixes emitted by the incytr driver (one per node × assay channel).
-_INCYTR_FC_METRICS = ("sclog2FC", "pr_log2FC", "ps_log2FC", "py_log2FC")
+_INCYTR_FC_METRICS = ("sclog2FC", "pr_log2FC", "ps_log2FC", "py_log2FC",
+                      "Ack_log2FC", "KGG_log2FC")
 _INCYTR_FC_COLS = tuple(
     f"{node}_{metric}" for node in _INCYTR_FC_NODES for metric in _INCYTR_FC_METRICS
 )

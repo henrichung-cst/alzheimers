@@ -709,10 +709,12 @@ ul.spec-unit-children li.muted { color:#9aa5b1; }
 .ip-related__count { margin-bottom:10px; color:#37474f; }
 .ip-related-pairs__results { margin-top:4px; font-size:11px; color:#444; }
 
+/* grid-template-columns is set inline (see evidence_row.js) so the column
+   count tracks the cohort's active layer list; overflow-x lets the wider
+   5xFAD (6-layer) matrix scroll instead of overflowing a narrow panel. */
 .ev-matrix { display:grid;
-  grid-template-columns: minmax(140px, 1.1fr) repeat(4, minmax(170px, 1fr));
   gap:0; background:#ffffff; border:1px solid #e0e0e0; border-radius:3px;
-  font-family:var(--font-mono); }
+  overflow-x:auto; font-family:var(--font-mono); }
 .ev-matrix-head, .ev-matrix-rowhead, .ev-cell {
   border-bottom:1px solid #f0f0f0; border-right:1px solid #f0f0f0;
   padding:4px 6px; box-sizing:border-box; }

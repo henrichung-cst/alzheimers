@@ -31,8 +31,10 @@ from alz.viewer.shared.incytr_index import (  # noqa: E402
     _INCYTR_SCORE_COLS_OPTIONAL,
     _active_optional_score_cols,
     _idx_label_bits,
+    write_incytr_backbone_grains,
 )
 from alz.tcell_viewer.paths import (  # noqa: E402
+    EDGE_SLICES_INCYTR_BACKBONE_DIR,
     EDGE_SLICES_INCYTR_PATHWAYS_DIR,
     INCYTR_PAIR_MODE_TCELLS_DIR,
     SCHEMA_VERSION,
@@ -59,6 +61,7 @@ _INCYTR_INDEX_FILENAME = "incytr_index.bin.gz"
 _INCYTR_LOW_SIGNAL_MEDIAN_N_THRESHOLD = 3
 
 _PAIR_FILE_RE = re.compile(r"(d\d+_d\d+)_incytr_output\.parquet$")
+_BACKBONE_FILE_RE = re.compile(r"(d\d+_d\d+)_backbone_output\.parquet$")
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +80,12 @@ def _contrast_days(contrasts: list[str]) -> list[int]:
 
 def _contrast_from_filename(fname: str) -> str | None:
     m = _PAIR_FILE_RE.search(fname)
+    return m.group(1) if m else None
+
+
+def _backbone_contrast_from_filename(fname: str) -> str | None:
+    """`d13_d2_backbone_output.parquet` -> `d13_d2`."""
+    m = _BACKBONE_FILE_RE.search(fname)
     return m.group(1) if m else None
 
 
@@ -716,6 +725,23 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
             flush=True,
         )
 
+    # B-3 / B-4: per-grain backbone entity tables + heatmap tensors, keyed to
+    # this donor's backbone parquets + donor-scoped output subdir (shard
+    # filenames are `{sender}__{receiver}.parquet` with no context in the
+    # name, so donors must not share a dir). Uses the Full-grain sender/
+    # receiver/contrast vocabs so grid indices align across grains.
+    backbone_grains = write_incytr_backbone_grains(
+        backbone_pair_mode_dir=os.path.join(INCYTR_PAIR_MODE_TCELLS_DIR, donor, "backbone"),
+        edge_slices_backbone_dir=os.path.join(EDGE_SLICES_INCYTR_BACKBONE_DIR, donor),
+        unified_viewer_dir=UNIFIED_VIEWER_DIR,
+        contrast_from_filename=_backbone_contrast_from_filename,
+        senders_canonical=senders_canonical,
+        receivers_canonical=receivers_canonical,
+        present_contrasts=list(present_contrasts),
+        contrast_to_idx=contrast_to_idx,
+        schema_version=SCHEMA_VERSION,
+    )
+
     # T-cell contrasts are of the form "<day>_d2" — derive the day axis once
     # so the JS doesn't have to parse contrast strings at render time. "Disease"
     # in the unified-viewer JS vocabulary maps to the variable day for T-cell;
@@ -768,6 +794,9 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
             "n_total_rows": total_rows,
             "pair_row_counts": pair_row_counts,
         },
+        # B-3 / B-4: per-grain backbone entity tables + heatmap tensors.
+        # Absent when backbone parquets have not been produced for this donor.
+        **({"backbone_grains": backbone_grains} if backbone_grains else {}),
     }
 
 
@@ -775,6 +804,8 @@ def _write_tcell_pair_pathways() -> dict:
     """Wipe and recreate the shard directory, then process each donor in turn."""
     shutil.rmtree(EDGE_SLICES_INCYTR_PATHWAYS_DIR, ignore_errors=True)
     os.makedirs(EDGE_SLICES_INCYTR_PATHWAYS_DIR, exist_ok=True)
+    shutil.rmtree(EDGE_SLICES_INCYTR_BACKBONE_DIR, ignore_errors=True)
+    os.makedirs(EDGE_SLICES_INCYTR_BACKBONE_DIR, exist_ok=True)
 
     by_context: dict[str, dict] = {}
     all_senders: set[str] = set()
@@ -812,7 +843,7 @@ def _write_tcell_pair_pathways() -> dict:
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "version": 1,
+        "version": 4,   # v4: backbone_grains (B-3/B-4)
         "source": f"pair_mode_tcells ({os.path.relpath(INCYTR_PAIR_MODE_TCELLS_DIR, config.REPO_ROOT)})",
         "source_mode": "pair_mode_tcells",
         "donors": sorted(by_context.keys()),

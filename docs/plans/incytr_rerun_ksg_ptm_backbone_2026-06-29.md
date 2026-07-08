@@ -1,9 +1,9 @@
 # Incytr three-cohort re-run — KsG + PTM + backbone (orchestration plan)
 
-**Status:** plan / awaiting approval. **Date:** 2026-06-29. **Theme:** B.
-**Companions:** [`theme_b/ksg_kinase_imputed_nodes.md`](theme_b/ksg_kinase_imputed_nodes.md)
-(KsG design), [`theme_b/backbone_incytr_track.md`](theme_b/backbone_incytr_track.md)
-(backbone — Song built & verified).
+**Status:** in progress (branch `feat/incytr-backbone-refactor`). **Date:** 2026-06-29. **Theme:** B.
+**Companions:** [`ksg_kinase_imputed_nodes.md`](../../archive/archived_plans/orchestration/theme_b/ksg_kinase_imputed_nodes.md)
+(KsG design — shipped, archived), [`backbone_incytr_track.md`](../foundation/backbone_incytr_track.md)
+(authoritative backbone spec).
 
 ## Goal
 

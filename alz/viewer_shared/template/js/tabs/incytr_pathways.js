@@ -2285,7 +2285,9 @@ async function _ipExportCurrentView() {
       return;
     }
     await IncytrGlobalIndex.ensureLoaded();
-    const { indices } = IncytrGlobalIndex.filterRank(IncytrFilter.get(), { limit: "all" });
+    // Export the ranked Top-N the table shows (caps at f.topLimit), not the
+    // whole matching universe. The display cap IS a filter from the user's view.
+    const { indices } = IncytrGlobalIndex.filterRank(IncytrFilter.get());
     rows = indices.map(i => IncytrGlobalIndex.materialize(i)).filter(Boolean);
   } else {
     const pairs = _ipPairsInScope(block);

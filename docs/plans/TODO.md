@@ -34,7 +34,7 @@ Write a small, rarely-used export script for the T-cell data that outputs all ki
 ## B. Incytr Improvements
 
 **B1. IncytrDB audit — database provenance and versioning**
-Locate the IncytrDB database backing incytr pathway calculations. Determine: (a) how Changhan maintains it, (b) how up to date it is, (c) confirm we are using the correct mouse vs. human version per dataset. (Email sent to Changhan — follow up.)
+Locate the IncytrDB database backing incytr pathway calculations. Determine: (a) how Changhan maintains it, (b) how up to date it is, (c) confirm we are using the correct mouse vs. human version per dataset.
 
 **B2. Incytr pathway visualization → sankey/chord diagram**
 Replace or supplement the current incytr pathway heatmap with a sankey or chord diagram that emphasizes cell-type connections over time. Collapse some excitatory neuron clusters to reduce visual complexity. (Also see B5 for backbone filtering before building this.)
@@ -194,13 +194,12 @@ A5, G1, G2, H1, D1 (substrate comparator design/scaffolding).
 
 ---
 
-## Archive — Completed
+## I. Cohort-abstraction refactor carryover (deferred, awaiting go)
 
-**[DONE 2026-06-19] NSCLC 10x reference for T-cell data**
-10x Flex dataset (897,733 cells × 18,082 genes) annotated via ProjecTILs + marker lineages. 77,760 T cells in 14 states; non-T → 7 TME lineages. Two metrics per (kinase, cell_type): mean_log2(CPM+1) + fraction expressing. Audit: 79/339 covered kinases expressed nowhere in TME (tissue-restricted families = MEA false-positive candidates). Wired into viewer as NSCLC attribution tier. Commits: 1f2fa8e, dbae990. Plan: `docs/plans/todo2_tcell_specificity_reference.md`.
+Deferred out of the completed cohort-namespace refactor (merged 2026-06-18); not part of any wave.
 
-**[DONE 2026-06-19] Incytr on 5xFAD**
-All 8 contrasts (cortex/hippocampus × 3/6/9/12mo) complete in the single PTM-inclusive `wide/` product. One driver fix: `null_if_empty()` for optional PTM assays with no samples at a given timepoint. Viewer wired as `fivexfad_cortex` and `fivexfad_hippocampus` contexts. Plan: `docs/plans/todo6_incytr_on_5xfad.md`.
+**I1. Never-read sidecar cleanup**
+Stop producing `_raw`/`_all`/`_per_cluster` audit sidecars at their writers (`mukesh_perdonor.py`, `tcells_perdonor.py`, `enrich_celltype.py`, `mukesh.py` `_concat`) and delete the on-disk copies. Deferred from refactor Phase 2/3.
 
-**[DONE 2026-06-19] Unified viewer scaling audit**
-P1–P8 implemented: attribution-summary + celltype-MEA sidecars, payload 105→53 MB raw / 10.1→5.63 MB gzip. Crosstable lazy init, gene_node_index per-context sidecar, LRU cap on 5xFAD caches, T-cell viewer sidecar payload mode. Plan: `docs/plans/todo8_unified_viewer_scaling_audit.md`.
+**I2. Cohort-file namespace moves**
+Complete the Phase-4 namespace migration for the paths held back to keep the frozen Incytr/decomposition layer out of a path-only move: R extractors, `*_decompose.py`, `build_5xfad_*`, Song `song.py` + `alz/decomposition_mea/`, `lucie.py`.

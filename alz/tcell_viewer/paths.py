@@ -26,6 +26,13 @@ EDGE_SLICES_INCYTR_PATHWAYS_DIR = os.path.join(
     UNIFIED_VIEWER_DIR, "edge_slices", "incytr_pathways"
 )
 
+# Backbone-grain shards (lazy-loaded by the pathway-table tab's grain selector).
+# Shard filenames are `{sender}__{receiver}.parquet` with no context in the
+# name, so each donor gets its own subdir joined at call time.
+EDGE_SLICES_INCYTR_BACKBONE_DIR = os.path.join(
+    UNIFIED_VIEWER_DIR, "edge_slices", "incytr_backbone"
+)
+
 # T-cell pair-mode parquet root (per-donor wide outputs).
 INCYTR_PAIR_MODE_TCELLS_DIR = os.path.join(
     config.REPO_ROOT, "outputs", "reports", "incytr_pair_mode_tcells"

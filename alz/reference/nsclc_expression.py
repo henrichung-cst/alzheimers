@@ -406,7 +406,7 @@ def compute_expression() -> pd.DataFrame:
 def _write_attribution_metrics(df: pd.DataFrame) -> pd.DataFrame:
     """Compute the standard attribution metric and write the canonical reference
     output. See alz/cross_reference/specificity.py and
-    docs/plans/attribution/standard_attribution_metric.md for the definition.
+    docs/foundation/standard_attribution_metric.md for the definition.
 
       nsclc_kinase_expression.csv  — per (kinase, cell_type): raw facts (mean,
         fraction, n_cells) + native metrics (detected, linear_expression,

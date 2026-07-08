@@ -162,11 +162,11 @@ pixi run tcell-viewer
 
 - Cohort and run-order summary: `README.md` section "T-cell exhaustion cohort".
 - Per-cell ProjecTILs aggregation decision:
-  `docs/tcell_exhaustion_analysis_summary.md`.
+  `docs/reference/tcell_exhaustion_analysis_summary.md`.
 - Within-cohort attribution implementation:
   `alz/cross_reference/tcell_within_cohort.py`.
 - Concordance de-gating rationale:
-  `docs/tcell_exhaustion_analysis_summary.md`.
+  `docs/reference/tcell_exhaustion_analysis_summary.md`.
 - Viewer builder:
   `alz/build_tcell_viewer.py`.
 - Viewer template:

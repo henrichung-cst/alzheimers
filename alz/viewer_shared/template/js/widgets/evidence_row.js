@@ -6,7 +6,7 @@
 // <slug>.parquet where slug = sanitize_celltype(cluster).
 //
 // Schema per shard row (from build_omics_trace.py, schema_version=1):
-//   layer        : "protein" | "phospho_ps" | "phospho_py"
+//   layer        : "protein" | "phospho_ps" | "phospho_py" | "acetyl" | "ubiq"
 //   gene_symbol  : string
 //   site_id      : string | null (null for protein rows)
 //   animal_id    : string  (e.g. "37_E50(L)_M_4mo_WT")
@@ -246,12 +246,21 @@ window.OmicsTraceStore = OmicsTraceStore;
 
 const EvidencePanel = (() => {
 
+  // Base layers shown for every cohort. AcK/KGG are appended only for 5xFAD
+  // (the only cohort with acetyl/ubiquitin assays) via _activeLayers() so other
+  // cohorts render neither the columns nor empty n/a cells.
   const _LAYERS = ["transcript", "protein", "phospho_ps", "phospho_py"];
+  const _PTM_LAYERS = ["acetyl", "ubiq"];
+  function _activeLayers() {
+    return _panelCohort() === "fivexfad" ? [..._LAYERS, ..._PTM_LAYERS] : _LAYERS;
+  }
   const _LAYER_LABELS = {
     transcript:  "Transcript",
     protein:     "Protein",
     phospho_ps:  "Phospho pS",
     phospho_py:  "Phospho pY",
+    acetyl:      "AcK",
+    ubiq:        "KGG",
   };
   // Tooltip unit hints surfaced in column headers.
   const _LAYER_UNITS = {
@@ -259,18 +268,24 @@ const EvidencePanel = (() => {
     protein:     "log₂(IRS-norm + ε)",
     phospho_ps:  "log₂(IRS-norm + ε), gene-mean",
     phospho_py:  "log₂(IRS-norm + ε), gene-mean",
+    acetyl:      "log₂(IRS-norm + ε), gene-mean",
+    ubiq:        "log₂(IRS-norm + ε), gene-mean",
   };
   const _TCELL_LAYER_UNITS = {
     transcript:  "log-norm pseudobulk mean",
     protein:     "deconvoluted protein abundance",
     phospho_ps:  "deconvoluted pS/pT abundance, gene-mean",
     phospho_py:  "deconvoluted pY abundance, gene-mean",
+    acetyl:      "deconvoluted AcK abundance, gene-mean",
+    ubiq:        "deconvoluted KGG abundance, gene-mean",
   };
   const _FIVEXFAD_LAYER_UNITS = {
     transcript:  "log-norm pseudobulk mean",
     protein:     "deconvoluted abundance",
     phospho_ps:  "deconvoluted abundance, gene-mean",
     phospho_py:  "deconvoluted abundance, gene-mean",
+    acetyl:      "deconvoluted abundance, gene-mean",
+    ubiq:        "deconvoluted abundance, gene-mean",
   };
   function _layerUnit(layer) {
     const c = _panelCohort();
@@ -291,6 +306,8 @@ const EvidencePanel = (() => {
     protein:     "pr_log2FC",
     phospho_ps:  "ps_log2FC",
     phospho_py:  "py_log2FC",
+    acetyl:      "Ack_log2FC",
+    ubiq:        "KGG_log2FC",
   };
 
   const _ARM_WT_COLOR      = "#777";
@@ -579,12 +596,18 @@ const EvidencePanel = (() => {
     if (layer === "protein") {
       perArm = _perArmFromRows(layerRows, arms);
     } else {
-      // Phospho: aggregate sites → gene per animal × group (matches Incytr).
+      // Phospho / AcK / KGG: aggregate sites → gene per animal × group
+      // (matches Incytr's own `summarise_all(mean)` collapse). AcK/KGG are
+      // structurally identical to phospho (site-keyed) so they share the
+      // aggregation; the per-site popover is a phospho-only affordance —
+      // AcK/KGG render one bar group per gene without a `▾ N sites` footer,
+      // matching the protein layer's visual weight.
       perArm = _aggregatePhosphoToGene(layerRows, arms);
       // Only count sites that contribute *signal* (≥1 positive value) in this
       // contrast. Sites where the forward projection collapses to zero across
       // every animal (e.g. parent gene not expressed in this cluster) carry no
-      // information and would clutter the popover.
+      // information — for phospho they'd clutter the popover, and here they
+      // also give us the same "measured but zero" gate for AcK/KGG.
       const armGroups = new Set(arms.map(a => a.group));
       const sitesWithSignal = new Set();
       for (const r of layerRows) {
@@ -597,10 +620,12 @@ const EvidencePanel = (() => {
         return { klass: "ev-cell ev-cell-na",
                  html: `<span>n/a</span><span>${_renderLfcChip(stored)}</span>` };
       }
-      footerHtml = `<button type="button" class="ev-phospho-expand" `
-        + `data-ev-popover="${_esc(cellId)}" `
-        + `title="View per-site detail (Incytr aggregates to gene-mean before LFC)">`
-        + `▾ ${sitesWithSignal.size} site${sitesWithSignal.size === 1 ? "" : "s"}</button>`;
+      if (layer === "phospho_ps" || layer === "phospho_py") {
+        footerHtml = `<button type="button" class="ev-phospho-expand" `
+          + `data-ev-popover="${_esc(cellId)}" `
+          + `title="View per-site detail (Incytr aggregates to gene-mean before LFC)">`
+          + `▾ ${sitesWithSignal.size} site${sitesWithSignal.size === 1 ? "" : "s"}</button>`;
+      }
     }
 
     // If after filtering to males-only and the requested contrast no per-arm
@@ -743,9 +768,11 @@ const EvidencePanel = (() => {
       + nLabel
       + `</div>`;
 
-    // Skeleton: matrix with loading cells.
+    // Skeleton: matrix with loading cells. Layer set (and thus column count) is
+    // cohort-aware; the grid template is driven off it so CSS can't desync.
+    const layers = _activeLayers();
     const headerRowHtml = `<div class="ev-matrix-corner"></div>`
-      + _LAYERS.map(l =>
+      + layers.map(l =>
           `<div class="ev-matrix-head" title="${_esc(_layerUnit(l))}">`
           + `${_esc(_LAYER_LABELS[l])}<span class="ev-unit">${_esc(_layerUnit(l))}</span>`
           + `</div>`).join("");
@@ -756,15 +783,16 @@ const EvidencePanel = (() => {
         + `<span class="ev-rh-gene">${_esc(nd.gene || "—")}</span>`
         + `<span class="ev-rh-cluster" title="${_esc(nd.cluster || "")}">${_esc(nd.cluster || "—")}</span>`
         + `</div>`;
-      const cells = _LAYERS.map(layer => {
+      const cells = layers.map(layer => {
         const cellId = `${gridId}-${nd.node}-${layer}`;
         return `<div class="ev-cell ev-cell-loading" id="${_esc(cellId)}">loading…</div>`;
       }).join("");
       return rh + cells;
     }).join("");
 
+    const gridCols = `minmax(140px, 1.1fr) repeat(${layers.length}, minmax(170px, 1fr))`;
     host.innerHTML = headerHtml
-      + `<div class="ev-matrix" id="${_esc(gridId)}">`
+      + `<div class="ev-matrix" id="${_esc(gridId)}" style="grid-template-columns:${gridCols};">`
       + headerRowHtml + bodyHtml
       + `</div>`;
 
@@ -793,7 +821,7 @@ const EvidencePanel = (() => {
 
     // Fill cells.
     for (const nd of nodes) {
-      for (const layer of _LAYERS) {
+      for (const layer of layers) {
         const cellId = `${gridId}-${nd.node}-${layer}`;
         const el = document.getElementById(cellId);
         if (!el) continue;

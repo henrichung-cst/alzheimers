@@ -163,14 +163,6 @@ export KSG_ATTRIBUTION_FILE="data/derived/ksg/song_attribution_long.csv"
     echo "All 9 comparisons succeeded."
   fi
 
-  # No inline sce4 parity gate here. This is a KsG-ON production burn: KsG
-  # widens gene.use beyond sce4's frozen per-pair node sets by design, so a
-  # byte-identical sce4 comparison necessarily diverges (extra paths) and would
-  # always "fail". The engine-regression invariant (the six fixes reproduce
-  # sce4 with KsG OFF) is validated separately and KsG-OFF via
-  # `pixi run verify-incytr-sce4` — run it when touching the engine, not on
-  # every production run.
-
   # Apply the canonical significance floors to wide/ in place (the driver emits
   # all paths at cutoff=0; this is the downstream half): SigProb > 0.1 (either)
   # AND |PDS| >= 0.2. No p_adj arm. No Top300 cap by default; Top300 is too

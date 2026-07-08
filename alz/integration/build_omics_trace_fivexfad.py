@@ -29,6 +29,8 @@ Inputs (already on disk; NOTHING upstream is recomputed):
       {tissue}_total_proteome_normalized.csv     (protein,     gene-keyed)
       {tissue}_st_raw_phospho_normalized.csv     (phospho_ps,  site-keyed)
       {tissue}_py_raw_phospho_normalized.csv     (phospho_py,  site-keyed)
+      {tissue}_ack_raw_ptm_normalized.csv        (acetyl,      site-keyed)
+      {tissue}_kgg_raw_ptm_normalized.csv        (ubiq,        site-keyed)
   - the scRNA share + cell counts via ``fivexfad_decompose._load_aggexp`` /
     ``_shares_by_condition`` / ``_load_counts`` (reused, not duplicated)
   - the per-sample → condition map via ``ingest._sample_group_map`` (reused)
@@ -43,8 +45,10 @@ Output: per-cluster parquet shards under
 omics_trace schema so ``OmicsTraceStore`` reads them unchanged. ``animal_id``
 carries the ``biological_sample_id``; ``genotype`` ∈ {TG, WT}; ``timepoint`` ∈
 {3mo, 6mo, 9mo, 12mo}. ``sex`` is omitted (5xFAD is not sex-split here).
+Layers self-gate per tissue: the hippocampus AcK report covers Mo6-12 only, so
+its 3mo condition columns contribute no rows to the shards (n/a in the viewer).
 
-Schema version: 1 — bump OMICS_TRACE_FIVEXFAD_SCHEMA_VERSION in
+Schema version: 2 — bump OMICS_TRACE_FIVEXFAD_SCHEMA_VERSION in
 alz/viewer/paths.py on any schema change.
 """
 
@@ -99,10 +103,17 @@ _TISSUE_OUT = {
 }
 
 # layer → (deconvolution channel, per-sample matrix filename, key columns).
+# `acetyl`/`ubiq` are site-keyed like phospho_ps/phospho_py — the Evidence
+# widget aggregates them site→gene at render time, matching Incytr's own
+# `summarise_all(mean)` collapse. Layers self-gate: if the per-sample matrix
+# is absent for a tissue (e.g. hippocampus AcK 3mo columns aren't emitted),
+# the loader treats it as an empty (never-measured) layer for that tissue.
 _LAYER_SPEC = {
-    "protein":    ("pr", "{tissue}_total_proteome_normalized.csv"),
-    "phospho_ps": ("ps", "{tissue}_st_raw_phospho_normalized.csv"),
-    "phospho_py": ("py", "{tissue}_py_raw_phospho_normalized.csv"),
+    "protein":    ("pr",  "{tissue}_total_proteome_normalized.csv"),
+    "phospho_ps": ("ps",  "{tissue}_st_raw_phospho_normalized.csv"),
+    "phospho_py": ("py",  "{tissue}_py_raw_phospho_normalized.csv"),
+    "acetyl":     ("ack", "{tissue}_ack_raw_ptm_normalized.csv"),
+    "ubiq":       ("kgg", "{tissue}_kgg_raw_ptm_normalized.csv"),
 }
 _LAYERS = list(_LAYER_SPEC)
 
@@ -241,10 +252,13 @@ def build_tissue(tissue: str, force: bool = False) -> dict:
     for layer, (channel, matrix_tmpl) in _LAYER_SPEC.items():
         mpath = os.path.join(OUTPUT_DIR, matrix_tmpl.format(tissue=tissue))
         if not os.path.exists(mpath):
-            raise FileNotFoundError(
-                f"per-sample matrix missing: {mpath} ({layer}). Run "
-                f"alz/cohorts/fivexfad/ingest.py (run_ingest) before omics_trace_fivexfad."
-            )
+            # Layers with tissue-scoped source assays (AcK/KGG on 5xFAD) may
+            # legitimately be absent for a tissue whose Spectronaut report was
+            # not run. Self-gate to "layer missing here" without failing the
+            # build — the widget renders n/a for those cells.
+            print(f"  {layer}: per-sample matrix absent at {os.path.basename(mpath)} — skip layer",
+                  flush=True)
+            continue
         m = pd.read_csv(mpath)
         key_cols = KEY_COLS[channel]
         sample_cols = [c for c in m.columns if c in group_map]
@@ -263,7 +277,7 @@ def build_tissue(tissue: str, force: bool = False) -> dict:
         print(f"  {layer}: {len(m):,} evidence-gene rows × {len(sample_cols)} samples",
               flush=True)
 
-    # --- Per-cluster shard build (one shard per cluster, all 3 layers) ---
+    # --- Per-cluster shard build (one shard per cluster, all loaded layers) ---
     shards_written: dict[str, str] = {}
     max_rel_err = 0.0
     n_gate = 0
@@ -271,6 +285,8 @@ def build_tissue(tissue: str, force: bool = False) -> dict:
         genes_cl = evidence_genes.get(cl, set())
         parts: list[pd.DataFrame] = []
         for layer in _LAYERS:
+            if layer not in loaded:
+                continue
             L = loaded[layer]
             sub_mask = L["gene"].isin(genes_cl).to_numpy()
             if not sub_mask.any():
@@ -365,8 +381,9 @@ def build_tissue(tissue: str, force: bool = False) -> dict:
         "generated_at": pd.Timestamp.utcnow().isoformat(),
         "tissue": tissue,
         "label": f"5xFAD {tissue} per-sample deconvoluted abundance "
-                 f"(protein + phospho pS + pY)",
-        "layers": list(_LAYERS),
+                 f"({', '.join(loaded.keys())})",
+        "layers": list(loaded.keys()),
+        "layers_configured": list(_LAYERS),
         "gene_scope": "routed_incytr_pathway_evidence_genes",
         "reconciliation_max_rel_err": max_rel_err,
         "reconciliation_cells_compared": n_gate,

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Standard cell-type attribution metric — one definition, every cohort.
 
-Implements the metric agreed in ``docs/plans/attribution/standard_attribution_metric.md``.
+Implements the metric agreed in ``docs/foundation/standard_attribution_metric.md``.
 It answers "how specific is this kinase to a cell type?" with one denominator:
 all cell types/states in the cohort. Detection is reported as an independent
 evidence column, but it does not change the denominator for concentration,

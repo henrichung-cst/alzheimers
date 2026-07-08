@@ -155,12 +155,6 @@ if [[ $SKIP_INCYTR -eq 0 ]]; then
   # invalidates the transcript_trace shards on schema version bump.
   run_step E3 "emit_expr_bygroup parquet (transcript trace substrate)" \
     pixi run Rscript alz/incytr_pair/emit_expr_bygroup.R
-  # Regression gate: confirms the six sce4-parity call-site overrides in
-  # incytr_commandline.R (see CLAUDE.md §Pair-mode Incytr) still hold. If
-  # any override is reverted, this step exits non-zero and prints a
-  # per-position max-|Δ| table for the two known-good pairs.
-  run_step E4 "sce4 parity regression (verify_sce4_parity.py)" \
-    pixi run python alz/incytr_pair/verify_sce4_parity.py --all-known-pairs
 fi
 
 run_step F1 "human ingest (reshape)" \

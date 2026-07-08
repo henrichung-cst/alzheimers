@@ -117,8 +117,6 @@ and `filter_significant_paths.py`; the cohorts differ only in their input builde
 | `build_tcells_input_gene_list.R` | T-cell-cohort `allmarkers.csv` builder (per donor); same per-contrast-DEG contract as the mouse path. pixi `tcells-build-input-gene-list`. |
 | `export_decomposition_for_pair.py` | Runs the **provenance deconvolution** `P_c = (N_total/N_c)×bulk×(specific_c/Σ_46 specific)` (min/10000 imputation): transcript share from frozen `aggexp.csv`, size factors from the Song h5ad, bulk from frozen `pr/imac/py_median.csv`. Emits 31-spine × 12 male-group `{pr,ps,py}_yuyu_deconvoluted.csv`. See `archive/sce4_reproduction_2026-06-08/README.md`. |
 | `pair_to_receiver_cache.py` | Reshapes the 9 wide driver outputs into the long-form `receiver_cache/` layout the unified viewer consumes. Also exports `_sanitize_celltype`, imported by 4 `alz/integration/` modules. |
-| `verify_sce4_parity.py` | Regression gate (`pixi run verify-incytr-sce4`): regenerates the two benchmark pairs unfiltered (nboot=0) and confirms the sce4-parity overrides still reproduce 599/600 + max \|Δ sclog2FC\|=0 on R/EM/T (App-transgene residual exempt). |
-| `verify_sce4_full.R` | Full sce4 reproduction gate (`pixi run verify-incytr-sce4-full`): compares every gated path tuple in the 9 unfiltered wide parquets against sce4's pre-cap pairwise RDS files. Fails loudly until all 9 RDS files are present. |
 | `audit_incytr_input_provenance.py` | Lightweight scanner that reports canonical, diagnostic, and suspicious Incytr input-root references in scripts/docs/configs. Use before treating a run as production. |
 | `__init__.py` | Package marker (enables `from incytr_pair.* import` in `alz/integration/`). |
 
@@ -126,9 +124,8 @@ The sce4-reproduction forensic probes (`audit_*`, `forensic_sce4_afc.R`,
 `run_sce4_full_unfiltered.sh`) and the redundant `launch_pair_mode.sh` launcher
 were archived to `archive/sce4_reproduction_2026-06-08/` on 2026-06-08 — the
 reproduction is solved and they are referenced only by the investigation log
-`archive/sce4_reproduction_2026-06-08/README.md`. The active regression gates
-(`verify_incytr_sce4.sh`, `verify_sce4_parity.py`, `verify_sce4_full.R`) and the
-production gene.use source (`extract_sce4_geneuse.R`) stay here.
+`archive/sce4_reproduction_2026-06-08/README.md`. The production gene.use source
+(`extract_sce4_geneuse.R`) stays here.
 
 ## Data layout
 
@@ -244,12 +241,10 @@ overhead. Plan accordingly.
 ### After the run
 
 ```bash
-pixi run verify-incytr-sce4   # regression gate: confirms sce4 parity on two known pairs
-pixi run verify-incytr-sce4-full   # full gate: requires all 9 pre-cap sce4 RDS files
-bash alz/runners/main/run_pair_mode_pipeline.sh   # picks up sentinels; runs E3/E4/I/V
+bash alz/runners/main/run_pair_mode_pipeline.sh   # picks up sentinels; runs E3/I/V
 ```
 
-For sce4 reproduction runs where permutation p-values are not needed, set
+For runs where permutation p-values are not needed, set
 `FULL_NBOOT=0` when calling `run_pair_mode.sh`; the path-set gates use SigProb
 and PDS, not permutation p-values. Set `FORCE_RERUN=1` if `wide/` already
 contains stale parquets from a non-frozen-geneuse run.

@@ -1039,7 +1039,7 @@ def build_payload(data: UnifiedData) -> dict:
     # and WMB share fold-pill baselines (song_uniform) are gone. wmb_uniform is
     # kept as the even-split baseline the viewer badge tooltip uses to translate
     # the detection-based wmb_concentration_tier into its concentration threshold
-    # (tier × uniform). See docs/plans/attribution/standard_attribution_metric.md.
+    # (tier × uniform). See docs/foundation/standard_attribution_metric.md.
     meta = {
         "schema_version": SCHEMA_VERSION,
         "viewer_payload_schema_version": 2,
@@ -1338,8 +1338,8 @@ def write_html(
         methods_bytes = os.path.getsize(PIPELINE_OVERVIEW_DEST)
     else:
         print(f"WARNING: {PIPELINE_OVERVIEW_SRC} not found; "
-              "Methods tab will 404. Render docs/pipeline_overview.qmd first "
-              "(quarto render docs/pipeline_overview.qmd --to html).",
+              "Methods tab will 404. Render docs/methods/pipeline_overview.qmd first "
+              "(quarto render docs/methods/pipeline_overview.qmd --to html).",
               file=sys.stderr)
     return {"html_bytes": len(raw), "output": UNIFIED_VIEWER_HTML,
             "methods_bytes": methods_bytes}

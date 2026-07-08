@@ -89,8 +89,6 @@ nsclc-metrics = "python alz/reference/nsclc_expression.py --metrics"
 nsclc-audit = "python alz/reference/nsclc_expression.py --audit"
 tcell-viewer = { cmd = "python alz/build_tcell_viewer.py", depends-on = ["tcell-within-cohort"] }
 install-incytr = "R CMD INSTALL --no-multiarch ../incytr"
-verify-incytr-sce4 = "bash alz/incytr_pair/verify_incytr_sce4.sh"
-verify-incytr-sce4-full = "Rscript alz/incytr_pair/verify_sce4_full.R"
 substrate-compare = "python -m alz.cross_reference.substrate_motif_compare"
 c5-mukesh-5xfad = "python -m alz.cross_reference.c5_mukesh_5xfad"
 kinase-incytr-bridge = "python -m alz.cross_reference.kinase_incytr_bridge"

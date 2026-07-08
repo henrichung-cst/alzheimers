@@ -531,7 +531,7 @@ function _attrPathwayFromContrast(contrast) {
 // the single cross-cohort detection floor shared with the within-cohort scRNA).
 // This replaces
 // the old transcript-share tier: a share is a relative ranking, not presence, and
-// was shown inversely predictive of truth (docs/plans/attribution/standard_attribution_metric.md).
+// was shown inversely predictive of truth (docs/foundation/standard_attribution_metric.md).
 // All values are precomputed in Python; the JS only renders.
 // Concentration badge: the shared _concTierCell (attribution_view.js) renders the
 // ≥N× tier identically; prefix a space and suppress it at tier 0 (no badge).

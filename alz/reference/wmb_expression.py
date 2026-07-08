@@ -543,7 +543,7 @@ def _write_attribution_metrics(df: pd.DataFrame) -> pd.DataFrame:
     """Compute the standard attribution metric and write the two WMB outputs.
 
     See alz/cross_reference/specificity.py and
-    docs/plans/attribution/standard_attribution_metric.md for the definition. The 9 retained
+    docs/foundation/standard_attribution_metric.md for the definition. The 9 retained
     WMB classes are already broad lineages, so there is no coarse vs. native
     distinction — the metric is computed once over them (group_col=None).
 

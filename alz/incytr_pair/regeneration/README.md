@@ -15,11 +15,8 @@ in `outputs/reports/incytr_pair_mode/` and is **never swapped** — viewer
 development reads it directly. This runbook covers the two remaining
 un-regenerated cohorts: **5xFAD** and **t-cell**.
 
-The pair-mode engine, scoring, and sce4-parity invariants are unchanged — these
-layers widen `gene.use` and emit additional grains. The engine reproduces sce4
-**with KsG OFF**; that regression check (`pixi run verify-incytr-sce4`) is a
-standalone KsG-OFF test, **never run on the production burn** (KsG widens
-`gene.use` beyond sce4's frozen node sets by design, so it would always diverge).
+The pair-mode engine and scoring are unchanged — these layers widen `gene.use`
+and emit additional grains.
 
 ## Scripts in this folder
 

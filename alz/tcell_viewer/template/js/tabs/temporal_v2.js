@@ -591,7 +591,7 @@ window.KinaseFilter = (function() {
     tcellMin: 0,      // 0 = Any (off, default); 1.5/2/3 = opt-in minimum state
                       // enrichment (fold over the kinase's baseline mean state).
                       // Enrichment only — concordance is never gated
-                      // (docs/tcell_exhaustion_analysis_summary.md).
+                      // (docs/reference/tcell_exhaustion_analysis_summary.md).
     sign: "",         // "" | "up" | "down" over selected day contrasts.
     pattern: "",      // TrendFilter value over ordered donor-day NES contrasts.
     fdr: 0.25, sortCol: "nes_profile", sortAsc: false,

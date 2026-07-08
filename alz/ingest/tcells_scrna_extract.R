@@ -6,7 +6,7 @@
 # ProjecTILs call (the scGate `none`-gate and doublets — donor1 ~13%, donor2
 # ~7%) are dropped honestly. This replaces the prior cluster-keyed path
 # (deleted 2026-05-28 with the cluster-annotate step); see
-# docs/tcell_exhaustion_analysis_summary.md.
+# docs/reference/tcell_exhaustion_analysis_summary.md.
 #
 # Memory pattern unchanged: load ONCE, DietSeurat to RNA-only + drop scale.data
 # immediately, extract every artifact in one pass.
