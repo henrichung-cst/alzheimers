@@ -62,8 +62,8 @@ Supported:
 - bulk phospho condition effects,
 - total-proteome-enabled stoichiometry analysis,
 - mechanism classification into abundance-driven, both, and activity-driven classes,
-- Track A concordance results for abundance-coupled classes,
-- Track B expression-constrained attributions for activity-driven kinases,
+- direction concordance for abundance-coupled classes,
+- detection-gated attributions for activity-driven kinases,
 - the merged final attribution table within the current mechanism-stratified framework.
 
 Not supported by the retired 24-group design:

@@ -140,6 +140,22 @@ have both been replaced by the unified pill. See
 `docs/foundation/specificity_confidence.md` for the full tier definition and
 per-cohort corroborator details.
 
+### Trend Vocabulary Is One Set Repo-Wide
+
+Kinase behavior across a cohort's ordered timepoints uses a single five-label
+vocabulary everywhere — `always_up`, `always_down`, `monotonic_up`,
+`monotonic_down`, `mixed` (plus a muted `—` when fewer than two finite values).
+The trajectory-classification labels (`peaked/progressive/declining/sustained/…`)
+and the `peak_NES`/`peak_contrast`/`trajectory_{g}` columns were removed; there
+is no stored trend column. Pills and the trend filter both classify live from
+the payload's ordered `NES_{contrast}` vector via `TrendFilter.classify` /
+`vectorMatches` (`trend_filter.js`), which share one definition of
+up/down/monotonic/mixed. Song shows three per-genotype pills (App/Tau/ApTt);
+5xFAD and T-cell show one. This is distinct from the Incytr pathway trend
+(`alz/viewer/shared/trajectory.py`, sign-vector over timepoints), which already
+used this five-label set and is unchanged. The 5xFAD `_f5RenderTrajectory`
+"NES over age" line chart is a chart, not a label, and is kept.
+
 ## Song AD / Mouse Attribution
 
 ### Producer Contract
@@ -426,14 +442,3 @@ Current companion specs:
   lazy sidecar conventions.
 - `docs/foundation/viewer_frontend_contract.md` defines shared versus
   intentionally forked frontend modules.
-
-Historical inputs that this document supersedes for current behavior:
-
-- `docs/plans/attribution/attribution_drawer_redesign.md`
-- `docs/integrations/5xfad-kinase-mea-viewer.md` Attribution sections
-- `docs/plans/todo2_tcell_specificity_reference.md` viewer-integration section
-- `docs/audits/cohort_abstraction_refactor/phase_5A_payload_inventory.md`
-  attribution inventory notes
-
-Those files remain useful for implementation history and audit provenance, but
-this document is the source of truth for the live Attribution tab architecture.

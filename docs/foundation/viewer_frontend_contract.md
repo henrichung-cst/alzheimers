@@ -122,23 +122,14 @@ center stack is scaled to the tallest positive flanking stack, matching Kinase L
 
 ### Song/AD Incytr Heatmap Saturation
 
-The Song/AD heatmap is intentionally not renormalized by default. A 2026-06-01 audit found that the
-current canonical Song outputs are heavily concentrated in three receiver/end-point cell types, and
-that the same pattern is present in frozen SCE4 `10302025` outputs after normalizing dotted versus
-hyphenated cell-type names. Current receiver shares are Cholinergic-Neurons 51.39%,
-Glutamatergic-excitatory-neurons-Cortical-layer-2-4-pyramidal-neurons 21.07%, and
-GABAergic-inhibitory-interneurons-VIP-positive 17.90%. Frozen SCE4 receiver shares are 51.15%,
-20.02%, and 17.69%, respectively. The normalized current-vs-SCE4 pair-count correlation is high
-across contrast/sender/receiver cells (Pearson 0.993, Spearman 0.972), so this is not a new viewer or
-canonical-output artifact.
-
-The same audit found a strong inverse relationship between endpoint path count and cell abundance in
-the current male pseudobulk counts (Spearman -0.864 versus receiver paths with |PDS| > 1).
-Cholinergic,
-VIP-positive, and layer-2-4 pyramidal neurons have median per-sample counts of roughly 2, 2, and 3
-cells, respectively. The audit artifact is
-`outputs/reports/incytr_pair_mode/cell_count_qc/median_cells_vs_receiver_paths.png`, with the source
-table at `outputs/reports/incytr_pair_mode/cell_count_qc/cell_count_incytr_pathway_qc.csv`.
+The Song/AD heatmap is intentionally not renormalized by default. The canonical Song outputs are
+heavily concentrated in a few receiver/endpoint cell types (Cholinergic, VIP-positive, and
+layer-2-4 pyramidal neurons dominate), and the same concentration is present in the frozen SCE4
+outputs — so it is a property of the data, not a viewer or canonical-output artifact. It tracks an
+inverse relationship between endpoint path count and cell abundance: those endpoints have median
+per-sample counts of ~2–3 cells. Supporting QC is under
+`outputs/reports/incytr_pair_mode/cell_count_qc/` (`median_cells_vs_receiver_paths.png`,
+`cell_count_incytr_pathway_qc.csv`).
 
 Treat log1p color as a visualization aid for this saturated row universe, not as a scoring
 transform. Treat the sparse-cell filter as a sensitivity view; it does not rewrite canonical Incytr
@@ -212,17 +203,13 @@ configuration or small view-specific hooks:
 js/01_state.js
 ```
 
-Note: `js/02_ui_chrome.js` was previously listed here. Its common chrome logic has
-been extracted to the shared `js/02_ui_chrome_common.js` (included before the
-per-viewer file); the residual per-viewer `02_ui_chrome.js` holds only
-viewer-specific TAB_MANIFEST entries and splitter registrations, which are
-intentional and not a consolidation target.
-
-Note: `kinase_audit.js` was previously listed here as a consolidation candidate.
-Its Attribution subtab has been consolidated — both viewers now call
-`AttributionView.render(..., MANIFEST)` from the shared engine. The remaining
-per-viewer divergence in `kinase_audit.js` (MEA-subtab structure, contrast
-pickers, trajectory filters) is intentional and is not a consolidation target.
+Not consolidation targets (intentional per-viewer divergence): the per-viewer
+`js/02_ui_chrome.js` holds only viewer-specific TAB_MANIFEST entries and splitter
+registrations (common chrome logic lives in shared `js/02_ui_chrome_common.js`,
+included before it); the per-viewer divergence in `kinase_audit.js` (MEA-subtab
+structure, contrast pickers, trajectory filters) is likewise intentional — its
+Attribution subtab already renders through the shared
+`AttributionView.render(..., MANIFEST)` engine.
 
 High-priority consolidation targets:
 
@@ -261,7 +248,3 @@ pixi run python alz/viewer/verify_payload_contract.py \
 
 Browser smoke should cover AD/Song Incytr heatmap/pathways, AD/Song kinase explorer, T-cell donor1
 Incytr/kinase, T-cell donor2 Incytr, and the donor2 no-kinase message.
-
-Manual browser smoke for both generated viewers was completed on 2026-06-01 after the shared-module
-refactor. Both the AD/Song unified viewer and T-cell viewer loaded and preserved their expected core
-interactions.

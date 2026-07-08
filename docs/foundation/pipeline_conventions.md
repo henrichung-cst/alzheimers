@@ -8,9 +8,9 @@ Sources: `project_lfc_sign_convention.md`, `project_mechanism_after_attribute.md
 
 | Column | Source | Direction |
 |---|---|---|
-| MEA OLS β | `kinase_enrich.py:44-62` | WT=0, disease=1 dummy → β = E[Y\|disease] − E[Y\|WT] |
-| MEA `lfc` in `site_level_ols.csv` | `decomposition/factorial_ols.py:71` | same |
-| MEA `NES` | `kinase_enrich.py:306-335` | prerank descending on stoich β → +NES = more active in disease |
+| MEA OLS β | `alz/bulk_mea/enrich.py` (`_build_design_matrix`) | WT=0, disease=1 dummy → β = E[Y\|disease] − E[Y\|WT] |
+| MEA `lfc` in `site_level_ols.csv` | `alz/bulk_mea/enrich.py` (`_run_ols_all_sites`) | same |
+| MEA `NES` | `alz/bulk_mea/enrich.py` (`_run_mea`) | prerank descending on stoich β → +NES = more active in disease |
 | Incytr `*_sclog2FC`, `*_pr_log2FC`, etc. | `incytr/R/math.R:53`, driver `incytr_commandline.R:107-108,199-200` | c1=disease, c2=WT → log2(disease/WT) |
 | Incytr `PDS`, `TPDS`, `PPDS`, `PhPDS_*` | `incytr/R/evaluation.R:67-87,376-379` | logi-transformed aFC → + = pathway up in disease |
 
@@ -24,9 +24,7 @@ When adding a new LFC-style column, default to this convention (condition1=disea
 
 Canonical order: `pixi run live` = `[ingest, normalize, enrich, attribute, mechanism, recover]`.
 
-`run_all.sh` runs K-attr before K-mech (fixed 2026-05-29 runners audit). Mechanism's standalone outputs (`mea_raw_phospho.csv`, `mechanism_annotation.csv`) are produced in any order — only the merge into `unified_attribution.csv` is order-sensitive.
-
-Full record: `docs/plans/runners_audit_2026-05-29.md`.
+`run_all.sh` runs K-attr before K-mech. Mechanism's standalone outputs (`mea_raw_phospho.csv`, `mechanism_annotation.csv`) are produced in any order — only the merge into `unified_attribution.csv` is order-sensitive.
 
 ## Reference crosswalk to levy_t5: always direct
 

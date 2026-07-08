@@ -1,6 +1,6 @@
 # Repository Retention Policy
 
-> **Note (2026-04-08):** The `archive/` directory was purged from git history to reduce repo size from 3.6 GB to ~5 MB. References to `archive/` paths below are retained as a decision record of what was archived and why. As of 2026-04-20, `docs/archive/` is gitignored — local files persist for provenance but are not tracked.
+> The `archive/` directory (repo root) is gitignored and not tracked in git; local files persist for provenance only. `archive/` paths referenced below resolve only in a local checkout that retains them.
 
 This document defines what remains mainline, what remains as supporting evidence, what is archived for provenance, which code paths should not be reopened, and the file-level inventory that backs those labels.
 
@@ -42,6 +42,9 @@ Generated caches (`alz/__pycache__/`, etc.) are excluded from this index.
 - `docs/foundation/mechanism_attribution_contract.md`
 - `docs/foundation/projected_state_mea_contract.md`
 - `docs/foundation/kinase_explorer_attribution.md`
+- `docs/foundation/standard_attribution_metric.md`
+- `docs/foundation/backbone_incytr_track.md`
+- `docs/foundation/tcell_reference.md`
 - `docs/foundation/viewer_payload_contract.md`
 - `docs/foundation/viewer_frontend_contract.md`
 - `docs/foundation/mukesh_ingest_policies.yml`
@@ -56,11 +59,12 @@ Generated caches (`alz/__pycache__/`, etc.) are excluded from this index.
 | `alz/bulk_mea/normalize.py` | Live Stage 2 IRS normalization + stoichiometry; `pixi run normalize` |
 | `alz/bulk_mea/enrich.py` | Live Stage 3 factorial OLS + MEA kinase enrichment; `pixi run enrich` |
 | `alz/bulk_mea/attribute.py` | Live Stage 4 unified cell-type attribution; `pixi run attribute` |
-| `alz/bulk_mea/mechanism.py` | Optional supplementary stage: raw-phospho MEA + mechanism classification; `pixi run mechanism` |
-| `alz/bulk_mea/recover.py` | Live Stage 5 final hypothesis-table assembly; `pixi run recover` |
+| `alz/bulk_mea/mechanism.py` | Live Stage 5: raw-phospho MEA + mechanism classification; `pixi run mechanism` |
+| `alz/bulk_mea/recover.py` | Live Stage 6 final hypothesis-table assembly; `pixi run recover` |
+| `alz/cohorts/{song,fivexfad,mukesh,tcells}/` | Per-cohort ingest / MEA modules; each emits the `cohort_contract` artifacts (5xFAD, Mukesh human, T-cell) |
 | `alz/pipelines/ingest/` | Current Kedro wrapper for ingest nodes; downstream bulk stages remain direct module entry points |
 | `alz/pipeline_registry.py`, `alz/settings.py`, `pyproject.toml` | Kedro project bootstrap |
-| `conf/base/{catalog,parameters}.yml`, `conf/full_cohort/parameters.yml` | Kedro Data Catalog + parameters (cohort selection lives here) |
+| `conf/base/{catalog,parameters}.yml`, `conf/{full_cohort,human_nbb}/parameters.yml` | Kedro Data Catalog + parameters (cohort selection lives here) |
 | `alz/runners/main/run_all.sh` | Canonical full end-to-end build (kinase + decomposition + Incytr + human + viewer); resumable sentinels; `pixi run all`. Auto-resolves WMB/SEA-AD downloads unless `--skip-atlas` |
 | `alz/runners/main/run_dual_analysis.sh` | Dual-track (males-only primary + full-cohort sensitivity); `pixi run dual` |
 | `alz/runners/main/run_pair_mode_pipeline.sh` | Canonical pair-mode Incytr build (inputs → Incytr → viewer reshape) |
@@ -68,13 +72,6 @@ Generated caches (`alz/__pycache__/`, etc.) are excluded from this index.
 | `alz/runners/main/run_levy_t5_attribution_rebuild.sh` | Targeted rerun: attribute → recover → viewer |
 | `alz/runners/main/run_pair_mode_viewer_build.sh` | Targeted rerun: pair receiver cache → viewer |
 | `alz/runners/main/run_mukesh_perdonor.sh` | Targeted human per-donor rerun |
-
-> The granular kinase-chain wrappers (`run_data_ingest.sh`, `run_kinase_attribution.sh`,
-> `run_attribution_recovery.sh`), the bundled `run_live_pipeline.sh`, `rerun_mouse_kinase_chain.sh`,
-> the completed `run_phase2_spine_pivot.sh`, and the lighter `run_pivot_smoke.sh` were archived
-> 2026-05-29 (runners audit). `pixi run {ingest,normalize,enrich,attribute,mechanism,recover}` /
-> `pixi run all` and `rerun_decomposition_chain.sh` cover their function; `run_data_ingest.sh` was
-> also stale (called the removed `song.py --markers` step).
 
 ### Outputs that must remain reproducible
 
@@ -101,8 +98,11 @@ Generated caches (`alz/__pycache__/`, etc.) are excluded from this index.
 | `alz/reference/atlas.py` | External-reference acquisition for SEA-AD, WMB, and HBCA |
 | `alz/reference/wmb_expression.py` | WMB expression export (required for unified attribution) |
 | `alz/reference/snrna_integration.py` | Song snRNA-seq pseudobulk, specificity, and concordance |
-| `alz/build_unified_viewer.py` | Kinase + pathway HTML viewer (cross-entity) |
-| `alz/build_tcell_viewer.py` | Dedicated T-cell HTML viewer |
+| `alz/build_unified_viewer.py` + `alz/viewer/`, `alz/viewer_shared/` | Unified Song/5xFAD/Mukesh HTML viewer (builder + cohort payload/template packages) |
+| `alz/build_tcell_viewer.py` + `alz/tcell_viewer/` | Dedicated T-cell HTML viewer (builder + package) |
+| `alz/cross_reference/` | Cross-cohort specificity + T-cell within-cohort reference |
+| `alz/decomposition_mea/` | Per-cluster decomposition MEA (levy_t5 forward projection) + verification |
+| `alz/incytr_pair/` | Pair-mode Incytr driver, runners, and decomposition export |
 | `alz/shared/map_kinases_to_genes.py` | Shared kinase-to-gene mapping utility |
 | `alz/ingest/lucie.py` and `alz/ingest/build_5xfad_omics_join_manifest.py` | Lucie / 5xFAD integration and provenance utilities |
 | `alz/runners/supporting/run_atlas_reference.sh` | Atlas/reference setup |
@@ -125,23 +125,10 @@ Archived assets are preserved for design history, negative-result provenance, an
 
 ### Archived documentation (local only, gitignored)
 
-`docs/archive/` holds prior-phase records kept on disk for provenance:
-
-- SAP identifiability record, factor-model failure record, rescue-branch record
-- Superseded transition summaries, atlas-series working notes
-- Receiver-centric refactor narrative, Incytr input validation log, integration audit logs
-
-### Archived code (purged from git 2026-04-08)
-
-Removed from the working tree; decision record preserved here:
-
-- `archive/code/sap_*.py` — retired SAP path (data, model, validate, perf_test, preflight, factor_model, model_2comp, module1_de, module2_triangulation, module5b_analysis, module5c_correlation, diagnostic_figures, tier_annotation)
-- `archive/code/kl_analysis_*.py` — deconvoluted / bulk kinase-enrichment discovery paths
-- `archive/code/{analysis_utils,downstream_utils,permutation_correction,plotting_utils}.py` — utility layer for retired paths
-- `archive/code/analyze_{sensitivity,substrate_overlap,temporal_trajectories}.py` — retired side analyses
-- `archive/code/{aptt_additivity_analysis,compare_corrections,compare_module6_sap,export_song_aobs_desp}.py`
-- `archive/code/r/{run_bmind,reconstruct_5xad_seurat,run_incytr_ad_models_yuyu01,run_incytr_5xfad_lore00}.R`
-- `archive/runners/{run_module5c,run_module5b,run_factor_model_validation,run_kinase_aggregate_validation,run_rerun_matrix}.sh`
+`archive/` (repo root) holds prior-phase records kept on disk for provenance —
+e.g. the deconvolution-infeasibility record (`archive/deconvolution/docs/`), the
+archived orchestration and standalone plans (`archive/archived_plans/`), and the
+factorial-Incytr archive (`archive/incytr_factorial_2026-05-18/`).
 
 ## Reproducibility Requirements
 

@@ -78,8 +78,8 @@ The project now has a clean decision structure:
 1. direct deconvolution is closed,
 2. transcript-only rescue is closed,
 3. stoichiometry plus mechanism stratification is the active route,
-4. Track A and Track B should remain distinct by design,
-5. the RNA-phospho decoupling result is the mechanistic explanation for that split.
+4. mechanism class (abundance-driven / both / activity-driven) and direction concordance remain distinct evidence axes,
+5. the RNA-phospho decoupling result is the mechanistic explanation for the abundance-vs-activity split.
 
 ## Bottom Line
 

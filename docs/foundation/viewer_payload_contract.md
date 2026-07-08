@@ -598,40 +598,10 @@ Current context targets:
 ]
 ```
 
-## Migration Plan
+## Non-Canonical Routing — do not reintroduce
 
-1. Add the adapter layer to both viewers while preserving current flat payload reads.
-2. Update both builders to emit `meta.viewer_payload_schema_version = 2`, `meta.contexts`, and
-   `meta.capabilities`.
-3. Add `by_context` to `kinases`, `celltypes`, and `incytr_pathways`.
-4. Refactor shared JS tabs to read through the adapter.
-5. After both viewers validate, remove cohort-specific direct reads from shared tabs.
-6. Remove emitted flat fallback blocks after both current viewers build successfully from v2-only
-   blocks.
-
-Current status as of 2026-06-01: steps 1-5 are implemented for the AD unified viewer and the T-cell
-viewer. Shared
-viewer modules now read active-context kinases, cell types, Incytr blocks, contrast axes, and shard
-filenames through `ViewerPayload`. The T-cell viewer uses `selection.context`, `ctx=`, and
-`by_context` as canonical routing. Legacy `#d=...` URLs are accepted only as an inbound shim and are
-rewritten through context state. The T-cell builder no longer emits `by_donor` aliases for
-`kinases`, `celltypes`, `incytr_pathways`, or `meta.transcript_trace`. The AD builder no longer
-duplicates flat `kinases`, `celltypes`, or `incytr_pathways` blocks outside `by_context`. Initial
-frontend deduplication has also moved byte-identical shared modules into `viewer_shared`:
-`tabs/incytr_state.js`, `widgets/multiselect.js`, and `widgets/sequence_logo.js`. `SliceCache`
-is also shared and uses context-scoped Incytr shard indexes by default while retaining legacy flat
-index fallback for older payloads. The Incytr heatmap and pathways tabs are shared as well; they
-derive disease/day and timepoint/baseline vocabularies from each active context instead of
-hard-coding the AD/Song contrast grid. Kinase detail and transcript trace modules are also shared;
-they branch on payload capabilities/context metadata rather than cohort-specific filenames. Hash and
-prerequisite routing is shared through `ctx=` and active-context defaults. Header, boot, and
-evidence-row rendering are shared with optional context-switch and cohort-label support. Manual
-browser smoke for both generated viewers passed on 2026-06-01 after this shared-module refactor.
-
-## Deprecation Targets
-
-The migration is intended to remove old routing assumptions, not just add a parallel schema.
-Deprecated code paths are:
+The frontend contract is `by_context` + `ctx=`. These older routing assumptions
+are not part of it and must not be reintroduced in shared code:
 
 - Frontend reads from T-cell `by_donor`; use `by_context`.
 - Frontend reads directly from flat `PAYLOAD.kinases`, `PAYLOAD.celltypes`, or

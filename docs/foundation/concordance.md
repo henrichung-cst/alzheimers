@@ -122,46 +122,53 @@ synthetic score.
 
 ## Direction tiers
 
-After the internal direction gate passes, the direction tier is
-assigned based on the strength and source of evidence:
+After the internal direction gate passes (`eligible` = `mea_significant` **and** the
+weighted direction check `> 0`), the direction tier is assigned by source and detection
+support. The corroboration gate is **detection-based**: a kinase is only attributed at a
+cell type where its gene is actually expressed there (`song_detected` / `wmb_detected` =
+`fraction_cells_expressing ≥ 0.10`). The prior share gates (`song_specificity ≥ 1/N`) were
+removed — they were inversely predictive of presence.
 
-### High confidence
-- Song contributed to concordance (`source` is `"song"` or `"both"`)
-- Song LFC exceeds the minimum threshold
-- Song cell-type specificity ≥ 2× uniform over the Levy-T5 spine
+### very_high
+- Meets **high** (below) **and** the per-cluster decomposition MEA agrees with bulk in sign
+  (`decomp_fdr < 0.25`, same-sign NES).
 
-### Moderate confidence
-- Song contributed but one strict Song gate is missing, OR
-- SEA-AD-only concordance (capped at moderate regardless of WMB tier)
+### high
+- Song contributed to concordance (`source` is `"song"` or `"both"`), **and**
+- `|song_lfc| > SONG_LFC_MIN`, **and**
+- the kinase gene is **detected** in that Song cluster (`song_detected`).
 
-### Low confidence
-- Weak evidence from all sources
+### moderate
+- **Song** — Song contributed but does not meet `high`, OR
+- **SEA-AD-only** — corroborated by `wmb_detected` or strong human location
+  (`human_location_score ≥ 1.0`).
 
-### None (rejected)
-- internal weighted direction check `≤ 0` (direction mismatch)
+### low
+- Eligible but none of the above.
 
-**Key constraint:** SEA-AD-only and WMB-only evidence can never reach "high"
-confidence. Only Song-supported concordance with Song cell-type localization
-(same-species, same-cohort) qualifies.
+### none (rejected)
+- Not `mea_significant`, or weighted direction check `≤ 0` (direction mismatch).
+
+**Key constraint:** SEA-AD-only evidence caps at `moderate`. Only Song-supported concordance
+with the gene detected in the Song cluster (same-species, same-cohort) reaches
+`high`/`very_high`.
 
 ## Evidence basis labels
 
-Each attributed (kinase, cell type) pair receives an evidence basis label
-describing which sources contributed:
+`assign_confidence` (`alz/bulk_mea/confidence.py`) writes a `confidence_basis` label
+alongside the tier:
 
-| Label | WMB | SEA-AD | Song | Interpretation |
-|-------|-----|--------|------|----------------|
-| `three_way` | ✓ | ✓ | ✓ | Strongest: Song-localized, WMB cross-checked, concordant in both human and mouse transcriptomics |
-| `within_cohort` | optional | — | ✓ | Strong: same-cohort mouse evidence + Song cell-type specificity |
-| `cross_species` | ✓ | ✓ | — | Moderate: human concordance + expression specificity, no paired mouse data |
-| `mouse_expression_only` | ✓ | — | — | Weak: expressed in cell type but no concordance evidence |
-| `song_only` | — | — | ✓ | Song concordance without WMB expression specificity |
-| `human_concordance_only` | — | ✓ | — | SEA-AD concordance without WMB expression specificity |
-| `weak` | — | — | — | Below all thresholds |
+| Label | Tier | Meaning |
+|-------|------|---------|
+| `song_high_decomp` | very_high | Song-detected concordance + decomposition MEA agrees with bulk in sign |
+| `song_high` | high | Song-detected concordance with `|song_lfc| > SONG_LFC_MIN` |
+| `song_moderate` | moderate | Song contributed but below the `high` gate |
+| `seaad_human_moderate` | moderate | SEA-AD-only, corroborated by strong human location (`human_location_score ≥ 1.0`) |
+| `seaad_wmb_moderate` | moderate | SEA-AD-only, corroborated by WMB detection |
+| `low_concordance` | low | Eligible but below all corroboration gates |
+| `none` | none | Not eligible (not `mea_significant` or direction gate ≤ 0) |
 
-Thresholds:
-- Song location: `song_specificity ≥ 1/N_CELL_TYPES` (above uniform), high at `2/N_CELL_TYPES`
-- WMB: `wmb_specificity ≥ wmb_specificity_uniform()` (above retained-class uniform; cross-check)
+Direction-check magnitude thresholds:
 - SEA-AD: `|sea_ad_lfc| > SEA_AD_LFC_MIN` (default 0.1)
 - Song: `|song_lfc| > SONG_LFC_MIN` (default 0.1)
 
@@ -176,14 +183,15 @@ does not export a synthetic score or the internal direction-gate value.
 ### Hypothesis tables (`attribution_recovery.py`)
 
 **Table 2 (celltype_evidence_table.csv):** Static per-(kinase, cell type)
-evidence. WMB fold, SEA-AD LFC, Song LFC, evidence basis, WMB tier.
+evidence: SEA-AD LFC, Song LFC, evidence basis, and `wmb_concentration_tier`
+(detection-derived).
 
 **Table 3 (kinase_hypothesis_table.csv):** Top 3 cell types per kinase,
 ranked by confidence tier and explicit evidence columns.
 
-`has_high_conf_attribution` is `True` if any cell type has WMB tier "high"
-AND concordance evidence from either source (`|song_lfc| > 0.1` OR
-`|sea_ad_lfc| > 0.1`).
+`has_high_conf_attribution` is `True` iff at least one (kinase, cell type) row
+reaches `high` or `very_high` confidence tier — it mirrors the per-row
+`confidence_tier`, with no separate gate.
 
 ### Interactive viewer (`build_unified_viewer.py`)
 
@@ -241,7 +249,7 @@ cluster) are forbidden — see [`cohort_contract.md`](./cohort_contract.md) §6.
 | SEA-AD pathway matching | `alz/bulk_mea/attribute.py` | `_assemble_unified()` |
 | Pipeline orchestration | `pixi.toml` | `attribute` task invokes `alz/bulk_mea/attribute.py` |
 | Song pathway-specific LFCs | `alz/reference/snrna_integration.py` | `step_concordance()` |
-| Song Allen-Cell-Type → WMB class mapping | `alz/shared/config.py` | `SONG_TO_WMB_CLASS_MAP` |
+| Cluster → WMB class crosswalk | `data/derived/bridges/cluster_to_wmb_class.csv` | 1-hop bridge (see `cohort_contract.md` §6.3) |
 | Top cell-type ranking | `alz/bulk_mea/recover.py` | `_build_kinase_hypothesis_table()` |
 | High-confidence flag | `alz/bulk_mea/recover.py` | `_build_kinase_hypothesis_table()` |
 | Viewer payload assembly | `alz/build_unified_viewer.py` | attribution payload block |

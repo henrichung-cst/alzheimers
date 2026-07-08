@@ -12,7 +12,7 @@
 analysis_mode: full_cohort  # disables males_only sex filter
 
 # Sample-level outlier exclusion is disabled at the ingest layer (see
-# docs/audits/mukesh_ingest_policies.yml -> sample_outlier_exclusion).
+# docs/foundation/mukesh_ingest_policies.yml -> sample_outlier_exclusion).
 # This path still resolves so any code reading the file gets per-sample
 # robust-z diagnostics.
 sample_exclusions_path: outputs/reports/data_ingest_human/sample_exclusions.csv

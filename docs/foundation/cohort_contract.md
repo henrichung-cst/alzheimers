@@ -2,15 +2,14 @@
 
 Canonical input/output schemas for the four shared analysis modes. Anything
 listed here is **stable cross-cohort**: a new collaborator dataset becomes
-runnable by writing one ingest module that emits artifacts matching this
-contract, plus one `conf/<cohort>/parameters.yml`. No code below
-`alz/cohorts/<cohort>/ingest.py` should know which cohort it is operating on.
+runnable by writing one ingest module (`alz/cohorts/<cohort>/ingest.py`) that
+emits artifacts matching this contract and declares the cohort's factor
+vocabulary / contrasts in `alz/shared/config.py`. No code below the ingest
+module should know which cohort it is operating on.
 
-This document codifies **today's de-facto schemas** (as of the 2026-05-21
-factorial vocab unification + repo-organization Phase 3 closeout). It is
-intentionally descriptive, not aspirational — when current code emits a
-column, this contract names it required; when current code is permissive,
-this contract is permissive.
+This document codifies **today's de-facto schemas**. It is intentionally
+descriptive, not aspirational — when current code emits a column, this contract
+names it required; when current code is permissive, this contract is permissive.
 
 ## 1. Scope
 
@@ -41,9 +40,9 @@ case/control design.
 | `column_name` | str | yes | matches a column in the bulk matrices |
 | `mouse_id` | str | yes (mouse) | cohort-internal subject id |
 | `animal_id` | str | yes (mouse) | upstream collaborator label; parsed by `config.parse_animal_id` |
-| `sex` | str | yes | factor level vocabulary in `conf/<cohort>/parameters.yml:sex_levels` |
-| `timepoint` | str | yes | factor level vocabulary in `conf/<cohort>/parameters.yml:timepoint_levels` |
-| `genotype` | str | yes | factor level vocabulary in `conf/<cohort>/parameters.yml:genotype_levels` (long form, no slashes) |
+| `sex` | str | yes | factor level parsed from `animal_id` via `config.parse_animal_id` |
+| `timepoint` | str | yes | factor level parsed from `animal_id` via `config.parse_animal_id` |
+| `genotype` | str | yes | canonical vocabulary `config.SAP_FACTORIAL.keys()` (long form, no slashes) |
 | `replicate` | int | optional | within-group replicate counter |
 | `has_snrna_seq` | bool | optional | true if matched snRNA is available |
 | `snrna_sample_id` | str | optional | join key into snRNA pseudobulk |
@@ -54,16 +53,17 @@ case/control design.
 | Column | Type | Required | Notes |
 |---|---|---|---|
 | `sample_id` | str | yes | matches a column in the bulk matrices; pattern `{group}-{N}` |
-| `group` | str | yes | factor level vocabulary in `conf/<cohort>/parameters.yml:group_levels` (e.g. `["CTRL","AD"]`) |
+| `group` | str | yes | case/control levels defined by the cohort's ingest module (e.g. `["CTRL","AD"]`) |
 
 Cohort code in `alz/cohorts/<cohort>/ingest.py` (or `alz/ingest/<name>.py` for
-the Song/Lucie originals) decides which shape to emit; downstream nodes branch on
-`parameters.yml:cohort_design` ∈ `{"factorial","case_control"}`.
+the Song/Lucie originals) decides which shape to emit. There is no
+`cohort_design` config key — the ingest module owns the shape.
 
 ### 2.2 Animal-ID parsing
 
-`config.parse_animal_id(s)` returns long-form `(sample_num, mouse_id_raw, sex,
-timepoint, genotype)`. The canonical genotype vocabulary is
+`config.parse_animal_id(s)` returns a dict with keys `sample_num`,
+`mouse_id_raw` (None for short form), `sex`, `timepoint`, `genotype` (or `None`
+if unparseable). The canonical genotype vocabulary is
 `config.SAP_FACTORIAL.keys()` after applying `config.GENOTYPE_TO_SAP`. New
 cohorts use either `config.parse_animal_id` (if they share the SAP regex
 format) or supply their own parser exported from `alz/cohorts/<cohort>/ingest.py`.
@@ -73,7 +73,8 @@ format) or supply their own parser exported from `alz/cohorts/<cohort>/ingest.py
 Defined by `config.CONTRAST_COEFS` — a `dict[contrast_name → dict[coef → value]]`.
 Each contrast is a linear combination over the OLS design columns. The Song
 default has 9 contrasts (`App|Tau|ApTt × 2mo|4mo|6mo`); a new factorial cohort
-overrides `CONTRAST_COEFS` via `conf/<cohort>/parameters.yml:contrast_coefs`.
+overrides the default with a Python `_contrast_coefs()` in its ingest module
+(e.g. `alz/cohorts/fivexfad/ingest.py`).
 
 Downstream code derives contrast lists from `config.CONTRAST_COEFS.keys()` —
 no module should re-declare the 9-name list.
@@ -81,8 +82,26 @@ no module should re-declare the 9-name list.
 ### 2.4 Analysis mode
 
 `conf/base/parameters.yml:analysis_mode` ∈ `{"males_only","full_cohort"}` selects
-sample subset for OLS. Read at module level via `config.ANALYSIS_MODE` today;
-Phase 4 task: inject as `params:analysis_mode` to Kedro nodes.
+the sample subset for OLS (`KEDRO_ENV=full_cohort` overlays the sensitivity config).
+It is threaded to the `enrich`/`attribute`/`mechanism` steps as a parameter;
+`normalize` always uses all samples.
+
+### 2.5 Display naming (viewer-only)
+
+Internal keys (`song`, `fivexfad`, `mukesh`), payload keys, `cohort_id`, data
+paths, and provenance stamps (`5xFAD`) stay literal. Viewer **display** labels
+map through two coordinated constants — `build_unified_viewer.py::COHORT_DISPLAY`
+(Python build-time) and `01_state.js::COHORT_LABELS` (JS runtime); the
+build/runtime boundary is why they are two objects, not one.
+
+| Internal key | Display | Split suffix |
+|---|---|---|
+| `song` | `MouseC1` | genotype split → `MouseC1_App/Tau/ApTt` |
+| `fivexfad` | `MouseC2` | tissue split → `MouseC2 Cortex` / `MouseC2 Hippocampus` |
+| `mukesh` | `HumanC1` | — |
+
+Mode buttons keep the grouping word: `Mouse (MouseC1)`, `Mouse (MouseC2)`,
+`Human (HumanC1)`. CSV export headers/filenames read the same map.
 
 ## 3. Bulk MEA contract (mode 1)
 
@@ -108,24 +127,25 @@ Phase 4 task: inject as `params:analysis_mode` to Kedro nodes.
 | `winsorized_sites{,_pY}.csv` | `contrast`, `site_id`, `gene_symbol`, `original_lfc`, `clipped_lfc`, `lower_bound`, `upper_bound` |
 | `mea_substrate_sets{,_pY}.csv` | `kinase`, `contrast`, `motif`, `residue_type`, `track`, `kl_percentile` |
 
-`contrast` cardinality = `len(parameters.yml:contrast_coefs)`. Case/control
-cohorts emit one contrast per non-reference group (Mukesh: one per donor =
-`{sample_id}_vs_CTRLmean`).
+`contrast` cardinality = the cohort's contrast set (`config.CONTRAST_COEFS`, or
+the cohort's `_contrast_coefs()` override). Case/control cohorts emit one contrast
+per non-reference group (Mukesh: one per donor = `{sample_id}_vs_CTRLmean`).
 
 ### 3.3 Cohort-specific knobs
 
-Live in `conf/<cohort>/parameters.yml`:
+Factor vocabulary and contrasts are Python, not YAML:
 
-```yaml
-cohort_design: factorial          # or "case_control"
-genotype_levels: [WTyp, AppP, Ttau, ApTt]   # factorial only
-timepoint_levels: [2mo, 4mo, 6mo]           # factorial only
-sex_levels: [ma, fe]                        # factorial only
-group_levels: [CTRL, AD]                    # case_control only
-reference_level: WTyp                       # the OLS baseline
-contrast_coefs: { ... }                     # overrides config.CONTRAST_COEFS default
-animal_id_regex: <pattern>                  # optional; default = config._ANIMAL_ID_FULL_RE
-```
+- **Genotype vocabulary / SAP mapping / default contrasts** — `alz/shared/config.py`
+  (`SAP_FACTORIAL`, `GENOTYPE_TO_SAP`, `CONTRAST_COEFS`); animal-ID regex
+  `config._ANIMAL_ID_FULL_RE`.
+- **Per-cohort contrast override** — a `_contrast_coefs()` in the cohort's ingest
+  module (e.g. `alz/cohorts/fivexfad/ingest.py`), returning the same
+  `dict[contrast → dict[coef → value]]` shape.
+- **Cohort shape (factorial vs case/control)** — decided by the ingest module
+  itself, not a config flag.
+
+The `conf/<env>/parameters.yml` files (`base`, `full_cohort`, `human_nbb`) carry
+only `analysis_mode` and reference/output paths — not factor vocabularies.
 
 ## 4. Decomposition MEA contract (mode 2, mouse-only)
 
@@ -191,8 +211,11 @@ Verified by `alz/decomposition_mea/verify_decomposition.py`:
 
 - **Raw scorer coverage**: when testing raw scorer completeness, check the raw/unfiltered artifact or run log for expected sender/receiver coverage. Do not use filtered `receiver_cache/pair_metadata.parquet` for this.
 - **Filtered viewer readiness**: central `wide/`, `receiver_cache/`, and unified-viewer Incytr pathway shards should agree on total row count after the configured gate/cap. Filtered outputs are not expected to contain all 31×31 pairs.
-- **Pair `p_value` is untrustworthy** — filter/rank on `|PDS|`. See [`feedback_no_incytr_pair_pvalue`].
 - Rank-deficient clusters emit NaN.
+
+The pair-mode correctness invariants (untrustworthy pair `p_value` → rank on
+`|PDS|`, output shape 961×9, scorer params, `floor_pr`, gene.use selection) are
+in `CLAUDE.md`; this contract does not restate them.
 
 ## 6. Cross-reference correlation contract (mode 4)
 
@@ -236,8 +259,12 @@ Checklist for adding cohort `<cohort>`:
    - `outputs/reports/data_ingest_<cohort>/sample_mapping.csv` (§2.1 shape that matches the design)
    - `outputs/reports/kinase_attribution_<cohort>/{stoichiometry,raw_phospho}_matrix{,_pY}.csv`
    - `outputs/reports/kinase_attribution_<cohort>/total_proteome_normalized.csv`
-2. Add `conf/<cohort>/parameters.yml` with cohort knobs (§3.3).
-3. Run mode 1 via `KEDRO_ENV=<cohort> pixi run live`.
+2. Declare the cohort's factor vocabulary / contrasts in `alz/shared/config.py`
+   (+ a `_contrast_coefs()` override in the ingest module if factorial); see §3.3.
+3. Run mode 1: factorial cohorts via `pixi run live` (`KEDRO_ENV=full_cohort` for
+   the full-cohort sensitivity overlay); case/control cohorts (e.g. Mukesh) via
+   `alz/runners/main/run_mukesh_perdonor.sh`, **not** the standard live runner
+   (see `conf/human_nbb/parameters.yml`).
 4. (Optional, if matched snRNA exists) supply `pseudobulk_cpm.csv` +
    `pseudobulk_cell_counts.csv` and run mode 2.
 5. (Optional, if Incytr inputs exist) supply `kldata.csv` + spine artifacts and

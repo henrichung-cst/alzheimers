@@ -1,4 +1,4 @@
-# Projected State MEA Contract (Packet 0B)
+# Projected State MEA Contract
 
 ## Scope
 
@@ -29,17 +29,13 @@ not as direct phosphoproteomic observation in a purified cell state.
 - No additional mechanism score is exported. Use categorical outcomes from
   downstream mechanism attribution logic only.
 
-## First implementation target
+## Donor / track eligibility
 
-Packet 0B implementation target is:
+Both donors are runnable (`pixi run tcells-decompose` defaults to `--donor both`):
 
-- `donor = donor1`
-- `track = st`
-- `kind = projected_state`
-- states = ProjecTILs `functional.cluster` labels
-
-No other donor/track must be made runnable before donor1 ST is contractually
-defined and documented.
+- **donor1** — `st` (from IMAC `ps_deconvoluted.csv`) **and** `py`.
+- **donor2** — `py` only; no IMAC track, so `st` is not produced.
+- `kind = projected_state`, states = ProjecTILs `functional.cluster` labels.
 
 ## Eligibility Inputs
 
@@ -65,7 +61,7 @@ present for the donor/track pair:
 
 A row is `skip_reason = null` when inputs and required QC conditions pass.
 
-Expected `skip_reason` values for Packet 0B are:
+Expected `skip_reason` values are:
 
 - `missing_projection_inputs` — required deconvolution inputs or `decompose_manifest.json` absent.
 - `missing_state_metadata` — required `scrna/cell_counts.csv` or `scrna/aggexp_data.csv`
@@ -84,7 +80,7 @@ Special rule:
 
 ## Deconvolution Prerequisite Command
 
-If any T-cell deconvolution input is missing, Packet 0B must not run
+If any T-cell deconvolution input is missing, projected state MEA must not run
 regeneration. Record this as a prerequisite and stop before generation:
 
 ```bash

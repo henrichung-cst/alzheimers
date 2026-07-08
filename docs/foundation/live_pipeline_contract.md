@@ -15,11 +15,11 @@ still call their package modules directly.
 | 2. Normalize | `pixi run normalize` | `python alz/bulk_mea/normalize.py` |
 | 3. Enrich | `pixi run enrich` | `python alz/bulk_mea/enrich.py` |
 | 4. Attribute | `pixi run attribute` | `python alz/bulk_mea/attribute.py` |
-| 5. Recover | `pixi run recover` | `python alz/bulk_mea/recover.py` |
-| Optional: mechanism | `pixi run mechanism` | `python alz/bulk_mea/mechanism.py` |
+| 5. Mechanism | `pixi run mechanism` | `python alz/bulk_mea/mechanism.py` |
+| 6. Recover | `pixi run recover` | `python alz/bulk_mea/recover.py` |
 
 Bundled front door (sequences ingest → normalize → enrich → attribute →
-recover):
+mechanism → recover):
 
 ```bash
 pixi run live
@@ -225,10 +225,12 @@ Failure modes:
 - missing unified attribution outputs from Stage 4
 - empty or malformed MEA results
 
-## Optional — Mechanism (`alz/bulk_mea/mechanism.py`)
+## Mechanism (`alz/bulk_mea/mechanism.py`)
 
-Off the live arc. Reviewer-response stage that re-runs MEA on raw
-(uncorrected) phospho LFCs and classifies each (kinase, contrast) as
+Stage 5 of the live arc, between `attribute` and `recover` (the merge into
+`unified_attribution.csv` requires attribute's output to exist first — see
+`pipeline_conventions.md`). Re-runs MEA on raw (uncorrected) phospho LFCs and
+classifies each (kinase, contrast) as
 `activity_driven`, `abundance_driven`, or `both` against the
 stoichiometry MEA from Stage 3. Track-namespaced for the per-track raw MEA;
 single-namespace combiner produces `mechanism_annotation.csv` and merges

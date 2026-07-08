@@ -6,7 +6,7 @@ Read by analytical role, not creation order.
 
 | File | Role |
 |:---|:---|
-| [`pipeline_overview.qmd`](./pipeline_overview.qmd) | End-to-end narrative of the full pipeline (bulk + Incytr) with cross-references into every foundation spec (renders to `pipeline_overview.html`) |
+| [`methods/pipeline_overview.qmd`](./methods/pipeline_overview.qmd) | End-to-end narrative of the full pipeline (bulk + Incytr) with cross-references into every foundation spec (renders to `pipeline_overview.html`) |
 
 ## Foundation (authoritative live specs)
 
@@ -24,26 +24,42 @@ Read by analytical role, not creation order.
 | [`foundation/viewer_payload_contract.md`](./foundation/viewer_payload_contract.md) | Shared frontend payload schema for current and future viewers; builders stay separate but emit a common context/capability contract |
 | [`foundation/viewer_frontend_contract.md`](./foundation/viewer_frontend_contract.md) | Frontend sharing policy for AD/Song and T-cell viewers; documents shared modules, intentional forks, and consolidation targets |
 | [`foundation/kinase_explorer_attribution.md`](./foundation/kinase_explorer_attribution.md) | Authoritative live contract for Kinase Explorer Attribution views across Song AD, human/Mukesh, 5xFAD, and T-cell viewer surfaces |
-| [`foundation/mechanism_attribution_contract.md`](./foundation/mechanism_attribution_contract.md) | Mechanism-annotation contract (Packet 0A): how mechanism labels merge into `unified_attribution.csv` |
-| [`foundation/projected_state_mea_contract.md`](./foundation/projected_state_mea_contract.md) | Projected-state MEA contract (Packet 0B): per-cluster decomposition → MEA substrate contract |
+| [`foundation/mechanism_attribution_contract.md`](./foundation/mechanism_attribution_contract.md) | Mechanism-annotation contract: how mechanism labels merge into `unified_attribution.csv` |
+| [`foundation/projected_state_mea_contract.md`](./foundation/projected_state_mea_contract.md) | Projected-state MEA contract: per-cluster decomposition → MEA substrate contract |
 | [`foundation/mukesh_ingest_policies.yml`](./foundation/mukesh_ingest_policies.yml) | Mukesh / NBB human ingest edge-case policies (consumed by `alz/cohorts/mukesh/ingest.py`) |
+| [`foundation/tcell_reference.md`](./foundation/tcell_reference.md) | T-cell NSCLC reference cohort constants (per-kinase cell-type detection basis) |
+| [`foundation/pipeline_conventions.md`](./foundation/pipeline_conventions.md) | Cross-pipeline invariants: LFC/NES/sclog2FC/PDS sign convention, mechanism-after-attribute ordering, direct levy_t5 mapping |
+| [`foundation/standard_attribution_metric.md`](./foundation/standard_attribution_metric.md) | The one cross-cohort attribution metric definition (`specificity.compute`); cited by path in 5 source files |
+| [`foundation/backbone_incytr_track.md`](./foundation/backbone_incytr_track.md) | Authoritative backbone-grain spec — read before touching backbone / Incytr-viewer code |
 
-## Reference Guides
+## Reference (state of the world)
 
-Stable docs that aren't authoritative specs but aren't plans either.
+Consolidated status / decision / interpretation records — what exists, what's decided or closed, what results mean. Distilled from `project_*` memories; not authoritative specs, not plans.
 
 | File | Role |
 |:---|:---|
-| [`cohorts_and_data.md`](./cohorts_and_data.md) | Per-cohort status + data conventions across Song, Mukesh, 5xFAD, T-cell |
-| [`pipeline_conventions.md`](./pipeline_conventions.md) | Cross-pipeline coding + naming conventions |
-| [`report_writing_checklist.md`](./report_writing_checklist.md) | Reviewer-facing report writing guidance |
-| [`tcell_exhaustion_analysis_summary.md`](./tcell_exhaustion_analysis_summary.md) | Stable summary of the T-cell exhaustion cohort, attribution interpretation, and dedicated viewer |
-| [`allen_ctx_hpf_disagreement.md`](./allen_ctx_hpf_disagreement.md) | Reviewer FAQ: why our cell-type verdicts may differ from the Allen ctx+HPF Transcriptomics Explorer |
-| [`viewer_style.md`](./viewer_style.md) | Writing-style guide for unified-viewer copy (panels, drawers, tooltips) |
-| [`viewer_crosstable_agreement.md`](./viewer_crosstable_agreement.md) | Unified-viewer Crosstable Agreement view: semantics + wiring |
-| [`incytr_sce4_reproduction.md`](./incytr_sce4_reproduction.md) | sce4 reproduction status + closed dead ends (companion to CLAUDE.md parity constants) |
-| [`kedro_argo_reintroduction.md`](./kedro_argo_reintroduction.md) | Design note for reintroducing Kedro under Argo orchestration |
-| [`cohort_abstraction_refactor.md`](./cohort_abstraction_refactor.md) | Cohort-abstraction refactor phase history + carryover |
+| [`reference/cohorts_and_data.md`](./reference/cohorts_and_data.md) | Per-cohort status + data conventions across Song, Mukesh, 5xFAD, T-cell |
+| [`reference/tcell_exhaustion_analysis_summary.md`](./reference/tcell_exhaustion_analysis_summary.md) | Stable summary of the T-cell exhaustion cohort, attribution interpretation, and dedicated viewer |
+| [`reference/incytr_sce4_reproduction.md`](./reference/incytr_sce4_reproduction.md) | sce4 reproduction status + closed dead ends (companion to CLAUDE.md parity constants) |
+| [`reference/allen_ctx_hpf_disagreement.md`](./reference/allen_ctx_hpf_disagreement.md) | Reviewer FAQ: why our cell-type verdicts may differ from the Allen ctx+HPF Transcriptomics Explorer |
+
+## Viewer Docs
+
+Non-contract viewer docs. Binding viewer contracts live in `foundation/` (`viewer_frontend_contract.md`, `viewer_payload_contract.md`).
+
+| File | Role |
+|:---|:---|
+| [`viewer/viewer_style.md`](./viewer/viewer_style.md) | Writing-style guide for unified-viewer copy (panels, drawers, tooltips) |
+| [`viewer/viewer_crosstable_agreement.md`](./viewer/viewer_crosstable_agreement.md) | Unified-viewer Crosstable Agreement view: semantics + wiring |
+
+## Methods
+
+How the work is done and written up.
+
+| File | Role |
+|:---|:---|
+| [`methods/pipeline_overview.qmd`](./methods/pipeline_overview.qmd) | End-to-end pipeline narrative (bulk + Incytr); renders to `pipeline_overview.html` |
+| [`methods/report_writing_checklist.md`](./methods/report_writing_checklist.md) | Reviewer-facing report writing guidance |
 
 ## Integrations
 
@@ -52,38 +68,18 @@ Stable docs that aren't authoritative specs but aren't plans either.
 | [`integrations/kinase_incytr_integration.md`](./integrations/kinase_incytr_integration.md) | Current pair-mode integration architecture; in-tree file inventory; data-flow diagram |
 | [`integrations/5xfad-kinase-mea-viewer.md`](./integrations/5xfad-kinase-mea-viewer.md) | 5xFAD kinase-MEA + viewer integration notes |
 | [`integrations/5xfad-omics-status.md`](./integrations/5xfad-omics-status.md) | Current 5xFAD proteomics/transcriptomics availability, sample matching status, and unresolved label conflicts |
-| [`integrations/5xfad-lucie-manifest.json`](./integrations/5xfad-lucie-manifest.json) | Local inventory of Lucie 5xFAD upstream files |
-
-## Agent Operating Docs
-
-Docs consumed by agent skills (see [`CLAUDE.md`](../CLAUDE.md) §Agent skills).
-
-| File | Role |
-|:---|:---|
-| [`agents/issue-tracker.md`](./agents/issue-tracker.md) | GitHub issue-tracker workflow for the `henrichung-cst/alzheimers` repo |
-| [`agents/triage-labels.md`](./agents/triage-labels.md) | The five canonical triage labels + their roles |
-| [`agents/domain.md`](./agents/domain.md) | Single-context domain-docs convention (`CONTEXT.md` + `docs/adr/`) |
-
-## Audits & Vignettes
-
-| File | Role |
-|:---|:---|
-| [`audits/tcell_theme_a_audit.md`](./audits/tcell_theme_a_audit.md) | T-cell Theme-A audit write-up |
-| [`vignettes/tcells_input_rds_walkthrough.Rmd`](./vignettes/tcells_input_rds_walkthrough.Rmd) | Walkthrough: T-cell input RDS objects + matching ProjecTILs predictions back to cells |
 
 ## Plans
 
-Live plans live in `docs/plans/`, indexed by [`plans/README.md`](./plans/README.md).
-Two bodies of work: the completed-but-live 4-wave **orchestration program** (Themes A–H,
-top-level docs + `theme_<x>/` subdirs) and **standalone topic plans** grouped under
-`attribution/`, `tcell/`, `fivexfad/`, `deployment/`. The only in-flight effort is the
-Theme-B Incytr regeneration ([`plans/incytr_rerun_ksg_ptm_backbone_2026-06-29.md`](./plans/incytr_rerun_ksg_ptm_backbone_2026-06-29.md)).
-Completed standalone plans are moved out to `archive/archived_plans/`. See
-[`plans/README.md`](./plans/README.md) for the full per-theme table and status legend.
+Live plans live in `docs/plans/`, indexed by [`plans/README.md`](./plans/README.md). The
+completed orchestration program's per-theme build record is archived under
+`archive/archived_plans/orchestration/`; completed standalone plans under
+`archive/archived_plans/standalone_done/`. See [`plans/README.md`](./plans/README.md) for the
+active-work table and status legend.
 
 ## Archive
 
-`docs/archive/` is gitignored and is not present in a fresh checkout; it holds
+`archive/` (repo root) is gitignored and is not present in a fresh checkout; it holds
 provenance material only where it has been locally regenerated. See
 [`foundation/repo_retention_policy.md`](./foundation/repo_retention_policy.md) §Archived for what belongs there and why.
 

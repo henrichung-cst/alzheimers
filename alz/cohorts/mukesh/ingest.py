@@ -868,7 +868,7 @@ def _write_diagnose_summary(counters: dict) -> None:
 # ---------------------------------------------------------------------------
 
 POLICY_FILE = os.path.join(
-    config.REPO_ROOT, "docs", "audits", "mukesh_ingest_policies.yml"
+    config.REPO_ROOT, "docs", "foundation", "mukesh_ingest_policies.yml"
 )
 SAMPLE_MAPPING_CSV = os.path.join(HUMAN_DATA_INGEST_DIR, "sample_mapping.csv")
 SAMPLE_EXCLUSIONS_CSV = os.path.join(HUMAN_DATA_INGEST_DIR, "sample_exclusions.csv")

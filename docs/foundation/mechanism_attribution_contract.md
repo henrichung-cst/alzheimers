@@ -1,10 +1,10 @@
-# Mechanism Attribution Contract (Packet 0A)
+# Mechanism Attribution Contract
 
 ## Scope
 
-This contract defines Phase 0 Packet 0A outputs: categorical attribution of kinase
-mechanism evidence by comparing paired stoichiometry-adjusted and raw-phospho MEA
-rows for the same kinase and cohort context.
+This contract defines categorical attribution of kinase mechanism evidence by
+comparing paired stoichiometry-adjusted and raw-phospho MEA rows for the same
+kinase and cohort context.
 
 No numeric mechanism-derived field is exported by this contract. Downstream systems should use
 `mechanism_call` as the public mechanism classification.

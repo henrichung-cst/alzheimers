@@ -4,7 +4,7 @@
 
 The repo has **one cell-type attribution metric**, defined in
 `alz/cross_reference/specificity.py` (`specificity.compute`), used by every
-cohort. Full spec: [`docs/plans/attribution/standard_attribution_metric.md`](../plans/attribution/standard_attribution_metric.md).
+cohort. Full spec: [`docs/foundation/standard_attribution_metric.md`](standard_attribution_metric.md).
 
 In brief: a cell type is **detected** when `fraction_cells_expressing ≥ 0.10`
 (count-based, normalization-free). Expression weights are de-logged to linear
@@ -68,7 +68,7 @@ Per-cohort wiring:
 |---|---|---|---|
 | Song | `alz/bulk_mea/specificity_class.py::assign_specificity_class` | `song_unit_effective_n` | WMB class OR human SEA-AD/HBCA (`human_location_score ≥ 1.0`) |
 | 5xFAD | `alz/viewer/cohorts/fivexfad.py::_apply_fivexfad_exclusivity_confidence` | `fivexfad_effective_n` | WMB class OR SEA-AD at the home cell type |
-| T-cell | `alz/build_tcell_viewer.py::_build_tcell_attribution_index` | `tcell_effective_n` | NSCLC detection at the crosswalked home state (panel-absent → uncorroborated, caps at `moderate`) |
+| T-cell | `alz/tcell_viewer/slices_kinase.py::_build_tcell_attribution_index` | `tcell_effective_n` | NSCLC detection at the crosswalked home state (panel-absent → uncorroborated, caps at `moderate`) |
 
 Direction concordance — bulk-MEA significance, snRNA LFC direction, decomp
 agreement — is **info-only for all three cohorts**. For 5xFAD these are stored
@@ -167,7 +167,7 @@ corroborated = (WMB top class == WMB class of the dominant unit's home cluster)
 ## 4. The tier
 
 `eff` = Song's effective number of units; thresholds
-`EXCLUSIVE_EFF_MAX = 1.5`, `ENRICHED_EFF_MAX = BROAD_EFF_MAX = 3.0`.
+`EXCLUSIVE_EFF_MAX = 1.5`, `BROAD_EFF_MAX = 3.0`.
 
 | Tier | Condition |
 |---|---|
