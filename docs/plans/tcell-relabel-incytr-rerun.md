@@ -109,16 +109,26 @@ Day contrasts (`d<later>_vs_d2`) are unchanged.
 - Migrated the evidence report and native UMAP plots to barcode-level labels.
 - Rendered the report and verified label/accounting invariants.
 
-**▸ Phase 2 — re-key the input builders (not started)**
+**✓ Phase 2 — re-key the input builders (complete)**
 
-- In `tcells_scrna_extract.R`, replace the `functional.cluster` mapping with a
-  validated barcode join to `{donor}_state_labels.csv`; drop blank `type` rows.
-- In `build_tcells_seurat.R`, perform the same join for `obj$Type` and remove the
-  ProjecTILs join/map.
-- Regenerate `cell_counts.csv`, `aggexp_data.csv`, `allmarkers.csv`, and
-  `state_audit.json`.
-- Run `pixi run tcells-build-input-gene-list` against the rebuilt object.
-- Verify emitted types and exact drop accounting (334 donor1; 104 donor2).
+- Added one shared R reader/validator for the canonical per-cell label artifacts;
+  both raw-RDS consumers use it for complete barcode alignment and donor/day/cluster
+  cross-checks.
+- Replaced the `functional.cluster`/`LABEL_MAP` paths in `tcells_scrna_extract.R`
+  and `build_tcells_seurat.R`; blank `type` rows now drop exactly the contaminant
+  cells.
+- Enforced sequential 26 GB memory-capped entrypoints for both raw-RDS builders.
+- Regenerated `cell_counts.csv`, `aggexp_data.csv`, `pct_expressing.csv`, the
+  scRNA `allmarkers.csv`, manifests/audits, and both `incytr_obj.rds` files.
+- Rebuilt the root `allmarkers.csv` files from the new `Type_condition` identities;
+  also repaired the pixi task's nested-`pixi` launcher failure.
+- Verified donor1 = 25,344 retained / 334 contaminants / 6 types / 35 state-day
+  groups; donor2 = 20,550 retained / 104 contaminants / 7 types / 34 state-day
+  groups.
+- `FindAllMarkers` emitted 33/35 donor1 and 32/34 donor2 `Type_condition`
+  identities. The four omitted identities (`CD4Activated_d13`, `CD4Naive_d20`,
+  `CD4Activated_d7`, `CD4Activated_d11`) each contain one cell and therefore have
+  no positive one-vs-rest marker rows; all retained type names are represented.
 
 **▸ Phase 3 — rebuild deconvolution inputs (not started)**
 

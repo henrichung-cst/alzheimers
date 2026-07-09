@@ -1,12 +1,9 @@
 #!/usr/bin/env Rscript
-# D4 scRNA extraction keyed on per-cell ProjecTILs state (not seurat_clusters).
+# D4 scRNA extraction keyed on evidence-backed per-cell state.
 #
-# The substrate aggregates by `(state, day)` where `state` = sanitized
-# `functional.cluster` from `projectils_predictions.csv`. Cells without a
-# ProjecTILs call (the scGate `none`-gate and doublets — donor1 ~13%, donor2
-# ~7%) are dropped honestly. This replaces the prior cluster-keyed path
-# (deleted 2026-05-28 with the cluster-annotate step); see
-# docs/reference/tcell_exhaustion_analysis_summary.md.
+# The substrate aggregates by `(state, day)` where `state` is the sanitized
+# per-cell `type` from the evidence report. Blank types are contaminants and are
+# dropped; all retained cells have an explicit CD4/CD8 state call.
 #
 # Memory pattern unchanged: load ONCE, DietSeurat to RNA-only + drop scale.data
 # immediately, extract every artifact in one pass.
@@ -18,7 +15,7 @@
 #   extract_manifest.json
 #   state_audit.json    (per-state totals, drop accounting)
 #
-# Prereq: pixi run tcells-projectils-map <donor>   (produces projectils_predictions.csv)
+# Prereq: Phase 1 per-cell labels under outputs/reports/tcell_labeling/cells/
 # Usage:  pixi run Rscript alz/ingest/tcells_scrna_extract.R <donor1|donor2>
 suppressPackageStartupMessages({
   library(Seurat)
@@ -40,35 +37,11 @@ cfg <- list(
 )[[donor]]
 stopifnot(!is.null(cfg))
 
+REPO_ROOT <- system("git rev-parse --show-toplevel", intern = TRUE)
+source(file.path(REPO_ROOT, "alz", "ingest", "tcells_state_labels.R"))
+
 outdir <- file.path("data/derived/tcells_incytr_inputs", donor, "scrna")
 dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
-
-pred_path <- file.path(outdir, "projectils_predictions.csv")
-if (!file.exists(pred_path)) {
-  stop("ProjecTILs predictions missing — run `pixi run tcells-projectils-map ",
-       donor, "` first: ", pred_path)
-}
-
-# 14-state sanitization map. Identical to the one in the deleted
-# tcells_annotate_clusters.py (_LABEL_MAP). Unknown ProjecTILs functional.cluster
-# values trigger an explicit error rather than a silent fallthrough — alphanumeric
-# only because the Incytr pair-mode driver splits `<condition>_<cluster>` on `_`.
-LABEL_MAP <- c(
-  "CD8.CM"         = "CD8CM",
-  "CD8.EM"         = "CD8EM",
-  "CD8.MAIT"       = "CD8MAIT",
-  "CD8.NaiveLike"  = "CD8Naive",
-  "CD8.TEMRA"      = "CD8TEMRA",
-  "CD8.TEX"        = "CD8Tex",
-  "CD8.TPEX"       = "CD8Tpex",
-  "CD4.CTL_EOMES"  = "CD4CTLeomes",
-  "CD4.CTL_Exh"    = "CD4CTLexh",
-  "CD4.CTL_GNLY"   = "CD4CTLgnly",
-  "CD4.NaiveLike"  = "CD4Naive",
-  "CD4.Tfh"        = "CD4Tfh",
-  "CD4.Th17"       = "CD4Th17",
-  "CD4.Treg"       = "Treg"
-)
 
 memline <- function(tag) {
   gc(full = TRUE)
@@ -91,33 +64,6 @@ obj <- DietSeurat(obj, assays = "RNA", dimreducs = NULL, graphs = NULL)
 obj[["RNA"]]$scale.data <- NULL
 memline("after DietSeurat")
 
-# --- merge per-cell ProjecTILs state ------------------------------------
-pred <- read.csv(pred_path, stringsAsFactors = FALSE)
-stopifnot(all(c("barcode", "functional.cluster", "lineage_gate") %in% colnames(pred)))
-
-bc_to_state_raw <- setNames(pred$functional.cluster, pred$barcode)
-bc_to_gate      <- setNames(pred$lineage_gate,       pred$barcode)
-state_raw <- bc_to_state_raw[colnames(obj)]
-gate      <- bc_to_gate[colnames(obj)]
-
-# Sanitize. NA preserved (cells without a per-cell call get dropped below).
-state <- rep(NA_character_, length(state_raw))
-mask  <- !is.na(state_raw)
-unknown <- setdiff(unique(state_raw[mask]), names(LABEL_MAP))
-if (length(unknown)) {
-  stop("unknown ProjecTILs functional.cluster value(s): ",
-       paste(unknown, collapse = ", "), " — add to LABEL_MAP")
-}
-state[mask] <- LABEL_MAP[state_raw[mask]]
-
-# Alphanumeric guard — Incytr's `<condition>_<cluster>` split mandates no `_`.
-bad <- unique(state[!is.na(state) & grepl("[^A-Za-z0-9]", state)])
-if (length(bad)) stop("non-alphanumeric state label(s) emitted: ",
-                      paste(bad, collapse = ", "))
-
-obj$state <- state
-obj$projectils_gate <- gate
-
 # Day parsing
 day_raw <- as.character(obj@meta.data[[cfg$day_col]])
 day <- as.integer(sub(".*[Dd]ay[_ ]?(\\d+).*", "\\1", day_raw))
@@ -127,17 +73,28 @@ if (any(is.na(day))) {
 }
 obj$ts_day <- day
 
-# --- drop unlabeled cells -----------------------------------------------
+# --- join evidence-backed per-cell state ---------------------------------
+joined <- load_tcell_state_labels(
+  donor = donor,
+  barcodes = colnames(obj),
+  days = day,
+  seurat_clusters = obj$seurat_clusters,
+  repo_root = REPO_ROOT
+)
+state <- joined$type
+obj$state <- state
+obj$state_label <- joined$label
+
+# --- drop contaminants ---------------------------------------------------
 n_total <- ncol(obj)
-keep <- !is.na(obj$state)
+keep <- joined$keep
 n_kept <- sum(keep)
 n_drop <- n_total - n_kept
 
-# Drop reason accounting (only for the dropped fraction)
-gate_drop_tab <- table(gate = ifelse(is.na(gate[!keep]), "missing_pred", gate[!keep]))
 cat("cells: total=", n_total, " kept=", n_kept, " (",
     round(100 * n_kept / n_total, 1), "%)  dropped=", n_drop, "\n", sep = "")
-cat("drop breakdown by lineage_gate:\n"); print(gate_drop_tab)
+drop_label_tab <- table(label = joined$label[!keep])
+cat("drop breakdown by evidence label:\n"); print(drop_label_tab)
 
 obj <- subset(obj, cells = colnames(obj)[keep])
 state <- obj$state
@@ -197,7 +154,7 @@ memline("after markers")
 # --- manifests ----------------------------------------------------------
 manifest <- list(
   donor = donor, rds = cfg$rds, day_col = cfg$day_col,
-  predictions = pred_path,
+  state_labels = joined$path,
   n_cells_kept = n_kept, n_cells_dropped = n_drop, n_cells_total = n_total,
   n_genes = nrow(obj),
   states = sort(unique(state)),
@@ -211,7 +168,7 @@ audit <- list(
   donor = donor,
   n_total = n_total, n_kept = n_kept, n_dropped = n_drop,
   drop_pct = round(100 * n_drop / n_total, 2),
-  drop_by_gate = as.list(setNames(as.integer(gate_drop_tab), names(gate_drop_tab))),
+  drop_by_label = as.list(setNames(as.integer(drop_label_tab), names(drop_label_tab))),
   state_totals = as.list(setNames(as.integer(table(state)), names(table(state)))),
   state_by_day = lapply(sort(unique(state)), function(s) {
     rows <- cc[cc$state == s, ]

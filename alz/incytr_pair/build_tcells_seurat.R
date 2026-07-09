@@ -1,9 +1,8 @@
 #!/usr/bin/env Rscript
 # Per-donor T-cell Seurat for Incytr pair-mode.
 #
-# Reads the raw donor RDS, joins per-cell ProjecTILs state from the extract
-# step's projectils_predictions.csv, sanitizes state names alphanumeric, drops
-# NA-state cells, and writes a slim Seurat with:
+# Reads the raw donor RDS, joins the evidence-backed per-cell state artifact,
+# drops contaminant cells (blank Incytr type), and writes a slim Seurat with:
 #   - Idents()       = state (Type)
 #   - obj$Type       = state
 #   - obj$condition  = sprintf("d%d", day)         (e.g. "d13")
@@ -34,32 +33,10 @@ cfg <- list(
 )[[donor]]
 stopifnot(!is.null(cfg))
 
-outdir <- file.path("data/derived/tcells_incytr_inputs", donor)
-scrnadir <- file.path(outdir, "scrna")
-pred_path <- file.path(scrnadir, "projectils_predictions.csv")
-if (!file.exists(pred_path)) {
-  stop("missing projectils predictions — run `pixi run tcells-projectils-map ",
-       donor, "` first: ", pred_path)
-}
+REPO_ROOT <- system("git rev-parse --show-toplevel", intern = TRUE)
+source(file.path(REPO_ROOT, "alz", "ingest", "tcells_state_labels.R"))
 
-# 14-state sanitization map (identical to tcells_scrna_extract.R). Alphanumeric
-# only because the pair-mode driver splits `<condition>_<cluster>` on `_`.
-LABEL_MAP <- c(
-  "CD8.CM"         = "CD8CM",
-  "CD8.EM"         = "CD8EM",
-  "CD8.MAIT"       = "CD8MAIT",
-  "CD8.NaiveLike"  = "CD8Naive",
-  "CD8.TEMRA"      = "CD8TEMRA",
-  "CD8.TEX"        = "CD8Tex",
-  "CD8.TPEX"       = "CD8Tpex",
-  "CD4.CTL_EOMES"  = "CD4CTLeomes",
-  "CD4.CTL_Exh"    = "CD4CTLexh",
-  "CD4.CTL_GNLY"   = "CD4CTLgnly",
-  "CD4.NaiveLike"  = "CD4Naive",
-  "CD4.Tfh"        = "CD4Tfh",
-  "CD4.Th17"       = "CD4Th17",
-  "CD4.Treg"       = "Treg"
-)
+outdir <- file.path("data/derived/tcells_incytr_inputs", donor)
 
 memline <- function(tag) {
   gc(full = TRUE)
@@ -82,22 +59,6 @@ obj <- DietSeurat(obj, assays = "RNA", dimreducs = NULL, graphs = NULL)
 obj[["RNA"]]$scale.data <- NULL
 memline("after DietSeurat")
 
-# Per-cell ProjecTILs state -------------------------------------------------
-pred <- read.csv(pred_path, stringsAsFactors = FALSE)
-stopifnot(all(c("barcode", "functional.cluster") %in% colnames(pred)))
-bc_to_state_raw <- setNames(pred$functional.cluster, pred$barcode)
-state_raw <- bc_to_state_raw[colnames(obj)]
-
-state <- rep(NA_character_, length(state_raw))
-mask  <- !is.na(state_raw)
-unknown <- setdiff(unique(state_raw[mask]), names(LABEL_MAP))
-if (length(unknown)) {
-  stop("unknown ProjecTILs functional.cluster value(s): ",
-       paste(unknown, collapse = ", "), " — add to LABEL_MAP")
-}
-state[mask] <- LABEL_MAP[state_raw[mask]]
-obj$state <- state
-
 # Day parsing ---------------------------------------------------------------
 day_raw <- as.character(obj@meta.data[[cfg$day_col]])
 day <- as.integer(sub(".*[Dd]ay[_ ]?(\\d+).*", "\\1", day_raw))
@@ -107,12 +68,25 @@ if (any(is.na(day))) {
 }
 obj$ts_day <- day
 
-# Drop NA-state cells -------------------------------------------------------
+# Evidence-backed per-cell state --------------------------------------------
+joined <- load_tcell_state_labels(
+  donor = donor,
+  barcodes = colnames(obj),
+  days = day,
+  seurat_clusters = obj$seurat_clusters,
+  repo_root = REPO_ROOT
+)
+obj$state <- joined$type
+obj$state_label <- joined$label
+
+# Drop contaminants ---------------------------------------------------------
 n_total <- ncol(obj)
-keep <- !is.na(obj$state)
+keep <- joined$keep
 n_kept <- sum(keep)
+drop_label_tab <- table(label = joined$label[!keep])
 cat("cells: total=", n_total, " kept=", n_kept, " (",
-    round(100 * n_kept / n_total, 1), "%)\n", sep = "")
+    round(100 * n_kept / n_total, 1), "%) dropped=", n_total - n_kept, "\n", sep = "")
+cat("drop breakdown by evidence label:\n"); print(drop_label_tab)
 
 obj <- subset(obj, cells = colnames(obj)[keep])
 memline("after subset")
