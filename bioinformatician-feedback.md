@@ -10,18 +10,22 @@ functional proof of exhaustion.
 
 ## Scientific and Biological Assessment
 
-Raw CITE-seq CD4/CD8 measurements establish lineage. Within each donor and lineage,
-non-cycle RNA markers are standardized and evaluated as coherent expected-high and
-expected-low programs. Every required program must support a named state; otherwise
-the cell remains `CD4` or `CD8`. Cycling is ignored because proliferation was
+Raw CITE-seq CD4/CD8 measurements establish lineage. Every named state requires
+direct positive detection in each defining non-cycle RNA module. Standardized
+positive-module strength selects among competing eligible states; expected-low
+evidence only breaks exact ties. Cycling is ignored because proliferation was
 artificially induced.
 
 This revision materially improves the time-course interpretation. Cluster-only
 labels were dominated by clusters nearly unique to individual days. Per-cell labels
-instead measure marker heterogeneity within those clusters. Donor 1 CD8 TEX rises
-from 39.2% at day 2 to 59.1% at day 20, although non-monotonically. Donor 2 remains
-approximately unchanged, 23.1% to 23.5%, and should not be forced into the expected
-trajectory.
+instead measure marker heterogeneity within those clusters. Separating naive-like
+from resting/memory explains most late composition shifts and reduces generic bins
+to low single digits. A hierarchical HAVCR2/LAG3/ENTPD1/TOX/NR4A1 aggregate that
+must exceed both acute activation and effector function restores the expected
+trajectory without a sparse Boolean AND gate: donor 1 CD8 TEX is 10.7% at day 2
+and 30.8% at day 20; donor 2 is 6.7% and 40.2%.
+The donor 2 day-11 value is a validation flag: it is a relative TEX-like RNA
+program, not evidence that terminal dysfunction has been established by day 11.
 
 ## Antibody Design and Signaling Relevance
 
@@ -32,8 +36,8 @@ phenotypes.
 
 ## Novelty and Impact
 
-Signed marker-module classification is standard, but explicitly excluding the
-experimentally induced cycle program and requiring positive plus negative evidence
+Positive module detection with signed tie-breaking is standard, but explicitly
+excluding the induced cycle program and separating naive-like from resting/memory
 is a useful, transparent adaptation. Its main value is preventing experimental-day
 structure from masquerading as biological state composition.
 

@@ -82,8 +82,8 @@ Ingested 2026-05-27 from Drive folder `1YE_h1jIyBajtm6ArxJqevJ0rt0xLKQgX` → `d
 The authoritative spine labels each cell independently. CD4/CD8 lineage uses raw
 CITE-seq antibody UMIs with native-cluster lineage as fallback. Positive and
 biologically meaningful negative RNA marker programs support named exhaustion,
-cytotoxic, activated, and naive/memory states. A cell without sufficient subtype
-evidence remains `CD4` or `CD8`. Cell-cycle evidence is excluded because
+cytotoxic, activated/effector, naive-like, and resting/memory states. A cell without
+sufficient subtype evidence remains `CD4` or `CD8`. Cell-cycle evidence is excluded because
 proliferation was induced in silico.
 
 Pipeline order: `ingest-tcells-scrna → tcells-label → tcells-scrna-extract →

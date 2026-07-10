@@ -37,6 +37,25 @@ CHECKPOINT_CONTEXT_MARKERS = ("PDCD1", "TIGIT")
 PROGENITOR_MARKERS = tuple(SIGNATURES["progenitor_exhaustion"])
 CYTOTOXIC_MARKERS = tuple(SIGNATURES["cytotoxic"])
 TERMINAL_EFFECTOR_MARKERS = ("GZMB", "GNLY", "PRF1")
+NAIVE_STEMNESS_MARKERS = ("TCF7", "LEF1")
+NAIVE_HOMING_MARKERS = ("CCR7", "SELL")
+RESTING_MEMORY_MARKERS = ("IL7R", "CD27")
+INHIBITORY_RECEPTOR_MARKERS = (
+    "PDCD1",
+    "HAVCR2",
+    "LAG3",
+    "CTLA4",
+    "TIGIT",
+    "ENTPD1",
+)
+CHECKPOINT_RECEPTOR_MARKERS = ("PDCD1", "CTLA4", "TIGIT")
+TERMINAL_INHIBITORY_RECEPTOR_MARKERS = ("HAVCR2", "LAG3", "ENTPD1")
+EXHAUSTION_TF_MARKERS = ("TOX", "NR4A1")
+LATE_EXHAUSTION_SIGNATURE_MARKERS = ("HAVCR2", "LAG3", "ENTPD1", "TOX", "NR4A1")
+ACUTE_ACTIVATION_MARKERS = ("CD69", "IL2RA", "TNFRSF4", "ICOS", "CD40LG")
+EFFECTOR_FUNCTION_MARKERS = ("GZMB", "PRF1", "IFNG", "TNF")
+GRANZYME_MARKERS = ("GZMB", "GZMH", "GNLY")
+PERFORIN_MARKERS = ("PRF1",)
 ACTIVATION_MARKERS = (
     "CD69",
     "IL2RA",
@@ -68,84 +87,101 @@ class PerCellStateDefinition:
     negative_modules: tuple[MarkerModule, ...]
 
 
-PROGENITOR_MODULE = MarkerModule("progenitor/stem-like", PROGENITOR_MARKERS)
-CHECKPOINT_CONTEXT_MODULE = MarkerModule(
-    "checkpoint context", CHECKPOINT_CONTEXT_MARKERS
-)
-TERMINAL_EXHAUSTION_MODULE = MarkerModule(
-    "terminal exhaustion", TERMINAL_EXHAUSTION_MARKERS
-)
 CYTOTOXIC_MODULE = MarkerModule("cytotoxic machinery", CYTOTOXIC_MARKERS)
-TERMINAL_EFFECTOR_MODULE = MarkerModule(
-    "terminal effector", TERMINAL_EFFECTOR_MARKERS
+NAIVE_STEMNESS_MODULE = MarkerModule("naive stemness", NAIVE_STEMNESS_MARKERS)
+NAIVE_HOMING_MODULE = MarkerModule("naive homing", NAIVE_HOMING_MARKERS)
+RESTING_MEMORY_MODULE = MarkerModule(
+    "resting/memory identity", RESTING_MEMORY_MARKERS
 )
-ACTIVATION_MODULE = MarkerModule("activation", ACTIVATION_MARKERS)
+INHIBITORY_RECEPTOR_MODULE = MarkerModule(
+    "inhibitory receptors", INHIBITORY_RECEPTOR_MARKERS
+)
+EXHAUSTION_TF_MODULE = MarkerModule(
+    "exhaustion transcription factors", EXHAUSTION_TF_MARKERS
+)
+LATE_EXHAUSTION_SIGNATURE_MODULE = MarkerModule(
+    "late exhaustion signature", LATE_EXHAUSTION_SIGNATURE_MARKERS
+)
+ACUTE_ACTIVATION_MODULE = MarkerModule(
+    "acute activation", ACUTE_ACTIVATION_MARKERS
+)
+EFFECTOR_FUNCTION_MODULE = MarkerModule(
+    "effector function", EFFECTOR_FUNCTION_MARKERS
+)
+GRANZYME_MODULE = MarkerModule("granzyme program", GRANZYME_MARKERS)
+PERFORIN_MODULE = MarkerModule("perforin", PERFORIN_MARKERS)
 
 
 PER_CELL_STATE_DEFINITIONS = {
-    "CD8 precursor exhausted (TPEX)": PerCellStateDefinition(
-        "CD8",
-        "CD8PrecursorExhausted",
-        (PROGENITOR_MODULE, CHECKPOINT_CONTEXT_MODULE),
-        (TERMINAL_EXHAUSTION_MODULE, TERMINAL_EFFECTOR_MODULE),
-    ),
     "CD8 exhausted (TEX)": PerCellStateDefinition(
         "CD8",
         "CD8Exhausted",
-        (TERMINAL_EXHAUSTION_MODULE,),
-        (PROGENITOR_MODULE,),
+        (LATE_EXHAUSTION_SIGNATURE_MODULE,),
+        (ACUTE_ACTIVATION_MODULE, EFFECTOR_FUNCTION_MODULE),
     ),
     "CD8 cytotoxic effector": PerCellStateDefinition(
         "CD8",
         "CD8CytotoxicEffector",
-        (CYTOTOXIC_MODULE,),
-        (TERMINAL_EXHAUSTION_MODULE,),
+        (GRANZYME_MODULE, PERFORIN_MODULE),
+        (INHIBITORY_RECEPTOR_MODULE, EXHAUSTION_TF_MODULE),
     ),
-    "CD8 activated": PerCellStateDefinition(
+    "CD8 activated/effector": PerCellStateDefinition(
         "CD8",
-        "CD8Activated",
-        (ACTIVATION_MODULE,),
-        (TERMINAL_EXHAUSTION_MODULE,),
+        "CD8ActivatedEffector",
+        (ACUTE_ACTIVATION_MODULE, EFFECTOR_FUNCTION_MODULE),
+        (INHIBITORY_RECEPTOR_MODULE, EXHAUSTION_TF_MODULE),
     ),
-    "CD8 naive/memory": PerCellStateDefinition(
+    "CD8 naive-like": PerCellStateDefinition(
         "CD8",
-        "CD8NaiveMemory",
-        (PROGENITOR_MODULE,),
+        "CD8NaiveLike",
+        (NAIVE_STEMNESS_MODULE, NAIVE_HOMING_MODULE),
         (
-            CHECKPOINT_CONTEXT_MODULE,
-            TERMINAL_EXHAUSTION_MODULE,
+            INHIBITORY_RECEPTOR_MODULE,
+            EXHAUSTION_TF_MODULE,
             CYTOTOXIC_MODULE,
-            ACTIVATION_MODULE,
+            ACUTE_ACTIVATION_MODULE,
         ),
+    ),
+    "CD8 resting/memory": PerCellStateDefinition(
+        "CD8",
+        "CD8RestingMemory",
+        (RESTING_MEMORY_MODULE,),
+        (INHIBITORY_RECEPTOR_MODULE, EXHAUSTION_TF_MODULE, ACUTE_ACTIVATION_MODULE),
     ),
     "CD4 exhaustion-associated": PerCellStateDefinition(
         "CD4",
         "CD4ExhaustionAssociated",
-        (TERMINAL_EXHAUSTION_MODULE,),
-        (PROGENITOR_MODULE,),
+        (LATE_EXHAUSTION_SIGNATURE_MODULE,),
+        (ACUTE_ACTIVATION_MODULE, EFFECTOR_FUNCTION_MODULE),
     ),
     "CD4 cytotoxic": PerCellStateDefinition(
         "CD4",
         "CD4Cytotoxic",
-        (CYTOTOXIC_MODULE,),
-        (PROGENITOR_MODULE,),
+        (GRANZYME_MODULE, PERFORIN_MODULE),
+        (INHIBITORY_RECEPTOR_MODULE, EXHAUSTION_TF_MODULE),
     ),
-    "CD4 activated": PerCellStateDefinition(
+    "CD4 activated/effector": PerCellStateDefinition(
         "CD4",
-        "CD4Activated",
-        (ACTIVATION_MODULE,),
-        (TERMINAL_EXHAUSTION_MODULE,),
+        "CD4ActivatedEffector",
+        (ACUTE_ACTIVATION_MODULE, EFFECTOR_FUNCTION_MODULE),
+        (INHIBITORY_RECEPTOR_MODULE, EXHAUSTION_TF_MODULE),
     ),
-    "CD4 naive/memory": PerCellStateDefinition(
+    "CD4 naive-like": PerCellStateDefinition(
         "CD4",
-        "CD4NaiveMemory",
-        (PROGENITOR_MODULE,),
+        "CD4NaiveLike",
+        (NAIVE_STEMNESS_MODULE, NAIVE_HOMING_MODULE),
         (
-            CHECKPOINT_CONTEXT_MODULE,
-            TERMINAL_EXHAUSTION_MODULE,
+            INHIBITORY_RECEPTOR_MODULE,
+            EXHAUSTION_TF_MODULE,
             CYTOTOXIC_MODULE,
-            ACTIVATION_MODULE,
+            ACUTE_ACTIVATION_MODULE,
         ),
+    ),
+    "CD4 resting/memory": PerCellStateDefinition(
+        "CD4",
+        "CD4RestingMemory",
+        (RESTING_MEMORY_MODULE,),
+        (INHIBITORY_RECEPTOR_MODULE, EXHAUSTION_TF_MODULE, ACUTE_ACTIVATION_MODULE),
     ),
 }
 
@@ -155,15 +191,17 @@ COLLAPSED_STATE_LABELS = {
 
 STATE_COLORS = {
     "CD4": "#80cdc1",
-    "CD4 activated": "#fdb863",
+    "CD4 activated/effector": "#fdb863",
     "CD4 cytotoxic": "#c2a5cf",
     "CD4 exhaustion-associated": "#d6604d",
-    "CD4 naive/memory": "#4393c3",
+    "CD4 naive-like": "#4393c3",
+    "CD4 resting/memory": "#92c5de",
     "CD8": "#5e3c99",
-    "CD8 activated": "#f46d43",
+    "CD8 activated/effector": "#f46d43",
     "CD8 cytotoxic effector": "#7b3294",
     "CD8 exhausted (TEX)": "#b2182b",
-    "CD8 naive/memory": "#2166ac",
+    "CD8 naive-like": "#2166ac",
+    "CD8 resting/memory": "#67a9cf",
     "contaminant": "#404040",
 }
 
@@ -180,6 +218,18 @@ def per_cell_marker_genes() -> tuple[str, ...]:
                 CYTOTOXIC_MARKERS,
                 TERMINAL_EFFECTOR_MARKERS,
                 ACTIVATION_MARKERS,
+                NAIVE_STEMNESS_MARKERS,
+                NAIVE_HOMING_MARKERS,
+                RESTING_MEMORY_MARKERS,
+                INHIBITORY_RECEPTOR_MARKERS,
+                CHECKPOINT_RECEPTOR_MARKERS,
+                TERMINAL_INHIBITORY_RECEPTOR_MARKERS,
+                EXHAUSTION_TF_MARKERS,
+                LATE_EXHAUSTION_SIGNATURE_MARKERS,
+                ACUTE_ACTIVATION_MARKERS,
+                EFFECTOR_FUNCTION_MARKERS,
+                GRANZYME_MARKERS,
+                PERFORIN_MARKERS,
             )
             for gene in module
         )

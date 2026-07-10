@@ -76,10 +76,22 @@ pixi run tcells-export-bulk       # linear per-day bulk matrices (pr/py/ps)
 pixi run tcells-decompose         # per-(state, day) substrate via P_s = (N_total/N_s) × bulk × share
 ```
 
+After reviewing the labels, run projected-state kinase MEA followed by the full
+pair-mode Incytr analysis in one memory-capped session:
+
+```bash
+bash alz/incytr_pair/regeneration/run_backbone_overnight_tcells.sh
+```
+
+This writes canonical state MEA under
+`outputs/reports/kinase_attribution_tcells/donor1/state_mea/` and Incytr under
+`outputs/reports/incytr_pair_mode_tcells_percell_posneg/`. It does not rebuild the
+viewer.
+
 **Substrate is keyed on cycle-independent per-cell marker labels.**
 CD4/CD8 lineage comes from CITE-seq CD4/CD8 antibody counts with native-cluster
-fallback. Positive and biologically meaningful negative RNA marker programs support
-each named state. Cells lacking sufficient subtype evidence remain simply `CD4`
+fallback. Every named state requires direct positive RNA marker-module detection;
+biologically meaningful negative evidence resolves exact ties. Cells lacking sufficient subtype evidence remain simply `CD4`
 or `CD8`. Cell-cycle evidence is knowingly excluded because proliferation was
 induced in silico. Only explicit myeloid/mast/NK/gamma-delta contaminant clusters
 are dropped. See

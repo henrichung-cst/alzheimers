@@ -24,8 +24,9 @@ Time courses:
 The pipeline labels each cell independently from raw CITE-seq CD4/CD8 lineage
 evidence and non-cycle RNA marker modules. Native-cluster lineage is used only when
 the antibody counts are inconclusive. Positive and biologically justified negative
-markers are considered; cells without sufficient subtype evidence remain `CD4` or
-`CD8`. The small provisional TPEX class is conservatively collapsed to `CD8`.
+markers are considered, but every named state requires direct positive marker-module
+detection. Naive-like and resting/memory are separate. Cells without sufficient
+subtype evidence remain `CD4` or `CD8`; TPEX is not reported.
 
 Cell cycling is knowingly excluded from classification and downstream types because
 proliferation was strongly induced in silico. Phase, cycle scores, `% dividing`, and
@@ -34,10 +35,12 @@ cycle genes are not loaded into the current labeling analysis.
 The same cycle-independent per-cell labels key scRNA aggregate expression, cell counts,
 deconvolution, Incytr, and the viewer.
 
-Within CD8 cells, donor1 TEX is 39.2% at d2 and 59.1% at d20, with a non-monotonic
-intervening trajectory. Donor2 TEX is 23.1% at d2 and 23.5% at d11, so it does not
-show net progressive TEX enrichment. This divergence is reported directly rather
-than forcing the expected trajectory.
+The hierarchical TEX rule uses the aggregate HAVCR2/LAG3/ENTPD1/TOX/NR4A1 program
+and requires it to exceed both acute activation and effector-function aggregates.
+Donor1 CD8 TEX rises from 10.7% at d2 to 30.8% at d20; donor2 rises from 6.7% at
+d2 to 40.2% at d11. Activated/effector dominates early, while TEX and
+resting/memory expand later. Donor2's rapid day-11 TEX-like call warrants
+functional validation and is not proof of terminal dysfunction.
 
 Composition values are observed label counts divided by all retained T cells from
 the same donor and day. This handles unequal recovered-cell totals but is not

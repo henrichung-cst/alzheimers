@@ -3,11 +3,12 @@
 
 Raw CITE-seq CD4/CD8 counts establish lineage, with the donor's native-cluster
 lineage used only when antibody counts are inconclusive. Within each donor and
-lineage, non-cycle RNA markers are standardized across cells. A named state is
-eligible only when every expected-high and expected-low module points in its
-declared direction relative to the donor-lineage mean. The eligible state whose
-weakest required module has the strongest support is assigned. If none is
-eligible, or the best support is tied, the cell remains simply ``CD4`` or ``CD8``.
+lineage, every ordinary named state requires direct detection in each defining
+positive module. Standardized positive-module strength selects among eligible
+states, with expected-low evidence used only for exact ties. Exhaustion is checked
+first using an aggregate late-exhaustion score that must exceed both acute-
+activation and effector-function aggregates. If no state is eligible, the cell
+remains simply ``CD4`` or ``CD8``.
 
 ProjecTILs calls are retained as reference evidence and never determine the label.
 Internal signed module values are classification mechanics and are not exported
@@ -25,7 +26,10 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from alz.analysis.tcell_marker_sets import (  # noqa: E402
+    ACUTE_ACTIVATION_MARKERS,
     COLLAPSED_STATE_LABELS,
+    EFFECTOR_FUNCTION_MARKERS,
+    LATE_EXHAUSTION_SIGNATURE_MARKERS,
     PER_CELL_STATE_DEFINITIONS,
     SIGNATURES,
     PerCellStateDefinition,
@@ -114,26 +118,48 @@ def collapse_state_label(label: str) -> str:
     return COLLAPSED_STATE_LABELS.get(label, label)
 
 
+def hierarchical_exhaustion_call(
+    late_exhaustion: float,
+    acute_activation: float,
+    effector_function: float,
+) -> bool:
+    """Call exhaustion only when its aggregate exceeds both counter-programs."""
+    return (
+        late_exhaustion > 0
+        and late_exhaustion > acute_activation
+        and late_exhaustion > effector_function
+    )
+
+
 def assign_marker_states(
     signed_module_support: pd.DataFrame,
     *,
+    eligible_states: set[str],
     fallback: str = "lineage",
 ) -> str:
     """Choose one state from a single cell's signed module-support table.
 
-    Rows are required modules and columns are candidate states. A state is
-    eligible only when every finite entry in its column is strictly positive.
-    Its support is the weakest required module. Ties retain the lineage fallback.
+    Rows are required modules and columns are candidate states. The weakest
+    positive module ranks eligible states and expected-low evidence breaks exact
+    ties.
     """
     support = {}
+    tie_break = {}
     for state in signed_module_support:
         values = signed_module_support[state].dropna()
-        if len(values) and values.gt(0).all():
-            support[state] = float(values.min())
+        if len(values) and state in eligible_states:
+            positive = values[values.index.str.startswith("higher:")]
+            negative = values[values.index.str.startswith("lower:")]
+            support[state] = float(positive.min())
+            tie_break[state] = float(negative.min()) if len(negative) else 0.0
     if not support:
         return fallback
     best = max(support.values())
     winners = [state for state, value in support.items() if value == best]
+    if len(winners) == 1:
+        return winners[0]
+    best_tie_break = max(tie_break[state] for state in winners)
+    winners = [state for state in winners if tie_break[state] == best_tie_break]
     return winners[0] if len(winners) == 1 else fallback
 
 
@@ -157,19 +183,63 @@ def _assign_lineage_states(cells: pd.DataFrame, lineage: str) -> pd.Series:
     }
     genes = list(per_cell_marker_genes())
     standardized = _standardize(cells[genes].apply(pd.to_numeric, errors="raise"))
+    exhaustion_label = (
+        "CD8 exhausted (TEX)" if lineage == "CD8" else "CD4 exhaustion-associated"
+    )
+    late_exhaustion = standardized[list(LATE_EXHAUSTION_SIGNATURE_MARKERS)].mean(axis=1)
+    acute_activation = standardized[list(ACUTE_ACTIVATION_MARKERS)].mean(axis=1)
+    effector_function = standardized[list(EFFECTOR_FUNCTION_MARKERS)].mean(axis=1)
+    exhaustion_high = pd.Series(
+        [
+            hierarchical_exhaustion_call(late, acute, effector)
+            for late, acute, effector in zip(
+                late_exhaustion, acute_activation, effector_function
+            )
+        ],
+        index=standardized.index,
+    )
+    competing_definitions = {
+        label: definition
+        for label, definition in definitions.items()
+        if label != exhaustion_label
+    }
     state_support = {
         label: _state_module_support(standardized, definition)
-        for label, definition in definitions.items()
+        for label, definition in competing_definitions.items()
+    }
+    state_positive_detection = {
+        label: pd.DataFrame(
+            {
+                module.name: cells[list(module.genes)].gt(0).any(axis=1)
+                for module in definition.positive_modules
+            },
+            index=cells.index,
+        ).all(axis=1)
+        for label, definition in competing_definitions.items()
     }
     labels = []
     for cell_index in standardized.index:
+        if bool(exhaustion_high.loc[cell_index]):
+            labels.append(exhaustion_label)
+            continue
         signed = pd.DataFrame(
             {
                 label: support.loc[cell_index]
                 for label, support in state_support.items()
             }
         )
-        labels.append(assign_marker_states(signed, fallback=lineage))
+        eligible_states = {
+            label
+            for label, detected in state_positive_detection.items()
+            if bool(detected.loc[cell_index])
+        }
+        labels.append(
+            assign_marker_states(
+                signed,
+                fallback=lineage,
+                eligible_states=eligible_states,
+            )
+        )
     return pd.Series(labels, index=standardized.index, dtype="object")
 
 

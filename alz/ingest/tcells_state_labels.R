@@ -84,9 +84,10 @@ load_tcell_state_labels <- function(donor, barcodes, days, seurat_clusters,
     stop("non-alphanumeric Incytr type(s): ", paste(bad_type, collapse = ", "))
   }
   expected_types <- c(
-    "CD4", "CD4Activated", "CD4Cytotoxic", "CD4ExhaustionAssociated", "CD4NaiveMemory",
-    "CD8", "CD8Activated", "CD8CytotoxicEffector", "CD8Exhausted",
-    "CD8NaiveMemory"
+    "CD4", "CD4ActivatedEffector", "CD4Cytotoxic",
+    "CD4ExhaustionAssociated", "CD4NaiveLike", "CD4RestingMemory",
+    "CD8", "CD8ActivatedEffector", "CD8CytotoxicEffector",
+    "CD8Exhausted", "CD8NaiveLike", "CD8RestingMemory"
   )
   unexpected_types <- setdiff(unique(type[!is.na(type)]), expected_types)
   if (length(unexpected_types)) {

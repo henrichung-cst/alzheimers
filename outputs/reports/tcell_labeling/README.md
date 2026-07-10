@@ -5,7 +5,8 @@ Each cell is labeled from non-cycle RNA marker modules and raw CD4/CD8 CITE-seq
 counts. Native clusters provide lineage fallback and UMAP context, not state.
 
 The analysis deliberately excludes cell-cycle genes, phase, cycle scores, and
-`% dividing`. Positive and biologically justified negative markers are both used.
+`% dividing`. Every named state requires direct positive marker-module detection;
+biologically justified negative markers resolve exact ties.
 Cells without sufficient subtype evidence remain `CD4` or `CD8`; they are not
 forced into a named state.
 

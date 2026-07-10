@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import matplotlib
 
@@ -11,6 +12,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from alz.analysis.tcell_marker_sets import STATE_COLORS  # noqa: E402
 
 

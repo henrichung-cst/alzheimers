@@ -11,11 +11,14 @@ original report and AUROC reproduction remain historical method records.
 
 - Assignment unit: individual cell.
 - Lineage: raw CD4/CD8 CITE-seq counts; native-cluster lineage is fallback only.
-- State evidence: non-cycle RNA programs expected to be higher and lower.
-- Eligibility: every defining module must point in its expected direction relative
-  to the donor-lineage mean.
-- Selection: the eligible state with the strongest weakest-module evidence wins.
-  There is no tuned magnitude cutoff.
+- State evidence: direct positive detection of non-cycle RNA programs, with
+  expected-low modules used only to distinguish competing eligible states.
+- Eligibility: every defining positive module must contain detected expression.
+- Selection: the eligible state with the strongest weakest positive module wins;
+  negative evidence breaks exact ties.
+- TEX hierarchy: the aggregate HAVCR2/LAG3/ENTPD1/TOX/NR4A1 program must be above
+  the donor-lineage mean and exceed both acute-activation and effector-function
+  aggregates before other states are considered.
 - Fallback: cells without a unique eligible state remain `CD4` or `CD8`; there is
   no `unclassified` label.
 - Contaminants: explicit non-T clusters remain `contaminant`.
@@ -25,9 +28,11 @@ original report and AUROC reproduction remain historical method records.
 
 ## State vocabulary
 
-- `CD4`, `CD4 naive/memory`, `CD4 activated`, `CD4 cytotoxic`,
+- `CD4`, `CD4 naive-like`, `CD4 resting/memory`, `CD4 activated/effector`,
+  `CD4 cytotoxic`,
   `CD4 exhaustion-associated`
-- `CD8`, `CD8 naive/memory`, `CD8 activated`, `CD8 cytotoxic effector`,
+- `CD8`, `CD8 naive-like`, `CD8 resting/memory`, `CD8 activated/effector`,
+  `CD8 cytotoxic effector`,
   `CD8 exhausted (TEX)`
 
 The small provisional TPEX category is collapsed to `CD8` because its independent

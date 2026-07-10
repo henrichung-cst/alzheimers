@@ -21,7 +21,10 @@ class PerCellReportTests(unittest.TestCase):
     def test_report_documents_signed_markers_lineage_fallback_and_cycle_exclusion(self) -> None:
         report = REPORT.read_text().lower()
         self.assertIn("assigned independently to each cell", report)
-        self.assertIn("expected to be lower", report)
+        self.assertIn("expected-low modules", report)
+        self.assertIn("direct positive detection", report)
+        self.assertIn("naive-like", report)
+        self.assertIn("resting/memory", report)
         self.assertIn("remains simply `cd4` or `cd8`", report)
         self.assertIn("% dividing", report)
         self.assertIn("are not loaded or used", report)
