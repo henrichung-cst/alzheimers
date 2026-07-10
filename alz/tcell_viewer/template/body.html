@@ -69,9 +69,9 @@
               <th data-col="nes_profile" data-metric="nesProfile" title="NES profile across day-vs-baseline (d2) contrasts. Color = direction (red up, blue down), saturation = |NES|, black outline = FDR < threshold. Click to sort by max |NES|.">NES Profile</th>
               <th data-col="trend" data-metric="trend" title="NES trend across timepoint contrasts (always up/down, monotonic up/down, mixed). — = no readable trend (< 2 finite contrasts). Click to sort.">Trend</th>
               <th data-col="n_sig" data-metric="nSig" title="n_sig — count of contrasts where FDR < threshold. Click to sort.">n_sig</th>
-              <th data-col="tcell_celltype" data-metric="tcellCelltype" title="Cell type — within-cohort cell-type confidence. The dominant T-cell type (CD8 / CD4 / Treg) the kinase concentrates in, from the donor's own scRNA. A ✓ tier badge marks concentration ≥2× the even 1/3 share (concentrated in one cell type); otherwise the kinase is broad across CD8/CD4/Treg. Distinct from Enrichment (which activation state) and the NSCLC spec column (beyond-T cell-type breadth). Click to sort.">Cell type</th>
-              <th data-col="tcell_max_enrich" data-metric="tcellMaxEnrich" title="Enrichment — peak within-cohort T-cell-state enrichment (fold of the most-enriched eligible state over the kinase's baseline mean state) across states in scope, with the most-enriched state named beside the fold. Only states detected in ≥10% of cells with ≥50 cells are eligible; an undetected kinase has no badge. Localizes a kinase among the ProjecTILs T-cell states; sortable, never gated. Click to sort.">Enrichment</th>
-              <th data-col="n_attributed_celltypes" data-metric="nAttributedCelltypes" title="T-cell states this kinase is detected in (fraction expressing ≥10%), out of 14 — breadth of detection within the cohort, parallel to the NSCLC spec column. Enrichment is the Enrichment column. Click to sort by count.">Cell states</th>
+              <th data-col="tcell_celltype" data-metric="tcellCelltype" title="Lineage — within-cohort CD8-versus-CD4 concentration from the donor's own scRNA. Distinct from state enrichment and the independent NSCLC coarse cell-type breadth.">Lineage</th>
+              <th data-col="tcell_max_enrich" data-metric="tcellMaxEnrich" title="Peak within-cohort enrichment across the evidence-backed states. Detection and raw pooled cell counts are reported separately; no minimum-cell gate is applied.">Enrichment</th>
+              <th data-col="n_attributed_celltypes" data-metric="nAttributedCelltypes" title="Evidence-backed states in which this kinase is detected (fraction expressing ≥10%). The denominator is the active donor's state roster.">Cell states</th>
               <th data-col="nsclc_specificity_count" data-metric="nsclcSpecificity" title="NSCLC specificity (N/7, fewer = more specific) — how many of the 7 coarse cell types (T_NK + non-T: B_plasma, Myeloid, Epithelial, Endothelial, Fibroblast, Mast) express this kinase in ≥10% of their cells (cell-weighted prevalence, at the shared 10% detection floor), with the dominant cell type badged. Fewer = more cell-type-restricted in the independent NSCLC reference (10x 897k-cell). n/a = outside the NSCLC probe panel. Click to sort.">NSCLC spec</th>
             </tr></thead>
             <tbody></tbody>
@@ -105,14 +105,6 @@
 
       <!-- ===== LEFT FILTER PANEL ===== -->
       <aside class="incytr-filter-panel">
-
-        <!-- Sparse cells: shared; wired once in wireIncytrPanel() -->
-        <label class="ke-filter-label" title="Sensitivity mode: remove cell-cell interactions where either endpoint has median n_cells &lt;= 3 when the payload provides cell-count QC metadata.">Sparse cells
-          <select id="if-low-signal" aria-label="Sparse cell-type filter">
-            <option value="include">Include all</option>
-            <option value="exclude">Exclude median n &lt;= 3</option>
-          </select>
-        </label>
 
         <!-- J-3: Grain selector — shared across table + heatmap (entity-level).
              Hidden when backbone_grains absent from payload. -->
@@ -290,26 +282,21 @@
     <div class="card glossary-card">
       <section class="glossary-section">
         <h2>Cell-state nomenclature</h2>
-        <p class="muted">ProjecTILs human T-cell state labels used across the donor scRNA, attribution, and pathway views.</p>
+        <p class="muted">Evidence-backed per-cell states used consistently across donor scRNA, attribution, and pathway views.</p>
         <h3>CD8<sup>+</sup> T-cells</h3>
         <dl>
-          <dt>NaiveLike</dt><dd>T cells with a naive-like phenotype.</dd>
-          <dt>CM</dt><dd>Central memory.</dd>
-          <dt>EM</dt><dd>Effector memory.</dd>
-          <dt>TEMRA</dt><dd>Effector memory re-expressing CD45RA.</dd>
-          <dt>TPEX</dt><dd>Precursor exhausted T cells.</dd>
-          <dt>TEX</dt><dd>Terminally exhausted T cells.</dd>
-          <dt>MAIT</dt><dd>Mucosal-associated invariant T cells.</dd>
+          <dt>CD8Cytotoxic</dt><dd>Remaining CD8 effector cells, including dividing activated effectors.</dd>
+          <dt>CD8Exhausted</dt><dd>Donor1 non-dividing CD8 cells with detected inhibitory-receptor evidence.</dd>
+          <dt>CD8Tpex</dt><dd>Donor2 TCF7-positive CD8 precursor-exhausted cells with inhibitory evidence.</dd>
+          <dt>CD8Tex</dt><dd>Donor2 non-dividing CD8 cells with detected inhibitory-receptor evidence that are not TPEX.</dd>
         </dl>
         <h3>CD4<sup>+</sup> T-cells</h3>
         <dl>
-          <dt>NaiveLike</dt><dd>T cells with a naive-like phenotype.</dd>
-          <dt>Tfh</dt><dd>T follicular helper cells.</dd>
-          <dt>Th17</dt><dd>Th17 helper cells.</dd>
-          <dt>Treg</dt><dd>T regulatory cells.</dd>
-          <dt>CTL_EOMES</dt><dd>Cytotoxic CD4 T cells expressing EOMES and GZMK.</dd>
-          <dt>CTL_GNLY</dt><dd>Cytotoxic CD4 T cells expressing GNLY.</dd>
-          <dt>CTL_Exh</dt><dd>Cytotoxic CD4 T cells with an exhaustion phenotype.</dd>
+          <dt>CD4Activated</dt><dd>Activated CD4 state assigned from the donor's cluster context.</dd>
+          <dt>CD4ActivatedStress</dt><dd>Donor2 activated/stress CD4 state.</dd>
+          <dt>CD4Naive</dt><dd>Donor1 naive-like CD4 state.</dd>
+          <dt>CD4Proliferating</dt><dd>Dividing CD4 state; proliferation is retained explicitly.</dd>
+          <dt>CD4Resting</dt><dd>Resting CD4 state.</dd>
         </dl>
       </section>
     </div>

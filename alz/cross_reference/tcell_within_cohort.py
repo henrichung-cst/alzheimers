@@ -2,7 +2,7 @@
 """Within-cohort cell-type attribution for the T-cell exhaustion cohort (donor1).
 
 Localizes **bulk** kinase activity signals (donor1 ST + pY stoichiometry MEA) to
-ProjecTILs cell-type **states** using only the cohort's own paired scRNA — the
+evidence-backed per-cell **states** using only the cohort's own paired scRNA — the
 "Song" within-cohort method (`alz/reference/snrna_integration.py` +
 `alz/bulk_mea/attribute.py`), no disease reference required. A kinase attributes
 to a state when its transcript is (a) preferentially expressed in that state
@@ -26,27 +26,27 @@ Two deliberate departures from the mouse design (see
 Two orthogonal specificity axes, reported as two columns:
 
 3. **Cell-type specificity** (`tcell_top_celltype` / `tcell_celltype_concentration_tier`
-   / `tcell_celltype_effective_n`). The 14 ProjecTILs states are a grid of cell
-   TYPE (CD8 / CD4 / Treg) × state. Collapsing the states onto cell types and
+   / `tcell_celltype_effective_n`). The evidence-backed states retain a CD8/CD4
+   lineage axis. Collapsing the states onto those lineages and
    running the SHARED `specificity.compute` coarse-group aggregation (cell-weighted,
    `group_col`) over DETECTED states only gives the same concentration-tier +
    effective_n math every cohort uses (Song/5xFAD) — answering "is this kinase
    concentrated in one T-cell type?". The detected-basis restriction stops an
    undetected state's trace noise from winning a phantom home; a kinase detected
    in zero states gets no home/tier/effective_n. `tcell_top_celltype` is the
-   dominant detected cell TYPE (cell-weighted argmax), NOT a state. The per-STATE
-   concentration-tier is retired (the ~14 states are transcriptionally homogeneous,
-   so a per-state dominance tier saturates at ≥2×).
+   dominant detected lineage (cell-weighted argmax), NOT a state. The per-state
+   concentration tier is retired; enrichment carries the activation-state axis.
 4. **State enrichment** (`tcell_state_enrichment`) — the activation-continuum axis,
    T-cell-only (brain cohorts have no "state"). For each state, the fold of that
    state's linear expression over the gene's BASELINE = the MEAN linear expression
-   across all adequately-sampled states (n_cells >= MIN_STATE_CELLS), gene-agnostic
+   across all observed states, gene-agnostic
    in its state set (the brain cohorts' celltype_mean / global_mean, ported to
    states). The baseline includes states where the gene is undetected, so a kinase
    concentrated in one state divides by a low baseline -> high fold = state-specific.
-   GUARDED at DISPLAY time: only states that are detected (frac >= DETECTION_FRAC_MIN)
-   AND have >= MIN_STATE_CELLS cells carry a badge; ineligible states get NaN. A
-   median-over-detected-states baseline (the prior bug) inverted the metric —
+   GUARDED at DISPLAY time: only states that are detected
+   (frac >= DETECTION_FRAC_MIN) carry a badge; undetected states get NaN. Raw
+   state cell counts are shipped alongside the call. A median-over-detected-states
+   baseline (the prior bug) inverted the metric —
    single-state kinases pinned to 1.0 and breadth drove the fold.
 
 CORRECTNESS TRAP: `aggexp_data.csv` is `AggregateExpression(slot="data")` — a SUM
@@ -87,17 +87,13 @@ if HERE not in sys.path:
 
 from alz.shared import config  # noqa: E402
 from alz.cross_reference import specificity  # noqa: E402
+from alz.cohorts.tcells import state_lineage  # noqa: E402
 
 # Bulk MEA contrast days that also have scRNA (MEA days {13,15,17,19,20} ∩
 # scRNA days {0,2,9,13,17,20}, minus the d2 baseline). d15/d19 have no scRNA →
 # no attribution rows (honest empty).
 CONTRAST_DAYS = ("d13", "d17", "d20")
 BASELINE_DAY = "d2"
-
-# A state must have at least this many cells (pooled across scRNA days) to enter
-# the state-enrichment baseline mean or to be picked as a kinase's headline state.
-# Drops CD8MAIT (n=8 in donor1); every other state clears it.
-MIN_STATE_CELLS = 50
 
 # Detection floor: a (gene, state) is "detected" when this fraction of the state's
 # cells express the transcript. The SINGLE cross-cohort gate
@@ -106,22 +102,6 @@ MIN_STATE_CELLS = 50
 # and the NSCLC reference. A state below it cannot carry a trustworthy enrichment
 # (the fold would be built on a handful of cells), so it is not eligible.
 DETECTION_FRAC_MIN = specificity.DETECTION_FRAC_MIN
-
-
-def _state_to_celltype(state: str) -> str:
-    """Collapse a sanitized ProjecTILs state to its cell TYPE (CD8 / CD4 / Treg).
-
-    The 14 states are a cell-type × activation-state grid; cell-type specificity
-    is asked over these three types. ``Treg`` stands alone; everything else folds
-    by CD8/CD4 prefix (CD8MAIT → CD8, so the n=8 state can never stand alone)."""
-    s = str(state)
-    if s == "Treg":
-        return "Treg"
-    if s.startswith("CD8"):
-        return "CD8"
-    if s.startswith("CD4"):
-        return "CD4"
-    return s
 
 
 def _donor_dir(donor: str) -> str:
@@ -235,8 +215,8 @@ def _compute_metric(donor: str, mean_long: pd.DataFrame
     df = mean_in_state.merge(det, on=["gene", "state"], how="left")
     df["tcell_fraction_expressing"] = df["tcell_fraction_expressing"].fillna(0.0)
     df["n_cells"] = df["n_cells"].fillna(0).astype(int)
-    # Cell TYPE (CD8 / CD4 / Treg) for the coarse-group aggregation.
-    df["cell_type_coarse"] = df["state"].map(_state_to_celltype)
+    # Lineage (CD8 / CD4) for the coarse-group aggregation.
+    df["cell_type_coarse"] = df["state"].map(state_lineage)
 
     per_label, _per_group, per_gene = specificity.compute(
         df, gene_col="gene", label_col="state",
@@ -245,19 +225,19 @@ def _compute_metric(donor: str, mean_long: pd.DataFrame
         detection_frac_min=DETECTION_FRAC_MIN)   # native axes; cell type below
     per_label = per_label.rename(columns={"detected": "tcell_detected"})
 
-    # --- Cell-type specificity (CD8 / CD4 / Treg), DETECTED-BASIS -----------
+    # --- Lineage specificity (CD8 / CD4), DETECTED-BASIS --------------------
     # The SHARED coarse-group aggregation (cell-weighted; the same effective_n /
     # concentration-tier math Song/5xFAD use, just with cell types as the unit),
     # with the share basis restricted to DETECTED expression. At shallow scRNA
     # depth an undetected state is noise, not low-real-expression, so letting it
     # into the basis lets a rounding-error fraction "win" a phantom home (CAMK1G/
     # TTBK1 read as CD4 while detected nowhere). We zero the expression of
-    # undetected states but KEEP all three cell types present, so the
-    # concentration tier stays a fold over the fixed 1/3 even share (filtering the
+    # undetected states but KEEP the observed lineages present, so the
+    # concentration tier stays a fold over the fixed 1/N even share (filtering the
     # rows out would shrink the denominator and make "concentrated" unreachable).
     # A kinase detected in zero states then has an all-zero basis and is nulled
     # below (no home, no tier, no effective_n → no pill). The per-STATE tier stays
-    # retired (the ~14 states are transcriptionally homogeneous, saturating at ≥2×).
+    # retired; state enrichment is the activation-continuum axis.
     df_ct = df.copy()
     _und = df_ct["tcell_fraction_expressing"].astype(float) < DETECTION_FRAC_MIN
     df_ct.loc[_und, "tcell_mean_log2_expression"] = np.nan   # → linear 0
@@ -279,7 +259,7 @@ def _compute_metric(donor: str, mean_long: pd.DataFrame
         "n_detected_native": "tcell_n_detected",
         "effective_n_native": "tcell_effective_n",        # per-state subtype spread
         "effective_n_coarse": "tcell_celltype_effective_n",
-        "top_group_coarse": "tcell_top_celltype"})         # CD8 / CD4 / Treg
+        "top_group_coarse": "tcell_top_celltype"})         # CD8 / CD4
 
     # Gene-level guard: a kinase detected in zero states has an all-zero share
     # basis, so its argmax cell type is arbitrary noise — null the whole axis.
@@ -287,10 +267,10 @@ def _compute_metric(donor: str, mean_long: pd.DataFrame
     per_gene.loc[_no_det, ["tcell_top_celltype", "tcell_celltype_effective_n",
                            "tcell_celltype_concentration_tier"]] = np.nan
 
-    # --- State enrichment (activation continuum), GUARDED -------------------
+    # --- State enrichment (activation continuum), detection-guarded ---------
     # For each state: fold of that state's linear expression over the gene's
-    # BASELINE = MEAN linear expression across all adequately-sampled states
-    # (n_cells >= MIN_STATE_CELLS), gene-AGNOSTIC in its state set. The baseline
+    # BASELINE = MEAN linear expression across all observed states,
+    # gene-AGNOSTIC in its state set. The baseline
     # deliberately includes states where THIS gene is undetected, so a kinase
     # living in one state divides by a baseline pulled down by its many low
     # states (-> high fold = state-specific). This is the brain cohorts'
@@ -300,16 +280,15 @@ def _compute_metric(donor: str, mean_long: pd.DataFrame
     #   median-over-eligible-states baseline INVERTED the metric — it normalized
     #   each gene by its OWN detected states, so a 1-state gene scored exactly 1.0
     #   and breadth (not specificity) drove the fold (Spearman +0.69).
-    #   DISPLAY guard unchanged: only ELIGIBLE states (detected AND
-    #   >= MIN_STATE_CELLS cells) carry a badge; ineligible states get NaN. A
-    #   kinase with no eligible state has no state enrichment.
-    sampled = per_label["n_cells"] >= MIN_STATE_CELLS
-    baseline = (per_label[sampled].groupby("gene")["linear_expression"]
+    #   DISPLAY guard: detected states carry enrichment; undetected states get
+    #   NaN. The raw pooled state cell count is carried separately.
+    baseline = (per_label.groupby("gene")["linear_expression"]
                 .mean().replace(0.0, np.nan))
     per_label["tcell_state_enrichment"] = (
         per_label["linear_expression"] / per_label["gene"].map(baseline))
-    elig = per_label["tcell_detected"] & sampled
+    elig = per_label["tcell_detected"]
     per_label.loc[~elig, "tcell_state_enrichment"] = np.nan
+    per_label["tcell_state_n_cells"] = per_label["n_cells"].astype(int)
     return per_label, per_gene
 
 
@@ -383,7 +362,8 @@ def build(donor: str = "donor1") -> dict:
     out_dir = _out_dir(donor)
     os.makedirs(out_dir, exist_ok=True)
     spec_cols = ["gene", "state", "tcell_detected", "tcell_fraction_expressing",
-                 "tcell_state_enrichment", "tcell_mean_log2_expression"]
+                 "tcell_state_n_cells", "tcell_state_enrichment",
+                 "tcell_mean_log2_expression"]
     spec[spec_cols].to_csv(
         os.path.join(out_dir, "tcell_enrichment.csv"), index=False)
     conc.to_csv(os.path.join(out_dir, "tcell_concordance.csv"), index=False)
@@ -412,6 +392,21 @@ def build(donor: str = "donor1") -> dict:
         spec[spec_cols].rename(columns={"gene": "gene_symbol",
                                         "state": "cell_type"}),
         on=["gene_symbol", "cell_type"], how="left")
+    # The raw state denominator describes the state, not the kinase gene.  A
+    # kinase absent from the scRNA matrix therefore still has a valid observed
+    # cell count even though its gene-level expression fields are missing.
+    state_cell_counts = (
+        spec[["state", "tcell_state_n_cells"]]
+        .drop_duplicates()
+        .set_index("state")["tcell_state_n_cells"]
+    )
+    if set(state_cell_counts.index) != set(states):
+        raise AssertionError(
+            "state cell-count evidence does not cover the canonical state roster"
+        )
+    grid["tcell_state_n_cells"] = (
+        grid["cell_type"].map(state_cell_counts).astype(int)
+    )
     grid = grid.merge(
         gene_breadth[["gene", "tcell_effective_n", "tcell_top_celltype",
                       "tcell_celltype_effective_n",
@@ -419,7 +414,8 @@ def build(donor: str = "donor1") -> dict:
             columns={"gene": "gene_symbol"}),
         on="gene_symbol", how="left")
     grid["tcell_detected"] = (
-        grid["tcell_detected"].fillna(False).infer_objects(copy=False).astype(bool))
+        grid["tcell_detected"].astype("boolean").fillna(False).astype(bool)
+    )
     grid["tcell_celltype_concentration_tier"] = (
         grid["tcell_celltype_concentration_tier"].fillna(0).astype(int))
     # concordance lfc (per gene × state × day)
@@ -449,7 +445,8 @@ def build(donor: str = "donor1") -> dict:
 
     cols = ["kinase", "residue_type", "gene_symbol", "contrast", "cell_type",
             "NES", "FDR",
-            "tcell_detected", "tcell_fraction_expressing", "tcell_state_enrichment",
+            "tcell_detected", "tcell_fraction_expressing", "tcell_state_n_cells",
+            "tcell_state_enrichment",
             "tcell_effective_n", "tcell_top_celltype",
             "tcell_celltype_effective_n", "tcell_celltype_concentration_tier",
             "tcell_lfc", "tcell_concordance", "tcell_concordant",

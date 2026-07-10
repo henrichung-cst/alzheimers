@@ -19,6 +19,7 @@ from alz.tcell_viewer.paths import (  # noqa: E402
 )
 from alz.tcell_viewer.common import DONORS, _short_contrast  # noqa: E402
 from alz.tcell_viewer.slices_traces import _build_tcell_measurement_trace  # noqa: E402
+from alz.tcell_viewer.state_contract import state_audit_path  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Audit helpers (only used here)
@@ -82,8 +83,18 @@ def _tcell_audit_specs() -> list[tuple[str, str, str]]:
                          "extract_manifest.json"),
         ))
         specs.append((
+            f"{donor}_state_audit", f"{donor} per-cell state audit",
+            state_audit_path(donor),
+        ))
+        specs.append((
+            f"{donor}_state_labels", f"{donor} per-cell state labels",
+            os.path.join(config.REPO_ROOT, "outputs", "reports",
+                         "tcell_labeling", "cells",
+                         f"{donor}_state_labels.csv"),
+        ))
+        specs.append((
             f"{donor}_decompose_manifest", f"{donor} decompose manifest",
-            os.path.join(TCELLS_INCYTR_INPUTS_DIR, donor, "scrna",
+            os.path.join(TCELLS_INCYTR_INPUTS_DIR, donor,
                          "decompose_manifest.json"),
         ))
     return specs

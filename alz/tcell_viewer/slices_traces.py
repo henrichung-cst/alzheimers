@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 
 import numpy as np
 import pandas as pd
@@ -194,6 +195,11 @@ def _write_tcell_transcript_trace() -> dict:
     """
     rel_path = "audit_sources/transcript_trace"
     out_dir_base = os.path.join(UNIFIED_VIEWER_DIR, rel_path)
+    # This generated tree is fully owned by the canonical viewer build. Clear
+    # it before writing so shards from a previous state ontology cannot remain
+    # addressable beside the current donor-scoped files.
+    shutil.rmtree(out_dir_base, ignore_errors=True)
+    os.makedirs(out_dir_base, exist_ok=True)
 
     by_context: dict[str, dict] = {}
     for donor in DONORS:

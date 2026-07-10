@@ -46,11 +46,6 @@ function _temporalSortDays(days) {
 function _temporalPathwayBlock() {
   const block = ViewerPayload.incytr();
   if (!block) return null;
-  if (window.IncytrCelltypeQc
-      && IncytrCelltypeQc.enabled(block)
-      && block.pathway_counts_low_signal_excluded) {
-    return block.pathway_counts_low_signal_excluded;
-  }
   return block.pathway_counts || null;
 }
 
@@ -260,8 +255,6 @@ function _temporalRenderSeriesRow(series, idx) {
     ["down", "down only"],
     ["either", "either (total)"],
   ].map(([v, l]) => `<option value="${_escapeHtml(v)}">${_escapeHtml(l)}</option>`).join("");
-  const sparse = isPathway && window.IncytrCelltypeQc
-    && IncytrCelltypeQc.hasLowSignal(_temporalActiveIncytrBlock());
   const unavailable = !_temporalLayerAvailable(series.layer);
   return `<div class="temporal-row${unavailable ? " temporal-row-unavailable" : ""}" data-idx="${idx}">
     <span class="temporal-label">Series ${idx + 1}</span>
@@ -270,7 +263,6 @@ function _temporalRenderSeriesRow(series, idx) {
     ${series.layer === "kinase" ? `<label title="Kinase MEA false-discovery-rate gate.">FDR <input class="temporal-fdr" type="number" min="0" max="1" step="0.01" style="width:54px;"></label>` : ""}
     ${isPathway ? `<label title="Incytr pathway pvalue gate. Blank = no pvalue gate.">pvalue <input class="temporal-pvalue" type="number" min="0" max="1" step="0.005" style="width:64px;"></label>` : ""}
     ${isPathway ? `<label title="Minimum absolute composite Pathway Disturbance Score.">|PDS| >= <input class="temporal-abs-pds" type="number" min="0" step="0.01" style="width:64px;"></label>` : ""}
-    ${sparse ? `<label title="Sensitivity mode: remove Incytr pathways where sender or receiver has median n_cells <= 3.">Sparse <select class="temporal-low-signal"><option value="include">Include all</option><option value="exclude">Exclude median n<=3</option></select></label>` : ""}
     <button class="temporal-rm" title="Remove this series">x</button>
   </div>`;
 }
@@ -282,14 +274,12 @@ function _temporalWireSeriesRow(rowEl, idx) {
   const fdrEl = rowEl.querySelector(".temporal-fdr");
   const pvalueEl = rowEl.querySelector(".temporal-pvalue");
   const absPdsEl = rowEl.querySelector(".temporal-abs-pds");
-  const lowSignalEl = rowEl.querySelector(".temporal-low-signal");
   const rmBtn = rowEl.querySelector(".temporal-rm");
   layerSel.value = s.layer;
   signSel.value = s.sign;
   if (fdrEl) fdrEl.value = s.fdr;
   if (pvalueEl) pvalueEl.value = (s.pvalue == null ? "" : s.pvalue);
   if (absPdsEl) absPdsEl.value = (s.absPds == null ? "" : s.absPds);
-  if (lowSignalEl) lowSignalEl.value = IncytrFilter.get("excludeLowSignalCelltypes") ? "exclude" : "include";
   layerSel.addEventListener("change", () => {
     s.layer = layerSel.value;
     if (s.layer === "pathway" && s.absPds == null) s.absPds = 0.01;
@@ -329,11 +319,6 @@ function _temporalWireSeriesRow(rowEl, idx) {
     } else {
       absPdsEl.value = (s.absPds == null ? "" : s.absPds);
     }
-  });
-  if (lowSignalEl) lowSignalEl.addEventListener("change", () => {
-    IncytrFilter.set({ excludeLowSignalCelltypes: lowSignalEl.value === "exclude" });
-    _temporalRenderUI();
-    renderTemporal();
   });
   rmBtn.addEventListener("click", () => {
     _temporalState.series.splice(idx, 1);

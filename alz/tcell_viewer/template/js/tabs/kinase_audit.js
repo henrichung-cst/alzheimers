@@ -959,7 +959,7 @@ async function renderActiveKinaseAuditTab(kinase_id) {
       const verdictExportBtn = document.getElementById("attr-verdict-export");
       if (verdictExportBtn) verdictExportBtn.addEventListener("click", exportVerdictCsv);
       _renderAuditTable("audit-attribution", "unified_attribution", ctx.attrRows,
-        ["kinase","gene_symbol","contrast","cell_type","tcell_detected","tcell_fraction_expressing","tcell_state_enrichment","tcell_lfc","tcell_concordance","tcell_consistency","NES","FDR"],
+        ["kinase","gene_symbol","contrast","cell_type","tcell_detected","tcell_fraction_expressing","tcell_state_n_cells","tcell_state_enrichment","tcell_lfc","tcell_concordance","tcell_consistency","NES","FDR"],
         "unified_attribution");
     }
   } catch (e) {
@@ -980,12 +980,12 @@ function exportVerdictCsv() {
   // the Raw attribution rows table (audit-attribution) below.
   const headers = [
     "cell_type", "confidence_tier",
-    "tcell_detected", "tcell_fraction_expressing", "tcell_state_enrichment",
+    "tcell_detected", "tcell_fraction_expressing", "tcell_state_n_cells", "tcell_state_enrichment",
     "tcell_consistency",
   ];
   const keys = [
     "cell_type", "confidence_tier",
-    "tcell_detected", "tcell_fraction_expressing", "tcell_state_enrichment",
+    "tcell_detected", "tcell_fraction_expressing", "tcell_state_n_cells", "tcell_state_enrichment",
     "tcell_consistency",
   ];
   csvDownload(csvSerialize(headers, keys, rows), exportFilename(donor, "attribution"));

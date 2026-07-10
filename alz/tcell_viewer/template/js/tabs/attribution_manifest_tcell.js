@@ -4,14 +4,14 @@
 //
 // Two orthogonal within-cohort axes (neither is "specificity" — that word is
 // reserved for the NSCLC reference):
-//   cell-TYPE confidence (CD8/CD4/Treg) drives the confidence pill (kinase-level)
+//   lineage confidence (CD8/CD4) drives the confidence pill (kinase-level)
 //   state enrichment (tcell_state_enrichment) is the activation-continuum axis.
 //
 // Column spine:
 //   cell_type (a STATE) with cell-type-confidence pill · tcell_detected (Detected)
 //   · tcell_state_enrichment (Enrichment, gated on detection) · tcell_lfc
 //   (LFC — info) · tcell_concordance (vs Bulk — info) · tcell_consistency
-//   (Timecourse — info) · nsclc_detected (NSCLC Detected)
+//   (Timecourse — info). Raw state cell counts accompany the detection call.
 //
 // Sections (accordion, in order):
 //   §0 Confidence verdict (cell-type axis sets the pill; state axis is info;
@@ -26,10 +26,8 @@ const TCELL_MANIFEST = (() => {
   const _num = (v, d=3) => (v == null || !isFinite(v)) ? "" : Number(v).toFixed(d);
 
   // State-enrichment cell: this state's transcript as a fold over the kinase's
-  // MEAN expression across all adequately-sampled ProjecTILs states (gene-agnostic
-  // baseline), so a kinase concentrated in one state scores a high fold and it is
-  // not saturated by the transcriptional homogeneity of ProjecTILs states (where a
-  // dominance-of-total concentration tier cannot localize). Reuses the shared badge
+  // MEAN expression across all observed evidence-backed states (gene-agnostic
+  // baseline), so a kinase concentrated in one state scores a high fold. Reuses the shared badge
   // palette (vhi/hi/mid/lo). Local to T-cell (no other cohort has this axis).
   function _tcellEnrichCell(fold) {
     const v = Number(fold);
@@ -55,7 +53,7 @@ const TCELL_MANIFEST = (() => {
     },
     {
       key: "confidence_tier", label: "Cell-type confidence", type: "conf", group: "id", hidden: true,
-      title: "Kinase-level cell-type confidence: how concentrated this kinase is in one T-cell TYPE (CD8 / CD4 / Treg), from the donor's own scRNA, corroborated by the independent NSCLC reference detecting the kinase in its T_NK cell type. tier ≥2 (≥2× the even 1/3 share) → moderate/high; broad → low. Shown once, on the kinase's headline state row — it is a per-kinase property, not per state.",
+      title: "Kinase-level lineage confidence: how concentrated this kinase is in CD8 versus CD4 states from the donor's own scRNA. The independent NSCLC reference contributes only a coarse T/NK presence check; it is not mapped to these evidence-backed states. Shown once on the kinase's headline state row.",
       render(r, _numFmt, _ctx) { return `<td>${_attrVerdictConfCell(r)}</td>`; },
     },
     {
@@ -71,7 +69,7 @@ const TCELL_MANIFEST = (() => {
       key: "tcell_state_enrichment", label: "Enrichment", type: "num", group: "attr",
       sub: "within", subLabel: "Within-cohort attribution (vs bulk direction)",
       subTitle: "Within-cohort detection + state enrichment, pooled across all scRNA days. Computed in alz/cross_reference/tcell_within_cohort.py.",
-      title: "State enrichment — this state's transcript level as a fold over the kinase's BASELINE (mean expression across all adequately-sampled states, ≥50 cells). A kinase concentrated in one state scores a high fold; a broadly-expressed kinase sits near 1×. An undetected state shows no badge (—). ≥3× strong / ≥2× moderate / ≥1.5× mild; <1.5× = broadly expressed (not state-enriched). Sorts by fold.",
+      title: "State enrichment — this state's transcript level as a fold over the kinase's baseline mean across all observed evidence-backed states. Detection and the raw pooled state cell count are shown separately; no minimum-cell gate is applied.",
       render(r, _numFmt, _ctx) {
         const det = r.tcell_detected === true || r.tcell_detected === "True" || r.tcell_detected === "true";
         return `<td class="attr-num">${det ? _tcellEnrichCell(r.tcell_state_enrichment)
@@ -88,13 +86,6 @@ const TCELL_MANIFEST = (() => {
         return `<td class="attr-num" title="${consist} of 3 contrast days (d13/d17/d20) move concordantly with bulk.">${consist}<span class="muted" style="font-size:10px;"> / 3</span></td>`;
       },
     },
-    {
-      key: "nsclc_detected", label: "Detected", type: "num", group: "ext",
-      sub: "nsclc", subLabel: "NSCLC reference (detection)",
-      subTitle: "Independent human reference: 10x 897k-cell NSCLC, detection at the matched T-cell state.",
-      title: "Independent reference (10x 897k-cell NSCLC): is the kinase actually present in THIS exact T-cell state? Fraction of reference cells expressing it (✓ = ≥10% of cells express it — the single cross-cohort detection floor, identical to the within-cohort scRNA). n/a = the kinase is outside the NSCLC probe panel. Sorts by detection.",
-      render(r, _numFmt, _ctx) { return `<td class="attr-num">${_detGateCell(r.nsclc_detected, r.nsclc_frac, "this T-cell state (NSCLC reference)")}</td>`; },
-    },
   ];
 
   // ---- Super-group header row -----------------------------------------------
@@ -103,8 +94,7 @@ const TCELL_MANIFEST = (() => {
     const _grpCounts = cols.reduce((acc, c) => { acc[c.group] = (acc[c.group]||0)+1; return acc; }, {});
     return `<tr class="attr-verdict-supergroup">` +
       `<th class="attr-supergroup-spacer" colspan="${(_grpCounts.id || 0)}"></th>` +
-      `<th class="attr-supergroup-attr" colspan="${(_grpCounts.attr || 0)}" title="Within-cohort cell-state attribution: transcript enrichment across this cohort's own ProjecTILs T-cell states + concordance vs the bulk kinase-MEA direction at this contrast.">Within-cohort attribution (vs bulk direction)</th>` +
-      `<th class="attr-supergroup-ext" colspan="${(_grpCounts.ext || 0)}" title="Independent human reference: 10x 897k-cell NSCLC (ProjecTILs/scGate T-states + marker-labeled non-T cell types). Detection at the matched T-state — is the kinase actually present where the within-cohort attribution localized it?">NSCLC reference (detection)</th>` +
+      `<th class="attr-supergroup-attr" colspan="${(_grpCounts.attr || 0)}" title="Within-cohort cell-state attribution across this cohort's evidence-backed per-cell states.">Within-cohort attribution (vs bulk direction)</th>` +
     `</tr>`;
   }
 
@@ -144,8 +134,7 @@ const TCELL_MANIFEST = (() => {
     return _enr(b) - _enr(a);
   }
 
-  // Always show all states — no filter (de-gate directive: all 14 ProjecTILs
-  // states listed for the human to read; sort reorders, nothing drops).
+  // Always show every evidence-backed state; sorting never drops rows.
   const rowVisible = null;
 
   function bulkAnchor(ctx) {
@@ -168,16 +157,15 @@ const TCELL_MANIFEST = (() => {
   const explainerHtml =
     `<details class="attr-explainer"><summary>How to read within-cohort T-cell attribution</summary>` +
     `<div class="attr-explainer-body">` +
-    `<p>The <strong>location-confidence</strong> pill is the unified kinase-level exclusivity confidence (how exclusively the kinase localizes to one ProjecTILs state), corroborated by the independent NSCLC reference. It is a per-kinase property — the pill is shown on the kinase's top state only; all other rows show a muted dot. Click any row to expand the confidence detail.</p>` +
-    `<p>The <strong>within-cohort</strong> axes (Detected / Enrichment / LFC / vs Bulk / Timecourse) localize the <strong>bulk</strong> kinase-activity signal to a T-cell ProjecTILs state using this cohort's own paired scRNA. The <strong>NSCLC detection</strong> column is an <strong>independent human reference</strong> (10x 897k-cell) corroborating whether the kinase is actually present in that exact state.</p>` +
+    `<p>The <strong>location-confidence</strong> pill is a kinase-level CD8-versus-CD4 lineage call from this cohort's own scRNA. It is shown on the kinase's top state only; all other rows show a muted dot.</p>` +
+    `<p>The <strong>within-cohort</strong> axes localize the bulk kinase-activity signal to the evidence-backed per-cell states. The independent NSCLC reference remains available as a separate coarse cell-type panel, but is not crosswalked to these states.</p>` +
     `<table class="attr-explainer-table" style="margin-bottom:8px;">` +
       `<thead><tr><th>Axis</th><th>What it tells you</th></tr></thead><tbody>` +
-      `<tr><td><strong>Location confidence</strong></td><td>Kinase-level exclusivity (unified): effective number of states (inverse-Simpson breadth over all states) + NSCLC corroboration. Shown on the top state; muted dot elsewhere.</td></tr>` +
+      `<tr><td><strong>Location confidence</strong></td><td>Kinase-level CD8/CD4 lineage concentration relative to the even 1/2 share, with independent coarse NSCLC T/NK detection as corroboration. Shown on the top state; muted dot elsewhere.</td></tr>` +
       `<tr><td><strong>Detected</strong></td><td>Within-cohort detection in this cohort's own scRNA, pooled across all days: fraction ≥ 10% (normalization-free presence).</td></tr>` +
-      `<tr><td><strong>Enrichment</strong></td><td>State enrichment — this state's transcript as a fold over the kinase's <em>baseline</em>: its mean expression across all adequately-sampled ProjecTILs states. The T-cell enrichment metric asks "how many fold above this kinase's typical T-cell state?" so a kinase concentrated in one state scores high — it is not flattened by the transcriptional homogeneity of ProjecTILs states (where a dominance-of-total concentration tier saturates and cannot localize). ≥3× strong / ≥2× moderate / ≥1.5× mild; &lt;1.5× = broadly expressed.</td></tr>` +
+      `<tr><td><strong>Enrichment</strong></td><td>This state's transcript as a fold over the kinase's mean expression across all observed evidence-backed states. Detection and pooled state cell count are shown as raw evidence; no minimum-cell gate is applied.</td></tr>` +
       `<tr><td><strong>LFC / vs Bulk</strong></td><td>Does the transcript move the same direction as the bulk kinase activity at this day? <strong>Info only</strong> — concordance between kinase activity and its own mRNA is at chance (OR≈1, verified 2026-06-03; same in the published mouse Song method). Never used to filter.</td></tr>` +
       `<tr><td><strong>Timecourse</strong></td><td>How many of the three contrast days (d13/d17/d20) agree in direction with bulk. Credibility from timecourse consistency, not per-day significance.</td></tr>` +
-      `<tr><td><strong>NSCLC Detected</strong></td><td>Independent 10x 897k-cell NSCLC reference: fraction of cells in this exact T-state that express the kinase (✓ = ≥10% of cells — the single cross-cohort detection floor). An independent corroborator of the within-cohort attribution. n/a = outside the NSCLC probe panel.</td></tr>` +
       `</tbody></table>` +
     `<p><strong>No p-value / FDR.</strong> Donor1 is a single donor with one scRNA library per day — no biological replicates, so a per-(state, day) significance test would be pseudoreplication. Direction + magnitude + timecourse consistency + NSCLC corroboration are reported instead.</p>` +
     `</div></details>`;
@@ -194,7 +182,7 @@ const TCELL_MANIFEST = (() => {
     if (!host) return;
     const conf = row.confidence_tier || "none";
     const basis = row.confidence_basis || "";
-    // tcell_top_celltype is the cell TYPE (CD8 / CD4 / Treg) — the axis the
+    // tcell_top_celltype is the lineage (CD8 / CD4) — the axis the
     // confidence pill is computed on. tcell_effective_n is the per-STATE
     // cell-state spread (info only; it does NOT set the confidence pill).
     const ctType = row.tcell_top_celltype || "";
@@ -216,39 +204,25 @@ const TCELL_MANIFEST = (() => {
       }
     }
 
-    // NSCLC corroborator from the row (per-STATE NSCLC detection at the
-    // crosswalked ProjecTILs state). Separate from the cell-type-axis T_NK
-    // corroboration that sets the pill.
-    const nsclcDet = row.nsclc_detected;
-    const nsclcFrac = row.nsclc_frac;
-    let corrLine;
-    if (nsclcDet == null) {
-      corrLine = `<span class="muted">Outside the NSCLC probe panel — reference cannot corroborate or refute.</span>`;
-    } else if (nsclcDet === true || nsclcDet === "True" || nsclcDet === "true") {
-      corrLine = `<span class="attr-badge attr-badge-info">✓ corroborated</span> NSCLC detects this kinase in the matched ${_escapeHtml(row.cell_type)} state (${_specPct(nsclcFrac)} of cells — expressed)`;
-    } else {
-      corrLine = `<span class="muted">✗ not detected</span> — NSCLC does NOT detect this kinase in the matched ${_escapeHtml(row.cell_type)} state (${_specPct(nsclcFrac)} of cells — not expressed).`;
-    }
-
     const thisCellDlHtml =
       `<dt>Cells expressing</dt><dd>${_specPct(row.tcell_fraction_expressing)}${detected ? "" : ' <span class="muted">(below 10%; not eligible for state enrichment)</span>'}</dd>` +
-      `<dt>State enrichment</dt><dd>${detected ? _tcellEnrichCell(row.tcell_state_enrichment) : '<span class="muted" title="Not detected in this state — no state enrichment">—</span>'} <span class="muted">vs the kinase's baseline (mean) state</span></dd>` +
-      `<dt>NSCLC corroborator</dt><dd>${corrLine}</dd>`;
+      `<dt>State cells</dt><dd>${row.tcell_state_n_cells == null ? "—" : Number(row.tcell_state_n_cells).toLocaleString()} <span class="muted">cells pooled across observed days</span></dd>` +
+      `<dt>State enrichment</dt><dd>${detected ? _tcellEnrichCell(row.tcell_state_enrichment) : '<span class="muted" title="Not detected in this state — no state enrichment">—</span>'} <span class="muted">vs the kinase's baseline (mean) state</span></dd>`;
 
     const reconcileSentence =
-      `The confidence pill reflects <strong>cell-type confidence</strong> (CD8 / CD4 / Treg), ` +
+      `The confidence pill reflects <strong>lineage confidence</strong> (CD8 / CD4), ` +
       `not state breadth: <strong>${_escapeHtml(conf.replace("_", " "))}</strong> — ${_escapeHtml(basis)}.` +
       (peakEnr != null && peakEnr >= 1.5
         ? ` Separately, on the activation-state axis the transcript peaks ${peakEnr.toFixed(1)}× in ${_escapeHtml(peakEnrState)} over its typical state.`
-        : ` On the activation-state axis it is not state-enriched (no detected state ≥1.5× its median).`);
+        : ` On the activation-state axis it is not state-enriched (no detected state ≥1.5× its mean-state baseline).`);
 
     const kinaseDlHtml =
-      `<dt>Cell type</dt><dd>${_escapeHtml(ctType) || "<span class='muted'>—</span>"} <span class="muted">— the type (CD8 / CD4 / Treg) it concentrates in; sets the confidence pill</span></dd>` +
+      `<dt>Lineage</dt><dd>${_escapeHtml(ctType) || "<span class='muted'>—</span>"} <span class="muted">— CD8 or CD4 concentration; sets the confidence pill</span></dd>` +
       `<dt>Peak state enrichment</dt><dd>${peakEnr == null
-        ? "<span class='muted'>— (no detected, ≥50-cell state)</span>"
+        ? "<span class='muted'>— (no detected state)</span>"
         : `${_tcellEnrichCell(peakEnr)} <span class="muted">in ${_escapeHtml(peakEnrState)} — activation-state axis (info, does not set the pill)</span>`}</dd>` +
-      `<dt>Cell-state spread</dt><dd><span class="badge ${band.badge}">${_specF2(eff)}</span> <span class="muted">effective # ProjecTILs states (info; not the confidence axis)</span></dd>` +
-      `<dt>Cell-type confidence</dt><dd><span class="${_attrConfidenceClass(conf)}" title="${_escapeHtml(basis)}">${_escapeHtml(conf.replace("_", " "))}</span></dd>` +
+      `<dt>Cell-state spread</dt><dd><span class="badge ${band.badge}">${_specF2(eff)}</span> <span class="muted">effective # evidence-backed states (info; not the confidence axis)</span></dd>` +
+      `<dt>Lineage confidence</dt><dd><span class="${_attrConfidenceClass(conf)}" title="${_escapeHtml(basis)}">${_escapeHtml(conf.replace("_", " "))}</span></dd>` +
       `<dt>Basis</dt><dd class="muted" style="font-size:11px;">${_escapeHtml(basis)}</dd>`;
 
     host.innerHTML = _renderSpecificityVerdictShell({

@@ -237,7 +237,7 @@ const TAB_GUIDE = {
   incytr: {
     preamble: "Pair-mode Incytr on the per-donor T-cell pseudobulk. The left panel filters pathways or heatmap cells; the view-switch (Table / Heatmap) selects the main pane. One heatmap cell = number of pathways surviving the active pvalue / |PDS| gates for a chosen day-vs-baseline contrast.",
     method: [
-      "Pair-mode Incytr was run on each donor's ProjecTILs-annotated clusters, contrasting each day against the d2 baseline. The heatmap reads precomputed counts at every (sender, receiver, contrast, pvalue, |PDS|) gate combination from the payload, including Timeline mode — no on-the-fly aggregation. Each pathway row is one Ligand → Receptor → EM → Target chain scored under pair-mode.",
+      "Pair-mode Incytr was run on each donor's evidence-backed per-cell states, contrasting each later day against the d2 baseline. Each pathway row is one Ligand → Receptor → EM → Target chain scored under pair-mode.",
     ],
     shows: {
       lead: "Where signalling change concentrates across cell-type pairs at the chosen day (heatmap), or the individual pathway rows behind a (sender, receiver, contrast) selection (table). Click a heatmap cell to switch to the table view for that pair.",
@@ -245,18 +245,17 @@ const TAB_GUIDE = {
     howTo: "Use the Table / Heatmap switch at top. In heatmap mode: use Single for one day, or Timeline to compare all days side by side for the active donor. In table mode: set sender/receiver/contrast filters. Use |PDS| as the primary gate — per-animal Wald-t is unreliable in this cohort.",
     toggles: [
       { name: "Table / Heatmap", desc: "switch the main pane between the pathway table and the sender × receiver heatmap." },
-      { name: "Sparse cells", desc: "exclude cell-type pairs where either endpoint has median n_cells ≤ 3." },
     ],
   },
   celltype: {
-    preamble: "Per-donor ProjecTILs assignment summary for the single-cell input used by the T-cell Incytr runs.",
+    preamble: "Per-donor evidence-backed state summary for the single-cell input used by the T-cell Incytr runs.",
     method: [
-      "The builder packages donor-specific state totals, state-by-day counts, and optional ProjecTILs embedding coordinates from the T-cell Incytr input directory.",
+      "The builder packages donor-specific state totals and state-by-day raw cell counts from the current T-cell Incytr input directory. Historical projection coordinates remain audit-only.",
     ],
     shows: {
-      lead: "The active donor's projected cell states, total state composition, and day-by-state cell counts.",
+      lead: "The active donor's evidence-backed states, total state composition, and day-by-state raw cell counts.",
     },
-    howTo: "Use the donor toggle to switch cohorts. If embedding coordinates are present, choose a projection reference and reduction from the controls above the canvas.",
+    howTo: "Use the donor toggle to switch cohorts and compare the state totals and day-specific raw cell counts.",
   },
 };
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -1003,6 +1004,17 @@ def main(argv: list[str] | None = None) -> None:
                 combo_out_dir = _canonical_out_dir(
                     donor, track, multi_track=len(tracks) > 1
                 )
+
+            if (
+                not dry_run
+                and args.out_dir is None
+                and args.state is None
+                and combo_out_dir.exists()
+            ):
+                # A full canonical regeneration owns this generated track
+                # directory. Clear it first so states from a previous ontology
+                # cannot remain discoverable by the viewer.
+                shutil.rmtree(combo_out_dir)
 
             if dry_run:
                 if inputs is not None:

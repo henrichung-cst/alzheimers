@@ -42,6 +42,7 @@ from alz.tcell_viewer.paths import (  # noqa: E402
     UNIFIED_VIEWER_DIR,
 )
 from alz.tcell_viewer.common import DONORS, _incytr_sanitize  # noqa: E402
+from alz.tcell_viewer.state_contract import validate_pathway_states  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Module-local constants
@@ -58,7 +59,6 @@ _INCYTR_PATHWAY_PVALUES = (0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
 _INCYTR_PATHWAY_ABS_PDS = (0.0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
 _INCYTR_TOP_INSTANCE_LIMIT = 5000
 _INCYTR_INDEX_FILENAME = "incytr_index.bin.gz"
-_INCYTR_LOW_SIGNAL_MEDIAN_N_THRESHOLD = 3
 
 _PAIR_FILE_RE = re.compile(r"(d\d+_d\d+)_incytr_output\.parquet$")
 _BACKBONE_FILE_RE = re.compile(r"(d\d+_d\d+)_backbone_output\.parquet$")
@@ -107,19 +107,16 @@ def _read_tcell_incytr_celltype_qc(
     counts_path = os.path.join(
         TCELLS_INCYTR_INPUTS_DIR, donor, "scrna", "cell_counts.csv"
     )
-    threshold = _INCYTR_LOW_SIGNAL_MEDIAN_N_THRESHOLD
     scope_days = _contrast_days(contrasts)
     out = {
         "source": os.path.relpath(counts_path, config.REPO_ROOT),
         "sample_scope": (
-            "donor-specific ProjecTILs state counts over Incytr contrast days "
+            "donor-specific evidence-backed state counts over Incytr contrast days "
             f"{scope_days}"
         ),
-        "low_signal_rule": f"median_n <= {threshold}",
-        "low_signal_median_n_threshold": threshold,
+        "units": "cells",
         "days": [f"d{d}" for d in scope_days],
         "by_celltype": {},
-        "low_signal_celltypes": [],
     }
     if not os.path.exists(counts_path):
         print(f"  ({donor}) (warn) cell-count QC file not found: {counts_path}",
@@ -137,33 +134,27 @@ def _read_tcell_incytr_celltype_qc(
     counts["day"] = pd.to_numeric(counts["day"], errors="coerce")
     counts["n_cells"] = pd.to_numeric(counts["n_cells"], errors="coerce")
     counts = counts.dropna(subset=["state", "day", "n_cells"])
+    counts["day"] = counts["day"].astype(int)
     if scope_days:
-        counts = counts[counts["day"].astype(int).isin(scope_days)]
-    stats = counts.groupby("state", sort=False)["n_cells"].agg(
-        median_n="median",
-        mean_n="mean",
-        min_n="min",
-        total_n="sum",
-        n_timepoints="count",
-    )
+        counts = counts[counts["day"].isin(scope_days)]
+    state_day_counts = counts.groupby(["state", "day"])["n_cells"].sum()
 
-    low: list[str] = []
     by_celltype: dict[str, dict] = {}
     for ct in sorted(set(celltypes)):
-        if ct in stats.index:
-            row = stats.loc[ct]
-            median_n = float(row["median_n"])
-            is_low = median_n <= threshold
-            rec = {
-                "median_n": median_n,
-                "mean_n": float(row["mean_n"]),
-                "min_n": int(row["min_n"]),
-                "total_n": int(row["total_n"]),
-                "n_timepoints": int(row["n_timepoints"]),
-                "low_signal_median_le_3": bool(is_low),
+        if scope_days:
+            by_day = {
+                f"d{day}": int(state_day_counts.get((ct, day), 0))
+                for day in scope_days
             }
-            if is_low:
-                low.append(ct)
+            values = list(by_day.values())
+            rec = {
+                "median_n": float(np.median(values)),
+                "mean_n": float(np.mean(values)),
+                "min_n": int(min(values)),
+                "total_n": int(sum(values)),
+                "n_timepoints": len(scope_days),
+                "by_day": by_day,
+            }
         else:
             rec = {
                 "median_n": None,
@@ -171,14 +162,13 @@ def _read_tcell_incytr_celltype_qc(
                 "min_n": None,
                 "total_n": 0,
                 "n_timepoints": 0,
-                "low_signal_median_le_3": False,
+                "by_day": {},
             }
         by_celltype[ct] = rec
 
     out["by_celltype"] = by_celltype
-    out["low_signal_celltypes"] = sorted(low)
-    print(f"  ({donor}) incytr celltype_qc: {len(low)} low-signal endpoint(s) "
-          f"at median_n <= {threshold}", flush=True)
+    print(f"  ({donor}) incytr celltype_qc: raw counts for "
+          f"{len(by_celltype)} state(s)", flush=True)
     return out
 
 
@@ -215,7 +205,6 @@ def _build_tcell_celltype_pathway_qc(con, celltype_qc: dict) -> dict:
             "min_n": qc.get("min_n"),
             "total_n": qc.get("total_n"),
             "n_timepoints": qc.get("n_timepoints"),
-            "low_signal_median_le_3": bool(qc.get("low_signal_median_le_3")),
             "receiver_paths_all": int(rec.get("receiver_paths_all") or 0),
             "receiver_paths_abs_pds_gt1": receiver_gt1,
             "sender_paths_all": int(rec.get("sender_paths_all") or 0),
@@ -364,22 +353,19 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         "SELECT DISTINCT sender FROM src").fetchall()})
     receivers_canonical = sorted({r[0] for r in con.execute(
         "SELECT DISTINCT receiver FROM src").fetchall()})
+    canonical_roster = validate_pathway_states(
+        donor, senders_canonical, receivers_canonical
+    )
     sender_to_idx = {s: i for i, s in enumerate(senders_canonical)}
     receiver_to_idx = {r: i for i, r in enumerate(receivers_canonical)}
     n_s, n_r, n_c = len(senders_canonical), len(receivers_canonical), len(present_contrasts)
     print(f"  ({donor}) senders={n_s}, receivers={n_r}, contrasts={n_c}", flush=True)
     celltype_qc = _read_tcell_incytr_celltype_qc(
         donor,
-        sorted(set(senders_canonical) | set(receivers_canonical)),
+        canonical_roster,
         list(present_contrasts),
     )
     celltype_pathway_qc = _build_tcell_celltype_pathway_qc(con, celltype_qc)
-    low_signal_celltypes = set(celltype_qc.get("low_signal_celltypes") or [])
-    if low_signal_celltypes:
-        con.register(
-            "low_signal_celltypes",
-            pd.DataFrame({"cell_type": sorted(low_signal_celltypes)}),
-        )
 
     # Heatmap counts cube.
     n_thr = len(_INCYTR_PATHWAY_PVALUES)
@@ -490,15 +476,6 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         }
 
     pathway_counts = _build_pathway_counts()
-    low_signal_where = (
-        "sender NOT IN (SELECT cell_type FROM low_signal_celltypes) "
-        "AND receiver NOT IN (SELECT cell_type FROM low_signal_celltypes)"
-        if low_signal_celltypes else ""
-    )
-    pathway_counts_low_signal_excluded = (
-        _build_pathway_counts(low_signal_where) if low_signal_where else None
-    )
-
     # Complete donor-local top-mode index. This mirrors the unified viewer's
     # packed-column contract so the shared Incytr Pathways tab can filter over
     # every row instead of a pre-capped top_instances table.
@@ -559,19 +536,12 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
     """).fetchdf()
     if len(top):
         top["rank"] = np.arange(1, len(top) + 1, dtype=int)
-        top["low_signal_endpoint"] = top.apply(
-            lambda r: bool(
-                r["sender"] in low_signal_celltypes
-                or r["receiver"] in low_signal_celltypes
-            ),
-            axis=1,
-        )
         top["traj_labels"] = ""
         top["sign_vec"] = ""
     top_cols = [
         "rank", "sender", "receiver", "Path", "Ligand", "Receptor", "EM",
         "Target", "contrast", "pvalue", "PDS", "abs_pds", "traj_labels",
-        "sign_vec", "low_signal_endpoint", *effective_score_cols,
+        "sign_vec", *effective_score_cols,
         *_INCYTR_LABEL_COLS,
     ]
     top_instances = {
@@ -765,12 +735,10 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         "senders": senders_canonical,
         "receivers": receivers_canonical,
         "celltype_qc": celltype_qc,
-        "low_signal_celltypes": list(celltype_qc.get("low_signal_celltypes") or []),
         "celltype_pathway_qc": celltype_pathway_qc,
         "heatmap_counts": heatmap_counts,
         "heatmap_counts_signed": heatmap_counts_signed,
         "pathway_counts": pathway_counts,
-        "pathway_counts_low_signal_excluded": pathway_counts_low_signal_excluded,
         "present_pairs": sorted(present_pairs),
         "n_total_rows": total_rows,
         "pair_row_counts": pair_row_counts,

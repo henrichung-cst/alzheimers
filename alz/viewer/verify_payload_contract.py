@@ -170,6 +170,80 @@ def _check_capabilities(
             )
 
 
+def _check_tcell_contract(payload: dict[str, Any], errors: list[str]) -> None:
+    """Hard checks for the evidence-backed T-cell state payload."""
+    if payload.get("meta", {}).get("cohort") != "tcell":
+        return
+    celltypes = payload.get("celltypes", {}).get("by_context", {})
+    incytr = payload.get("incytr_pathways", {}).get("by_context", {})
+    all_states: set[str] = set()
+    for donor, state_block in celltypes.items():
+        roster = {str(value) for value in state_block.get("name", [])}
+        all_states.update(roster)
+        block = incytr.get(donor, {})
+        endpoints = {
+            str(value)
+            for value in [*block.get("senders", []), *block.get("receivers", [])]
+        }
+        unknown = sorted(endpoints - roster)
+        if unknown:
+            errors.append(f"T-cell context {donor} has foreign endpoints: {unknown}")
+        forbidden = {
+            "low_signal_celltypes",
+            "pathway_counts_low_signal_excluded",
+        } & set(block)
+        qc_forbidden = {
+            "low_signal_rule",
+            "low_signal_median_n_threshold",
+            "low_signal_celltypes",
+        } & set(block.get("celltype_qc", {}))
+        qc = block.get("celltype_qc", {})
+        if set(qc.get("by_celltype", {})) != roster:
+            errors.append(
+                f"T-cell context {donor} raw cell-count roster mismatch"
+            )
+        qc_days = set(qc.get("days", []))
+        for state, evidence in qc.get("by_celltype", {}).items():
+            by_day = evidence.get("by_day")
+            if not isinstance(by_day, dict) or set(by_day) != qc_days:
+                errors.append(
+                    f"T-cell context {donor}/{state} lacks complete day-count evidence"
+                )
+            if evidence.get("n_timepoints") != len(qc_days):
+                errors.append(
+                    f"T-cell context {donor}/{state} timepoint count is incomplete"
+                )
+        if forbidden or qc_forbidden:
+            errors.append(
+                f"T-cell context {donor} exports legacy low-signal keys: "
+                f"{sorted(forbidden | qc_forbidden)}"
+            )
+        if any(
+            "low_signal_endpoint" in row
+            for row in block.get("top_instances", {}).get("rows", [])
+        ):
+            errors.append(
+                f"T-cell context {donor} top rows export low_signal_endpoint"
+            )
+        if any(
+            "low_signal_median_le_3" in row
+            for row in block.get("celltype_pathway_qc", {}).get("rows", [])
+        ):
+            errors.append(
+                f"T-cell context {donor} cell-count rows export a gate call"
+            )
+    attr_states = {
+        str(value) for value in payload.get("attribution_index", {}).get(
+            "cell_type", []
+        )
+    }
+    if not attr_states.issubset(all_states):
+        errors.append(
+            "T-cell attribution contains states absent from the context rosters: "
+            f"{sorted(attr_states - all_states)}"
+        )
+
+
 def validate(path: Path) -> tuple[bool, list[str], dict[str, Any]]:
     payload = _load_payload(path)
     errors: list[str] = []
@@ -178,6 +252,7 @@ def validate(path: Path) -> tuple[bool, list[str], dict[str, Any]]:
         _check_context_blocks(payload, context_ids, errors)
         _check_incytr(payload, context_ids, errors)
         _check_capabilities(payload, context_ids, errors)
+        _check_tcell_contract(payload, errors)
     summary = {
         "path": str(path),
         "contexts": context_ids,

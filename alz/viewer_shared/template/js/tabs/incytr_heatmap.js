@@ -582,19 +582,15 @@ function _ihRenderQcPlot(block) {
   }
   wrap.style.display = "";
 
-  const lowRows = rows.filter(r => !!r.low_signal_median_le_3);
-  const mainRows = rows.filter(r => !r.low_signal_median_le_3);
   const yMetric = (block.celltype_pathway_qc && block.celltype_pathway_qc.y_metric)
     || "receiver_paths_abs_pds_gt1";
   const gate = (block.celltype_pathway_qc && block.celltype_pathway_qc.pds_gate)
     || "abs(PDS) > 1";
-  const threshold = (block.celltype_qc && block.celltype_qc.low_signal_median_n_threshold) || 3;
   const topLabelRows = rows
     .slice()
     .sort((a, b) => (Number(b[yMetric]) || 0) - (Number(a[yMetric]) || 0))
     .slice(0, 5);
   const labelSet = new Set([
-    ...lowRows.map(r => r.cell_type),
     ...topLabelRows.map(r => r.cell_type),
   ]);
 
@@ -632,24 +628,9 @@ function _ihRenderQcPlot(block) {
     };
   }
 
-  const traces = [
-    traceFor(mainRows, "median n > 3", "#2f5f9f", "circle"),
-  ];
-  if (lowRows.length) traces.push(
-    traceFor(lowRows, "median n <= 3", "#b42318", "diamond")
-  );
+  const traces = [traceFor(rows, "Cell states", "#2f5f9f", "circle")];
 
   const xVals = rows.map(r => Number(r.median_n)).filter(Number.isFinite);
-  const maxY = Math.max(...rows.map(r => (Number(r[yMetric]) || 0) + 1), 1);
-  const shapes = Number.isFinite(threshold) ? [{
-    type: "line",
-    x0: threshold,
-    x1: threshold,
-    y0: 1,
-    y1: maxY,
-    yref: "y",
-    line: { color: "#b42318", width: 1, dash: "dash" },
-  }] : [];
 
   const layout = {
     title: {
@@ -671,7 +652,6 @@ function _ihRenderQcPlot(block) {
       fixedrange: false,
     },
     legend: { orientation: "h", x: 0, y: 1.12 },
-    shapes,
     plot_bgcolor: "#fafafa",
     paper_bgcolor: "#ffffff",
   };

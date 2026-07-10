@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 import sys
 
@@ -33,10 +34,24 @@ EDGE_SLICES_INCYTR_BACKBONE_DIR = os.path.join(
     UNIFIED_VIEWER_DIR, "edge_slices", "incytr_backbone"
 )
 
-# T-cell pair-mode parquet root (per-donor wide outputs).
-INCYTR_PAIR_MODE_TCELLS_DIR = os.path.join(
-    config.REPO_ROOT, "outputs", "reports", "incytr_pair_mode_tcells"
-)
+# T-cell pair-mode parquet root (per-donor wide outputs). The default is the
+# evidence-backed per-cell-state run. Diagnostics may select another complete
+# tree explicitly; there is no silent fallback to the historical ProjecTILs run.
+def resolve_incytr_pair_mode_tcells_dir(
+    environ: Mapping[str, str] | None = None,
+) -> str:
+    """Resolve the explicit diagnostic override or the production default."""
+    env = os.environ if environ is None else environ
+    return env.get(
+        "TCELL_INCYTR_PAIR_MODE_DIR",
+        os.path.join(
+            config.REPO_ROOT, "outputs", "reports",
+            "incytr_pair_mode_tcells_percell",
+        ),
+    )
+
+
+INCYTR_PAIR_MODE_TCELLS_DIR = resolve_incytr_pair_mode_tcells_dir()
 
 # T-cell kinase MEA (bulk; donor1 only — donor2 has no IMAC).
 KINASE_ATTRIBUTION_TCELLS_DIR = os.path.join(

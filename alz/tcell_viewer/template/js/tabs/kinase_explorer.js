@@ -36,11 +36,10 @@ function _confPass(rowConf, threshold) {
 // Within-cohort T-cell state enrichment:
 // detection evidence (tcell_fraction_expressing >= 0.10) is shown separately.
 // STATE ENRICHMENT = each state's linear expression as a fold over the
-// kinase's BASELINE mean across all adequately-sampled ProjecTILs states (gene-agnostic;
+// kinase's BASELINE mean across all observed evidence-backed states (gene-agnostic;
 // precomputed in Python), so a kinase concentrated in one state scores a high fold. The
 // concentration-of-total tier is retired here — it saturates at ≥2× because the
-// ~14 ProjecTILs states are transcriptionally homogeneous, so it cannot localize
-// a kinase along the activation continuum. Enrichment uses the full state set and
+// Enrichment uses the full state set and
 // discriminates. The location-confidence pill still uses the per-gene effective # of states.
 function _tcellEnrichBadge(fold, state) {
   const v = Number(fold);
@@ -60,8 +59,8 @@ function _tcellEnrichBadge(fold, state) {
 function getScopedAttribution(kinaseId, filter) {
   // Returns filtered within-cohort attribution rows from
   // PAYLOAD.attribution_index for one kinase. The T-cell attribution carries the
-  // expression evidence (tcell_detected) + two within-cohort axes — cell-TYPE
-  // confidence (tcell_top_celltype = CD8/CD4/Treg, which drives confidence_tier)
+  // expression evidence (tcell_detected) + two within-cohort axes — lineage
+  // confidence (tcell_top_celltype = CD8/CD4, which drives confidence_tier)
   // and the activation-state axis (tcell_state_enrichment, gated on detection) —
   // plus pseudobulk concordance vs bulk NES + confidence_tier/confidence_basis.
   // specificity_celltype (the shared key the unified engine reads) = _pill_anchor;
@@ -84,6 +83,7 @@ function getScopedAttribution(kinaseId, filter) {
       cell_type:          AI.cell_type[j],
       tcell_detected:           AI.tcell_detected           ? AI.tcell_detected[j]           : false,
       tcell_fraction_expressing: AI.tcell_fraction_expressing ? AI.tcell_fraction_expressing[j] : null,
+      tcell_state_n_cells:      AI.tcell_state_n_cells      ? AI.tcell_state_n_cells[j]      : null,
       tcell_effective_n:        AI.tcell_effective_n        ? AI.tcell_effective_n[j]        : null,
       tcell_top_celltype:       topCt,
       tcell_state_enrichment:   AI.tcell_state_enrichment   ? AI.tcell_state_enrichment[j]   : null,
@@ -93,8 +93,6 @@ function getScopedAttribution(kinaseId, filter) {
       tcell_consistency:  AI.tcell_consistency  ? AI.tcell_consistency[j]  : 0,
       nes:                AI.nes                ? AI.nes[j]                : null,
       fdr:                AI.fdr                ? AI.fdr[j]                : null,
-      nsclc_frac:         AI.nsclc_frac         ? AI.nsclc_frac[j]         : null,
-      nsclc_detected:     AI.nsclc_detected     ? AI.nsclc_detected[j]     : null,
       confidence_tier:    AI.confidence_tier    ? AI.confidence_tier[j]    : "none",
       confidence_basis:   AI.confidence_basis   ? AI.confidence_basis[j]   : "",
       // The cell-type confidence pill (a kinase-level property) is rendered once,
@@ -512,15 +510,17 @@ function _renderCellTypesCell(r, filter) {
       detectedCells.add(e.cell_type);
   }
   const n = detectedCells.size;
+  const ctBlock = ViewerPayload.celltypes ? ViewerPayload.celltypes() : null;
+  const totalStates = ctBlock && Array.isArray(ctBlock.name) ? ctBlock.name.length : 0;
   if (n === 0) return `<span class="muted" title="Not detected (≥10% of cells) in any T-cell state in scope">0</span>`;
   const names = Array.from(detectedCells).sort();
   const tip = `Detected (≥10% of cells) in ${n} T-cell state(s): ${names.join(", ")}`;
-  return `<span title="${_escapeHtml(tip)}"><strong>${n}</strong><span class="muted" style="font-size:10px;"> / 14</span></span>`;
+  return `<span title="${_escapeHtml(tip)}"><strong>${n}</strong><span class="muted" style="font-size:10px;"> / ${totalStates}</span></span>`;
 }
 
-// Within-cohort cell-TYPE confidence (CD8 / CD4 / Treg) from the donor's own
-// scRNA: the dominant cell type + whether the kinase concentrates there (tier ≥2
-// = ≥2× the even 1/3 share) or is broad across the three types. Distinct from the
+// Within-cohort lineage confidence (CD8 / CD4) from the donor's own scRNA:
+// the dominant lineage + whether the kinase concentrates there (tier ≥2
+// = ≥2× the even 1/2 share) or is broad across both. Distinct from the
 // NSCLC spec column (beyond-T cell-type breadth). Precomputed in Python
 // (tcell_celltype / tcell_celltype_tier slice columns).
 function _renderCellTypeCell(r) {
@@ -528,11 +528,11 @@ function _renderCellTypeCell(r) {
   if (!ct) return '<span class="muted" title="No measurable cell-type expression distribution">—</span>';
   const tier = r.tcell_celltype_tier || 0;
   if (tier >= 2) {
-    return `<span class="badge hi" title="Concentrated in ${_escapeHtml(ct)} — ≥2× the even 1/3 cell-type share (concentrated in one cell type)">${_escapeHtml(ct)} ✓</span>`;
+    return `<span class="badge hi" title="Concentrated in ${_escapeHtml(ct)} — ≥2× the even 1/2 lineage share">${_escapeHtml(ct)} ✓</span>`;
   }
-  // Broad: the kinase is spread across CD8/CD4/Treg. Naming the bare argmax (a
+  // Broad: the kinase is spread across CD8/CD4. Naming the bare argmax (a
   // near-tie) misreads as "it's a <type> kinase", so show only "broad".
-  return `<span class="muted" title="Broad across CD8 / CD4 / Treg — not concentrated in any single T-cell type (≤2× the even 1/3 share)">broad</span>`;
+  return `<span class="muted" title="Broad across CD8 / CD4 — not concentrated in either lineage">broad</span>`;
 }
 
 // NSCLC cell-type specificity — the SINGLE independent-reference breadth metric:

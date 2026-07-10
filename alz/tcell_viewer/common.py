@@ -7,9 +7,9 @@ Vocabulary note — T-cell specificity vs enrichment
 ---------------------------------------------------
 The T-cell cohort uses two metrics that **diverge** from the AD cohorts:
 
-- **Enrichment** (within-cohort): concentration of expression in a ProjecTILs
-  T-state, computed as fold over the kinase's BASELINE mean across all
-  adequately-sampled states (the AD cohorts' celltype_mean / global_mean share,
+- **Enrichment** (within-cohort): concentration of expression in an
+  evidence-backed T-cell state, computed as fold over the kinase's baseline mean
+  across all observed states (the AD cohorts' celltype_mean / global_mean share,
   ported to states; named enrichment here to reflect the T-state
   activation-continuum reading). A kinase concentrated in one state divides by a
   low baseline -> high fold; a broadly-expressed kinase sits near 1×.
@@ -67,26 +67,8 @@ TIMEPOINT_COLOR_MAP = {
 
 # Metric vocabulary constants — use these in payload keys and UI labels so
 # changes are made in one place.
-ENRICHMENT = "enrichment"   # within-cohort ProjecTILs T-state concentration
+ENRICHMENT = "enrichment"   # within-cohort evidence-backed state concentration
 SPECIFICITY = "specificity"  # NSCLC N-of-7 coarse cell-type breadth
-
-PROJECTILS_LABEL_MAP = {
-    "CD8.CM": "CD8CM",
-    "CD8.EM": "CD8EM",
-    "CD8.MAIT": "CD8MAIT",
-    "CD8.NaiveLike": "CD8Naive",
-    "CD8.TEMRA": "CD8TEMRA",
-    "CD8.TEX": "CD8Tex",
-    "CD8.TPEX": "CD8Tpex",
-    "CD4.CTL_EOMES": "CD4CTLeomes",
-    "CD4.CTL_Exh": "CD4CTLexh",
-    "CD4.CTL_GNLY": "CD4CTLgnly",
-    "CD4.NaiveLike": "CD4Naive",
-    "CD4.Tfh": "CD4Tfh",
-    "CD4.Th17": "CD4Th17",
-    "CD4.Treg": "Treg",
-}
-
 
 def _incytr_sanitize(name: str) -> str:
     """Match the upstream sanitize in alz/integration/load.R:sanitize_celltype."""

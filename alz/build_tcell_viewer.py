@@ -2,7 +2,7 @@
 """T-cell viewer builder: single-file HTML deliverable for the T-cell cohort.
 
 Reads the T-cell bulk MEA (donor1 only; donor2 has no IMAC) and the per-donor
-pair-mode Incytr wide outputs (`outputs/reports/incytr_pair_mode_tcells/`).
+pair-mode Incytr wide outputs from the evidence-backed per-cell-state run.
 Emits `outputs/reports/tcell_viewer/index.html` with the columnar payload
 inlined as `<script type="application/json" id="payload-data">` plus per-pair
 parquet shards under `edge_slices/incytr_pathways/` fetched on demand.
@@ -29,6 +29,7 @@ import resource
 import sys
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(HERE)
@@ -36,6 +37,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 sys.path.insert(0, HERE)
 
+from alz.shared import config  # noqa: E402
 from alz.viewer.shared.payload_helpers import _sanitize, _build_kinase_motifs  # noqa: E402
 
 from tcell_viewer.paths import (  # noqa: E402
@@ -48,6 +50,7 @@ from tcell_viewer.paths import (  # noqa: E402
     SCHEMA_VERSION,
     UNIFIED_VIEWER_DIR,
     UNIFIED_VIEWER_HTML,
+    resolve_incytr_pair_mode_tcells_dir,
 )
 
 # Slice modules — cohort slice logic lives here, not inline.
@@ -64,7 +67,6 @@ from alz.tcell_viewer.slices_incytr import (  # noqa: E402
 from alz.tcell_viewer.slices_kinase import (  # noqa: E402
     _build_donor_kinases_slice,
     _build_celltypes_slice,
-    _load_donor_clusters,
     _load_projected_state_mea_payload,
     _build_decomposition_index_from_state_mea,
 )
@@ -76,6 +78,7 @@ from alz.tcell_viewer.slices_audit import (  # noqa: E402
     build_tcell_audit_manifest,
     AUDIT_TABLE_SPECS,
 )
+from alz.tcell_viewer.state_contract import load_donor_states  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -198,13 +201,13 @@ def build_tcell_payload() -> dict:
     }
 
     print("[build_tcell_payload] celltypes slice:", flush=True)
-    donor_clusters = {d: _load_donor_clusters(d) for d in DONORS}
-    celltypes_slice = _build_celltypes_slice(donor_clusters)
+    donor_states = {d: load_donor_states(d) for d in DONORS}
+    celltypes_slice = _build_celltypes_slice(donor_states)
     celltype_id_by_name = {
         name: idx for idx, name in zip(celltypes_slice["id"], celltypes_slice["name"])
     }
     celltypes_by_context: dict[str, dict] = {}
-    for donor, clusters in donor_clusters.items():
+    for donor, clusters in donor_states.items():
         ordered = [c for c in celltypes_slice["name"] if c in set(clusters)]
         celltypes_by_context[donor] = {
             "id": [celltype_id_by_name[c] for c in ordered],
@@ -309,7 +312,7 @@ def build_tcell_payload() -> dict:
         elif capabilities["within_cohort_attribution"]:
             notes.append(
                 "Cell-type attribution is within-cohort: the bulk kinase signal "
-                "is localized to ProjecTILs states using this cohort's own scRNA "
+                "is localized to evidence-backed per-cell states using this cohort's own scRNA "
                 "(transcript specificity + concordance vs the bulk NES). Single "
                 "donor, single library per day — no per-state significance test "
                 "(direction + timecourse consistency only).")
@@ -456,6 +459,204 @@ def validate(payload: dict | None = None) -> str:
         ip_idx_path = os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, "index.json")
         if not os.path.exists(ip_idx_path):
             errors.append(f"missing edge_slices/incytr_pathways/index.json")
+
+        celltypes_by_context = payload.get("celltypes", {}).get("by_context", {})
+        incytr_by_context = payload.get("incytr_pathways", {}).get("by_context", {})
+        transcript_by_context = (
+            payload.get("meta", {}).get("transcript_trace", {})
+            .get("by_context", {})
+        )
+        for donor in DONORS:
+            roster = set(load_donor_states(donor))
+            payload_states = set(
+                celltypes_by_context.get(donor, {}).get("name", [])
+            )
+            if payload_states != roster:
+                errors.append(
+                    f"{donor} celltype roster mismatch: payload="
+                    f"{sorted(payload_states)} canonical={sorted(roster)}"
+                )
+            block = incytr_by_context.get(donor, {})
+            endpoints = set(block.get("senders", [])) | set(
+                block.get("receivers", [])
+            )
+            if not endpoints.issubset(roster):
+                errors.append(
+                    f"{donor} Incytr endpoints outside canonical roster: "
+                    f"{sorted(endpoints - roster)}"
+                )
+            forbidden = {
+                "low_signal_celltypes",
+                "pathway_counts_low_signal_excluded",
+            }
+            present_forbidden = sorted(forbidden & set(block))
+            qc = block.get("celltype_qc", {})
+            raw_count_fields = {
+                "median_n", "mean_n", "min_n", "total_n", "n_timepoints",
+                "by_day",
+            }
+            qc_days = set(qc.get("days", []))
+            qc_states = set(qc.get("by_celltype", {}))
+            if qc_states != roster:
+                errors.append(
+                    f"{donor} raw cell-count roster mismatch: "
+                    f"{sorted(qc_states)}"
+                )
+            for state, record in qc.get("by_celltype", {}).items():
+                missing_raw = raw_count_fields - set(record)
+                if missing_raw:
+                    errors.append(
+                        f"{donor}/{state} cell-count evidence missing "
+                        f"{sorted(missing_raw)}"
+                    )
+                    continue
+                by_day = record["by_day"]
+                if set(by_day) != qc_days:
+                    errors.append(
+                        f"{donor}/{state} day-count evidence mismatch: "
+                        f"{sorted(by_day)} != {sorted(qc_days)}"
+                    )
+                if record["n_timepoints"] != len(qc_days):
+                    errors.append(
+                        f"{donor}/{state} n_timepoints does not cover scoped days"
+                    )
+
+            counts_path = os.path.join(config.REPO_ROOT, qc.get("source", ""))
+            if os.path.exists(counts_path):
+                source_counts = pd.read_csv(counts_path)
+                source_counts["day"] = pd.to_numeric(
+                    source_counts["day"], errors="coerce"
+                )
+                source_counts["n_cells"] = pd.to_numeric(
+                    source_counts["n_cells"], errors="coerce"
+                )
+                source_counts = source_counts.dropna(
+                    subset=["state", "day", "n_cells"]
+                )
+                expected_state_day = (
+                    source_counts.groupby(["state", "day"])["n_cells"].sum()
+                )
+                for state, record in qc.get("by_celltype", {}).items():
+                    for day_label, observed_n in record.get("by_day", {}).items():
+                        day = int(day_label.removeprefix("d"))
+                        expected_n = int(expected_state_day.get((state, day), 0))
+                        if observed_n != expected_n:
+                            errors.append(
+                                f"{donor}/{state}/{day_label} raw cell count "
+                                f"{observed_n} != source {expected_n}"
+                            )
+            present_forbidden.extend(sorted(
+                {
+                    "low_signal_rule",
+                    "low_signal_median_n_threshold",
+                    "low_signal_celltypes",
+                } & set(qc)
+            ))
+            if present_forbidden:
+                errors.append(
+                    f"{donor} exports legacy low-signal keys: "
+                    f"{sorted(set(present_forbidden))}"
+                )
+            if any(
+                "low_signal_endpoint" in row
+                for row in block.get("top_instances", {}).get("rows", [])
+            ):
+                errors.append(f"{donor} top pathway rows export low_signal_endpoint")
+            if any(
+                "low_signal_median_le_3" in row
+                for row in block.get("celltype_pathway_qc", {}).get("rows", [])
+            ):
+                errors.append(f"{donor} cell-count evidence exports a gate call")
+
+            wide_dir = os.path.join(INCYTR_PAIR_MODE_TCELLS_DIR, donor, "wide")
+            wide_files = sorted(glob.glob(
+                os.path.join(wide_dir, "*_incytr_output.parquet")
+            ))
+            expected_rows = sum(
+                pq.ParquetFile(path).metadata.num_rows for path in wide_files
+            )
+            if int(block.get("n_total_rows", -1)) != expected_rows:
+                errors.append(
+                    f"{donor} pathway total {block.get('n_total_rows')} != "
+                    f"source parquet total {expected_rows}"
+                )
+            expected_contrasts = {
+                os.path.basename(path).removesuffix("_incytr_output.parquet")
+                for path in wide_files
+            }
+            if set(block.get("contrasts", [])) != expected_contrasts:
+                errors.append(
+                    f"{donor} contrast roster does not match source parquets"
+                )
+
+            trace = transcript_by_context.get(donor, {})
+            declared_trace_states = set(trace.get("clusters", []))
+            if declared_trace_states != roster:
+                errors.append(
+                    f"{donor} transcript-trace roster mismatch: "
+                    f"{sorted(declared_trace_states)}"
+                )
+            trace_dir = os.path.join(
+                UNIFIED_VIEWER_DIR,
+                trace.get("relative_path", f"audit_sources/transcript_trace/{donor}"),
+            )
+            trace_files = {
+                os.path.splitext(os.path.basename(path))[0]
+                for path in glob.glob(os.path.join(trace_dir, "*.parquet"))
+            }
+            if trace_files != roster:
+                errors.append(
+                    f"{donor} transcript-trace file roster mismatch: "
+                    f"files={sorted(trace_files)} canonical={sorted(roster)}"
+                )
+
+        expected_source = (
+            "pair_mode_tcells ("
+            f"{os.path.relpath(INCYTR_PAIR_MODE_TCELLS_DIR, config.REPO_ROOT)})"
+        )
+        if payload.get("incytr_pathways", {}).get("source") != expected_source:
+            errors.append("incytr_pathways source does not match selected input root")
+
+        production_default = os.path.join(
+            config.REPO_ROOT, "outputs", "reports",
+            "incytr_pair_mode_tcells_percell",
+        )
+        if resolve_incytr_pair_mode_tcells_dir({}) != production_default:
+            errors.append("T-cell pair-mode resolver does not select production default")
+        diagnostic_override = os.path.join(config.REPO_ROOT, "diagnostic-pair-mode")
+        if resolve_incytr_pair_mode_tcells_dir({
+            "TCELL_INCYTR_PAIR_MODE_DIR": diagnostic_override,
+        }) != diagnostic_override:
+            errors.append("T-cell pair-mode resolver ignores explicit override")
+
+        legacy_trace_files = glob.glob(os.path.join(
+            UNIFIED_VIEWER_DIR, "audit_sources", "transcript_trace", "*.parquet"
+        ))
+        if legacy_trace_files:
+            errors.append("transcript-trace root contains legacy unscoped shards")
+
+        attribution_states = set(
+            payload.get("attribution_index", {}).get("cell_type", [])
+        )
+        if attribution_states and attribution_states != set(load_donor_states("donor1")):
+            errors.append(
+                "donor1 attribution state roster does not match the per-cell audit"
+            )
+
+        for donor, projected in (
+            payload.get("projected_state_mea", {}).get("by_context", {}).items()
+        ):
+            roster = set(load_donor_states(donor))
+            projected_states = {
+                str(row.get("state"))
+                for row in projected.get("rows", [])
+                if row.get("state") is not None
+            }
+            if not projected_states.issubset(roster):
+                errors.append(
+                    f"{donor} projected-state MEA contains historical states: "
+                    f"{sorted(projected_states - roster)}"
+                )
 
     peak_mb = _peak_rss_mb()
     lines = [
