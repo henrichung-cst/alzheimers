@@ -77,15 +77,14 @@ Ingested 2026-05-27 from Drive folder `1YE_h1jIyBajtm6ArxJqevJ0rt0xLKQgX` → `d
 - Replicates are technical re-injections (r1↔r2 corr 0.96–0.99) → averaged to one column per (donor, day).
 - Out of scope: KGG/AcK/MME enrichments, flow cytometry.
 
-### scRNA cell-state spine: CITE-seq lineage and biological states
+### scRNA cell-state spine: cycle-independent per-cell marker annotation
 
-The authoritative spine is assigned per cell. CD4/CD8 lineage uses raw CITE-seq
-CD4/CD8 antibody UMIs with native-cluster fallback. CD8 states are
-`CD8PrecursorExhausted`, `CD8Exhausted`, `CD8Memory`, `CD8Cytotoxic`, and
-`CD8Effector`; their direct marker evidence remains in the per-cell artifact.
-ProjecTILs raw state/confidence and categorical reference support are retained as
-independent corroboration rather than an override. The labels do not claim terminal
-exhaustion or directly measured functional dysfunction.
+The authoritative spine labels each cell independently. CD4/CD8 lineage uses raw
+CITE-seq antibody UMIs with native-cluster lineage as fallback. Positive and
+biologically meaningful negative RNA marker programs support named exhaustion,
+cytotoxic, activated, and naive/memory states. A cell without sufficient subtype
+evidence remains `CD4` or `CD8`. Cell-cycle evidence is excluded because
+proliferation was induced in silico.
 
 Pipeline order: `ingest-tcells-scrna → tcells-label → tcells-scrna-extract →
 tcells-decompose`. The extract joins the authoritative label artifact by barcode

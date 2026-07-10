@@ -21,33 +21,28 @@ Time courses:
 
 ## Core Pipeline
 
-The pipeline extracts CITE-seq antibody and RNA evidence per cell, assigns
-CD4/CD8 lineage from raw CD4/CD8 antibody counts with native-cluster fallback,
-and emits donor-agnostic biological states. CD8 labels are `CD8 exhausted`,
-`CD8 precursor exhausted`, `CD8 memory`, `CD8 cytotoxic`, and `CD8 effector`.
-CD4 labels are `CD4 proliferating`, `CD4 memory`, `CD4 cytotoxic`, and
-`CD4 resting`.
+The pipeline labels each cell independently from raw CITE-seq CD4/CD8 lineage
+evidence and non-cycle RNA marker modules. Native-cluster lineage is used only when
+the antibody counts are inconclusive. Positive and biologically justified negative
+markers are considered; cells without sufficient subtype evidence remain `CD4` or
+`CD8`. The small provisional TPEX class is conservatively collapsed to `CD8`.
 
-The exhaustion names are operational calls for this chronic-stimulation experiment:
-`CD8 exhausted` requires co-detection of at least two among HAVCR2, LAG3, ENTPD1,
-and PDCD1; `CD8 precursor exhausted` additionally requires TCF7 plus at least one
-of LEF1, SELL, CCR7, and IL7R. They do not imply terminal exhaustion or directly
-measured dysfunction. Terminal exhaustion is specifically avoided because many
-checkpoint-positive cells remain in S/G2M.
+Cell cycling is knowingly excluded from classification and downstream types because
+proliferation was strongly induced in silico. Phase, cycle scores, `% dividing`, and
+cycle genes are not loaded into the current labeling analysis.
 
-The same per-cell evidence labels key scRNA aggregate expression, cell counts,
-deconvolution, Incytr, and the viewer. ProjecTILs projections are independent
-reference evidence, not authoritative state labels. Raw neighborhood confidence is
-retained, with categorical semantics: exactly 1 is `unanimous`, greater than 0.5 is
-`majority-supported`, 0.5 or less is `ambiguous`, and missing is `not projected`.
-No arbitrary 0.8/0.9 high-confidence cutoff is used.
+The same cycle-independent per-cell labels key scRNA aggregate expression, cell counts,
+deconvolution, Incytr, and the viewer.
 
-The direct exhausted fraction rises from 2.5% at d0 to 49.1% at d20 in donor1 and
-from 15.8% at d2 to 58.4% at d11 in donor2. The stringent intersection of a direct
-exhausted call, CITE-seq CD8 lineage, and unanimous ProjecTILs `CD8.TEX` rises to
-23.6% and 22.8%, respectively. Donor1 fluctuates at intermediate days and donor2
-plateaus after d7, so this is an overall temporal expansion rather than strict
-monotonicity.
+Within CD8 cells, donor1 TEX is 39.2% at d2 and 59.1% at d20, with a non-monotonic
+intervening trajectory. Donor2 TEX is 23.1% at d2 and 23.5% at d11, so it does not
+show net progressive TEX enrichment. This divergence is reported directly rather
+than forcing the expected trajectory.
+
+Composition values are observed label counts divided by all retained T cells from
+the same donor and day. This handles unequal recovered-cell totals but is not
+absolute cell-count normalization; changes are relative composition, not measured
+absolute expansion.
 
 Canonical run order:
 
@@ -162,7 +157,7 @@ fresh validation:
 - `outputs/reports/tcell_viewer/tcell_viewer.payload.json`
 - `outputs/reports/kinase_attribution_tcells/donor1/unified_attribution_tcells.csv`
 - `outputs/reports/kinase_attribution_tcells/donor1/mea/`
-- `outputs/reports/incytr_pair_mode_tcells_percell/<donor>/wide/`
+- `outputs/reports/incytr_pair_mode_tcells_percell_posneg/<donor>/wide/`
 
 Useful commands:
 
@@ -177,8 +172,8 @@ pixi run tcell-viewer
 ## Source Files
 
 - Cohort and run-order summary: `README.md` section "T-cell exhaustion cohort".
-- Per-cell ProjecTILs aggregation decision:
-  `docs/reference/tcell_exhaustion_analysis_summary.md`.
+- Per-cell labeling decision and biological interpretation:
+  `outputs/reports/tcell_labeling/tcell_state_labeling_evidence_percell.html`.
 - Within-cohort attribution implementation:
   `alz/cross_reference/tcell_within_cohort.py`.
 - Concordance de-gating rationale:

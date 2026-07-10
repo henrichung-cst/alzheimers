@@ -70,35 +70,32 @@ Pipeline (run in this order):
 
 ```bash
 pixi run ingest-tcells-scrna      # download raw Seurat RDS for both donors (~10 GB)
-pixi run tcells-label             # CITE-seq lineage + definitive biological states
-pixi run tcells-scrna-extract     # evidence-state-keyed aggexp/counts/markers
+pixi run tcells-label             # cycle-independent per-cell RNA/ADT state labels
+pixi run tcells-scrna-extract     # marker-type-keyed aggexp/counts/markers
 pixi run tcells-export-bulk       # linear per-day bulk matrices (pr/py/ps)
 pixi run tcells-decompose         # per-(state, day) substrate via P_s = (N_total/N_s) × bulk × share
 ```
 
-**Substrate is keyed on evidence-backed per-cell biological states, not ProjecTILs
-states.** CD4/CD8 lineage comes from the cells' CITE-seq CD4/CD8 antibody counts
-with native-cluster fallback. CD8 states are named `CD8PrecursorExhausted`,
-`CD8Exhausted`, `CD8Memory`, `CD8Cytotoxic`, and `CD8Effector`. ProjecTILs state,
-raw confidence, and categorical reference corroboration are retained beside the
-direct call rather than overwriting it. `TerminalExhausted` is not used because
-many checkpoint-positive cells remain proliferative. Only explicit
-myeloid/mast/NK/gamma-delta contaminant clusters are dropped. See
+**Substrate is keyed on cycle-independent per-cell marker labels.**
+CD4/CD8 lineage comes from CITE-seq CD4/CD8 antibody counts with native-cluster
+fallback. Positive and biologically meaningful negative RNA marker programs support
+each named state. Cells lacking sufficient subtype evidence remain simply `CD4`
+or `CD8`. Cell-cycle evidence is knowingly excluded because proliferation was
+induced in silico. Only explicit myeloid/mast/NK/gamma-delta contaminant clusters
+are dropped. See
 [`docs/reference/tcell_exhaustion_analysis_summary.md`](docs/reference/tcell_exhaustion_analysis_summary.md)
 for the rationale.
 
 Outputs (under `data/derived/tcells_incytr_inputs/<donor>/`):
 - `scrna/aggexp_data.csv`, `cell_counts.csv`, `allmarkers.csv` — substrate keyed
-  on sanitized biological state (`CD8PrecursorExhausted`, `CD8Exhausted`,
-  `CD4Proliferating`, …; alphanumeric only).
+  on per-cell labels supported by positive/negative non-cycle marker modules,
+  with lineage-only `CD4`/`CD8` fallbacks.
 - `outputs/reports/tcell_labeling/cells/{donor}_state_labels.csv` — per-cell
-  lineage/state calls plus raw RNA and antibody evidence.
-- `scrna/projectils_predictions.csv` — independent reference projection used for
-  categorical corroboration, never as an authoritative override.
+  lineage/state calls plus raw RNA, ADT, and reference-projection evidence.
+- `outputs/reports/tcell_labeling/percell_evidence/` — marker definitions,
+  state/day counts, gene and panel AUROCs, and reference corroboration summaries.
 - `scrna/state_audit.json`, `extract_manifest.json`, `decompose_manifest.json` — drop accounting and per-state/day cell counts.
 - `{pr,py,ps}_deconvoluted.csv` — per-(state, day) values, columns `d{day}_{state}`. Mass identity `Σ_s P_s × N_s/N_total ≈ bulk` verified to ≤ 2e-15 per channel × day.
-
-ProjecTILs reference atlases (carmonalab figshare doi 10.6084/m9.figshare.23608308) cache at `data/external/projectils/`. The CD4 atlas is tumor-derived — no Tcm/Th1/Tprolif vocabulary. Figshare blocks programmatic download on this network's WAF; references must be hand-downloaded the first time.
 
 ### Per-cluster proportional decomposition (Levy-t5 branch)
 

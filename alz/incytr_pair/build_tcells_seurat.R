@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # Per-donor T-cell Seurat for Incytr pair-mode.
 #
-# Reads the raw donor RDS, joins the evidence-backed per-cell state artifact,
+# Reads the raw donor RDS, joins the cycle-independent per-cell label artifact,
 # drops contaminant cells (blank Incytr type), and writes a slim Seurat with:
 #   - Idents()       = state (Type)
 #   - obj$Type       = state
@@ -68,7 +68,7 @@ if (any(is.na(day))) {
 }
 obj$ts_day <- day
 
-# Evidence-backed per-cell state --------------------------------------------
+# Cycle-independent per-cell marker type -----------------------------------
 joined <- load_tcell_state_labels(
   donor = donor,
   barcodes = colnames(obj),
@@ -86,7 +86,7 @@ n_kept <- sum(keep)
 drop_label_tab <- table(label = joined$label[!keep])
 cat("cells: total=", n_total, " kept=", n_kept, " (",
     round(100 * n_kept / n_total, 1), "%) dropped=", n_total - n_kept, "\n", sep = "")
-cat("drop breakdown by evidence label:\n"); print(drop_label_tab)
+cat("drop breakdown by per-cell label:\n"); print(drop_label_tab)
 
 obj <- subset(obj, cells = colnames(obj)[keep])
 memline("after subset")

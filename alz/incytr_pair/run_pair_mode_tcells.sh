@@ -3,12 +3,12 @@
 #
 # Contrasts (per meeting_notes_triage_2026-05-27.md): each later day vs the
 # day-2 baseline, per donor independently.
-#   donor1 = {d13, d17, d20} vs d2   (3 contrasts, 9 states, pr+py+ps)
-#   donor2 = {d5, d7, d9, d11} vs d2 (4 contrasts, 9 states, pr+py — no IMAC)
+#   donor1 = {d13, d17, d20} vs d2   (3 contrasts, per-cell labels, pr+py+ps)
+#   donor2 = {d5, d7, d9, d11} vs d2 (4 contrasts, per-cell labels, pr+py)
 #
 # Reuses alz/incytr_pair/incytr_commandline.R with env-parameterized inputs:
 #   INPUTS_DIR_OVERRIDE  → per-donor data/derived/tcells_incytr_inputs/<donor>
-#   OUTPUT_DIR_OVERRIDE  → optional replacement for the canonical per-cell output root
+#   OUTPUT_DIR_OVERRIDE  → optional replacement for the canonical per-cell root
 #   CHANNELS             → "pr,py,ps" (donor1) or "pr,py" (donor2)
 #   PR_FILE/PY_FILE/PS_FILE → state-keyed deconvoluted CSVs
 #   PR_GENE_COL/PY_GENE_COL/PS_GENE_COL → "gene_symbol"
@@ -45,7 +45,7 @@ done
 declare -A DONOR_DAYS=( [donor1]="13 17 20" [donor2]="5 7 9 11" )
 declare -A DONOR_CHANNELS=( [donor1]="pr,py,ps" [donor2]="pr,py" )
 
-LOG_DIR="${OUTPUT_DIR_OVERRIDE:-outputs/reports/incytr_pair_mode_tcells_percell}"
+LOG_DIR="${OUTPUT_DIR_OVERRIDE:-outputs/reports/incytr_pair_mode_tcells_percell_posneg}"
 mkdir -p "$LOG_DIR"
 
 preflight() {
@@ -130,7 +130,7 @@ fi
 LOG="$LOG_DIR/pair_run.log"
 {
   failed=()
-  # donor2 first: smaller (11 states), no ps channel — banks the simpler cohort
+  # donor2 first: no ps channel — banks the simpler cohort
   # before the higher-RSS donor1 run.
   for donor in donor2 donor1; do
     preflight "$donor" || { failed+=("$donor:preflight"); continue; }

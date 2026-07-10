@@ -1,0 +1,145 @@
+---
+title: "T-cell state labeling: per-cell positive and negative marker evidence"
+subtitle: "Cycle-independent revision built on Matt's reproduced marker analysis"
+format:
+  html:
+    toc: true
+    code-fold: true
+    embed-resources: true
+    page-layout: full
+execute:
+  echo: false
+  warning: false
+  error: true
+---
+
+```{python}
+from pathlib import Path
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from alz.analysis.tcell_marker_sets import STATE_COLORS
+
+ROOT = Path("outputs/reports/tcell_labeling")
+EVIDENCE = ROOT / "percell_evidence"
+DONORS = ("donor1", "donor2")
+BY_DAY = pd.read_csv(EVIDENCE / "state_by_day.csv")
+PANELS = pd.read_csv(EVIDENCE / "state_panel_evidence.csv")
+DEFINITIONS = pd.read_csv(EVIDENCE / "state_marker_definitions.csv")
+COLORS = STATE_COLORS
+```
+
+## Scope and conclusion
+
+State is assigned independently to each cell rather than inherited from its Seurat
+cluster. Raw CITE-seq CD4/CD8 counts establish lineage, with the native cluster's
+lineage used only when antibody counts are inconclusive. Positive and biologically
+meaningful negative RNA marker programs determine state. A cell with no coherent
+named-state program remains simply `CD4` or `CD8`.
+
+Cell-cycle genes, phase, cycle scores, and `% dividing` are not loaded or used.
+Proliferation was induced in silico and therefore cannot disqualify exhaustion.
+ProjecTILs is retained only as raw reference corroboration and never changes the
+marker-derived label.
+
+The per-cell method avoids the severe day-confounding produced by assigning one
+state to each native cluster. Donor 1 shows late TEX enrichment, while donor 2 does
+not show a net increase between day 2 and day 11. The donor difference is reported
+rather than forced to match the expected trajectory.
+
+## Methods
+
+Within each donor and ADT-defined lineage, every non-cycle marker is standardized
+across cells. Each candidate state declares modules expected to be higher and
+modules expected to be lower. Every required module must point in its expected
+direction relative to the donor-lineage mean. The weakest required module limits
+support, preventing one strong marker program from compensating for missing
+negative evidence. The best eligible state is assigned; exact ties or no eligible
+state retain the `CD4` or `CD8` lineage label. Zero is the donor-lineage mean, so
+there is no tuned magnitude cutoff.
+
+Internal signed module values are classification mechanics and are not exported as
+analysis scores. The evidence tables contain categorical calls, raw log-normalized
+RNA values, raw antibody counts, detection fractions, and AUROCs with clear units.
+
+```{python}
+DEFINITIONS
+```
+
+## State composition from day 2
+
+Composition is the observed cell count for a label divided by all retained T cells
+from the same donor and day. This corrects for unequal recovered-cell totals across
+days but is not absolute cell-count normalization; changes represent relative
+composition, not expansion measured in absolute cells.
+
+```{python}
+analysis = BY_DAY[(BY_DAY.day >= 2) & BY_DAY.type.notna()].copy()
+analysis["fraction_all_t"] = analysis.n_cells / analysis.groupby(["donor", "day"]).n_cells.transform("sum")
+analysis.pivot_table(index=["donor", "day"], columns="state" if "state" in analysis else "label", values="fraction_all_t", fill_value=0).mul(100).round(1)
+```
+
+```{python}
+#| label: fig-percell-composition
+#| fig-cap: "Cycle-independent per-cell marker-state composition from day 2 onward."
+#| fig-width: 15
+#| fig-height: 6
+fig, axes = plt.subplots(1, 2, figsize=(15, 6), sharey=True, layout="constrained")
+for ax, donor in zip(axes, DONORS):
+    rows = analysis[analysis.donor.eq(donor)]
+    fractions = rows.pivot_table(index="day", columns="label", values="fraction_all_t", fill_value=0)
+    bottom = np.zeros(len(fractions))
+    for label in fractions.columns:
+        ax.bar(fractions.index.astype(str), fractions[label], bottom=bottom,
+               color=COLORS[label], label=label)
+        bottom += fractions[label].to_numpy()
+    ax.set_title(donor)
+    ax.set_xlabel("stimulation day")
+    ax.set_ylim(0, 1)
+axes[0].set_ylabel("fraction of retained T cells")
+axes[1].legend(frameon=False, fontsize=7, bbox_to_anchor=(1.02, 1), loc="upper left")
+```
+
+## CD8 trajectory
+
+```{python}
+cd8 = analysis[analysis.lineage.eq("CD8")].copy()
+cd8["fraction_within_cd8"] = cd8.n_cells / cd8.groupby(["donor", "day"]).n_cells.transform("sum")
+cd8.pivot_table(index=["donor", "day"], columns="label", values="fraction_within_cd8", fill_value=0).mul(100).round(1)
+```
+
+Donor 1 CD8 TEX is 39.2% at day 2 and 59.1% at day 20, with a non-monotonic
+intervening trajectory. Donor 2 CD8 TEX is 23.1% at day 2 and 23.5% at day 11.
+The latter is not evidence of progressive TEX enrichment, although HAVCR2 and
+ENTPD1 expression increase over time. State proportions are descriptive because
+there is one sample per donor/day.
+
+The provisional TPEX category is not reported. Its small population lacked
+independent corroboration, so cells meeting that internal pattern are conservatively
+retained as `CD8` rather than forced into TPEX, naive/memory, or TEX.
+
+## Positive and negative panel separation
+
+AUROC characterizes whether each assigned category expresses its declared marker
+program in the expected direction relative to other cells of the same lineage.
+Negative panels are direction-reversed, so AUROC above 0.5 indicates the expected
+loss. These panels also create the labels, so the AUROCs characterize classifier
+separation rather than provide independent validation.
+
+```{python}
+PANELS[["donor", "lineage", "state", "module", "expected_direction", "oriented_panel_auroc"]].round(3)
+```
+
+## Native UMAP context
+
+![](umap/umap_percell_label_comparison.png){fig-alt="Native Seurat clusters and cycle-independent per-cell marker labels for both donors."}
+
+Per-cell labels can span native UMAP clusters because the method resolves marker
+heterogeneity within clusters. The UMAP is context, not an assignment gate.
+
+## Claim boundary
+
+These are relative RNA/ADT phenotypes, not measurements of dysfunction,
+irreversibility, or killing capacity. `CD8 exhausted (TEX)` denotes
+the terminal-exhaustion-associated marker pattern. ProjecTILs confidence, including
+exact confidence 1, is supporting reference evidence only.

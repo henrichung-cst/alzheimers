@@ -6,14 +6,14 @@
 #   bash alz/incytr_pair/tcells_status.sh --watch 20
 #   bash alz/incytr_pair/tcells_status.sh --root outputs/reports/incytr_pair_mode_tcells
 #
-# The default root is the fresh per-cell rerun. The monitor never reads parquet
+# The default root is the current per-cell-label rerun. The monitor never reads parquet
 # contents, restarts work, or changes any analysis artifact.
 set -uo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT"
 
-ROOT="${INCYTR_TCELLS_OUTPUT_ROOT:-outputs/reports/incytr_pair_mode_tcells_percell}"
+ROOT="${INCYTR_TCELLS_OUTPUT_ROOT:-outputs/reports/incytr_pair_mode_tcells_percell_posneg}"
 WATCH_SECONDS=""
 
 usage() {

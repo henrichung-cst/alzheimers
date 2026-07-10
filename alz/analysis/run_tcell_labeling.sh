@@ -1,42 +1,63 @@
 #!/usr/bin/env bash
-# Rebuild CITE-seq/RNA evidence, definitive per-cell states, figures, and report.
+# Assign cycle-independent per-cell T-cell states from RNA/ADT marker evidence.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-PROJECT_ROOT="$PWD"
 
-PIXI_BIN="${PIXI_BIN:-$(command -v pixi 2>/dev/null || true)}"
-if [[ -z "$PIXI_BIN" && -x "$HOME/.pixi/bin/pixi" ]]; then
-  PIXI_BIN="$HOME/.pixi/bin/pixi"
+PIXI_BIN="${PIXI_BIN:-$HOME/.pixi/bin/pixi}"
+QUARTO_BIN="${QUARTO_BIN:-$HOME/.local/bin/quarto}"
+MEMMAX="${MEMMAX:-26G}"
+MEMSWAPMAX="${MEMSWAPMAX:-2G}"
+REEXTRACT="${REEXTRACT:-0}"
+OUT="outputs/reports/tcell_labeling"
+MARKERS="$OUT/auroc/marker_genes.txt"
+
+if [[ ! -x "$PIXI_BIN" ]]; then
+  echo "pixi executable not found: $PIXI_BIN" >&2
+  exit 1
 fi
-if [[ -z "$PIXI_BIN" ]]; then
-  echo "pixi executable not found" >&2
+if [[ ! -x "$QUARTO_BIN" ]]; then
+  echo "quarto executable not found: $QUARTO_BIN" >&2
   exit 1
 fi
 
-MEMMAX="${MEMMAX:-26G}"
-OUT="outputs/reports/tcell_labeling"
-mkdir -p "$OUT/auroc" "$OUT/adt"
+mkdir -p "$OUT/auroc"
+"$PIXI_BIN" run python alz/analysis/tcell_state_labels.py --write-markers "$MARKERS"
 
-"$PIXI_BIN" run python alz/analysis/tcell_percell_auroc.py \
-  --write-markers "$OUT/auroc/marker_genes.txt"
+marker_coverage_ok() {
+  local expression="$1"
+  "$PIXI_BIN" run python - "$MARKERS" "$expression" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+marker_path, expression_path = map(Path, sys.argv[1:])
+if not expression_path.is_file():
+    raise SystemExit(1)
+required = {line.strip() for line in marker_path.read_text().splitlines() if line.strip()}
+with expression_path.open(newline="") as handle:
+    columns = set(next(csv.reader(handle)))
+raise SystemExit(0 if required <= columns else 1)
+PY
+}
 
 for donor in donor1 donor2; do
-  systemd-run --user --scope -p MemoryMax="$MEMMAX" -p MemorySwapMax=2G \
-    "$PIXI_BIN" run Rscript alz/analysis/tcell_export_marker_cells.R "$donor"
+  expression="$OUT/auroc/${donor}_marker_cell_expr.csv"
+  if [[ "$REEXTRACT" == "1" || ! -s "$expression" ]] || \
+     ! marker_coverage_ok "$expression"; then
+    echo "=== extracting $donor non-cycle marker RNA/ADT (MemoryMax=$MEMMAX) ==="
+    systemd-run --user --scope -p MemoryMax="$MEMMAX" -p MemorySwapMax="$MEMSWAPMAX" \
+      "$PIXI_BIN" run Rscript alz/analysis/tcell_export_marker_cells.R "$donor"
+  else
+    echo "=== reusing $expression ==="
+  fi
 done
 
 "$PIXI_BIN" run python alz/analysis/tcell_state_labels.py
+"$PIXI_BIN" run python alz/analysis/tcell_state_evidence.py
 "$PIXI_BIN" run python alz/analysis/tcell_native_umap_plots.py
-(
-  cd "$OUT"
-  QUARTO_BIN="${QUARTO_BIN:-$(command -v quarto 2>/dev/null || true)}"
-  if [[ -z "$QUARTO_BIN" && -x "$HOME/.local/bin/quarto" ]]; then
-    QUARTO_BIN="$HOME/.local/bin/quarto"
-  fi
-  if [[ -z "$QUARTO_BIN" ]]; then
-    echo "quarto executable not found" >&2
-    exit 1
-  fi
-  "$PIXI_BIN" run --manifest-path "$PROJECT_ROOT/pixi.toml" \
-    "$QUARTO_BIN" render tcell_state_labeling_evidence.qmd
-)
+"$QUARTO_BIN" render \
+  "$OUT/tcell_state_labeling_evidence_percell.qmd" \
+  --to html \
+  --execute-dir .
+
+echo "Per-cell label report: $OUT/tcell_state_labeling_evidence_percell.html"

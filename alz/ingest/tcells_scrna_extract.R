@@ -1,9 +1,8 @@
 #!/usr/bin/env Rscript
-# D4 scRNA extraction keyed on evidence-backed per-cell state.
+# D4 scRNA extraction keyed on cycle-independent per-cell T-cell labels.
 #
-# The substrate aggregates by `(state, day)` where `state` is the sanitized
-# per-cell `type` from the evidence report. Blank types are contaminants and are
-# dropped; all retained cells have an explicit CD4/CD8 state call.
+# The substrate aggregates by `(state, day)` using each cell's non-cycle positive
+# and negative marker call. CD4/CD8 are valid lineage-only fallback states.
 #
 # Memory pattern unchanged: load ONCE, DietSeurat to RNA-only + drop scale.data
 # immediately, extract every artifact in one pass.
@@ -15,7 +14,7 @@
 #   extract_manifest.json
 #   state_audit.json    (per-state totals, drop accounting)
 #
-# Prereq: Phase 1 per-cell labels under outputs/reports/tcell_labeling/cells/
+# Prereq: `pixi run python alz/analysis/tcell_state_labels.py`
 # Usage:  pixi run Rscript alz/ingest/tcells_scrna_extract.R <donor1|donor2>
 suppressPackageStartupMessages({
   library(Seurat)
@@ -73,7 +72,7 @@ if (any(is.na(day))) {
 }
 obj$ts_day <- day
 
-# --- join evidence-backed per-cell state ---------------------------------
+# --- join cycle-independent per-cell marker state -----------------------
 joined <- load_tcell_state_labels(
   donor = donor,
   barcodes = colnames(obj),
@@ -94,7 +93,7 @@ n_drop <- n_total - n_kept
 cat("cells: total=", n_total, " kept=", n_kept, " (",
     round(100 * n_kept / n_total, 1), "%)  dropped=", n_drop, "\n", sep = "")
 drop_label_tab <- table(label = joined$label[!keep])
-cat("drop breakdown by evidence label:\n"); print(drop_label_tab)
+cat("drop breakdown by per-cell label:\n"); print(drop_label_tab)
 
 obj <- subset(obj, cells = colnames(obj)[keep])
 state <- obj$state

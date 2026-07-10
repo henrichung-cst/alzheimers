@@ -1,4 +1,4 @@
-# Shared reader and validator for evidence-backed per-cell T-cell state labels.
+# Shared reader and validator for cycle-independent per-cell T-cell labels.
 #
 # Both raw-RDS consumers source this file so barcode alignment, contaminant
 # handling, and type validation have one implementation.
@@ -10,7 +10,7 @@ load_tcell_state_labels <- function(donor, barcodes, days, seurat_clusters,
     paste0(donor, "_state_labels.csv")
   )
   if (!file.exists(path)) {
-    stop("per-cell state labels missing — regenerate Phase 1 first: ", path)
+    stop("per-cell state labels missing — run `pixi run tcells-label`: ", path)
   }
 
   labels <- read.csv(
@@ -20,8 +20,7 @@ load_tcell_state_labels <- function(donor, barcodes, days, seurat_clusters,
     na.strings = c("", "NA")
   )
   required <- c(
-    "barcode", "donor", "seurat_cluster", "day", "lineage", "Phase",
-    "proliferation", "label", "type"
+    "barcode", "donor", "seurat_cluster", "day", "lineage", "label", "type"
   )
   missing_columns <- setdiff(required, colnames(labels))
   if (length(missing_columns)) {
@@ -83,6 +82,16 @@ load_tcell_state_labels <- function(donor, barcodes, days, seurat_clusters,
   bad_type <- unique(type[!is.na(type) & grepl("[^A-Za-z0-9]", type)])
   if (length(bad_type)) {
     stop("non-alphanumeric Incytr type(s): ", paste(bad_type, collapse = ", "))
+  }
+  expected_types <- c(
+    "CD4", "CD4Activated", "CD4Cytotoxic", "CD4ExhaustionAssociated", "CD4NaiveMemory",
+    "CD8", "CD8Activated", "CD8CytotoxicEffector", "CD8Exhausted",
+    "CD8NaiveMemory"
+  )
+  unexpected_types <- setdiff(unique(type[!is.na(type)]), expected_types)
+  if (length(unexpected_types)) {
+    stop("unexpected per-cell marker type(s): ",
+         paste(unexpected_types, collapse = ", "))
   }
 
   list(

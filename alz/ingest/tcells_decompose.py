@@ -57,7 +57,7 @@ _BULK_COL_RE = re.compile(r"^D\d+_d(?P<d>\d+)$")
 def _load_aggexp(donor: str
                  ) -> tuple[pd.DataFrame, list[tuple[str, int]], float]:
     """Load aggexp (state-keyed). Columns are already `<state>__d<day>` — the
-    extract step keys on the sanitized per-cell evidence state, so no
+    extract step keys on the sanitized native-cluster state, so no
     cluster→label collapse is needed here. Floor = (nonzero min) / 10000."""
     path = os.path.join(INCYTR_INPUT_DIR, donor, "scrna", "aggexp_data.csv")
     raw = pd.read_csv(path).set_index("gene")
