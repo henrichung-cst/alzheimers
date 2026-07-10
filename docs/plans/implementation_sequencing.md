@@ -16,8 +16,10 @@ Plan shorthand used below:
 PhosphoSite-family data with a viewer tab. `sidechain-01` = PSP `Kinase_Substrate_Dataset` unified with
 MEA motif evidence → weighted interactome + per-pathway cytoscape sidechains. `E1` = a reference
 regulation hierarchy (A↑⇒B↓) with an observed disease-direction overlay + click-kinase-neighbors tab.
-**These overlap at the backend (`kinase_kinase_edges.py`) and at the viewer (two kinase-network tabs).**
-Adjudicate before building either (§2, D2).
+**Resolved (D2): shared `kinase_kinase_edges.py` backend — E1's A→B hierarchy comes from PSP's
+`Kinase_Substrate_Dataset`, the same file sidechain-01 loads (the Johnson Kinase Library is a motif
+atlas and cannot emit kinase→kinase edges). E1 is a directional/disease-overlay layer on the sidechain
+interactome, not a parallel network.**
 
 **T2 — cell-type specificity engine.** `C4`, `E2`, and `G2` all consume the existing per-kinase
 cell-type specificity basis. `C4` gates targets on human-vs-mouse breadth; `E2` uses specificity to
@@ -48,24 +50,24 @@ can proceed regardless.
 permanently retired; marker-panel per-cell abandoned. No longer an open adjudication — the only
 remaining gate is the user's WIP labels freezing before the t-cell Incytr re-key/re-run.
 
-**D2 — E1 vs sidechain scope.** Decide: (a) does `E1`'s reference hierarchy reuse `sidechain-01`'s
-`kinase_kinase_edges.py` backend, or a different source (the Johnson Kinase Library motif atlas is a
-distinct product from PSP's `Kinase_Substrate_Dataset`)? (b) one kinase-network tab with a
-regulation-direction overlay toggle, or two separate tabs? Recommendation: **shared backend, one tab.**
-`E1` becomes a directional/disease-overlay *layer* on the sidechain interactome rather than a parallel
-network — otherwise we ship two kinase graphs the user must reconcile. Confirm the data-source question
-with domain input before locking.
+**D2 — E1 vs sidechain scope. RESOLVED: shared backend.** E1's reference hierarchy (A→B regulation)
+is sourced from PSP's `Kinase_Substrate_Dataset` — the same file `sidechain-01` already loads. The
+Johnson Kinase Library is a motif-scoring atlas and cannot emit kinase→kinase edges, so it is not a
+viable alternate source; the data source is forced, not a preference. E1 reuses `kinase_kinase_edges.py`
+and renders as a directional/disease-direction **overlay layer** on the sidechain interactome. Tab
+structure (single tab with a regulation-overlay mode vs. a separate tab) is deferred to subplan-04 build
+time — build the sidechain tab, add the overlay mode within it, split only if the UX is cramped.
 
-**D3 — geneuse un-pin: yes/no.** Un-pinning switches AD to the derived `DEG∪prG` recipe (single
-cross-cohort recipe, wider enumeration) and requires a full AD re-run + viewer rebuild. Recommendation:
-**un-pin** — consistent with "sce4 parity is a closed non-goal"; keeping the frozen sets only makes
-sense if judged the better selection on independent merits. Production-output-changing, so it is an
-explicit go/no-go.
+**D3 — geneuse un-pin. RESOLVED: un-pin.** AD switches to the derived `DEG∪prG` recipe (same path as
+t-cells); single cross-cohort recipe, wider enumeration (downstream SigProb/|PDS| filter still applies).
+Removes the `use_frozen_geneuse` branch + `extract_sce4_geneuse.R` (anti-shim). Production-output-
+changing — requires a full AD re-run + viewer rebuild (Wave 3). Touch points in
+`ad_geneuse_unpin_from_sce4.md`.
 
-**D4 — C4 form.** Operational review checklist (doc/skill) vs an automated guard wired into the
-specificity/attribution surface. Recommendation: **automated guard** folded into the existing
-`check-controls`/attribution path (consumes T2), with the checklist as its human-readable output — a
-prose-only checklist will not be enforced.
+**D4 — C4 form. RESOLVED: prose checklist / skill.** C4 stays a review-time operational constraint
+(the human checks mouse-vs-human cell-type breadth per candidate before reporting), not an automated
+guard. No code artifact; no dependency on a candidate-target-list surface. Matches the current
+`cross-species-specificity-guard.md` framing — no rewrite needed.
 
 **D5 — I2 timing.** `sidechain-01/02` import the exact frozen-layer modules `I2` relocates
 (`*_decompose.py`, `song.py`, R extractors). Running `I2` mid-stream breaks those imports.
@@ -118,7 +120,7 @@ I1 ── independent (low conflict) · I2 ── isolated window, last (D5)
   blocked on unobtainable source artifacts, which the no-contact rule forbids requesting).
 - `A4` T-cell data structure — verified on disk (donor1 has IMAC, donor2 does not; both total+pY+scRNA).
 - `matt` labeling — RESOLVED to Matt cluster-relabel (D1/T4); the labeler is user-owned active WIP.
-- Human decisions still open: D2 (E1/sidechain scope), D3 (geneuse), D4 (C4 form).
+- All adjudications resolved: D2 (shared backend), D3 (un-pin), D4 (prose checklist), D5 (I2 last).
 
 **Wave 1 — independent builds (parallel, disjoint outputs, no gate).**
 - `corr` (labeling-independent standalone script + CSV) — the one unblocked t-cell task.
@@ -129,13 +131,14 @@ I1 ── independent (low conflict) · I2 ── isolated window, last (D5)
 - `A3` t-cell Incytr trend coverage — deferred: it verifies the t-cell Incytr re-run, which waits on the
   labels freezing. Not Wave 1.
 
-**Wave 2 — kinase backends + specificity thread (after D2).**
-- `sidechain-01` (PSP interactome) ∥ `sidechain-02` (t-cell motif — needs D1).
-- `E1` on the shared backend, then `E2` (needs T2 specificity).
-- `C4`, `G2` (T2 specificity consumers) — parallel with the above, disjoint outputs.
+**Wave 2 — kinase backends + specificity thread.**
+- `sidechain-01` (PSP interactome) ∥ `sidechain-02` (t-cell motif — waits on labels freezing).
+- `E1` on the shared `kinase_kinase_edges.py` backend (D2), then `E2` (needs T2 specificity).
+- `G2` (T2 specificity consumer) — parallel with the above, disjoint outputs.
+- `C4` — prose checklist (D4); a docs task, no backend dependency, can land any time.
 
-**Wave 3 — Incytr recompute (after B1 + D3).**
-- `geneuse` un-pin → AD re-run → AD viewer rebuild.
+**Wave 3 — Incytr recompute.**
+- `geneuse` un-pin (D3) → AD re-run → AD viewer rebuild.
 
 **Wave 4 — viewer tabs (serialize the payload/integration step).**
 - `sidechain-03 → 04`, `B2` sankey, `C3` early-change tab, `E1/E2` tab(s). Author in parallel; merge
@@ -143,10 +146,5 @@ I1 ── independent (low conflict) · I2 ── isolated window, last (D5)
 
 **Isolated — `I2`** frozen-layer namespace moves, dedicated window, last (D5).
 
----
-
-## 6. Open questions to route to domain input
-- D2 data source: is E1's reference hierarchy the Johnson Kinase Library atlas or PSP's substrate
-  dataset (the one sidechain-01 already loads)?
-- D3: un-pin AD gene.use (recommended) or keep frozen sets on independent merit?
-- D4: C4 as an automated guard (recommended) or a prose checklist?
+All adjudications (D1–D5) are resolved. The only remaining gate is the user's T-cell labeling WIP
+freezing before the t-cell Incytr re-key/re-run.

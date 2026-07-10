@@ -1,7 +1,11 @@
-# AD gene.use — un-pin from sce4's frozen per-pair node sets (decision pending)
+# AD gene.use — un-pin from sce4's frozen per-pair node sets
 
-**Status:** open decision, not yet actioned. Surfaced 2026-07-07 when sce4 parity
-was declared a closed non-goal and the `verify-incytr-sce4` gate was removed.
+**Status:** DECIDED (2026-07-10) — **un-pin**. AD switches to the derived `DEG∪prG`
+recipe, the same path t-cells use. Surfaced 2026-07-07 when sce4 parity was
+declared a closed non-goal and the `verify-incytr-sce4` gate was removed; the pin
+is the last piece of parity machinery still shaping production AD output.
+Production-output-changing — requires a full AD re-run + viewer rebuild after the
+switch. Implementation is the "Touch points" list below.
 
 ## The pin
 
@@ -32,23 +36,15 @@ losslessly from its RDS — not a rule we can re-derive. Un-pinning means AD fal
 back to the `DEG ∪ prG` derivation, which is **broader** than sce4's sets
 (engine-monotonic: subset ⇒ fewer paths), so AD path counts will grow.
 
-## The decision
+## Rationale
 
-Un-pin AD gene.use to the derived `DEG ∪ prG` path (same as t-cells), or keep the
-frozen sets as the chosen AD gene selection on non-parity grounds (e.g. it is a
-defensible, literature-anchored selection independent of the parity motive)?
+Un-pin is consistent with "parity is a non-goal" — a single gene.use recipe across
+cohorts. AD enumeration widens (more candidate paths; the downstream SigProb/|PDS|
+filter still applies). The frozen sets are sce4's *effective* gene.use lifted from
+its RDS, not a re-derivable rule, so keeping them would only be defensible as a
+better selection on independent merits — which is not the case here.
 
-- **Un-pin** — consistent with "parity is a non-goal"; single gene.use recipe
-  across cohorts; AD enumeration widens (more candidate paths, downstream
-  SigProb/|PDS| filter still applies).
-- **Keep** — only if the frozen sets are judged the better selection on their own
-  merits, not because they match sce4. If kept, drop the parity framing from the
-  code/README comments so the rationale stands on its own.
-
-Changing this alters production AD output, so it is a deliberate pipeline change,
-not doc cleanup. Requires a full AD re-run + viewer rebuild after the switch.
-
-## Touch points if un-pinning
+## Touch points
 
 - `alz/incytr_pair/run_pair_mode.sh` — stop exporting `SCE4_GENEUSE_DIR`; drop the
   extract-artifacts block (L51–63).
