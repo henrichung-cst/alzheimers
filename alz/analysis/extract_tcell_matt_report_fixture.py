@@ -13,6 +13,8 @@ class _TableParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.section = "document"
+        self.sections: list[str] = []
+        self._heading_tag: str | None = None
         self._heading_parts: list[str] | None = None
         self._table_rows: list[list[str]] | None = None
         self._row: list[str] | None = None
@@ -22,6 +24,7 @@ class _TableParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in {"h1", "h2", "h3"}:
             self._heading_parts = []
+            self._heading_tag = tag
         elif tag == "table":
             self._table_rows = []
         elif tag == "tr" and self._table_rows is not None:
@@ -40,7 +43,10 @@ class _TableParser(HTMLParser):
             heading = _normalize(" ".join(self._heading_parts))
             if heading and heading != "Table of contents":
                 self.section = heading
+                if self._heading_tag == "h2":
+                    self.sections.append(heading)
             self._heading_parts = None
+            self._heading_tag = None
         elif tag in {"th", "td"} and self._cell_parts is not None:
             assert self._row is not None
             self._row.append(_normalize(" ".join(self._cell_parts)))
@@ -72,6 +78,12 @@ def extract_displayed_tables(report: Path) -> list[dict[str, object]]:
     return parser.tables
 
 
+def extract_top_level_sections(report: Path) -> list[str]:
+    parser = _TableParser()
+    parser.feed(report.read_text(encoding="utf-8"))
+    return parser.sections
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("fixture", type=Path)
@@ -82,6 +94,10 @@ def main() -> int:
         raise ValueError("no displayed tables found in Matt's report")
     fixture["displayed_table_count"] = len(tables)
     fixture["displayed_tables"] = tables
+    sections = extract_top_level_sections(Path(fixture["source_report"]))
+    if not sections:
+        raise ValueError("no top-level sections found in Matt's report")
+    fixture["historical_sections"] = sections
     state_counts: dict[str, dict[str, int]] = {"donor1": {}, "donor2": {}}
     for table in tables:
         rows = table["rows"]

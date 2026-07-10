@@ -2003,5 +2003,15 @@
       "CD4.CTL_EOMES": 251,
       "CD4.CTL_GNLY": 120
     }
-  }
+  },
+  "historical_sections": [
+    "What this document shows",
+    "Gene glossary",
+    "Step 1 — CD8 vs CD4 identity is certain",
+    "Step 2 — Cytotoxic / exhaustion sub-states hold up",
+    "Step 3 — CD4-helper sub-states (Th17, Tfh) are not supported",
+    "Step 4 — TPEX folds into TEX; EOMES / EM / Treg remain weak",
+    "Step 5 — Proliferation is a second axis, and some clusters are not T cells",
+    "Step 6 — What the data supports"
+  ]
 }

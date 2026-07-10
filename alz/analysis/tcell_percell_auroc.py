@@ -55,7 +55,6 @@ PANEL_LABELS: dict[str, set[str]] = {
     "naive_memory": {"CD8.NaiveLike", "CD8.CM", "CD4.NaiveLike"},
 }
 
-MEMORY_GENES = ("TCF7", "LEF1", "SELL", "CCR7", "IL7R")
 TYPE_PANELS = {"cd4_lineage": "CD4", "cd8_lineage": "CD8"}
 PROJECTION_COLUMNS = {
     "projection_reference",
@@ -373,117 +372,6 @@ def calculate_evidence_tables(
     return pd.DataFrame(marker_rows), pd.DataFrame(panel_rows)
 
 
-def _comparison_table(
-    unadjusted: pd.DataFrame,
-    adjusted: pd.DataFrame,
-    *,
-    value_column: str,
-) -> pd.DataFrame:
-    count_columns = ["n_cells_target", "n_cells_comparison"]
-    identity = [
-        column
-        for column in unadjusted.columns
-        if column not in {*count_columns, value_column}
-        and column != "marker_value_unit"
-        and not column.startswith("target_")
-        and not column.startswith("comparison_")
-    ]
-    left = unadjusted[identity + count_columns + [value_column]].rename(
-        columns={value_column: "unadjusted_auroc"}
-    )
-    right = adjusted[identity + count_columns + [value_column]].rename(
-        columns={value_column: "cycle_regressed_auroc"}
-    )
-    merged = left.merge(
-        right,
-        on=identity + count_columns,
-        how="outer",
-        validate="one_to_one",
-    )
-    merged["auroc_difference"] = (
-        merged["cycle_regressed_auroc"] - merged["unadjusted_auroc"]
-    )
-    return merged
-
-
-def _tpex_tex_evidence(
-    donor: str,
-    raw: pd.DataFrame,
-    residuals: pd.DataFrame,
-    states: pd.Series,
-) -> pd.DataFrame:
-    eligible = states.isin(["CD8.TPEX", "CD8.TEX"]).to_numpy()
-    positive = states.eq("CD8.TPEX").to_numpy()
-    rows: list[dict[str, object]] = []
-    for gene in MEMORY_GENES:
-        if gene not in raw:
-            continue
-        raw_values = raw[gene].to_numpy(dtype=float)
-        adjusted_values = residuals[gene].to_numpy(dtype=float)
-        rows.append(
-            {
-                "donor": donor,
-                "gene": gene,
-                "target": "CD8.TPEX",
-                "comparison": "CD8.TEX",
-                "n_cells_target": int((positive & eligible).sum()),
-                "n_cells_comparison": int((~positive & eligible).sum()),
-                "tpex_raw_detection_fraction": float(
-                    np.mean(raw_values[positive & eligible] > 0)
-                ),
-                "tex_raw_detection_fraction": float(
-                    np.mean(raw_values[~positive & eligible] > 0)
-                ),
-                "unadjusted_auroc": mann_whitney_auroc(
-                    raw_values[eligible], positive[eligible]
-                ),
-                "cycle_regressed_auroc": mann_whitney_auroc(
-                    adjusted_values[eligible], positive[eligible]
-                ),
-            }
-        )
-    result = pd.DataFrame(rows)
-    result["auroc_difference"] = (
-        result["cycle_regressed_auroc"] - result["unadjusted_auroc"]
-    )
-    return result
-
-
-def _loss_of_memory_sensitivity(
-    donor: str,
-    raw: pd.DataFrame,
-    residuals: pd.DataFrame,
-    states: pd.Series,
-) -> pd.DataFrame:
-    target = states.eq("CD8.TEX").to_numpy()
-    eligible = states.str.startswith("CD8.").to_numpy()
-    rows: list[dict[str, object]] = []
-    for gene in MEMORY_GENES:
-        if gene not in raw:
-            continue
-        row: dict[str, object] = {
-            "donor": donor,
-            "target": "CD8.TEX",
-            "comparison": "same-lineage sibling CD8 states",
-            "gene": gene,
-            "n_cells_target": int(target.sum()),
-            "n_cells_comparison": int((eligible & ~target).sum()),
-        }
-        for layer, values in (
-            ("unadjusted", raw[gene].to_numpy(dtype=float)),
-            ("cycle_regressed", residuals[gene].to_numpy(dtype=float)),
-        ):
-            higher_in_tex = mann_whitney_auroc(values[eligible], target[eligible])
-            row[f"{layer}_loss_of_memory_auroc"] = 1.0 - higher_in_tex
-        rows.append(row)
-    result = pd.DataFrame(rows)
-    result["auroc_difference"] = (
-        result["cycle_regressed_loss_of_memory_auroc"]
-        - result["unadjusted_loss_of_memory_auroc"]
-    )
-    return result
-
-
 def _write_donor_results(donor: str, cells: pd.DataFrame, output_root: Path) -> None:
     declared_markers = list(
         dict.fromkeys(gene for genes in SIGNATURES.values() for gene in genes)
@@ -492,12 +380,14 @@ def _write_donor_results(donor: str, cells: pd.DataFrame, output_root: Path) -> 
     raw = cells[present_markers].apply(pd.to_numeric, errors="raise")
     residuals = residualize_marker_expression(raw, cells[list(CYCLE_COLUMNS)])
 
-    unadjusted_marker, unadjusted_panel = calculate_evidence_tables(donor, cells)
     adjusted_cells = cells.drop(columns=present_markers).join(residuals)
-    adjusted_marker, adjusted_panel = calculate_evidence_tables(
-        donor, adjusted_cells, value_kind="cycle_regressed_residual"
+    adjusted_matt_marker, adjusted_matt_panel = calculate_evidence_tables(
+        donor,
+        adjusted_cells,
+        type_background="all_other_cells",
+        value_kind="cycle_regressed_residual",
     )
-    historical_marker, historical_panel = calculate_evidence_tables(
+    unadjusted_matt_marker, unadjusted_matt_panel = calculate_evidence_tables(
         donor, cells, type_background="all_other_cells"
     )
 
@@ -506,30 +396,18 @@ def _write_donor_results(donor: str, cells: pd.DataFrame, output_root: Path) -> 
     unadjusted_dir.mkdir(parents=True, exist_ok=True)
     adjusted_dir.mkdir(parents=True, exist_ok=True)
 
-    unadjusted_marker.to_csv(
-        unadjusted_dir / f"{donor}_percell_marker_auroc.csv", index=False
-    )
-    unadjusted_panel.to_csv(
-        unadjusted_dir / f"{donor}_percell_panel_auroc.csv", index=False
-    )
-    historical_marker.to_csv(
+    unadjusted_matt_marker.to_csv(
         unadjusted_dir / f"{donor}_historical_percell_marker_auroc.csv", index=False
     )
-    historical_panel.to_csv(
+    unadjusted_matt_panel.to_csv(
         unadjusted_dir / f"{donor}_historical_percell_panel_auroc.csv", index=False
     )
-    adjusted_marker.to_csv(
-        adjusted_dir / f"{donor}_percell_marker_auroc.csv", index=False
+    adjusted_matt_marker.to_csv(
+        adjusted_dir / f"{donor}_matt_method_percell_marker_auroc.csv", index=False
     )
-    adjusted_panel.to_csv(
-        adjusted_dir / f"{donor}_percell_panel_auroc.csv", index=False
+    adjusted_matt_panel.to_csv(
+        adjusted_dir / f"{donor}_matt_method_percell_panel_auroc.csv", index=False
     )
-    _comparison_table(
-        unadjusted_marker, adjusted_marker, value_column="gene_auroc"
-    ).to_csv(adjusted_dir / f"{donor}_percell_marker_auroc_comparison.csv", index=False)
-    _comparison_table(
-        unadjusted_panel, adjusted_panel, value_column="signature_auroc"
-    ).to_csv(adjusted_dir / f"{donor}_percell_panel_auroc_comparison.csv", index=False)
 
     values = pd.DataFrame(index=cells.index)
     values.index.name = "barcode"
@@ -541,12 +419,6 @@ def _write_donor_results(donor: str, cells: pd.DataFrame, output_root: Path) -> 
         values[f"{gene}_log_normalized_expression"] = raw[gene]
         values[f"{gene}_cycle_regressed_residual"] = residuals[gene]
     values.to_csv(adjusted_dir / f"{donor}_marker_cell_values.csv")
-    _tpex_tex_evidence(
-        donor, raw, residuals, cells["functional.cluster"].astype(str)
-    ).to_csv(adjusted_dir / f"{donor}_tpex_tex_gene_evidence.csv", index=False)
-    _loss_of_memory_sensitivity(
-        donor, raw, residuals, cells["functional.cluster"].astype(str)
-    ).to_csv(adjusted_dir / f"{donor}_loss_of_memory_sensitivity.csv", index=False)
 
     design = np.column_stack(
         [np.ones(len(cells)), cells[["S.Score", "G2M.Score"]].to_numpy(dtype=float)]

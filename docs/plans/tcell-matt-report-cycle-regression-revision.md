@@ -1,173 +1,110 @@
-# Reproduce Matt's T-cell report and remove induced cell-cycle signal
+# Re-run Matt's T-cell analysis after cell-cycle regression
 
 ## Status
 
-Implemented on 2026-07-10; the revised evidence report is awaiting scientific review.
-Do not relabel cells, rerun Incytr, update the viewer, or change the downstream state
-spine until that review is complete.
+Implemented on 2026-07-10. The previous cycle-regression report changed Matt's
+analytical narrative and has been replaced by the faithful rerun. Do not relabel
+downstream inputs, rerun Incytr, or update the viewer until this report is reviewed.
 
-## Authoritative documents
+## Purpose
 
-1. `outputs/reports/tcell_labeling/tcell_state_labeling_evidence_matt.html` — the
-   original report and narrative/method baseline. A dated snapshot preserves the
-   historical version; the live report is not treated as byte-immutable.
-2. `tcell_label_notes.txt` — the scientific review questions the revision must answer.
-3. This plan — the implementation contract for a reproducible revision.
+The deliverable is Matt's analysis with one preprocessing change:
 
-The divergent winning-marker-panel report is archived under
-`outputs/reports/tcell_labeling/archive/divergent_marker_classifier_2026-07-10/`
-and is out of scope.
+```text
+original per-cell expression
+        ↓
+regress S.Score and G2M.Score donor-wide
+        ↓
+run Matt's original marker-panel, clustering, relabel, and conclusion workflow
+```
 
-## Decision
+This is not an audit of Matt's report. It must not introduce a new evidence framework,
+new label vocabulary, new biological questions, or a historical-versus-corrected
+comparison narrative.
 
-Reproduce Matt's original method before modifying it:
+## Sources to preserve
 
-- retain the original per-cell ProjecTILs `functional.cluster` labels as the labels
-  being evaluated;
-- calculate per-cell marker and marker-panel AUROC with Matt's original marker sets;
-- use opposite-lineage cells for CD4/CD8 type questions and same-lineage sibling
-  states for functional-substate questions;
-- retain Seurat clustering as independent supporting evidence, not as a mechanism
-  that forces every cell in a cluster into one state;
-- do not introduce a winning-marker-panel classifier or a new state vocabulary.
+1. `tcell_state_labeling_evidence_matt.html` — historical narrative and method
+   baseline.
+2. `tcell_label_notes.txt` — questions to answer within Matt's existing structure.
+3. `tcell_matt_report_expected.json` — machine-readable inventory of Matt's marker
+   panels, displayed tables, state counts, and AUROCs.
 
-Then add one controlled extension: remove the experimentally induced cell-cycle
-component from marker expression and rerun the *same* AUROC questions. Cell cycle is
-a nuisance signal in this experiment; it must not be used to accept, reject, merge,
-or rename a T-cell state.
+The dated HTML snapshot remains provenance. The live report is not treated as
+byte-immutable; the reproducible object is Matt's method.
 
-## What “cell-cycle regression removal” means
+## Invariants
 
-The marker extractor already produces a compact cells × marker-genes matrix from the
-Seurat log-normalized RNA `data` layer. Join it by barcode to the existing Seurat
-`S.Score` and `G2M.Score` values. For each donor and marker gene, fit the donor-wide
-ordinary least-squares model:
+The rerun must preserve:
+
+- Matt's section sequence and section titles;
+- the ProjecTILs `functional.cluster` labels as the labels being evaluated;
+- Matt's versioned marker panels;
+- per-cell panel score as the mean of across-cell z-scored marker expression;
+- Mann–Whitney AUROC with half credit for ties;
+- Matt's implemented type-panel background for exact method continuity;
+- same-lineage sibling backgrounds for functional-state panels;
+- Seurat clusters as independent supporting evidence;
+- Matt's progression from lineage, to supported/unsupported substates, to a collapsed
+  biological label set.
+
+The report may change a conclusion only when the cycle-regressed rerun changes the
+underlying evidence.
+
+## The single analytical change
+
+For every donor and marker gene, fit across all projected cells:
 
 ```text
 log-normalized expression = intercept + beta_S × S.Score + beta_G2M × G2M.Score + residual
 ```
 
-Use the residual as the cycle-regressed marker value. Fit across the donor, not within
-a ProjecTILs state, so the target label cannot influence regression. Do not use the
-binary `Phase` call, a positivity cutoff, or a cell-exclusion rule. Adding a constant
-back to residuals is unnecessary because AUROC is rank-based and panel genes are
-z-scored before averaging.
+Use the residual in Matt's marker and marker-panel calculations. Preserve the raw
+expression separately. Do not use binary `Phase`, a positivity cutoff, or cell
+exclusion.
 
-The compact regression is preferred over reading Seurat `scale.data`: it reproduces
-the intended nuisance removal without materializing a multi-gigabyte dense matrix.
-Regression coefficients are implementation diagnostics, not biological scores and
-must not appear as viewer labels or exported analysis scores.
+For cluster support, run Matt's Seurat workflow after `ScaleData(...,
+vars.to.regress = c("S.Score", "G2M.Score"))`, then use the resulting clusters,
+markers, and UMAP in the same supporting role as the original report. Cell-cycle genes
+may still be expressed, but they must not create a `proliferating` identity or be used
+to reject an exhaustion label in this artificially stimulated experiment.
 
-## Work plan
+## Report contract
 
-### 1. Freeze and inventory the original
+The revised report must retain these top-level sections exactly:
 
-- Record the historical report SHA-256 as provenance rather than a runtime gate.
-- Keep the dated archive snapshot in
-  `outputs/reports/tcell_labeling/archive/matt_original_snapshot_2026-07-10/`.
-- Extract the report's displayed marker panels, target states, comparison backgrounds,
-  AUROC values, tables, and conclusions into a machine-readable reproduction fixture.
-- Record the exact input paths and row counts used by the original analysis.
+1. What this document shows
+2. Gene glossary
+3. Step 1 — CD8 vs CD4 identity is certain
+4. Step 2 — Cytotoxic / exhaustion sub-states hold up
+5. Step 3 — CD4-helper sub-states (Th17, Tfh) are not supported
+6. Step 4 — TPEX folds into TEX; EOMES / EM / Treg remain weak
+7. Step 5 — Proliferation is a second axis, and some clusters are not T cells
+8. Step 6 — What the data supports
 
-### 2. Restore the unadjusted Matt pipeline
+Within that structure:
 
-- Restore a single marker-set source matching the report.
-- Restore the marker extractor for log-normalized RNA, joined strictly by barcode.
-- Restore per-marker AUROC and panel-score AUROC:
-  - per-cell panel score = mean of marker expression z-scored across cells;
-  - type panels = target lineage versus opposite lineage;
-  - state panels = target state versus same-lineage sibling states;
-  - AUROC = Mann–Whitney U divided by `n_target × n_comparison`, with half credit
-    for ties.
-- Emit unadjusted results into a new `reproduced_unadjusted/` directory; never
-  overwrite the historical files used by the original report.
-- Compare reproduced values with the values extracted from the original HTML.
-  Any mismatch must be explained before cycle regression is added.
+- present cycle-regressed values as the analysis result, not as a sensitivity layer;
+- retain Matt's table shapes and explanatory style where possible;
+- use the cycle-regressed Seurat clusters and UMAP for cluster support;
+- explain in Step 5 that induced cell cycle was regressed and is not a biological
+  labeling axis;
+- remove `CD4 proliferating` from the final biological vocabulary;
+- keep the original conclusions where adjusted evidence remains materially the same;
+- do not foreground discrepancies in the historical HTML.
 
-### 3. Add cycle-regressed marker evidence
+## Reproducibility checks
 
-- Implement the donor-wise gene-level regression defined above as a pure, tested
-  transformation of the compact marker matrix.
-- Preserve raw log-normalized marker values alongside residualized values with explicit
-  units/names; never replace raw evidence silently.
-- Recalculate the same per-marker and per-panel AUROC tables with identical labels and
-  backgrounds.
-- Emit results into `cycle_regressed/` with unambiguous `unadjusted_auroc`,
-  `cycle_regressed_auroc`, and `auroc_difference` columns.
-- Do not create a thresholded “cycle-corrected confidence” score.
+- Matt's unadjusted method reproduces all recorded AUROCs and target-cell counts.
+- Barcode joins are one-to-one and preserve all projected cells.
+- Residual marker values are orthogonal to S and G2/M scores.
+- Changing binary `Phase` cannot change adjusted results.
+- Donors remain separate.
+- The rendered report's top-level section sequence matches Matt's report.
+- The dedicated runner renders the report from declared outputs without invoking
+  state-label, Incytr, index, or viewer producers.
 
-### 4. Address `tcell_label_notes.txt` without changing the backbone
+## Review gate
 
-- **TIM-3/TOX in CD8 exhausted:** show unadjusted and cycle-regressed per-gene AUROC,
-  detection fraction, and raw expression distribution. State whether their absence is
-  unchanged after nuisance removal.
-- **Cytotoxic versus exhausted:** keep them as separate biological questions. Do not
-  use the former `CD8 cytotoxic/exhausted` combined label in the revised conclusion.
-  Quantify overlap of the two continuous panels without turning overlap into a new type.
-- **Cycling and exhaustion:** remove “cycling therefore not exhausted” reasoning.
-  Report only whether marker separation remains after cycle regression.
-- **CD4 resting/naive terminology:** do not retain this non-standard final label without
-  marker support. Report the evaluated reference state and its naive/memory evidence.
-- **Negative markers:** after exact reproduction, add a clearly labeled sensitivity
-  analysis using predefined loss-of-memory markers for exhaustion. Keep original
-  unsigned AUROC as the primary reproduction result.
-- **CD8 separation:** show the complete adjusted per-marker and panel AUROC rather than
-  inventing a stronger categorical call.
-- **TPEX versus TEX:** directly compare TPEX with TEX on TCF7, LEF1, SELL, CCR7, and IL7R
-  before deciding whether the states should merge.
-- **Cluster forcing:** keep all primary tests per cell. Use Seurat or cycle-regressed
-  clusters only as an independent visualization of heterogeneity.
-
-### 5. Build a separate revised report
-
-- Reconstruct Matt's report source as
-  `tcell_state_labeling_evidence_cycle_regressed.qmd` and render
-  `tcell_state_labeling_evidence_cycle_regressed.html`.
-- Preserve Matt's section order, gene glossary, tables, and explanatory style wherever
-  the underlying result is unchanged.
-- Clearly distinguish three evidence layers:
-  1. original unadjusted Matt result;
-  2. cycle-regressed result using the same question;
-  3. explicitly labeled sensitivity analyses requested in the notes.
-- Replace the original proliferation section with a nuisance-removal methods/QC section.
-- Build the revision as a separate report so the historical method and the new
-  extension remain easy to compare.
-
-### 6. Review gate before downstream work
-
-Present the revised report and an explicit proposed label mapping for scientific review.
-Only after approval may another task re-key deconvolution, Incytr, the report index, or
-the viewer. The current plan does not authorize those changes.
-
-## Tests and reproducibility checks
-
-- Barcode joins are one-to-one and preserve all original projected cells.
-- A fixed Mann–Whitney fixture verifies AUROC and tie handling.
-- Original unadjusted report values reproduce from scripts and declared inputs.
-- Regressed marker residuals are numerically orthogonal to `S.Score` and `G2M.Score`
-  when the design matrix has full rank.
-- Shuffling or changing the binary `Phase` column cannot change adjusted results.
-- AUROC target/background counts are emitted with every result.
-- Donors are processed and reported separately.
-- The dated original snapshot remains recoverable, while analytical reproduction is
-  verified from the method fixture and declared inputs.
-- The revised QMD renders from a clean process using only declared outputs.
-
-## Acceptance criteria
-
-- Matt's original method is reproducible, and the dated historical report remains
-  recoverable from its snapshot.
-- The unadjusted method is fully reproducible from versioned scripts.
-- Cycle regression is a single isolated preprocessing step; all downstream AUROC logic
-  is shared with the unadjusted analysis.
-- No state is rejected because it cycles, and no state is assigned from cell cycle.
-- Every question in `tcell_label_notes.txt` is answered with per-cell evidence.
-- No downstream state spine changes before explicit report approval.
-
-## Explicitly out of scope
-
-- A winning-marker-panel classifier.
-- New definitive labels or score cutoffs.
-- Incytr/deconvolution reruns.
-- Viewer/index updates.
-- Functional or terminal-exhaustion claims unsupported by the assay.
+The report is the only deliverable in this phase. Downstream label mapping,
+deconvolution, Incytr, report-index, and viewer changes require separate approval.

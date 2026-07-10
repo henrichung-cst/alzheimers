@@ -9,6 +9,7 @@ QUARTO_BIN="${QUARTO_BIN:-$HOME/.local/bin/quarto}"
 MEMMAX="${MEMMAX:-26G}"
 MEMSWAPMAX="${MEMSWAPMAX:-2G}"
 REEXTRACT="${REEXTRACT:-0}"
+RECLUSTER="${RECLUSTER:-$REEXTRACT}"
 OUT="outputs/reports/tcell_labeling"
 MARKERS="$OUT/auroc/marker_genes.txt"
 
@@ -33,6 +34,15 @@ for donor in donor1 donor2; do
       "$PIXI_BIN" run Rscript alz/analysis/tcell_export_marker_cells.R "$donor"
   else
     echo "=== reusing $expression (set REEXTRACT=1 for a clean RDS extraction) ==="
+  fi
+  cluster_cells="$OUT/clusters/${donor}_cc_recluster_cells.csv"
+  if [[ "$RECLUSTER" == "1" ]] || [[ ! -s "$cluster_cells" ]] || \
+     ! head -n 1 "$cluster_cells" | grep -q 'UMAP_1'; then
+    echo "=== rebuilding cycle-regressed Seurat clusters and UMAP for $donor ==="
+    systemd-run --user --scope -p MemoryMax="$MEMMAX" -p MemorySwapMax="$MEMSWAPMAX" \
+      "$PIXI_BIN" run Rscript alz/analysis/tcell_cellcycle_recluster.R "$donor"
+  else
+    echo "=== reusing $cluster_cells (set RECLUSTER=1 to rebuild) ==="
   fi
 done
 

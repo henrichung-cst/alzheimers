@@ -14,5 +14,11 @@ The original report has a checksum-verified backup under
 `archive/matt_original_snapshot_2026-07-10/`. Superseded exploratory report work is
 under `archive/divergent_marker_classifier_2026-07-10/` and is not authoritative.
 
+The current deliverable is
+[`tcell_state_labeling_evidence_cycle_regressed.html`](tcell_state_labeling_evidence_cycle_regressed.html):
+Matt's analysis rerun after donor-wise S/G2M regression. It preserves Matt's section
+order, marker questions, cluster/UMAP support, and conclusion flow; it is not an audit
+or replacement labeling framework. Rebuild it with `pixi run tcells-matt-cycle-report`.
+
 No downstream label, deconvolution, Incytr, index, or viewer change should proceed
 until the revised report is reviewed.
