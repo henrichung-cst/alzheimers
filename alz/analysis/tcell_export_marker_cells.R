@@ -2,6 +2,7 @@
 # Extract the compact per-cell evidence needed for T-cell labeling from the
 # multi-GB Seurat object in one load:
 #   * log-normalized RNA expression for the declared marker genes;
+#   * continuous Seurat S and G2/M scores used only for nuisance regression;
 #   * raw CITE-seq antibody UMI counts for lineage/state context and isotypes;
 #   * RNA/Protein QC metadata used to audit time-dependent detection depth.
 # Per-cell labels are assigned downstream by tcell_state_labels.py.
@@ -38,6 +39,25 @@ if (!assay %in% Assays(obj)) stop("RNA assay is required for exhaustion-marker e
 DefaultAssay(obj) <- assay
 message("[", donor, "] assay=", assay, " cells=", ncol(obj), " genes=", nrow(obj))
 
+# Export full-precision continuous cycle covariates with the compact matrix.  The
+# historical re-clustering artifact rounded these values to three decimals; a
+# clean report rebuild should not depend on that lossy intermediate.  Phase is
+# retained for QC only and is never used by the regression or AUROC targets.
+cycle_columns <- c("S.Score", "G2M.Score", "Phase")
+if (!all(cycle_columns %in% colnames(obj@meta.data))) {
+  s_genes <- intersect(cc.genes.updated.2019$s.genes, rownames(obj))
+  g2m_genes <- intersect(cc.genes.updated.2019$g2m.genes, rownames(obj))
+  if (!length(s_genes) || !length(g2m_genes)) {
+    stop("RNA assay lacks genes required for Seurat cell-cycle scoring")
+  }
+  obj <- CellCycleScoring(
+    obj,
+    s.features = s_genes,
+    g2m.features = g2m_genes,
+    set.ident = FALSE
+  )
+}
+
 # log-normalized 'data' slot — matches the log-space choice in the pseudobulk path.
 mat <- GetAssayData(obj, assay = assay, layer = "data")
 present <- intersect(markers, rownames(mat))
@@ -46,10 +66,14 @@ if (length(missing)) message("[", donor, "] markers absent: ", paste(missing, co
 
 sub <- as.matrix(t(mat[present, , drop = FALSE]))  # cells x markers, dense & tiny
 df <- data.frame(barcode = colnames(obj), sub, check.names = FALSE)
+df[["Phase"]] <- as.character(obj@meta.data[colnames(obj), "Phase"])
+df[["S.Score"]] <- as.numeric(obj@meta.data[colnames(obj), "S.Score"])
+df[["G2M.Score"]] <- as.numeric(obj@meta.data[colnames(obj), "G2M.Score"])
 
 out <- file.path(outdir, paste0(donor, "_marker_cell_expr.csv"))
 write.csv(df, out, row.names = FALSE)
-message("[", donor, "] wrote ", out, " (", nrow(df), " cells x ", length(present), " markers)")
+message("[", donor, "] wrote ", out, " (", nrow(df), " cells x ", length(present),
+        " markers plus continuous cell-cycle covariates)")
 
 # Raw ADT evidence. Feature aliases accommodate the donor-specific Ki-67 name;
 # checkpoint proteins are not present in either panel. Donor2-only TOX/BATF/

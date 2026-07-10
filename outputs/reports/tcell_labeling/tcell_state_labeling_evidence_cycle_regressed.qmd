@@ -1,0 +1,669 @@
+---
+title: "T-cell ProjecTILs state labeling — cycle-regressed evidence"
+subtitle: "Reproduction of Matt's per-cell AUROC analysis with induced cell cycle treated as a nuisance covariate"
+date: "2026-07-10"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    embed-resources: true
+    theme: cosmo
+    css: styles/tcell_cycle_report.css
+execute:
+  echo: false
+  warning: false
+  error: true
+---
+
+```{python}
+from pathlib import Path
+import sys
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from matplotlib.lines import Line2D
+
+ROOT = Path(".")
+PROJECT_ROOT = ROOT.resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+from alz.analysis.tcell_marker_sets import SIGNATURES
+
+UNADJUSTED = ROOT / "reproduced_unadjusted"
+ADJUSTED = ROOT / "cycle_regressed"
+DONORS = ("donor1", "donor2")
+
+panel_comparison = {
+    donor: pd.read_csv(ADJUSTED / f"{donor}_percell_panel_auroc_comparison.csv")
+    for donor in DONORS
+}
+marker_comparison = {
+    donor: pd.read_csv(ADJUSTED / f"{donor}_percell_marker_auroc_comparison.csv")
+    for donor in DONORS
+}
+cell_values = {
+    donor: pd.read_csv(ADJUSTED / f"{donor}_marker_cell_values.csv")
+    for donor in DONORS
+}
+cluster_cells = {
+    donor: pd.read_csv(ROOT / "clusters" / f"{donor}_cc_recluster_cells.csv",
+                       usecols=["barcode", "cc_cluster"])
+    for donor in DONORS
+}
+inventory = pd.concat(
+    [pd.read_csv(UNADJUSTED / f"{donor}_input_inventory.csv") for donor in DONORS],
+    ignore_index=True,
+)
+reproduction = pd.read_csv(UNADJUSTED / "reproduction_check.csv")
+
+PANEL_NAMES = {
+    "cd4_lineage": "CD4 type",
+    "cd8_lineage": "CD8 type",
+    "exhaustion": "exhaustion",
+    "progenitor_exhaustion": "precursor exhaustion",
+    "cytotoxic": "cytotoxic",
+    "th17": "Th17",
+    "tfh": "Tfh",
+    "treg": "Treg",
+    "naive_memory": "naive/memory",
+}
+PANEL_COLORS = {
+    "exhaustion": "#a50f15",
+    "progenitor_exhaustion": "#ef3b2c",
+    "cytotoxic": "#e6550d",
+    "th17": "#31a354",
+    "tfh": "#3182bd",
+    "treg": "#756bb1",
+    "naive_memory": "#636363",
+}
+
+def matching_panels(donor, *, include_type=False):
+    data = panel_comparison[donor]
+    keep = data["is_matching_panel"].astype(bool) & ~data.panel.eq("tcell_core")
+    if not include_type:
+        keep &= ~data.marker_class.eq("type")
+    return data.loc[keep].copy()
+
+def present_table(frame, columns, digits=3):
+    shown = frame.loc[:, columns].copy()
+    numeric = shown.select_dtypes(include="number").columns
+    shown[numeric] = shown[numeric].round(digits)
+    return shown.reset_index(drop=True)
+```
+
+## What this document shows
+
+This report revises Matt's original evidence walkthrough in a separate artifact so
+the historical method and the cell-cycle extension remain easy to compare.
+The original ProjecTILs `functional.cluster` remains the per-cell label being tested.
+No cell is assigned a state by whichever marker panel happens to score highest, and
+Seurat clusters do not force a common state onto their member cells.
+
+The analysis has three explicit evidence layers:
+
+1. **Historical reproduction.** Matt's displayed AUROCs are regenerated using the
+   background implemented by the historical script.
+2. **Method-corrected unadjusted evidence.** Type panels compare a state only with
+   the opposite lineage, as Matt's methods text intended. State panels compare with
+   same-lineage sibling states.
+3. **Cycle-regressed evidence.** The identical targets, backgrounds, marker sets,
+   z-scoring, and AUROC calculation are applied after removing the linear component
+   associated with continuous S and G2/M scores.
+
+AUROC is the probability that a randomly selected target cell has a higher marker
+value or panel score than a randomly selected comparison cell; ties receive half
+credit. An AUROC of 0.5 therefore has the direct meaning of no rank separation.
+Cells are observations within two separate donor time courses, not biological
+replicates, so no per-cell significance tests are presented.
+
+### Reproduction status
+
+```{python}
+pd.DataFrame([{
+    "historical method reproduction passed": bool(reproduction.matches.all()),
+    "displayed AUROCs checked": len(reproduction),
+    "displayed AUROCs reproduced": int(reproduction.matches.sum()),
+    "donor1 projected cells": int(inventory.set_index("donor").loc["donor1", "n_projected_cells"]),
+    "donor2 projected cells": int(inventory.set_index("donor").loc["donor2", "n_projected_cells"]),
+}])
+```
+
+All displayed historical values reproduce. The audit also found two inconsistencies
+in the historical report that are preserved as provenance rather than silently
+rewritten:
+
+- Step 1 says the comparison is the opposite type, but its displayed values require
+  comparison with **all other projected T cells**, including same-lineage siblings.
+- Step 2 prose names KLRK1 and TNFRSF9, but those genes were absent from the compact
+  expression input. The displayed values reproduce with the versioned panels shown
+  below, which use EOMES and CTLA4 instead.
+
+The revised before/after results use the intended opposite-lineage type comparison.
+
+## Gene glossary
+
+The following are the complete scored marker panels. They are unchanged between the
+unadjusted and cycle-regressed analyses.
+
+```{python}
+GLOSSARY = {
+    "CD4": ("CD4 type", "CD4 co-receptor"),
+    "IL7R": ("CD4 type; precursor exhaustion; naive/memory", "CD127; resting and memory survival"),
+    "CCR7": ("CD4 type; precursor exhaustion; naive/memory", "lymph-node homing; naive and central memory"),
+    "LTB": ("CD4 type", "lymphotoxin-beta; resting lymphoid program"),
+    "CD8A": ("CD8 type", "CD8 co-receptor alpha"),
+    "CD8B": ("CD8 type", "CD8 co-receptor beta"),
+    "NKG7": ("CD8 type; cytotoxic", "cytotoxic granule regulator"),
+    "PDCD1": ("exhaustion", "PD-1 inhibitory receptor"),
+    "CTLA4": ("exhaustion; Treg", "inhibitory receptor also induced by activation"),
+    "LAG3": ("exhaustion", "inhibitory receptor"),
+    "HAVCR2": ("exhaustion", "TIM-3 inhibitory receptor"),
+    "TIGIT": ("exhaustion", "inhibitory receptor"),
+    "TOX": ("exhaustion", "transcriptional regulator associated with exhaustion"),
+    "ENTPD1": ("exhaustion", "CD39 ectonucleotidase"),
+    "TCF7": ("precursor exhaustion; naive/memory", "TCF1 self-renewal and memory program"),
+    "LEF1": ("precursor exhaustion; naive/memory", "self-renewal and naive/memory transcription factor"),
+    "SELL": ("precursor exhaustion; naive/memory", "CD62L lymph-node homing"),
+    "GZMB": ("cytotoxic", "granzyme B"),
+    "GZMH": ("cytotoxic", "granzyme H"),
+    "GNLY": ("cytotoxic", "granulysin"),
+    "PRF1": ("cytotoxic", "perforin"),
+    "EOMES": ("cytotoxic", "effector-associated transcription factor"),
+    "RORC": ("Th17", "Th17 lineage-associated transcription factor"),
+    "CCR6": ("Th17", "Th17-associated chemokine receptor"),
+    "IL17A": ("Th17", "IL-17A cytokine"),
+    "IL17F": ("Th17", "IL-17F cytokine"),
+    "IL23R": ("Th17", "IL-23 receptor"),
+    "KLRB1": ("Th17", "CD161; also expressed by MAIT-like cells"),
+    "CXCR5": ("Tfh", "follicular-homing receptor"),
+    "BCL6": ("Tfh", "Tfh lineage-associated transcription factor"),
+    "ICOS": ("Tfh", "inducible co-stimulator"),
+    "IL21": ("Tfh", "Tfh-associated cytokine"),
+    "FOXP3": ("Treg", "Treg lineage-associated transcription factor"),
+    "IL2RA": ("Treg", "CD25; also induced by activation"),
+    "IKZF2": ("Treg", "Helios transcription factor"),
+    "CD3D": ("T-cell core", "T-cell receptor signaling subunit"),
+    "CD3E": ("T-cell core", "T-cell receptor signaling subunit"),
+    "TRAC": ("T-cell core", "T-cell receptor alpha constant"),
+    "ZAP70": ("T-cell core", "T-cell receptor signaling kinase"),
+}
+pd.DataFrame(
+    [{"gene": gene, "marker set": panel, "function": function}
+     for gene, (panel, function) in GLOSSARY.items()]
+)
+```
+
+## Step 1 — CD8 versus CD4 identity
+
+**Method:** per-cell panel AUROC using the opposite lineage as comparison.
+
+This corrects the historical implementation to match Matt's stated question. For
+example, a CD8.TEX cell is compared with all projected CD4 cells, not with other CD8
+states. Cell cycling is not part of a target or background definition.
+
+```{python}
+type_rows = []
+for donor in DONORS:
+    data = matching_panels(donor, include_type=True)
+    data = data[data.marker_class.eq("type")].copy()
+    data["donor"] = donor
+    type_rows.append(data)
+type_rows = pd.concat(type_rows, ignore_index=True)
+type_rows["marker set"] = type_rows.panel.map(PANEL_NAMES)
+present_table(
+    type_rows,
+    ["donor", "state", "marker set", "n_cells_target", "n_cells_comparison",
+     "unadjusted_auroc", "cycle_regressed_auroc", "auroc_difference"],
+)
+```
+
+The CD8 calls remain strongly separated from CD4 cells after regression. The CD4
+lineage panel is weaker for the cytotoxic CD4 states, especially CD4.CTL_GNLY, because
+CD4 RNA is sparsely detected and cytotoxic programs are shared across lineages. This
+is a limitation of the RNA panel, not evidence that cell cycle created the CD8/CD4
+separation.
+
+## Step 2 — Cytotoxic and exhaustion-associated states
+
+**Method:** per-cell panel AUROC against same-lineage sibling states.
+
+The cytotoxic and exhaustion panels answer different questions and are not collapsed
+into a combined categorical label. Their continuous overlap is biologically expected:
+checkpoint-associated cells may retain cytotoxic machinery.
+
+```{python}
+states_of_interest = {
+    ("CD8.TEX", "exhaustion"),
+    ("CD8.TEX", "cytotoxic"),
+    ("CD4.CTL_Exh", "exhaustion"),
+    ("CD4.CTL_Exh", "cytotoxic"),
+    ("CD4.CTL_GNLY", "cytotoxic"),
+}
+step2 = []
+for donor in DONORS:
+    data = panel_comparison[donor]
+    keep = data.apply(lambda row: (row.state, row.panel) in states_of_interest, axis=1)
+    selected = data.loc[keep].copy()
+    selected["donor"] = donor
+    step2.append(selected)
+step2 = pd.concat(step2, ignore_index=True)
+step2["marker set"] = step2.panel.map(PANEL_NAMES)
+present_table(
+    step2,
+    ["donor", "state", "marker set", "n_cells_target", "n_cells_comparison",
+     "unadjusted_auroc", "cycle_regressed_auroc", "auroc_difference"],
+)
+```
+
+Continuous cytotoxic/exhaustion overlap, quantified without assigning a new type:
+
+```{python}
+overlap_rows = []
+overlap_panels = {panel: SIGNATURES[panel] for panel in ("exhaustion", "cytotoxic")}
+for donor in DONORS:
+    values = cell_values[donor]
+    for layer, suffix in [
+        ("unadjusted", "_log_normalized_expression"),
+        ("cycle-regressed", "_cycle_regressed_residual"),
+    ]:
+        scores = {}
+        for panel, genes in overlap_panels.items():
+            matrix = values[[f"{gene}{suffix}" for gene in genes]].copy()
+            matrix.columns = genes
+            z = matrix.subtract(matrix.mean()).divide(matrix.std(ddof=0).replace(0, np.nan))
+            scores[panel] = z.mean(axis=1)
+        cd8 = values.lineage.eq("CD8")
+        overlap_rows.append({
+            "donor": donor,
+            "expression layer": layer,
+            "CD8 cells": int(cd8.sum()),
+            "Spearman correlation": scores["exhaustion"][cd8].corr(
+                scores["cytotoxic"][cd8], method="spearman"
+            ),
+        })
+present_table(pd.DataFrame(overlap_rows),
+              ["donor", "expression layer", "CD8 cells", "Spearman correlation"])
+```
+
+The correlations describe continuous co-expression only. They are not used as a
+gate, confidence score, or justification for a combined “cytotoxic/exhausted” label.
+
+Complete CD8 functional-panel evidence:
+
+```{python}
+cd8_evidence = []
+for donor in DONORS:
+    data = matching_panels(donor)
+    selected = data[data.lineage.eq("CD8")].copy()
+    selected["donor"] = donor
+    cd8_evidence.append(selected)
+cd8_evidence = pd.concat(cd8_evidence, ignore_index=True)
+cd8_evidence["marker set"] = cd8_evidence.panel.map(PANEL_NAMES)
+present_table(
+    cd8_evidence,
+    ["donor", "state", "marker set", "n_cells_target", "n_cells_comparison",
+     "unadjusted_auroc", "cycle_regressed_auroc", "auroc_difference"],
+)
+```
+
+Complete CD8 per-marker evidence for every matching functional panel:
+
+```{python}
+cd8_marker_evidence = []
+for donor in DONORS:
+    data = marker_comparison[donor]
+    selected = data[
+        data.lineage.eq("CD8")
+        & data["is_matching_panel"].astype(bool)
+        & data.marker_class.eq("state")
+    ].copy()
+    selected["donor"] = donor
+    cd8_marker_evidence.append(selected)
+cd8_marker_evidence = pd.concat(cd8_marker_evidence, ignore_index=True)
+cd8_marker_evidence["marker set"] = cd8_marker_evidence.panel.map(PANEL_NAMES)
+present_table(
+    cd8_marker_evidence,
+    ["donor", "state", "marker set", "gene", "n_cells_target",
+     "n_cells_comparison", "unadjusted_auroc", "cycle_regressed_auroc",
+     "auroc_difference"],
+)
+```
+
+```{python}
+#| label: fig-state-panel-cycle-adjustment
+#| fig-cap: "Matching functional-state panel AUROCs before and after cell-cycle regression. Lines connect the same state and marker question; 0.5 is chance rank separation."
+#| fig-width: 12
+#| fig-height: 6.5
+fig, axes = plt.subplots(1, 2, figsize=(12, 6.5), sharey=True, layout="constrained")
+for ax, donor in zip(axes, DONORS):
+    data = matching_panels(donor).sort_values("unadjusted_auroc")
+    y = np.arange(len(data))
+    for i, row in enumerate(data.itertuples()):
+        color = PANEL_COLORS.get(row.panel, "#555555")
+        ax.plot([row.unadjusted_auroc, row.cycle_regressed_auroc], [i, i], color=color, alpha=.7)
+        ax.scatter(row.unadjusted_auroc, i, facecolor="white", edgecolor=color, s=38, zorder=3)
+        ax.scatter(row.cycle_regressed_auroc, i, color=color, s=38, zorder=3)
+    ax.axvline(.5, color="#777777", linestyle="--", linewidth=1)
+    ax.set_yticks(y, [f"{s}\n{PANEL_NAMES.get(p, p)}" for s, p in zip(data.state, data.panel)], fontsize=8)
+    ax.set_xlim(.25, 1.0)
+    ax.set_xlabel("AUROC")
+    ax.set_title(donor)
+fig.legend(
+    handles=[
+        Line2D([0], [0], marker="o", color="#555", markerfacecolor="white", label="unadjusted"),
+        Line2D([0], [0], marker="o", color="#555", markerfacecolor="#555", label="cycle-regressed"),
+    ],
+    loc="outside upper center", ncol=2, frameon=False,
+)
+```
+
+CD8.TEX retains modest exhaustion-associated separation after regression: 0.672 to
+0.684 in donor1 and 0.611 to 0.622 in donor2. CD4.CTL_Exh and CD4.CTL_GNLY also retain
+their respective exhaustion and cytotoxic signals. The changes are small at the panel
+level, so artificially induced cycling does not account for these state-marker results.
+
+### TIM-3 and TOX evidence
+
+The absence or weakness of individual genes must not be hidden by the panel average.
+HAVCR2 encodes TIM-3; TOX is an exhaustion-associated transcriptional regulator.
+
+```{python}
+tim3_tox = []
+for donor in DONORS:
+    data = marker_comparison[donor]
+    selected = data[
+        data.state.eq("CD8.TEX")
+        & data.panel.eq("exhaustion")
+        & data.gene.isin(["HAVCR2", "TOX"])
+    ].copy()
+    selected["donor"] = donor
+    raw = pd.read_csv(UNADJUSTED / f"{donor}_percell_marker_auroc.csv")
+    raw = raw[
+        raw.state.eq("CD8.TEX")
+        & raw.panel.eq("exhaustion")
+        & raw.gene.isin(["HAVCR2", "TOX"])
+    ][["gene", "target_detection_fraction", "comparison_detection_fraction"]]
+    selected = selected.merge(raw, on="gene", validate="one_to_one")
+    tim3_tox.append(selected)
+tim3_tox = pd.concat(tim3_tox, ignore_index=True)
+present_table(
+tim3_tox,
+    ["donor", "gene", "n_cells_target", "n_cells_comparison",
+     "target_detection_fraction", "comparison_detection_fraction",
+     "unadjusted_auroc", "cycle_regressed_auroc", "auroc_difference"],
+)
+```
+
+```{python}
+#| label: fig-tim3-tox-raw-expression
+#| fig-cap: "Raw log-normalized HAVCR2 (TIM-3) and TOX expression in CD8.TEX versus other projected CD8 states. The zero-heavy distributions are shown directly; no positivity threshold beyond observed expression above zero is used."
+#| fig-width: 11
+#| fig-height: 7
+fig, axes = plt.subplots(2, 2, figsize=(11, 7), sharey="row", layout="constrained")
+for row_index, gene in enumerate(["HAVCR2", "TOX"]):
+    for column_index, donor in enumerate(DONORS):
+        ax = axes[row_index, column_index]
+        values = cell_values[donor]
+        cd8 = values[values.lineage.eq("CD8")]
+        column = f"{gene}_log_normalized_expression"
+        sibling = cd8.loc[~cd8.functional_cluster.eq("CD8.TEX"), column].to_numpy()
+        tex = cd8.loc[cd8.functional_cluster.eq("CD8.TEX"), column].to_numpy()
+        violin = ax.violinplot(
+            [sibling, tex], positions=[0, 1], widths=.75,
+            showmeans=False, showmedians=True, showextrema=False,
+        )
+        for body, color in zip(violin["bodies"], ["#9ecae1", "#cb181d"]):
+            body.set_facecolor(color)
+            body.set_edgecolor("#333333")
+            body.set_alpha(.8)
+        violin["cmedians"].set_color("#111111")
+        ax.set_xticks([0, 1], ["other CD8", "CD8.TEX"])
+        ax.set_title(f"{donor} · {gene}")
+        ax.grid(axis="y", alpha=.15)
+    axes[row_index, 0].set_ylabel("log-normalized RNA expression")
+```
+
+TIM-3/HAVCR2 supports CD8.TEX in both donors and changes little after regression.
+TOX is near chance before adjustment in donor1 and only weakly separated in donor2;
+regression improves donor1 TOX separation but does not create strong, consistent TOX
+evidence across donors. The CD8.TEX label is therefore supported by a multi-gene
+exhaustion-associated pattern, not by uniformly strong expression of every canonical
+terminal-exhaustion marker.
+
+## Step 3 — CD4 helper substates remain donor-dependent
+
+**Method:** the same per-cell panel AUROC against other projected CD4 states.
+
+```{python}
+helper = []
+for donor in DONORS:
+    data = matching_panels(donor)
+    selected = data[data.state.isin(["CD4.Th17", "CD4.Tfh", "CD4.Treg", "CD4.NaiveLike"])].copy()
+    selected["donor"] = donor
+    helper.append(selected)
+helper = pd.concat(helper, ignore_index=True)
+helper["marker set"] = helper.panel.map(PANEL_NAMES)
+present_table(
+    helper,
+    ["donor", "state", "marker set", "n_cells_target", "n_cells_comparison",
+     "unadjusted_auroc", "cycle_regressed_auroc", "auroc_difference"],
+)
+```
+
+Cell-cycle regression does not produce consistent two-donor support for Tfh, Treg,
+or the CD4.NaiveLike naive/memory interpretation. CD4.Th17 improves in donor1 but
+remains near chance in donor2; that donor discordance is not sufficient to promote a
+definitive Th17 call. The evaluated reference names should remain visible in the
+evidence table, but they should not yet become stronger downstream biological labels.
+
+### Cluster heterogeneity is supporting evidence only
+
+Cycle-regressed Seurat clusters provide an independent view of transcriptional
+neighborhoods. They are not used as AUROC targets and do not force a common state
+onto their cells. The table reports each cluster's observed ProjecTILs mixture.
+
+```{python}
+cluster_summaries = {}
+cluster_matrices = {}
+for donor in DONORS:
+    joined = cluster_cells[donor].merge(
+        cell_values[donor][["barcode", "functional_cluster"]],
+        on="barcode", how="inner", validate="one_to_one",
+    )
+    counts = pd.crosstab(joined.cc_cluster.astype(str), joined.functional_cluster)
+    fractions = counts.div(counts.sum(axis=1), axis=0)
+    cluster_matrices[donor] = fractions
+    cluster_summaries[donor] = pd.DataFrame({
+        "cycle-regressed cluster": counts.index,
+        "projected cells": counts.sum(axis=1).to_numpy(),
+        "distinct ProjecTILs states": (counts > 0).sum(axis=1).to_numpy(),
+        "dominant ProjecTILs state": fractions.idxmax(axis=1).to_numpy(),
+        "dominant-state fraction": fractions.max(axis=1).to_numpy(),
+    })
+
+pd.concat(
+    [cluster_summaries[donor].assign(donor=donor) for donor in DONORS],
+    ignore_index=True,
+)[["donor", "cycle-regressed cluster", "projected cells",
+   "distinct ProjecTILs states", "dominant ProjecTILs state",
+   "dominant-state fraction"]].round(3)
+```
+
+```{python}
+#| label: fig-cluster-projectils-heterogeneity
+#| fig-cap: "Within-cluster ProjecTILs state composition after cell-cycle-regressed Seurat clustering. Mixed rows show why cluster membership is supporting evidence rather than a state-assignment rule."
+#| fig-width: 13
+#| fig-height: 7
+fig, axes = plt.subplots(1, 2, figsize=(13, 7), layout="constrained")
+for ax, donor in zip(axes, DONORS):
+    matrix = cluster_matrices[donor]
+    image = ax.imshow(matrix.to_numpy(), aspect="auto", cmap="magma", vmin=0, vmax=1)
+    ax.set_yticks(np.arange(len(matrix.index)), matrix.index)
+    ax.set_xticks(np.arange(len(matrix.columns)), matrix.columns, rotation=65, ha="right", fontsize=7)
+    ax.set_xlabel("ProjecTILs functional.cluster")
+    ax.set_ylabel("cycle-regressed Seurat cluster")
+    ax.set_title(donor)
+fig.colorbar(image, ax=axes, label="fraction of cluster", shrink=.72)
+```
+
+Most clusters contain several reference states, often without a single state nearing
+purity. This confirms the visual concern that a ProjecTILs label can span multiple
+transcriptional neighborhoods, while also showing why replacing every cell's label
+with its cluster majority would discard genuine per-cell heterogeneity.
+
+## Step 4 — TPEX versus TEX and loss-of-memory sensitivity
+
+**Method:** direct per-cell comparison of CD8.TPEX with CD8.TEX on TCF7, LEF1, SELL,
+CCR7, and IL7R. This avoids inferring precursor status from a cluster or from cell
+cycle.
+
+```{python}
+tpex = pd.concat(
+    [pd.read_csv(ADJUSTED / f"{donor}_tpex_tex_gene_evidence.csv") for donor in DONORS],
+    ignore_index=True,
+)
+present_table(
+    tpex,
+    ["donor", "gene", "n_cells_target", "n_cells_comparison",
+     "tpex_raw_detection_fraction", "tex_raw_detection_fraction",
+     "unadjusted_auroc", "cycle_regressed_auroc", "auroc_difference"],
+)
+```
+
+```{python}
+#| label: fig-tpex-tex-gene-evidence
+#| fig-cap: "Cycle-regressed per-gene AUROC for CD8.TPEX versus CD8.TEX. Values above 0.5 indicate higher expression in TPEX; the five genes do not form a uniformly separating program."
+#| fig-width: 10
+#| fig-height: 4.5
+fig, axes = plt.subplots(1, 2, figsize=(10, 4.5), sharey=True, layout="constrained")
+for ax, donor in zip(axes, DONORS):
+    data = tpex[tpex.donor.eq(donor)]
+    colors = ["#b2182b" if value >= .5 else "#2166ac" for value in data.cycle_regressed_auroc]
+    ax.bar(data.gene, data.cycle_regressed_auroc, color=colors)
+    ax.axhline(.5, color="#555", linestyle="--", linewidth=1)
+    ax.set_ylim(0, .8)
+    ax.set_title(donor)
+    ax.set_xlabel("memory / precursor marker")
+axes[0].set_ylabel("TPEX-versus-TEX AUROC")
+```
+
+Donor1 has TPEX enrichment for TCF7, LEF1, and CCR7, but SELL and IL7R do not
+separate TPEX from TEX. Donor2 shows only weak TCF7 and CCR7 separation, with SELL
+lower in TPEX. The five-gene precursor program therefore does not consistently
+corroborate a distinct TPEX population across donors after cycle removal.
+
+### Negative-marker sensitivity for CD8.TEX
+
+This sensitivity analysis asks the reverse, biologically interpretable question:
+what is the probability that a same-lineage comparison cell expresses a memory gene
+more strongly than a CD8.TEX cell? It does not create a composite confidence score or
+a thresholded label.
+
+```{python}
+loss = pd.concat(
+    [pd.read_csv(ADJUSTED / f"{donor}_loss_of_memory_sensitivity.csv") for donor in DONORS],
+    ignore_index=True,
+)
+present_table(
+    loss,
+    ["donor", "gene", "n_cells_target", "n_cells_comparison",
+     "unadjusted_loss_of_memory_auroc", "cycle_regressed_loss_of_memory_auroc",
+     "auroc_difference"],
+)
+```
+
+Loss of the memory program is not uniformly strong. CCR7 provides the most consistent
+adjusted loss-of-memory evidence, while SELL and IL7R do not. This limits any claim
+that the full CD8.TEX population is uniformly terminally exhausted.
+
+## Step 5 — Cell cycle is removed as a nuisance signal
+
+For each donor and marker gene, the analysis fits one ordinary least-squares model
+across all projected cells:
+
+```text
+log-normalized expression = intercept + beta_S × S.Score + beta_G2M × G2M.Score + residual
+```
+
+The residual is the cycle-regressed marker value. Fitting across the donor prevents
+the ProjecTILs target label from determining the regression. The continuous scores
+are used directly; binary `Phase`, a positivity cutoff, cell exclusion, and a
+cycle-corrected confidence score are not used. Raw log-normalized expression is
+retained alongside each residualized value.
+
+```{python}
+present_table(
+    inventory,
+    ["donor", "n_projected_cells", "n_marker_genes",
+     "max_abs_residual_cycle_correlation"],
+    digits=8,
+)
+```
+
+The residual marker values are numerically orthogonal to both modeled cycle
+covariates. Regression changes some individual genes, but most matching panel AUROCs
+move only slightly because panels combine several standardized genes and AUROC uses
+rank information.
+
+```{python}
+#| label: fig-auroc-change-distribution
+#| fig-cap: "Change in matching functional-state panel AUROC after cycle regression. Positive values indicate stronger separation after adjustment."
+#| fig-width: 9
+#| fig-height: 4.5
+fig, ax = plt.subplots(figsize=(9, 4.5), layout="constrained")
+positions = []
+labels = []
+for donor_index, donor in enumerate(DONORS):
+    data = matching_panels(donor)
+    x = donor_index + np.linspace(-.13, .13, len(data))
+    colors = [PANEL_COLORS.get(panel, "#555") for panel in data.panel]
+    ax.scatter(x, data.auroc_difference, c=colors, s=48, alpha=.85, edgecolor="white", linewidth=.4)
+    positions.append(donor_index)
+    labels.append(donor)
+ax.axhline(0, color="#555", linewidth=1)
+ax.set_xticks(positions, labels)
+ax.set_ylabel("cycle-regressed AUROC − unadjusted AUROC")
+ax.set_title("Cell-cycle adjustment sensitivity")
+```
+
+## Step 6 — Evidence-supported proposal for scientific review
+
+This is a proposed interpretation, not a downstream relabeling action.
+
+| ProjecTILs state | Cycle-regressed evidence | Proposed handling for review |
+|---|---|---|
+| CD8.TEX | Exhaustion panel remains above chance in both donors; HAVCR2 is consistent, TOX and loss-of-memory evidence are mixed | Retain as **CD8 exhaustion-associated**; do not claim uniform terminal exhaustion |
+| CD8.TPEX | Precursor panel is modest in donor1 and near chance in donor2; direct five-gene evidence is inconsistent | Do not independently confirm TPEX; evaluate a TEX/TPEX merge as a sensitivity mapping |
+| CD4.CTL_Exh | Exhaustion panel remains separated in both donors | Retain as an exhaustion-associated CD4 reference state |
+| CD4.CTL_GNLY | Cytotoxic panel remains strongly separated in both donors | Retain as cytotoxic CD4 |
+| CD4.CTL_EOMES | Cytotoxic panel is supported, but the EOMES-specific identity was not directly established by a separate panel | Retain as cytotoxic-associated; avoid an EOMES-specific claim |
+| CD4.Th17 / CD4.Tfh / CD4.Treg | Matching panels are weak or donor-inconsistent | Do not promote to definitive helper-subtype labels from this assay alone |
+| CD4.NaiveLike | Naive/memory support is donor-dependent | Report naive/memory evidence without converting it to “resting/naive” |
+| CD8.EM / CD8.TEMRA / CD8.CM / CD8.NaiveLike / CD8.MAIT | Several groups are small or not supported by their matching functional panel in both donors | Retain as evaluated reference states until a separate mapping is scientifically approved |
+
+The principal conclusion is narrower than Matt's original cluster-based collapse:
+cell-cycle removal leaves a reproducible exhaustion-associated signal in CD8.TEX and
+CD4.CTL_Exh and a strong cytotoxic signal in CD4.CTL_GNLY. It does **not** turn the
+full set of tumor-reference functional states into definitive blood T-cell types.
+Cycling is neither a reason to reject exhaustion nor evidence for assigning it.
+
+## Reproducibility
+
+The revised report is produced by:
+
+- `alz/analysis/tcell_marker_sets.py` — versioned marker panels;
+- `alz/analysis/tcell_export_marker_cells.R` — compact log-normalized RNA matrix and
+  full-precision continuous cell-cycle covariates;
+- `alz/analysis/tcell_percell_auroc.py` — strict barcode joins, historical
+  reproduction, cycle regression, and per-cell AUROC;
+- `alz/analysis/fixtures/tcell_matt_report_expected.json` — historical snapshot
+  provenance, displayed tables, input inventory, panels, AUROCs, and documented
+  method discrepancies.
+
+Run the dedicated report workflow; it does not relabel cells or update downstream
+state spines:
+
+```bash
+bash alz/analysis/run_tcell_matt_cycle_regression.sh
+```

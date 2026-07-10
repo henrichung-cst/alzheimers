@@ -1,0 +1,2007 @@
+{
+  "source_report": "outputs/reports/tcell_labeling/tcell_state_labeling_evidence_matt.html",
+  "archive_report": "outputs/reports/tcell_labeling/archive/matt_original_snapshot_2026-07-10/tcell_state_labeling_evidence_matt.html",
+  "historical_snapshot_sha256": "c114b70b052bb18a1e01e11b11038a22558254621e08f5f7f320f79d0bf7eeed",
+  "inputs": {
+    "expression_pattern": "outputs/reports/tcell_labeling/auroc/{donor}_marker_cell_expr.csv",
+    "projection_pattern": "data/derived/tcells_incytr_inputs/{donor}/scrna/projectils_embeddings.csv",
+    "projected_cells": {
+      "donor1": 22422,
+      "donor2": 19195
+    },
+    "marker_genes_present": {
+      "donor1": 39,
+      "donor2": 39
+    }
+  },
+  "marker_panels": {
+    "cd4_lineage": [
+      "CD4",
+      "IL7R",
+      "CCR7",
+      "LTB"
+    ],
+    "cd8_lineage": [
+      "CD8A",
+      "CD8B",
+      "NKG7"
+    ],
+    "exhaustion": [
+      "PDCD1",
+      "CTLA4",
+      "LAG3",
+      "HAVCR2",
+      "TIGIT",
+      "TOX",
+      "ENTPD1"
+    ],
+    "progenitor_exhaustion": [
+      "TCF7",
+      "LEF1",
+      "SELL",
+      "CCR7",
+      "IL7R"
+    ],
+    "cytotoxic": [
+      "GZMB",
+      "GZMH",
+      "GNLY",
+      "NKG7",
+      "PRF1",
+      "EOMES"
+    ],
+    "th17": [
+      "RORC",
+      "CCR6",
+      "IL17A",
+      "IL17F",
+      "IL23R",
+      "KLRB1"
+    ],
+    "tfh": [
+      "CXCR5",
+      "BCL6",
+      "ICOS",
+      "PDCD1",
+      "IL21"
+    ],
+    "treg": [
+      "FOXP3",
+      "IL2RA",
+      "CTLA4",
+      "IKZF2"
+    ],
+    "naive_memory": [
+      "CCR7",
+      "SELL",
+      "TCF7",
+      "LEF1",
+      "IL7R"
+    ]
+  },
+  "documented_discrepancies": [
+    {
+      "location": "Step 1",
+      "report_text": "type panels use the opposite type as comparison",
+      "implemented_background_required_to_reproduce_values": "all other projected T cells"
+    },
+    {
+      "location": "Step 2 prose",
+      "report_text": "cytotoxic includes KLRK1 and exhaustion includes TNFRSF9",
+      "implemented_panels_required_to_reproduce_values": "versioned panels above use EOMES and CTLA4; compact inputs do not contain KLRK1 or TNFRSF9"
+    }
+  ],
+  "displayed_panel_auroc_rounded_3dp": {
+    "donor1": {
+      "CD4.CTL_EOMES|cd4_lineage": 0.496,
+      "CD4.CTL_Exh|cd4_lineage": 0.524,
+      "CD4.CTL_GNLY|cd4_lineage": 0.468,
+      "CD4.NaiveLike|cd4_lineage": 0.748,
+      "CD4.Tfh|cd4_lineage": 0.611,
+      "CD4.Th17|cd4_lineage": 0.508,
+      "CD4.Treg|cd4_lineage": 0.593,
+      "CD8.CM|cd8_lineage": 0.816,
+      "CD8.EM|cd8_lineage": 0.869,
+      "CD8.MAIT|cd8_lineage": 0.809,
+      "CD8.NaiveLike|cd8_lineage": 0.771,
+      "CD8.TEMRA|cd8_lineage": 0.896,
+      "CD8.TEX|cd8_lineage": 0.962,
+      "CD8.TPEX|cd8_lineage": 0.829,
+      "CD4.CTL_Exh|cytotoxic": 0.814,
+      "CD4.CTL_Exh|exhaustion": 0.71,
+      "CD4.CTL_GNLY|cytotoxic": 0.859,
+      "CD4.CTL_GNLY|exhaustion": 0.455,
+      "CD8.TEX|cytotoxic": 0.738,
+      "CD8.TEX|exhaustion": 0.672,
+      "CD4.Th17|th17": 0.573,
+      "CD4.Tfh|tfh": 0.57,
+      "CD4.Treg|treg": 0.473,
+      "CD8.TPEX|progenitor_exhaustion": 0.64
+    },
+    "donor2": {
+      "CD4.CTL_EOMES|cd4_lineage": 0.437,
+      "CD4.CTL_Exh|cd4_lineage": 0.525,
+      "CD4.CTL_GNLY|cd4_lineage": 0.466,
+      "CD4.NaiveLike|cd4_lineage": 0.557,
+      "CD4.Tfh|cd4_lineage": 0.688,
+      "CD4.Th17|cd4_lineage": 0.572,
+      "CD4.Treg|cd4_lineage": 0.628,
+      "CD8.EM|cd8_lineage": 0.681,
+      "CD8.TEMRA|cd8_lineage": 0.78,
+      "CD8.TEX|cd8_lineage": 0.911,
+      "CD8.TPEX|cd8_lineage": 0.777,
+      "CD4.CTL_Exh|cytotoxic": 0.77,
+      "CD4.CTL_Exh|exhaustion": 0.752,
+      "CD4.CTL_GNLY|cytotoxic": 0.954,
+      "CD4.CTL_GNLY|exhaustion": 0.677,
+      "CD8.TEX|cytotoxic": 0.606,
+      "CD8.TEX|exhaustion": 0.611,
+      "CD4.Th17|th17": 0.539,
+      "CD4.Tfh|tfh": 0.507,
+      "CD4.Treg|treg": 0.676,
+      "CD8.TPEX|progenitor_exhaustion": 0.471
+    }
+  },
+  "historical_conclusions": [
+    "CD8 and CD4 lineage separation is stronger than functional-substate separation",
+    "CD4.Th17 and CD4.Tfh are not supported by their defining marker panels",
+    "CD8.TPEX was proposed to merge with CD8.TEX",
+    "cell cycle was retained as a biological axis in the historical report",
+    "Seurat clusters were used to propose collapsed downstream labels"
+  ],
+  "displayed_tables": [
+    {
+      "table_index": 0,
+      "section": "What this document shows",
+      "row_count_including_header": 4,
+      "rows": [
+        [
+          "Method",
+          "What it measures",
+          "Used in"
+        ],
+        [
+          "Per-cell AUROC",
+          "the chance that a randomly picked labeled cell shows more of a marker than a randomly picked comparison cell",
+          "Steps 1–4"
+        ],
+        [
+          "ProjecTILs’ own confidence",
+          "how sure the labeling tool was, cell by cell",
+          "Step 4"
+        ],
+        [
+          "Seurat clustering",
+          "cluster the cells with Seurat, without using the ProjecTILs labels or the chosen markers, then read each cluster’s strongest genes",
+          "Steps 3, 5, 6"
+        ]
+      ]
+    },
+    {
+      "table_index": 1,
+      "section": "Gene glossary",
+      "row_count_including_header": 155,
+      "rows": [
+        [
+          "",
+          "Gene",
+          "Marker set",
+          "Function"
+        ],
+        [
+          "0",
+          "CD4",
+          "CD4 type",
+          "CD4 co-receptor — marks CD4 helper T cells (often not detected)"
+        ],
+        [
+          "1",
+          "LTB",
+          "CD4 type",
+          "lymphotoxin-beta — resting/lymphoid cytokine"
+        ],
+        [
+          "2",
+          "CCR7",
+          "CD4 type, precursor-exhaustion, naive/memory",
+          "lymph-node homing chemokine receptor — naive/central-memory"
+        ],
+        [
+          "3",
+          "IL7R",
+          "CD4 type, precursor-exhaustion, naive/memory",
+          "CD127 — survival signal, resting/memory cells"
+        ],
+        [
+          "4",
+          "CD8A",
+          "CD8 type",
+          "CD8 co-receptor alpha — marks CD8 killer T cells"
+        ],
+        [
+          "5",
+          "CD8B",
+          "CD8 type",
+          "CD8 co-receptor beta — marks CD8 killer T cells"
+        ],
+        [
+          "6",
+          "NKG7",
+          "CD8 type, cytotoxic",
+          "cytotoxic granule regulator"
+        ],
+        [
+          "7",
+          "EOMES",
+          "cytotoxic",
+          "eomesodermin — CD4-killer & effector TF"
+        ],
+        [
+          "8",
+          "GNLY",
+          "cytotoxic",
+          "granulysin — pore-forming cytolytic granule protein"
+        ],
+        [
+          "9",
+          "GZMB",
+          "cytotoxic",
+          "granzyme B — cytolytic serine protease"
+        ],
+        [
+          "10",
+          "GZMH",
+          "cytotoxic",
+          "granzyme H — cytolytic serine protease"
+        ],
+        [
+          "11",
+          "PRF1",
+          "cytotoxic",
+          "perforin — pore-forming cytolytic effector"
+        ],
+        [
+          "12",
+          "ENTPD1",
+          "exhaustion",
+          "CD39 ectonucleotidase — deep-exhaustion marker"
+        ],
+        [
+          "13",
+          "HAVCR2",
+          "exhaustion",
+          "TIM-3 inhibitory checkpoint receptor"
+        ],
+        [
+          "14",
+          "LAG3",
+          "exhaustion",
+          "inhibitory checkpoint receptor"
+        ],
+        [
+          "15",
+          "TIGIT",
+          "exhaustion",
+          "inhibitory checkpoint receptor"
+        ],
+        [
+          "16",
+          "TOX",
+          "exhaustion",
+          "master transcription factor of exhaustion"
+        ],
+        [
+          "17",
+          "PDCD1",
+          "exhaustion, Tfh",
+          "PD-1 inhibitory checkpoint receptor"
+        ],
+        [
+          "18",
+          "CTLA4",
+          "exhaustion, Treg",
+          "inhibitory checkpoint — Treg & activated T"
+        ],
+        [
+          "19",
+          "LEF1",
+          "precursor-exhaustion, naive/memory",
+          "self-renewal TF — naive/memory marker"
+        ],
+        [
+          "20",
+          "SELL",
+          "precursor-exhaustion, naive/memory",
+          "CD62L — lymph-node homing, naive/central-memory"
+        ],
+        [
+          "21",
+          "TCF7",
+          "precursor-exhaustion, naive/memory",
+          "self-renewal TF — marks precursor-exhausted & naive cells"
+        ],
+        [
+          "22",
+          "CD3D",
+          "T-cell core",
+          "T-cell receptor signaling subunit — on all T cells"
+        ],
+        [
+          "23",
+          "CD3E",
+          "T-cell core",
+          "T-cell receptor signaling subunit — on all T cells"
+        ],
+        [
+          "24",
+          "TRAC",
+          "T-cell core",
+          "T-cell receptor alpha constant — on all T cells"
+        ],
+        [
+          "25",
+          "ZAP70",
+          "T-cell core",
+          "T-cell receptor signaling kinase — on all T cells"
+        ],
+        [
+          "26",
+          "BCL6",
+          "Tfh",
+          "Tfh master transcription factor"
+        ],
+        [
+          "27",
+          "CXCR5",
+          "Tfh",
+          "follicle-homing chemokine receptor — Tfh master marker"
+        ],
+        [
+          "28",
+          "ICOS",
+          "Tfh",
+          "inducible costimulator — Tfh & activated T"
+        ],
+        [
+          "29",
+          "IL21",
+          "Tfh",
+          "Tfh signature cytokine"
+        ],
+        [
+          "30",
+          "CCR6",
+          "Th17",
+          "Th17-homing chemokine receptor"
+        ],
+        [
+          "31",
+          "IL17A",
+          "Th17",
+          "IL-17A signature Th17 cytokine"
+        ],
+        [
+          "32",
+          "IL17F",
+          "Th17",
+          "IL-17F Th17 cytokine"
+        ],
+        [
+          "33",
+          "IL23R",
+          "Th17",
+          "IL-23 receptor — Th17 maintenance"
+        ],
+        [
+          "34",
+          "KLRB1",
+          "Th17",
+          "CD161 — Th17/MAIT-associated lectin"
+        ],
+        [
+          "35",
+          "RORC",
+          "Th17",
+          "ROR-gamma-t — Th17 master TF"
+        ],
+        [
+          "36",
+          "FOXP3",
+          "Treg",
+          "master Treg transcription factor (often not detected)"
+        ],
+        [
+          "37",
+          "IKZF2",
+          "Treg",
+          "Helios — Treg-stabilizing TF"
+        ],
+        [
+          "38",
+          "IL2RA",
+          "Treg",
+          "CD25 IL-2 receptor alpha — Treg & activation"
+        ],
+        [
+          "39",
+          "AHI1",
+          "—",
+          "Jouberin — T-cell-signaling modulator"
+        ],
+        [
+          "40",
+          "ANLN",
+          "—",
+          "anillin — cell division (cytokinesis)"
+        ],
+        [
+          "41",
+          "AOAH",
+          "—",
+          "acyloxyacyl hydrolase"
+        ],
+        [
+          "42",
+          "ATF3",
+          "—",
+          "stress-induced TF"
+        ],
+        [
+          "43",
+          "ATF5",
+          "—",
+          "stress-response TF"
+        ],
+        [
+          "44",
+          "AURKA",
+          "—",
+          "aurora kinase A — spindle pole"
+        ],
+        [
+          "45",
+          "BATF3",
+          "—",
+          "AP-1 family TF"
+        ],
+        [
+          "46",
+          "BIRC3",
+          "—",
+          "anti-apoptotic survival gene (cIAP2)"
+        ],
+        [
+          "47",
+          "CCL22",
+          "—",
+          "macrophage-derived chemokine"
+        ],
+        [
+          "48",
+          "CCL3",
+          "—",
+          "MIP-1alpha inflammatory chemokine"
+        ],
+        [
+          "49",
+          "CCL4",
+          "—",
+          "MIP-1beta inflammatory chemokine"
+        ],
+        [
+          "50",
+          "CCL4L2",
+          "—",
+          "MIP-1beta paralog"
+        ],
+        [
+          "51",
+          "CCL5",
+          "—",
+          "RANTES — effector/memory T chemokine"
+        ],
+        [
+          "52",
+          "CCNB1",
+          "—",
+          "cyclin B1 — mitotic entry"
+        ],
+        [
+          "53",
+          "CD40LG",
+          "—",
+          "CD40L — CD4 helper costimulation signal"
+        ],
+        [
+          "54",
+          "CD52",
+          "—",
+          "CAMPATH-1 surface antigen"
+        ],
+        [
+          "55",
+          "CD59",
+          "—",
+          "membrane complement inhibitor"
+        ],
+        [
+          "56",
+          "CD83",
+          "—",
+          "activation marker; also dendritic-cell maturation"
+        ],
+        [
+          "57",
+          "CDC20",
+          "—",
+          "mitotic activator (APC/C)"
+        ],
+        [
+          "58",
+          "CDC25B",
+          "—",
+          "mitotic-entry phosphatase"
+        ],
+        [
+          "59",
+          "CISH",
+          "—",
+          "cytokine-signaling negative feedback"
+        ],
+        [
+          "60",
+          "CIT",
+          "—",
+          "citron kinase — cell division (cytokinesis)"
+        ],
+        [
+          "61",
+          "CTSW",
+          "—",
+          "cathepsin W — cytotoxic-cell granule enzyme"
+        ],
+        [
+          "62",
+          "CX3CR1",
+          "—",
+          "fractalkine receptor — final-stage effector marker"
+        ],
+        [
+          "63",
+          "CXCL9",
+          "—",
+          "interferon-induced monocyte/DC chemokine"
+        ],
+        [
+          "64",
+          "CYBB",
+          "—",
+          "phagocyte NADPH-oxidase (gp91phox), not a T cell"
+        ],
+        [
+          "65",
+          "DDIT4",
+          "—",
+          "REDD1 — mTOR-inhibiting stress gene"
+        ],
+        [
+          "66",
+          "DEPDC1",
+          "—",
+          "mitotic regulator"
+        ],
+        [
+          "67",
+          "DLGAP5",
+          "—",
+          "mitotic spindle protein"
+        ],
+        [
+          "68",
+          "E2F8",
+          "—",
+          "atypical E2F cell-cycle TF"
+        ],
+        [
+          "69",
+          "EIF4EBP1",
+          "—",
+          "4E-BP1 — mTOR-controlled translation repressor"
+        ],
+        [
+          "70",
+          "ESCO2",
+          "—",
+          "sister-chromatid cohesion (S phase)"
+        ],
+        [
+          "71",
+          "F2R",
+          "—",
+          "PAR1 thrombin receptor — final-stage-effector-associated"
+        ],
+        [
+          "72",
+          "FCER1G",
+          "—",
+          "Fc-receptor gamma adaptor, not a T cell"
+        ],
+        [
+          "73",
+          "FCGR3A",
+          "—",
+          "CD16 Fc receptor — NK, not a T cell"
+        ],
+        [
+          "74",
+          "FKBP4",
+          "—",
+          "Hsp90 co-chaperone — growth"
+        ],
+        [
+          "75",
+          "FOS",
+          "—",
+          "immediate-early AP-1 TF subunit (activation)"
+        ],
+        [
+          "76",
+          "FOXP1",
+          "—",
+          "TF enforcing naive/quiescent state"
+        ],
+        [
+          "77",
+          "FURIN",
+          "—",
+          "pro-protein convertase — activation-induced"
+        ],
+        [
+          "78",
+          "GAB2",
+          "—",
+          "scaffold in cytokine signaling"
+        ],
+        [
+          "79",
+          "GATA1",
+          "—",
+          "mast/red-cell TF, not a T cell"
+        ],
+        [
+          "80",
+          "GATA2",
+          "—",
+          "mast/basophil cell TF, not a T cell"
+        ],
+        [
+          "81",
+          "GIMAP4",
+          "—",
+          "GTPase of resting T-cell survival"
+        ],
+        [
+          "82",
+          "GINS2",
+          "—",
+          "replication-fork subunit (S phase)"
+        ],
+        [
+          "83",
+          "GZMA",
+          "—",
+          "granzyme A — cytolytic serine protease"
+        ],
+        [
+          "84",
+          "H1-0",
+          "—",
+          "linker histone H1.0"
+        ],
+        [
+          "85",
+          "H1-2",
+          "—",
+          "replication-linked linker histone (S phase)"
+        ],
+        [
+          "86",
+          "H1-3",
+          "—",
+          "replication-linked linker histone (S phase)"
+        ],
+        [
+          "87",
+          "H1-4",
+          "—",
+          "replication-linked linker histone (S phase)"
+        ],
+        [
+          "88",
+          "H1-5",
+          "—",
+          "replication-linked linker histone (S phase)"
+        ],
+        [
+          "89",
+          "H4C3",
+          "—",
+          "replication-linked core histone H4 (S phase)"
+        ],
+        [
+          "90",
+          "HERC5",
+          "—",
+          "interferon-induced enzyme (ISG15 ligase)"
+        ],
+        [
+          "91",
+          "HLA-DPB1",
+          "—",
+          "MHC-II — antigen-presenting cell"
+        ],
+        [
+          "92",
+          "HLA-DQA1",
+          "—",
+          "MHC-II — antigen-presenting cell"
+        ],
+        [
+          "93",
+          "HLA-DRA",
+          "—",
+          "MHC-II — antigen-presenting cell"
+        ],
+        [
+          "94",
+          "HMMR",
+          "—",
+          "spindle/mitotic regulator"
+        ],
+        [
+          "95",
+          "IER3",
+          "—",
+          "immediate-early activation/stress response"
+        ],
+        [
+          "96",
+          "IFNG",
+          "—",
+          "interferon-gamma — effector cytokine"
+        ],
+        [
+          "97",
+          "IRF4",
+          "—",
+          "activation/effector TF, tuned by TCR strength"
+        ],
+        [
+          "98",
+          "ITGAX",
+          "—",
+          "CD11c integrin — dendritic/myeloid cell"
+        ],
+        [
+          "99",
+          "JUN",
+          "—",
+          "immediate-early AP-1 TF subunit (activation)"
+        ],
+        [
+          "100",
+          "JUNB",
+          "—",
+          "AP-1 TF subunit (activation)"
+        ],
+        [
+          "101",
+          "KIF15",
+          "—",
+          "mitotic motor protein"
+        ],
+        [
+          "102",
+          "KIR3DL1",
+          "—",
+          "killer Ig-like receptor — NK, not a T cell"
+        ],
+        [
+          "103",
+          "KLF2",
+          "—",
+          "quiescence TF — circulating/resting T cells"
+        ],
+        [
+          "104",
+          "KLRC3",
+          "—",
+          "NKG2E lectin receptor"
+        ],
+        [
+          "105",
+          "KLRC4",
+          "—",
+          "NKG2F lectin receptor"
+        ],
+        [
+          "106",
+          "KLRK1",
+          "—",
+          "NKG2D activating receptor"
+        ],
+        [
+          "107",
+          "KYNU",
+          "—",
+          "kynureninase — myeloid/interferon, not a T cell"
+        ],
+        [
+          "108",
+          "LMO2",
+          "—",
+          "blood-precursor TF, not a T cell"
+        ],
+        [
+          "109",
+          "LTA",
+          "—",
+          "lymphotoxin-alpha (TNF family, activation)"
+        ],
+        [
+          "110",
+          "LYN",
+          "—",
+          "myeloid/B-cell kinase, not a T cell"
+        ],
+        [
+          "111",
+          "MAF",
+          "—",
+          "c-MAF TF — effector/IL-10 program"
+        ],
+        [
+          "112",
+          "MARCKS",
+          "—",
+          "myeloid cytoskeletal substrate"
+        ],
+        [
+          "113",
+          "MCM6",
+          "—",
+          "replication helicase subunit (S phase)"
+        ],
+        [
+          "114",
+          "METRNL",
+          "—",
+          "meteorin-like metabolic cytokine"
+        ],
+        [
+          "115",
+          "MIR155HG",
+          "—",
+          "miR-155 host gene — activation-induced"
+        ],
+        [
+          "116",
+          "MYB",
+          "—",
+          "proliferation TF"
+        ],
+        [
+          "117",
+          "MYC",
+          "—",
+          "proliferation & metabolic master TF"
+        ],
+        [
+          "118",
+          "NCAM1",
+          "—",
+          "CD56 — NK-cell marker, not a T cell"
+        ],
+        [
+          "119",
+          "NEAT1",
+          "—",
+          "paraspeckle lncRNA — stress/broad, low specificity"
+        ],
+        [
+          "120",
+          "NEIL3",
+          "—",
+          "replication-linked DNA repair enzyme"
+        ],
+        [
+          "121",
+          "NFE2",
+          "—",
+          "mast/platelet-precursor TF, not a T cell"
+        ],
+        [
+          "122",
+          "NUSAP1",
+          "—",
+          "spindle-associated mitotic protein"
+        ],
+        [
+          "123",
+          "ODC1",
+          "—",
+          "ornithine decarboxylase — MYC-driven polyamine synthesis"
+        ],
+        [
+          "124",
+          "PARP8",
+          "—",
+          "poly-ADP-ribose polymerase 8 — low specificity"
+        ],
+        [
+          "125",
+          "PECAM1",
+          "—",
+          "CD31 — adhesion, effector-associated"
+        ],
+        [
+          "126",
+          "PLCG2",
+          "—",
+          "PLC-gamma2 signaling (in the histone-high dividing group)"
+        ],
+        [
+          "127",
+          "PLEK",
+          "—",
+          "pleckstrin — effector granule release"
+        ],
+        [
+          "128",
+          "PLK1",
+          "—",
+          "polo-like mitotic kinase"
+        ],
+        [
+          "129",
+          "PMAIP1",
+          "—",
+          "NOXA — pro-apoptotic stress effector"
+        ],
+        [
+          "130",
+          "RMI2",
+          "—",
+          "genome-stability complex (replication)"
+        ],
+        [
+          "131",
+          "RORA",
+          "—",
+          "ROR-alpha — Th17-supporting TF (also broad)"
+        ],
+        [
+          "132",
+          "SERPINE2",
+          "—",
+          "protease inhibitor — effector/stress-associated"
+        ],
+        [
+          "133",
+          "SESN3",
+          "—",
+          "sestrin 3 — stress/quiescence, restrains mTOR"
+        ],
+        [
+          "134",
+          "SLFN5",
+          "—",
+          "schlafen 5 — interferon-responsive"
+        ],
+        [
+          "135",
+          "SNHG15",
+          "—",
+          "small-nucleolar-RNA host — proliferation-correlated"
+        ],
+        [
+          "136",
+          "SPC25",
+          "—",
+          "kinetochore complex (mitosis)"
+        ],
+        [
+          "137",
+          "SPI1",
+          "—",
+          "PU.1 master myeloid TF, not a T cell"
+        ],
+        [
+          "138",
+          "TIMP1",
+          "—",
+          "metalloprotease inhibitor — activation/stress"
+        ],
+        [
+          "139",
+          "TNF",
+          "—",
+          "TNF-alpha pro-inflammatory cytokine (activation)"
+        ],
+        [
+          "140",
+          "TNFAIP2",
+          "—",
+          "TNF-induced inflammatory effector"
+        ],
+        [
+          "141",
+          "TNFRSF4",
+          "—",
+          "OX40 costimulatory receptor"
+        ],
+        [
+          "142",
+          "TNFRSF9",
+          "—",
+          "4-1BB (CD137) costimulatory/activation receptor"
+        ],
+        [
+          "143",
+          "TNFSF14",
+          "—",
+          "LIGHT (TNF family) costimulation"
+        ],
+        [
+          "144",
+          "TOP2A",
+          "—",
+          "topoisomerase II-alpha — mitosis"
+        ],
+        [
+          "145",
+          "TPSAB1",
+          "—",
+          "tryptase alpha/beta 1 — mast cell, not a T cell"
+        ],
+        [
+          "146",
+          "TPSB2",
+          "—",
+          "tryptase beta 2 — mast cell, not a T cell"
+        ],
+        [
+          "147",
+          "TRDC",
+          "—",
+          "TCR-delta constant — gamma-delta cell, not the alpha-beta T cells studied here"
+        ],
+        [
+          "148",
+          "TRIB3",
+          "—",
+          "stress-response pseudokinase"
+        ],
+        [
+          "149",
+          "TXNIP",
+          "—",
+          "metabolic-quiescence marker"
+        ],
+        [
+          "150",
+          "TYROBP",
+          "—",
+          "DAP12 adaptor — NK/myeloid, not a T cell"
+        ],
+        [
+          "151",
+          "WDFY4",
+          "—",
+          "cross-presenting dendritic-cell gene, not a T cell"
+        ],
+        [
+          "152",
+          "ZBTB20",
+          "—",
+          "TF associated with memory maintenance"
+        ],
+        [
+          "153",
+          "ZEB2",
+          "—",
+          "transcription factor of final-stage effector cells"
+        ]
+      ]
+    },
+    {
+      "table_index": 2,
+      "section": "Step 1 — CD8 vs CD4 identity is certain",
+      "row_count_including_header": 8,
+      "rows": [
+        [
+          "",
+          "state",
+          "AUROC d1",
+          "n d1",
+          "AUROC d2",
+          "n d2"
+        ],
+        [
+          "0",
+          "CD8.TEX",
+          "0.962",
+          "3470",
+          "0.911",
+          "5642.0"
+        ],
+        [
+          "1",
+          "CD8.TEMRA",
+          "0.896",
+          "155",
+          "0.780",
+          "11.0"
+        ],
+        [
+          "2",
+          "CD8.EM",
+          "0.869",
+          "344",
+          "0.681",
+          "160.0"
+        ],
+        [
+          "3",
+          "CD8.TPEX",
+          "0.829",
+          "872",
+          "0.777",
+          "2547.0"
+        ],
+        [
+          "4",
+          "CD8.CM",
+          "0.816",
+          "230",
+          "NaN",
+          "NaN"
+        ],
+        [
+          "5",
+          "CD8.MAIT",
+          "0.809",
+          "8",
+          "NaN",
+          "NaN"
+        ],
+        [
+          "6",
+          "CD8.NaiveLike",
+          "0.771",
+          "102",
+          "NaN",
+          "NaN"
+        ]
+      ]
+    },
+    {
+      "table_index": 3,
+      "section": "Step 1 — CD8 vs CD4 identity is certain",
+      "row_count_including_header": 8,
+      "rows": [
+        [
+          "",
+          "state",
+          "AUROC d1",
+          "n d1",
+          "AUROC d2",
+          "n d2"
+        ],
+        [
+          "0",
+          "CD4.NaiveLike",
+          "0.748",
+          "2796",
+          "0.557",
+          "308"
+        ],
+        [
+          "1",
+          "CD4.Tfh",
+          "0.611",
+          "311",
+          "0.688",
+          "4156"
+        ],
+        [
+          "2",
+          "CD4.Treg",
+          "0.593",
+          "2126",
+          "0.628",
+          "224"
+        ],
+        [
+          "3",
+          "CD4.CTL_Exh",
+          "0.524",
+          "3115",
+          "0.525",
+          "1628"
+        ],
+        [
+          "4",
+          "CD4.Th17",
+          "0.508",
+          "6911",
+          "0.572",
+          "4148"
+        ],
+        [
+          "5",
+          "CD4.CTL_EOMES",
+          "0.496",
+          "1229",
+          "0.437",
+          "251"
+        ],
+        [
+          "6",
+          "CD4.CTL_GNLY",
+          "0.468",
+          "753",
+          "0.466",
+          "120"
+        ]
+      ]
+    },
+    {
+      "table_index": 4,
+      "section": "Step 2 — Cytotoxic / exhaustion sub-states hold up",
+      "row_count_including_header": 4,
+      "rows": [
+        [
+          "",
+          "state",
+          "cytotoxic d1",
+          "exhaustion d1",
+          "cytotoxic d2",
+          "exhaustion d2"
+        ],
+        [
+          "0",
+          "CD4.CTL_Exh",
+          "0.814",
+          "0.710",
+          "0.770",
+          "0.752"
+        ],
+        [
+          "1",
+          "CD4.CTL_GNLY",
+          "0.859",
+          "0.455",
+          "0.954",
+          "0.677"
+        ],
+        [
+          "2",
+          "CD8.TEX",
+          "0.738",
+          "0.672",
+          "0.606",
+          "0.611"
+        ]
+      ]
+    },
+    {
+      "table_index": 5,
+      "section": "Step 3 — CD4-helper sub-states (Th17, Tfh) are not supported",
+      "row_count_including_header": 4,
+      "rows": [
+        [
+          "",
+          "state",
+          "marker set",
+          "AUROC d1",
+          "n d1",
+          "AUROC d2",
+          "n d2"
+        ],
+        [
+          "0",
+          "CD4.Th17",
+          "th17",
+          "0.573",
+          "6911",
+          "0.539",
+          "4148"
+        ],
+        [
+          "1",
+          "CD4.Tfh",
+          "tfh",
+          "0.570",
+          "311",
+          "0.507",
+          "4156"
+        ],
+        [
+          "2",
+          "CD4.Treg",
+          "treg",
+          "0.473",
+          "2126",
+          "0.676",
+          "224"
+        ]
+      ]
+    },
+    {
+      "table_index": 6,
+      "section": "Step 3 — CD4-helper sub-states (Th17, Tfh) are not supported",
+      "row_count_including_header": 15,
+      "rows": [
+        [
+          "",
+          "group",
+          "label",
+          "what the cells are doing",
+          "% dividing",
+          "% total",
+          "top genes (see glossary)"
+        ],
+        [
+          "0",
+          "0",
+          "CD4 resting/naive",
+          "resting CD4",
+          "4",
+          "14.6",
+          "TIMP1, CD52, NEAT1, SLFN5, GIMAP4, GZMA"
+        ],
+        [
+          "1",
+          "1",
+          "CD4 proliferating",
+          "dividing CD4 (+ metabolic stress)",
+          "87",
+          "13.1",
+          "RMI2, BATF3, DDIT4, MYB, EIF4EBP1, GINS2"
+        ],
+        [
+          "2",
+          "2",
+          "CD4 proliferating",
+          "dividing CD4",
+          "100",
+          "12.2",
+          "ESCO2, KIF15, SPC25, TOP2A, NEIL3, NUSAP1"
+        ],
+        [
+          "3",
+          "3",
+          "CD4 activated",
+          "early-activation / resting CD4",
+          "0",
+          "11.9",
+          "FOS, JUN, FOXP1, RORA, JUNB, ZBTB20"
+        ],
+        [
+          "4",
+          "4",
+          "CD8 cytotoxic/exhausted",
+          "dividing CD8 cytotoxic/exhausted",
+          "94",
+          "9.2",
+          "GZMB, CTSW, CD8A, LAG3, CCL3, NKG7"
+        ],
+        [
+          "5",
+          "5",
+          "CD4 activated",
+          "activated CD4 (inflammatory)",
+          "19",
+          "7.2",
+          "LTA, TNF, MIR155HG, IER3, TNFRSF4, IRF4"
+        ],
+        [
+          "6",
+          "6",
+          "CD8 cytotoxic/exhausted",
+          "dividing CD8 cytotoxic",
+          "97",
+          "6.9",
+          "CD8B, CD8A, KLRK1, CCL5, KIF15, ESCO2"
+        ],
+        [
+          "7",
+          "7",
+          "CD4 proliferating",
+          "dividing CD4",
+          "97",
+          "6.4",
+          "CCNB1, CDC20, HMMR, DEPDC1, PLK1, AURKA"
+        ],
+        [
+          "8",
+          "8",
+          "CD4 cytotoxic",
+          "final-stage cytotoxic CD4 (ZEB2/CX3CR1), not dividing",
+          "1",
+          "6.2",
+          "ZEB2, JUN, AOAH, PARP8, RORA, TXNIP"
+        ],
+        [
+          "9",
+          "9",
+          "CD8 cytotoxic/exhausted",
+          "CD8 cytotoxic (GNLY)",
+          "22",
+          "4.1",
+          "CD8B, CCL5, CD8A, KLRK1, CTSW, GNLY"
+        ],
+        [
+          "10",
+          "10",
+          "CD4 proliferating",
+          "dividing CD4 (CD40LG/GZMA)",
+          "99",
+          "3.7",
+          "CD40LG, GAB2, FURIN, GZMA, CD59, AHI1"
+        ],
+        [
+          "11",
+          "11",
+          "CD4 activated",
+          "chemokine-releasing CD4",
+          "11",
+          "3.2",
+          "CCL4L2, TNFRSF9, CCL4, IFNG, CCL3, LTA"
+        ],
+        [
+          "12",
+          "12",
+          "contaminant",
+          "myeloid / antigen-presenting (not a T cell)",
+          "10",
+          "0.7",
+          "CD83, LYN, HLA-DPB1, HLA-DRA, BIRC3, HLA-DQA1"
+        ],
+        [
+          "13",
+          "13",
+          "contaminant",
+          "NK / gamma-delta (not a T cell)",
+          "77",
+          "0.6",
+          "TYROBP, NCAM1, FCER1G, KLRC3, FCGR3A, TRDC"
+        ]
+      ]
+    },
+    {
+      "table_index": 7,
+      "section": "Step 3 — CD4-helper sub-states (Th17, Tfh) are not supported",
+      "row_count_including_header": 14,
+      "rows": [
+        [
+          "",
+          "group",
+          "label",
+          "what the cells are doing",
+          "% dividing",
+          "% total",
+          "top genes (see glossary)"
+        ],
+        [
+          "0",
+          "0",
+          "CD8 cytotoxic/exhausted",
+          "dividing CD8 cytotoxic",
+          "99",
+          "18.3",
+          "KLRC4, KLRK1, E2F8, TOP2A, ANLN, DLGAP5"
+        ],
+        [
+          "1",
+          "1",
+          "CD4 proliferating",
+          "dividing CD4",
+          "99",
+          "14.9",
+          "KLF2, CIT, E2F8, CDC25B, ANLN, NEIL3"
+        ],
+        [
+          "2",
+          "2",
+          "CD4 activated / stress",
+          "stressed CD4 (TRIB3/ATF3) — the 'TPEX' cells",
+          "68",
+          "14.1",
+          "H1-0, TRIB3, PMAIP1, ATF3, HERC5, CISH"
+        ],
+        [
+          "3",
+          "3",
+          "CD4 activated",
+          "activated CD4 (inflammatory)",
+          "22",
+          "11.6",
+          "TNF, LTA, ODC1, MIR155HG, TNFRSF4, TNFSF14"
+        ],
+        [
+          "4",
+          "4",
+          "CD8 cytotoxic/exhausted",
+          "stressed + cytotoxic CD8",
+          "66",
+          "10.7",
+          "ATF5, SNHG15, METRNL, GZMB, SERPINE2, TRIB3"
+        ],
+        [
+          "5",
+          "5",
+          "CD8 cytotoxic/exhausted",
+          "CD8 cytotoxic/exhausted (ENTPD1)",
+          "38",
+          "10.3",
+          "PECAM1, KLRK1, KLRC4, CTSW, ENTPD1, ITGAX"
+        ],
+        [
+          "6",
+          "6",
+          "CD4 resting/naive",
+          "resting CD4 (IL7R/KLF2/TXNIP)",
+          "28",
+          "8.5",
+          "CD4, TXNIP, IL7R, SESN3, SLFN5, CD52"
+        ],
+        [
+          "7",
+          "7",
+          "CD4 activated",
+          "chemokine-releasing CD4",
+          "3",
+          "4.3",
+          "CCL4L2, CCL4, IFNG, CCL3, TNFRSF9, ZEB2"
+        ],
+        [
+          "8",
+          "8",
+          "CD8 cytotoxic/exhausted",
+          "CD8 cytotoxic (GZMH/PRF1)",
+          "60",
+          "3.9",
+          "GZMH, PLEK, CCL5, LAG3, F2R, GZMA"
+        ],
+        [
+          "9",
+          "9",
+          "CD4 proliferating",
+          "dividing CD4 (histone-high)",
+          "54",
+          "2.5",
+          "PLCG2, H4C3, H1-2, H1-3, H1-5, H1-4"
+        ],
+        [
+          "10",
+          "10",
+          "CD4 activated",
+          "activated CD4 (inflammatory)",
+          "70",
+          "0.5",
+          "LTA, TNFSF14, FKBP4, TNF, MYC, ODC1"
+        ],
+        [
+          "11",
+          "11",
+          "contaminant",
+          "myeloid (not a T cell)",
+          "20",
+          "0.3",
+          "KYNU, TNFAIP2, CCL22, WDFY4, MARCKS, CXCL9"
+        ],
+        [
+          "12",
+          "12",
+          "contaminant",
+          "mast (not a T cell)",
+          "67",
+          "0.2",
+          "TPSAB1, TPSB2, GATA2, NFE2, LMO2, GATA1"
+        ]
+      ]
+    },
+    {
+      "table_index": 8,
+      "section": "Step 3 — CD4-helper sub-states (Th17, Tfh) are not supported",
+      "row_count_including_header": 15,
+      "rows": [
+        [
+          "",
+          "group",
+          "n",
+          "ProjecTILs (dominant)",
+          "suggested relabel"
+        ],
+        [
+          "0",
+          "0",
+          "3696",
+          "CD4.CTL_Exh (0.33)",
+          "CD4 resting/naive"
+        ],
+        [
+          "1",
+          "1",
+          "3259",
+          "CD4.Th17 (0.75)",
+          "CD4 proliferating"
+        ],
+        [
+          "2",
+          "2",
+          "3035",
+          "CD4.Th17 (0.37)",
+          "CD4 proliferating"
+        ],
+        [
+          "3",
+          "3",
+          "1816",
+          "CD4.NaiveLike (0.79)",
+          "CD4 activated"
+        ],
+        [
+          "4",
+          "4",
+          "2262",
+          "CD8.TEX (0.61)",
+          "CD8 cytotoxic/exhausted"
+        ],
+        [
+          "5",
+          "5",
+          "1571",
+          "CD4.Th17 (0.80)",
+          "CD4 activated"
+        ],
+        [
+          "6",
+          "6",
+          "1709",
+          "CD8.TEX (0.65)",
+          "CD8 cytotoxic/exhausted"
+        ],
+        [
+          "7",
+          "7",
+          "1615",
+          "CD4.Th17 (0.63)",
+          "CD4 proliferating"
+        ],
+        [
+          "8",
+          "8",
+          "930",
+          "CD4.CTL_GNLY (0.29)",
+          "CD4 cytotoxic"
+        ],
+        [
+          "9",
+          "9",
+          "1001",
+          "CD8.TEX (0.58)",
+          "CD8 cytotoxic/exhausted"
+        ],
+        [
+          "10",
+          "10",
+          "935",
+          "CD4.CTL_Exh (0.56)",
+          "CD4 proliferating"
+        ],
+        [
+          "11",
+          "11",
+          "565",
+          "CD4.CTL_Exh (0.32)",
+          "CD4 activated"
+        ],
+        [
+          "12",
+          "12",
+          "17",
+          "CD4.Th17 (0.76)",
+          "contaminant"
+        ],
+        [
+          "13",
+          "13",
+          "11",
+          "CD4.CTL_GNLY (0.45)",
+          "contaminant"
+        ]
+      ]
+    },
+    {
+      "table_index": 9,
+      "section": "Step 3 — CD4-helper sub-states (Th17, Tfh) are not supported",
+      "row_count_including_header": 14,
+      "rows": [
+        [
+          "",
+          "group",
+          "n",
+          "ProjecTILs (dominant)",
+          "suggested relabel"
+        ],
+        [
+          "0",
+          "0",
+          "3480",
+          "CD8.TEX (0.73)",
+          "CD8 cytotoxic/exhausted"
+        ],
+        [
+          "1",
+          "1",
+          "3048",
+          "CD4.Tfh (0.52)",
+          "CD4 proliferating"
+        ],
+        [
+          "2",
+          "2",
+          "2821",
+          "CD4.Th17 (0.55)",
+          "CD4 activated / stress"
+        ],
+        [
+          "3",
+          "3",
+          "2242",
+          "CD4.Th17 (0.69)",
+          "CD4 activated"
+        ],
+        [
+          "4",
+          "4",
+          "2121",
+          "CD8.TPEX (0.51)",
+          "CD8 cytotoxic/exhausted"
+        ],
+        [
+          "5",
+          "5",
+          "1976",
+          "CD8.TEX (0.76)",
+          "CD8 cytotoxic/exhausted"
+        ],
+        [
+          "6",
+          "6",
+          "1732",
+          "CD4.Tfh (0.63)",
+          "CD4 resting/naive"
+        ],
+        [
+          "7",
+          "7",
+          "701",
+          "CD4.CTL_Exh (0.22)",
+          "CD4 activated"
+        ],
+        [
+          "8",
+          "8",
+          "649",
+          "CD8.TEX (0.76)",
+          "CD8 cytotoxic/exhausted"
+        ],
+        [
+          "9",
+          "9",
+          "318",
+          "CD4.Tfh (0.31)",
+          "CD4 proliferating"
+        ],
+        [
+          "10",
+          "10",
+          "94",
+          "CD4.Th17 (0.51)",
+          "CD4 activated"
+        ],
+        [
+          "11",
+          "11",
+          "8",
+          "CD8.TPEX (0.50)",
+          "contaminant"
+        ],
+        [
+          "12",
+          "12",
+          "5",
+          "CD8.TEX (0.40)",
+          "contaminant"
+        ]
+      ]
+    },
+    {
+      "table_index": 10,
+      "section": "Step 4 — TPEX folds into TEX; EOMES / EM / Treg remain weak",
+      "row_count_including_header": 3,
+      "rows": [
+        [
+          "",
+          "donor",
+          "state",
+          "precursor-marker AUROC",
+          "n cells"
+        ],
+        [
+          "0",
+          "d1",
+          "CD8.TPEX",
+          "0.640",
+          "872"
+        ],
+        [
+          "1",
+          "d2",
+          "CD8.TPEX",
+          "0.471",
+          "2547"
+        ]
+      ]
+    },
+    {
+      "table_index": 11,
+      "section": "Step 5 — Proliferation is a second axis, and some clusters are not T cells",
+      "row_count_including_header": 3,
+      "rows": [
+        [
+          "",
+          "donor",
+          "n cells",
+          "% dividing (S+G2M)",
+          "% resting (G1)",
+          "% S",
+          "% G2M"
+        ],
+        [
+          "0",
+          "donor1",
+          "25678",
+          "52.5",
+          "47.5",
+          "26.1",
+          "26.4"
+        ],
+        [
+          "1",
+          "donor2",
+          "20654",
+          "62.8",
+          "37.2",
+          "30.7",
+          "32.1"
+        ]
+      ]
+    },
+    {
+      "table_index": 12,
+      "section": "Step 6 — What the data supports",
+      "row_count_including_header": 8,
+      "rows": [
+        [
+          "",
+          "fate",
+          "label",
+          "% dividing",
+          "% d1",
+          "n d1",
+          "% d2"
+        ],
+        [
+          "0",
+          "RELABEL",
+          "CD4 proliferating",
+          "94.0",
+          "35.4",
+          "9090.0",
+          "17.4"
+        ],
+        [
+          "1",
+          "RELABEL",
+          "CD4 activated",
+          "8.0",
+          "22.3",
+          "5717.0",
+          "16.3"
+        ],
+        [
+          "2",
+          "KEEP / MERGE",
+          "CD8 cytotoxic/exhausted",
+          "80.0",
+          "20.2",
+          "5192.0",
+          "43.1"
+        ],
+        [
+          "3",
+          "RELABEL",
+          "CD4 resting/naive",
+          "4.0",
+          "14.6",
+          "3744.0",
+          "8.5"
+        ],
+        [
+          "4",
+          "KEEP",
+          "CD4 cytotoxic",
+          "1.0",
+          "6.2",
+          "1601.0",
+          "NaN"
+        ],
+        [
+          "5",
+          "DROP",
+          "contaminant",
+          "39.0",
+          "1.3",
+          "334.0",
+          "0.5"
+        ],
+        [
+          "6",
+          "NaN",
+          "CD4 activated / stress",
+          "NaN",
+          "NaN",
+          "NaN",
+          "14.1"
+        ]
+      ]
+    }
+  ],
+  "displayed_table_count": 13,
+  "displayed_state_target_counts": {
+    "donor1": {
+      "CD8.TEX": 3470,
+      "CD8.TEMRA": 155,
+      "CD8.EM": 344,
+      "CD8.TPEX": 872,
+      "CD8.CM": 230,
+      "CD8.MAIT": 8,
+      "CD8.NaiveLike": 102,
+      "CD4.NaiveLike": 2796,
+      "CD4.Tfh": 311,
+      "CD4.Treg": 2126,
+      "CD4.CTL_Exh": 3115,
+      "CD4.Th17": 6911,
+      "CD4.CTL_EOMES": 1229,
+      "CD4.CTL_GNLY": 753
+    },
+    "donor2": {
+      "CD8.TEX": 5642,
+      "CD8.TEMRA": 11,
+      "CD8.EM": 160,
+      "CD8.TPEX": 2547,
+      "CD4.NaiveLike": 308,
+      "CD4.Tfh": 4156,
+      "CD4.Treg": 224,
+      "CD4.CTL_Exh": 1628,
+      "CD4.Th17": 4148,
+      "CD4.CTL_EOMES": 251,
+      "CD4.CTL_GNLY": 120
+    }
+  }
+}
