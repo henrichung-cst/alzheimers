@@ -62,12 +62,16 @@ MEM_MEA="${MEM_MEA:-16G}"
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== $(date -Is) [1/2] donor1 projected-state kinase MEA (st + py) ==="
+echo "=== $(date -Is) [1/2] kinase preflight start ==="
 "$PIXI" run python -m alz.cohorts.tcells.state_mea \
     --donor donor1 --track both --dry-run
+echo "=== $(date -Is) [1/2] kinase preflight done ==="
+echo "=== $(date -Is) [1/2] kinase MEA start ==="
 systemd-run --user --scope \
     -p MemoryMax="$MEM_MEA" -p MemorySwapMax=0 \
     --unit "state-mea-tcells-${TS}" \
     "$PIXI" run tcell-state-mea
+echo "=== $(date -Is) [1/2] kinase MEA done ==="
 echo "=== $(date -Is) [1/2] done ==="
 
 # ---------------------------------------------------------------------------
