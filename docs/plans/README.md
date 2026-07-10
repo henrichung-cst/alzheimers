@@ -8,15 +8,37 @@ Status legend: **active** = in-flight / approved-pending · **deferred** = parke
 
 ---
 
-## Plans
+## In flight
 
 | Doc | Status | What |
 |---|---|---|
-| [`incytr_rerun_ksg_ptm_backbone_2026-06-29.md`](incytr_rerun_ksg_ptm_backbone_2026-06-29.md) | in progress | three-cohort Incytr re-run (KsG + Ack/KGG PTM + backbone) on branch `feat/incytr-backbone-refactor` |
-| [`kinase_sidechain_incytr_graph/`](kinase_sidechain_incytr_graph/) | active | one-spine + kinase-sidechain cytoscape tab — `/orchestrate`-decomposed subplan set (`_index.md` + 01–04); backend edge-model + viewer tab unbuilt |
-| [`ad_geneuse_unpin_from_sce4.md`](ad_geneuse_unpin_from_sce4.md) | active | open decision — un-pin AD Incytr `gene.use` from sce4's frozen node sets to derived DEG∪prG |
-| [`deployment/todo9_viewer_aws_deployment.md`](deployment/todo9_viewer_aws_deployment.md) | active | viewer AWS deployment scaling plan (options A/B) |
-| [`TODO.md`](TODO.md) | living | theme backlog (A–H) — the master list of candidate work |
+| [`kinase_sidechain_incytr_graph/`](kinase_sidechain_incytr_graph/) | active | one-spine + kinase-sidechain cytoscape tab — `/orchestrate`-decomposed subplan set (`_index.md` + 01–04); all four parts unbuilt |
+| [`ad_geneuse_unpin_from_sce4.md`](ad_geneuse_unpin_from_sce4.md) | open decision | un-pin AD Incytr `gene.use` from sce4's frozen node sets to derived DEG∪prG — untouched, decision pending |
+| [`tcell-proteome-transcriptome-correlation.md`](tcell-proteome-transcriptome-correlation.md) | active | genome-wide donor2/day2 bulk-protein vs pseudobulk-transcript Spearman — standalone CSV, unbuilt |
+| [`tcell-matt-report-restoration.md`](tcell-matt-report-restoration.md) | active WIP | Matt cluster-relabel labeling (Seurat clusters → small biological set) as canonical; ProjecTILs permanently retired. User-owned; gates the t-cell Incytr re-run |
+| [`deployment/todo9_viewer_aws_deployment.md`](deployment/todo9_viewer_aws_deployment.md) | partial | viewer AWS deployment scaling — Option A (`deploy_viewer.sh` s3 sync) shipped; B/C/D open |
+
+## Backlog
+
+Candidate work, one file per item. Delete a file when it ships — git holds the history.
+
+| Doc | Theme | What |
+|---|---|---|
+| [`tcell-incytr-trend-timepoint-coverage.md`](tcell-incytr-trend-timepoint-coverage.md) | T-cell | verify Incytr trends cover all 3 timepoints |
+| [`tcell-data-structure-verification.md`](tcell-data-structure-verification.md) | T-cell | confirm donor1/donor2 data shape matches the pipeline's assumptions |
+| [`incytrdb-provenance-audit.md`](incytrdb-provenance-audit.md) | Incytr | IncytrDB source, freshness, correct mouse/human version per dataset |
+| [`incytr-sankey-diagram.md`](incytr-sankey-diagram.md) | Incytr | add sankey view + collapse excitatory clusters (chord already ships) |
+| [`disease-direction-site-level-early-change.md`](disease-direction-site-level-early-change.md) | Cross-cohort | Disease Direction Stage 4 — site-level early-change phosphosites |
+| [`cross-species-specificity-guard.md`](cross-species-specificity-guard.md) | Cross-cohort | review constraint: no single-mouse-celltype target that is broad in human |
+| [`kinase-regulation-network.md`](kinase-regulation-network.md) | Kinase hierarchy | PhosphoSite-based regulation network + observed disease overlay (precedes family discrimination) |
+| [`kinase-family-discrimination.md`](kinase-family-discrimination.md) | Kinase hierarchy | separate same-family kinases by cell-type specificity (needs the network first) |
+| [`methods-workflow-diagrams.md`](methods-workflow-diagrams.md) | Docs | workflow flowcharts for AD + T-cell pipelines |
+| [`positive-controls-list.md`](positive-controls-list.md) | Docs | curated per-cohort positive-control artifact |
+| [`tmt-paper-imac-replication.md`](tmt-paper-imac-replication.md) | External | fetch TMT-paper IMAC data, compare kinase enrichment (exploratory) |
+| [`never-read-sidecar-cleanup.md`](never-read-sidecar-cleanup.md) | Refactor carryover | stop emitting `_raw`/`_all`/`_per_cluster` sidecars |
+| [`cohort-namespace-frozen-layer-moves.md`](cohort-namespace-frozen-layer-moves.md) | Refactor carryover | migrate held-back frozen Incytr/decomposition paths into `alz/cohorts/*` |
+
+Current-state snapshot cross-referencing every plan against commits: [`plans_state_audit_2026-07-10.md`](plans_state_audit_2026-07-10.md). Sequencing, cross-cutting threads, and blocking adjudications: [`implementation_sequencing.md`](implementation_sequencing.md). The T-cell labeling direction is resolved — canonical = Matt cluster-relabel, ProjecTILs permanently retired.
 
 ---
 
