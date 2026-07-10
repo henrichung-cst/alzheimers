@@ -77,13 +77,19 @@ Ingested 2026-05-27 from Drive folder `1YE_h1jIyBajtm6ArxJqevJ0rt0xLKQgX` → `d
 - Replicates are technical re-injections (r1↔r2 corr 0.96–0.99) → averaged to one column per (donor, day).
 - Out of scope: KGG/AcK/MME enrichments, flow cytometry.
 
-### scRNA cell-state spine: ProjecTILs (not Seurat clusters)
+### scRNA cell-state spine: CITE-seq lineage and biological states
 
-Aggregate directly by per-cell `functional.cluster` from ProjecTILs (carmonalab figshare doi 10.6084/m9.figshare.23608308, cached at `data/external/projectils/`). Azimuth PBMC-ref was stripped (lost 30.2% / 64.8% donor1/2). Cluster-keyed path was also tried and dropped (lost 44.5% donor1 after recluster).
+The authoritative spine is assigned per cell. CD4/CD8 lineage uses raw CITE-seq
+CD4/CD8 antibody UMIs with native-cluster fallback. CD8 states are
+`CD8PrecursorExhausted`, `CD8Exhausted`, `CD8Memory`, `CD8Cytotoxic`, and
+`CD8Effector`; their direct marker evidence remains in the per-cell artifact.
+ProjecTILs raw state/confidence and categorical reference support are retained as
+independent corroboration rather than an override. The labels do not claim terminal
+exhaustion or directly measured functional dysfunction.
 
-Pipeline order: `ingest-tcells-scrna → tcells-projectils-map → tcells-scrna-extract → tcells-decompose`. ProjecTILs-map MUST run before extract (extract reads per-cell predictions).
-
-State names are sanitized via inline 14-entry `LABEL_MAP` in `tcells_scrna_extract.R` (alphanumeric only — Incytr constraint). Anti-shim (deleted): `tcells_annotate_clusters.py`, `tcells_recluster.R`, recluster runners, on-disk RDS + cluster_annotations.csv + audit JSONs, pixi tasks `tcells-recluster` / `tcells-annotate`.
+Pipeline order: `ingest-tcells-scrna → tcells-label → tcells-scrna-extract →
+tcells-decompose`. The extract joins the authoritative label artifact by barcode
+and validates barcode, day, and native-cluster agreement.
 
 **OOM lesson:** `GetAssayData(layer="scale.data")` on a 27486×25678 object materializes a ~5.6 GB dense matrix and OOMs the 30 GB box. Fix: immediately `DietSeurat(assays="RNA")` + drop scale.data/reductions + `gc()` after load, never access scale.data, load the object exactly once and extract all small artifacts in that pass.
 
@@ -94,8 +100,8 @@ State names are sanitized via inline 14-entry `LABEL_MAP` in `tcells_scrna_extra
 | Donor1 | 8,125 | 1,180 | 62,807 | 7/6/6 (pr/py/IMAC) |
 | Donor2 | 7,767 | 514 | — | 5 |
 
-Donor1 scRNA: 27,486g × 25,678c, 14 ProjecTILs states, days 0/2/9/13/17/20.
-Donor2 scRNA: 29,191g × 20,654c, 13 ProjecTILs states, days 2/5/7/9/11.
+Donor1 scRNA: 27,486g × 25,678c, days 0/2/9/13/17/20.
+Donor2 scRNA: 29,191g × 20,654c, days 2/5/7/9/11.
 
 Donor2 pY has no `PTM.FlankingRegion` → empty motif (MEA skipped; Incytr uses phospho substrate, not motif).
 

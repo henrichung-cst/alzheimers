@@ -553,9 +553,31 @@ multiomics_args <- list(
   Ack.data_condition1 = ack_1, Ack.data_condition2 = ack_2, Ack.correction = 0.001, Ack.q = NULL,
   KGG.data_condition1 = kgg_1, KGG.data_condition2 = kgg_2, KGG.correction = 0.001, KGG.q = NULL
 )
-# When ack_1/ack_2 or kgg_1/kgg_2 are NULL (the default when ACK_FILE/KGG_FILE
-# are unset), Integr_multiomics skips those layers silently — the same pattern
-# used for ps/py on donor2 T-cells. The phospho-only path is byte-identical.
+# Incytr emits one informational message per unavailable layer *per pair*.
+# In pair mode that makes intentionally absent assays (for example pS for
+# donor2) obscure the actual pair progress. Announce the known omissions once
+# per contrast, then muffle only those exact, expected messages below. This
+# does not affect the matrices passed to Incytr, nor warnings/errors or an
+# unexpected missing-data message.
+.omics_labels <- c(pr = "Proteomics", ps = "pS", py = "pY",
+                   Ack = "Ack", KGG = "KGG", Rme1 = "Rme1")
+.omics_inputs <- list(
+  pr = list(pr_1, pr_2), ps = list(ps_1, ps_2), py = list(py_1, py_2),
+  Ack = list(ack_1, ack_2), KGG = list(kgg_1, kgg_2),
+  Rme1 = list(NULL, NULL)
+)
+.unavailable_omics <- names(.omics_inputs)[vapply(.omics_inputs, function(x) {
+  is.null(x[[1]]) || is.null(x[[2]])
+}, logical(1))]
+.expected_omics_messages <- paste0(
+  unname(.omics_labels[.unavailable_omics]),
+  " fold change data not found for at least one condition, this part has been skipped."
+)
+if (length(.unavailable_omics)) {
+  cat(sprintf("[pair-driver] unavailable omics layers for this contrast (skipped for every pair): %s\n",
+              paste(unname(.omics_labels[.unavailable_omics]), collapse = ", ")))
+}
+# The phospho-only path is byte-identical apart from this log compaction.
 
 # Condition->barcodes split must be captured before rm(Data.input) below.
 cond_cells <- lapply(c(condition1, condition2), function(cc) {
@@ -677,22 +699,31 @@ process_pair <- function(i) {
   }
   t_one <- proc.time()[["elapsed"]]
   res <- tryCatch(
-    Incytr::Cal_pairwise_grid(
-      template          = template,
-      pairs             = pair_df,
-      DB                = DB.M,
-      gene.use_Sender   = gene_use_S,
-      gene.use_Receiver = gene_use_R,
-      multiomics        = multiomics_args,
-      kldata            = kldata,
-      mean_method       = NULL,
-      fold_threshold    = 10,
-      n.cores           = 1L,
-      nboot             = NBOOT,
-      seed.use          = 1L,
-      perm.n.cores      = N_PERM_WORKERS,
-      expr_bygroup      = expr_substrate,
-      backbone_out_dir  = if (nzchar(BACKBONE_OUT_DIR)) BACKBONE_OUT_DIR else NULL
+    withCallingHandlers(
+      Incytr::Cal_pairwise_grid(
+        template          = template,
+        pairs             = pair_df,
+        DB                = DB.M,
+        gene.use_Sender   = gene_use_S,
+        gene.use_Receiver = gene_use_R,
+        multiomics        = multiomics_args,
+        kldata            = kldata,
+        mean_method       = NULL,
+        fold_threshold    = 10,
+        n.cores           = 1L,
+        nboot             = NBOOT,
+        seed.use          = 1L,
+        perm.n.cores      = N_PERM_WORKERS,
+        expr_bygroup      = expr_substrate,
+        backbone_out_dir  = if (nzchar(BACKBONE_OUT_DIR)) BACKBONE_OUT_DIR else NULL
+      ),
+      message = function(m) {
+        # R's message() appends a newline to conditionMessage(m); trim that
+        # transport detail before matching the package's fixed notice text.
+        if (trimws(conditionMessage(m)) %in% .expected_omics_messages) {
+          invokeRestart("muffleMessage")
+        }
+      }
     ),
     error = function(e) {
       warning(sprintf("[pair-driver] Cal_pairwise_grid failed for %s -> %s: %s",

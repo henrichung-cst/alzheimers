@@ -3,12 +3,12 @@
 #
 # Contrasts (per meeting_notes_triage_2026-05-27.md): each later day vs the
 # day-2 baseline, per donor independently.
-#   donor1 = {d13, d17, d20} vs d2   (3 contrasts, 14 states, pr+py+ps)
-#   donor2 = {d5, d7, d9, d11} vs d2 (4 contrasts, 11 states, pr+py — no IMAC)
+#   donor1 = {d13, d17, d20} vs d2   (3 contrasts, 9 states, pr+py+ps)
+#   donor2 = {d5, d7, d9, d11} vs d2 (4 contrasts, 9 states, pr+py — no IMAC)
 #
 # Reuses alz/incytr_pair/incytr_commandline.R with env-parameterized inputs:
 #   INPUTS_DIR_OVERRIDE  → per-donor data/derived/tcells_incytr_inputs/<donor>
-#   OUTPUT_DIR_OVERRIDE  → per-donor outputs/reports/incytr_pair_mode_tcells/<donor>
+#   OUTPUT_DIR_OVERRIDE  → optional replacement for the canonical per-cell output root
 #   CHANNELS             → "pr,py,ps" (donor1) or "pr,py" (donor2)
 #   PR_FILE/PY_FILE/PS_FILE → state-keyed deconvoluted CSVs
 #   PR_GENE_COL/PY_GENE_COL/PS_GENE_COL → "gene_symbol"
@@ -23,6 +23,15 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
+PIXI_BIN="${PIXI_BIN:-$(command -v pixi 2>/dev/null || true)}"
+if [[ -z "$PIXI_BIN" && -x "$HOME/.pixi/bin/pixi" ]]; then
+  PIXI_BIN="$HOME/.pixi/bin/pixi"
+fi
+if [[ -z "$PIXI_BIN" ]]; then
+  echo "pixi executable not found" >&2
+  exit 1
+fi
+
 DRIVER="alz/incytr_pair/incytr_commandline.R"
 MODE="full"
 SMOKE_DONOR=""
@@ -36,7 +45,7 @@ done
 declare -A DONOR_DAYS=( [donor1]="13 17 20" [donor2]="5 7 9 11" )
 declare -A DONOR_CHANNELS=( [donor1]="pr,py,ps" [donor2]="pr,py" )
 
-LOG_DIR="outputs/reports/incytr_pair_mode_tcells"
+LOG_DIR="${OUTPUT_DIR_OVERRIDE:-outputs/reports/incytr_pair_mode_tcells_percell}"
 mkdir -p "$LOG_DIR"
 
 preflight() {
@@ -82,7 +91,7 @@ run_one() {
   env \
     INPUTS_DIR_OVERRIDE="$indir" \
     OUTPUT_DIR_OVERRIDE="$out_subdir" \
-    BACKBONE_OUT_DIR="outputs/reports/incytr_pair_mode_tcells/${donor}/backbone" \
+    BACKBONE_OUT_DIR="${LOG_DIR}/${donor}/backbone" \
     CHANNELS="${DONOR_CHANNELS[$donor]}" \
     PR_FILE="pr_deconvoluted.csv" \
     PY_FILE="py_deconvoluted.csv" \
@@ -97,7 +106,7 @@ run_one() {
     N_CHUNK_MULT="${N_CHUNK_MULT:-8}" \
     NPERM_WORKERS="${NPERM_WORKERS:-1}" \
     "${ksg_env[@]}" \
-    pixi run Rscript "$DRIVER" "$c1" "$c2" \
+    "$PIXI_BIN" run Rscript "$DRIVER" "$c1" "$c2" \
     || { echo "FAIL $(date -Is)" > "$status_file"; echo "  FAIL: [$donor] $c1 vs $c2 (continuing)"; return 1; }
   echo "done $(date -Is)" > "$status_file"
 }
@@ -134,7 +143,7 @@ LOG="$LOG_DIR/pair_run.log"
     # Canonical significance floor (uncapped; no p_adj/FDR arm):
     # (SigProb_<later> > 0.1 OR SigProb_d2 > 0.1) AND |PDS| >= 0.2
     echo "=== $(date -Is) [$donor] significance filter ==="
-    pixi run python alz/incytr_pair/filter_significant_paths.py --dir "$OUT_DIR"
+    "$PIXI_BIN" run python alz/incytr_pair/filter_significant_paths.py --dir "$OUT_DIR"
     ls -lh "$OUT_DIR/"
   done
   echo

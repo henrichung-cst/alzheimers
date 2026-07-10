@@ -39,11 +39,16 @@ CELLS = Path("outputs/reports/tcell_labeling/cells")
 EMBED = Path("data/derived/tcells_incytr_inputs")
 
 LABEL_COLORS = {
-    "CD8 cytotoxic": "#ff7f0e", "CD8 exhausted": "#d62728",
-    "CD8 TPEX": "#e377c2", "CD8 TEX": "#7f0000",
-    "CD4 activated": "#1f77b4", "CD4 activated / stress": "#17becf",
-    "CD4 resting": "#2ca02c", "CD4 naive": "#98df8a",
-    "CD4 proliferating": "#9467bd", "contaminant": "#7f7f7f",
+    "CD8 precursor exhausted": "#7f0000",
+    "CD8 exhausted": "#d7301f",
+    "CD8 memory": "#3182bd",
+    "CD8 cytotoxic": "#fdae61",
+    "CD8 effector": "#9e9ac8",
+    "CD4 proliferating": "#6a51a3",
+    "CD4 memory": "#31a354",
+    "CD4 cytotoxic": "#e6550d",
+    "CD4 resting": "#74c476",
+    "contaminant": "#525252",
 }
 
 

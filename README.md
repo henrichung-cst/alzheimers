@@ -63,24 +63,38 @@ Outputs land in `outputs/reports/kinase_attribution_human/` (per-donor NES, recu
 Net-new human T-cell exhaustion cohort (ingested 2026-05-27 from Google Drive folder `1YE_h1jIyBajtm6ArxJqevJ0rt0xLKQgX`). Two donors, each with matched TMT phosphoproteomics and CITE-seq scRNA along a time course (donor1 days 0/2/9/13/17/20, donor2 days 2/5/7/9/11). Donor1 carries Total + pY + IMAC; donor2 carries Total + pY only (no IMAC → no kinase MEA on donor2; Incytr pair-mode runs pr+py on donor2, pr+ps+py on donor1).
 
 For a stable, citation-ready summary of this analysis and the dedicated T-cell
-viewer, use [`docs/tcell_exhaustion_analysis_summary.md`](docs/tcell_exhaustion_analysis_summary.md).
+viewer, use
+[`docs/reference/tcell_exhaustion_analysis_summary.md`](docs/reference/tcell_exhaustion_analysis_summary.md).
 
 Pipeline (run in this order):
 
 ```bash
 pixi run ingest-tcells-scrna      # download raw Seurat RDS for both donors (~10 GB)
-pixi run install-projectils       # one-time: install ProjecTILs + cache CD4/CD8 atlases
-pixi run tcells-projectils-map    # per-cell projection onto human CD4/CD8 reference atlases
-pixi run tcells-scrna-extract     # state-keyed aggexp/counts/markers (MUST run after projectils-map)
+pixi run tcells-label             # CITE-seq lineage + definitive biological states
+pixi run tcells-scrna-extract     # evidence-state-keyed aggexp/counts/markers
 pixi run tcells-export-bulk       # linear per-day bulk matrices (pr/py/ps)
 pixi run tcells-decompose         # per-(state, day) substrate via P_s = (N_total/N_s) × bulk × share
 ```
 
-**Substrate is keyed on per-cell ProjecTILs `functional.cluster`, not Seurat clusters.** Cluster-level annotation was deleted (anti-shim) after losing 44.5% of donor1 to the Seurat–ProjecTILs partition mismatch. State-keyed aggregation drops only cells with no ProjecTILs call (~13% donor1, ~7% donor2 — scGate `none`-gate + doublets). See [`docs/tcell_exhaustion_analysis_summary.md`](docs/tcell_exhaustion_analysis_summary.md) for the rationale.
+**Substrate is keyed on evidence-backed per-cell biological states, not ProjecTILs
+states.** CD4/CD8 lineage comes from the cells' CITE-seq CD4/CD8 antibody counts
+with native-cluster fallback. CD8 states are named `CD8PrecursorExhausted`,
+`CD8Exhausted`, `CD8Memory`, `CD8Cytotoxic`, and `CD8Effector`. ProjecTILs state,
+raw confidence, and categorical reference corroboration are retained beside the
+direct call rather than overwriting it. `TerminalExhausted` is not used because
+many checkpoint-positive cells remain proliferative. Only explicit
+myeloid/mast/NK/gamma-delta contaminant clusters are dropped. See
+[`docs/reference/tcell_exhaustion_analysis_summary.md`](docs/reference/tcell_exhaustion_analysis_summary.md)
+for the rationale.
 
 Outputs (under `data/derived/tcells_incytr_inputs/<donor>/`):
-- `scrna/aggexp_data.csv`, `cell_counts.csv`, `allmarkers.csv` — substrate keyed on sanitized ProjecTILs state (`CD8Tex`, `CD4Th17`, `Treg`, …; alphanumeric only — Incytr `<condition>_<cluster>` split constraint).
-- `scrna/projectils_predictions.csv` — per-cell `lineage_gate`, `functional.cluster`, `functional.cluster.conf`.
+- `scrna/aggexp_data.csv`, `cell_counts.csv`, `allmarkers.csv` — substrate keyed
+  on sanitized biological state (`CD8PrecursorExhausted`, `CD8Exhausted`,
+  `CD4Proliferating`, …; alphanumeric only).
+- `outputs/reports/tcell_labeling/cells/{donor}_state_labels.csv` — per-cell
+  lineage/state calls plus raw RNA and antibody evidence.
+- `scrna/projectils_predictions.csv` — independent reference projection used for
+  categorical corroboration, never as an authoritative override.
 - `scrna/state_audit.json`, `extract_manifest.json`, `decompose_manifest.json` — drop accounting and per-state/day cell counts.
 - `{pr,py,ps}_deconvoluted.csv` — per-(state, day) values, columns `d{day}_{state}`. Mass identity `Σ_s P_s × N_s/N_total ≈ bulk` verified to ≤ 2e-15 per channel × day.
 

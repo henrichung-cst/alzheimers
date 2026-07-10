@@ -57,7 +57,7 @@ _BULK_COL_RE = re.compile(r"^D\d+_d(?P<d>\d+)$")
 def _load_aggexp(donor: str
                  ) -> tuple[pd.DataFrame, list[tuple[str, int]], float]:
     """Load aggexp (state-keyed). Columns are already `<state>__d<day>` — the
-    extract step keys on the sanitized ProjecTILs `functional.cluster`, so no
+    extract step keys on the sanitized per-cell evidence state, so no
     cluster→label collapse is needed here. Floor = (nonzero min) / 10000."""
     path = os.path.join(INCYTR_INPUT_DIR, donor, "scrna", "aggexp_data.csv")
     raw = pd.read_csv(path).set_index("gene")
@@ -99,8 +99,8 @@ def _shares_by_day(
 def _load_counts(donor: str
                  ) -> tuple[dict[tuple[str, int], int], dict[int, int]]:
     """Load state-keyed cell counts. cell_counts.csv has columns (state, day,
-    n_cells) — already filtered upstream to cells with a ProjecTILs call.
-    N_total reflects only annotated cells, keeping mass identity
+    n_cells) — already filtered upstream to non-contaminant evidence labels.
+    N_total reflects only retained T cells, keeping mass identity
     Σ_s P_s × N_s/N_total = bulk exact on the annotated subset."""
     path = os.path.join(INCYTR_INPUT_DIR, donor, "scrna", "cell_counts.csv")
     cc = pd.read_csv(path)

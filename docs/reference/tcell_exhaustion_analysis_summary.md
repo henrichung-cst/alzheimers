@@ -21,23 +21,39 @@ Time courses:
 
 ## Core Pipeline
 
-The pipeline projects cells onto ProjecTILs CD4/CD8 reference atlases, extracts
-state-keyed scRNA aggregate expression and cell counts, exports donor/day bulk
-matrices, and builds state/day substrate estimates for Incytr.
+The pipeline extracts CITE-seq antibody and RNA evidence per cell, assigns
+CD4/CD8 lineage from raw CD4/CD8 antibody counts with native-cluster fallback,
+and emits donor-agnostic biological states. CD8 labels are `CD8 exhausted`,
+`CD8 precursor exhausted`, `CD8 memory`, `CD8 cytotoxic`, and `CD8 effector`.
+CD4 labels are `CD4 proliferating`, `CD4 memory`, `CD4 cytotoxic`, and
+`CD4 resting`.
 
-Substrate and viewer cell states are keyed on per-cell ProjecTILs
-`functional.cluster`, not Seurat clusters. This is a deliberate anti-shim
-decision: collapsing ProjecTILs calls onto Seurat clusters caused large,
-uninterpretable loss because the partitions did not agree. Cells without a
-ProjecTILs call are dropped; otherwise state labels flow through directly as
-sanitized names such as `CD8Tex`, `CD8Tpex`, `CD4Th17`, and `Treg`.
+The exhaustion names are operational calls for this chronic-stimulation experiment:
+`CD8 exhausted` requires co-detection of at least two among HAVCR2, LAG3, ENTPD1,
+and PDCD1; `CD8 precursor exhausted` additionally requires TCF7 plus at least one
+of LEF1, SELL, CCR7, and IL7R. They do not imply terminal exhaustion or directly
+measured dysfunction. Terminal exhaustion is specifically avoided because many
+checkpoint-positive cells remain in S/G2M.
+
+The same per-cell evidence labels key scRNA aggregate expression, cell counts,
+deconvolution, Incytr, and the viewer. ProjecTILs projections are independent
+reference evidence, not authoritative state labels. Raw neighborhood confidence is
+retained, with categorical semantics: exactly 1 is `unanimous`, greater than 0.5 is
+`majority-supported`, 0.5 or less is `ambiguous`, and missing is `not projected`.
+No arbitrary 0.8/0.9 high-confidence cutoff is used.
+
+The direct exhausted fraction rises from 2.5% at d0 to 49.1% at d20 in donor1 and
+from 15.8% at d2 to 58.4% at d11 in donor2. The stringent intersection of a direct
+exhausted call, CITE-seq CD8 lineage, and unanimous ProjecTILs `CD8.TEX` rises to
+23.6% and 22.8%, respectively. Donor1 fluctuates at intermediate days and donor2
+plateaus after d7, so this is an overall temporal expansion rather than strict
+monotonicity.
 
 Canonical run order:
 
 ```bash
 pixi run ingest-tcells-scrna
-pixi run install-projectils
-pixi run tcells-projectils-map
+pixi run tcells-label
 pixi run tcells-scrna-extract
 pixi run tcells-export-bulk
 pixi run tcells-decompose
@@ -52,14 +68,14 @@ Donor 1 is the only donor with kinase MEA because Donor 1 has IMAC. Donor 2 has
 no IMAC, so the viewer should show Donor 2 kinase/attribution absence as an
 expected cohort limitation, not a missing-data bug.
 
-Within-cohort T-cell attribution localizes Donor 1 bulk kinase activity to
-ProjecTILs states using this cohort's own scRNA:
+Within-cohort T-cell attribution localizes Donor 1 bulk kinase activity to the
+biological evidence states using this cohort's own scRNA:
 
 - Detection evidence: whether the kinase transcript is present in each state
   (fraction of cells expressing >= 10%, normalization-free). Detection is shown
   separately and does not change the specificity denominator. State enrichment
   is computed against the kinase's MEAN expression across all adequately-sampled
-  ProjecTILs states (>= 50 cells), gene-agnostic in its state set, so a kinase
+  adequately sampled evidence states, gene-agnostic in its state set, so a kinase
   concentrated in one state scores a high fold; effective number of states uses
   the same all-state expression distribution.
 - Transcript change: pseudobulk expression change versus d2.
@@ -146,7 +162,7 @@ fresh validation:
 - `outputs/reports/tcell_viewer/tcell_viewer.payload.json`
 - `outputs/reports/kinase_attribution_tcells/donor1/unified_attribution_tcells.csv`
 - `outputs/reports/kinase_attribution_tcells/donor1/mea/`
-- `outputs/reports/incytr_pair_mode_tcells/<donor>/wide/`
+- `outputs/reports/incytr_pair_mode_tcells_percell/<donor>/wide/`
 
 Useful commands:
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env Rscript
-# Extract per-cell log-normalized expression for the marker genes ONLY, from the
-# cell-level Seurat object, to a compact CSV (cells x markers). This is the one
-# step that must touch the multi-GB .rds; it drops everything else immediately so
-# nothing large is written out. Per-cell state labels are assigned downstream by
-# tcell_state_labels.py, which joins this marker evidence to the cell-cycle and
-# native-cluster exports.
+# Extract the compact per-cell evidence needed for T-cell labeling from the
+# multi-GB Seurat object in one load:
+#   * log-normalized RNA expression for the declared marker genes;
+#   * raw CITE-seq antibody UMI counts for lineage/state context and isotypes;
+#   * RNA/Protein QC metadata used to audit time-dependent detection depth.
+# Per-cell labels are assigned downstream by tcell_state_labels.py.
 #
 # Run under a memory cap (the object is ~5 GB compressed, ~15-30 GB in RAM):
 #   systemd-run --user --scope -p MemoryMax=26G -p MemorySwapMax=2G \
@@ -50,3 +50,67 @@ df <- data.frame(barcode = colnames(obj), sub, check.names = FALSE)
 out <- file.path(outdir, paste0(donor, "_marker_cell_expr.csv"))
 write.csv(df, out, row.names = FALSE)
 message("[", donor, "] wrote ", out, " (", nrow(df), " cells x ", length(present), " markers)")
+
+# Raw ADT evidence. Feature aliases accommodate the donor-specific Ki-67 name;
+# checkpoint proteins are not present in either panel. Donor2-only TOX/BATF/
+# PRDM1/GZMB are exported when measured and remain optional downstream evidence.
+if (!"Protein" %in% Assays(obj)) stop("Protein assay is required")
+protein_counts <- GetAssayData(obj, assay = "Protein", layer = "counts")
+feature_aliases <- list(
+  CD3_protein_umi = c("CD3(UCHT1)-Ab"),
+  CD4_protein_umi = c("CD4(RPA-T4)-Ab"),
+  CD8_protein_umi = c("CD8(SK1)-Ab"),
+  TCF1_protein_umi = c("TCF1-TCF7-Ab"),
+  Ki67_protein_umi = c("Ki67-Ab", "Ki-67-Ab"),
+  NCAM1_protein_umi = c("NCAM1-Ab"),
+  mouse_isotype_umi = c("Mouse-Isotype-Control-Ab"),
+  rabbit_isotype_umi = c("Rabbit-Isotype-Control-Ab")
+)
+optional_features <- c(
+  TOX_protein_umi = "Tox-Tox2-Ab",
+  BATF_protein_umi = "BATF-Ab",
+  PRDM1_protein_umi = "Blimp-1-PRDI-BF1-Ab",
+  GZMB_protein_umi = "Granzyme-B-Ab"
+)
+resolve_feature <- function(aliases) {
+  present_aliases <- aliases[aliases %in% rownames(protein_counts)]
+  if (!length(present_aliases)) return(NA_character_)
+  present_aliases[[1L]]
+}
+features <- vapply(feature_aliases, resolve_feature, character(1L))
+missing_features <- names(features)[is.na(features)]
+if (length(missing_features)) {
+  stop("required Protein evidence absent: ", paste(missing_features, collapse = ", "))
+}
+
+adt <- data.frame(barcode = colnames(obj), check.names = FALSE)
+for (output_name in names(features)) {
+  adt[[output_name]] <- as.numeric(protein_counts[features[[output_name]], colnames(obj)])
+}
+for (output_name in names(optional_features)) {
+  feature <- optional_features[[output_name]]
+  if (feature %in% rownames(protein_counts)) {
+    adt[[output_name]] <- as.numeric(protein_counts[feature, colnames(obj)])
+  }
+}
+
+metadata <- obj@meta.data
+for (column in c("nCount_RNA", "nFeature_RNA", "nCount_Protein", "nFeature_Protein")) {
+  if (column %in% colnames(metadata)) adt[[column]] <- metadata[[column]]
+}
+mitochondrial_column <- grep(
+  "^(percent\\.mt|percent_mito|mito_percent)$",
+  colnames(metadata),
+  ignore.case = TRUE,
+  value = TRUE
+)
+if (length(mitochondrial_column)) {
+  adt[["percent_mitochondrial"]] <- metadata[[mitochondrial_column[[1L]]]]
+}
+
+adt_outdir <- "outputs/reports/tcell_labeling/adt"
+dir.create(adt_outdir, showWarnings = FALSE, recursive = TRUE)
+adt_out <- file.path(adt_outdir, paste0(donor, "_adt_evidence.csv"))
+write.csv(adt, adt_out, row.names = FALSE)
+message("[", donor, "] wrote ", adt_out, " (", nrow(adt), " cells x ",
+        ncol(adt) - 1L, " evidence columns)")
