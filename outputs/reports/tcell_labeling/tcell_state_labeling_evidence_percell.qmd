@@ -1,6 +1,6 @@
 ---
-title: "T-cell state labeling: per-cell positive and negative marker evidence"
-subtitle: "Cycle-independent revision built on Matt's reproduced marker analysis"
+title: "T-cell state labeling from per-cell marker evidence"
+subtitle: "Matt's marker-based method applied to each cell, with cell-cycle signals excluded"
 format:
   html:
     toc: true
@@ -29,67 +29,89 @@ DEFINITIONS = pd.read_csv(EVIDENCE / "state_marker_definitions.csv")
 COLORS = STATE_COLORS
 ```
 
-## Scope and conclusion
+## Main result
 
-State is assigned independently to each cell rather than inherited from its Seurat
-cluster. Raw CITE-seq CD4/CD8 counts establish lineage, with the native cluster's
-lineage used only when antibody counts are inconclusive. Every named state requires
-direct positive detection of its defining RNA modules. Negative marker evidence
-ranks competing eligible states but cannot create a label. A cell with no coherent
-named-state program remains simply `CD4` or `CD8`.
+Each cell receives its own state label from its RNA and CITE-seq markers. Raw
+CITE-seq CD4 and CD8 counts determine whether a cell belongs to the CD4 or CD8
+group. When those counts are inconclusive, the CD4 or CD8 identity of the cell's
+Seurat cluster is used. A named state requires detected RNA markers that define
+that state. If no named state meets its marker requirements, the label remains
+simply `CD4` or `CD8`.
 
-Cell-cycle genes, phase, cycle scores, and `% dividing` are not loaded or used.
-Proliferation was induced in silico and therefore cannot disqualify exhaustion.
-ProjecTILs is retained only as raw reference corroboration and never changes the
-marker-derived label.
+Cell-cycle genes, phase, cycle scores, and `% dividing` are excluded because
+proliferation was induced in silico. The RNA and CITE-seq markers determine the
+final label.
 
-The per-cell method avoids the severe day-confounding produced by assigning one
-state to each native cluster. Separating naive-like from resting/memory resolves
-most of the misleading late "naive" composition. TEX uses a hierarchical aggregate
-that must dominate acute activation and effector programs, avoiding both dropout-
-driven loss and acute-activation misclassification.
+Labeling each cell separately preserves differences among cells within the same
+Seurat cluster. Separating naive-like cells from resting/memory cells removes most
+of the misleading rise in naive-like cells at later days. The CD8 exhausted label
+requires the combined expression of five exhaustion markers to be stronger than
+both early activation and effector marker expression.
 
 ## Methods
 
-Eligibility is based on direct positive detection in every defining module:
+Each named state has direct marker requirements:
 
-- naive-like requires a TCF7/LEF1 stemness signal and a CCR7/SELL homing signal;
-- resting/memory requires direct IL7R or CD27 identity evidence; TCF7, LEF1, and
-  EOMES remain supporting context but do not create the label;
-- activated/effector requires both acute activation
-  (CD69/IL2RA/TNFRSF4/ICOS/CD40LG) and effector function
-  (GZMB/PRF1/IFNG/TNF);
-- cytotoxic effector requires PRF1 plus a GZMB/GZMH/GNLY granzyme signal;
-- the late-exhaustion aggregate combines HAVCR2, LAG3, ENTPD1, TOX, and NR4A1;
-  PDCD1, CTLA4, and TIGIT remain supporting receptor evidence because they can rise
-  during acute activation.
+- naive-like requires detection of at least one of `TCF7` or `LEF1` and at least
+  one of `CCR7` or `SELL`;
+- resting/memory requires detection of `IL7R` or `CD27`, while `TCF7`, `LEF1`, and
+  `EOMES` provide additional supporting evidence;
+- activated/effector requires at least one early activation marker
+  (`CD69`, `IL2RA`, `TNFRSF4`, `ICOS`, or `CD40LG`) and at least one effector marker
+  (`GZMB`, `PRF1`, `IFNG`, or `TNF`);
+- cytotoxic effector requires `PRF1` and at least one of `GZMB`, `GZMH`, or `GNLY`;
+- exhaustion is based on the combined expression of `HAVCR2`, `LAG3`, `ENTPD1`,
+  `TOX`, and `NR4A1`. `PDCD1`, `CTLA4`, and `TIGIT` provide supporting receptor
+  evidence because they may also increase during early activation.
 
-Within each donor and ADT-defined lineage, marker expression is also standardized
-across cells. When multiple states meet their positive requirements, the state
-with the strongest weakest positive module is selected; expected-low modules break
-exact ties. Negative evidence therefore refines a positive call but never creates
-one. A cell with no eligible state remains `CD4` or `CD8`.
+Marker expression is standardized among cells from the same donor and CD4 or CD8
+group. When a cell meets the requirements for more than one state, the method
+compares the required marker groups and selects the state with the strongest
+overall evidence. Markers expected to be low in a state are used only to resolve an
+exact tie.
 
-Exhaustion is the hierarchical exception. Its aggregate must be above the
-donor-lineage mean and greater than both the acute-activation aggregate and the
-effector-function aggregate. This natural zero/balance rule replaces the sparse
-single-cell AND gate without introducing a tuned percentile cutoff. Exhaustion is
-checked before activated/effector or cytotoxic assignment.
-
-Internal signed module values are classification mechanics and are not exported as
-analysis scores. The evidence tables contain categorical calls, raw log-normalized
-RNA values, raw antibody counts, detection fractions, and AUROCs with clear units.
+Exhaustion is checked first. Its five-gene expression value must be above the
+average for the same donor and CD4 or CD8 group. It must also be higher than both
+the early activation value and the effector value. These are comparisons made
+within each cell: they test whether exhaustion expression is stronger, while still
+allowing an exhausted cell to retain activation or effector expression. The
+evidence tables report the final labels, raw log-normalized RNA values, raw
+antibody counts, detection fractions, and AUROCs.
 
 ```{python}
-DEFINITIONS
+definition_names = {
+    "late exhaustion signature": "exhaustion markers",
+    "acute activation": "early activation",
+    "granzyme program": "cytotoxic genes",
+    "perforin": "required gene",
+    "naive stemness": "naive identity",
+    "naive homing": "homing markers",
+    "cytotoxic machinery": "cytotoxic genes",
+    "resting/memory identity": "resting/memory markers",
+    "exhaustion transcription factors": "exhaustion regulators",
+}
+
+def simplify_marker_text(value):
+    text = str(value)
+    for old, new in definition_names.items():
+        text = text.replace(old, new)
+    return text.replace(" | ", "; ")
+
+definitions_display = DEFINITIONS[[
+    "lineage", "state", "positive_modules_expected_higher",
+]].copy()
+definitions_display.columns = [
+    "CD4/CD8 group", "Assigned state", "Markers required",
+]
+definitions_display["Markers required"] = definitions_display["Markers required"].map(simplify_marker_text)
+definitions_display
 ```
 
 ## State composition from day 2
 
-Composition is the observed cell count for a label divided by all retained T cells
-from the same donor and day. This corrects for unequal recovered-cell totals across
-days but is not absolute cell-count normalization; changes represent relative
-composition, not expansion measured in absolute cells.
+Composition is the percentage of retained T cells assigned to each label for a
+given donor and day. This allows cell-state percentages to be compared across days
+despite differences in the number of recovered cells.
 
 ```{python}
 analysis = BY_DAY[(BY_DAY.day >= 2) & BY_DAY.type.notna()].copy()
@@ -99,7 +121,7 @@ analysis.pivot_table(index=["donor", "day"], columns="state" if "state" in analy
 
 ```{python}
 #| label: fig-percell-composition
-#| fig-cap: "Cycle-independent per-cell marker-state composition from day 2 onward."
+#| fig-cap: "Per-cell marker-state composition from day 2 onward, with cell-cycle signals excluded."
 #| fig-width: 15
 #| fig-height: 6
 fig, axes = plt.subplots(1, 2, figsize=(15, 6), sharey=True, layout="constrained")
@@ -126,43 +148,35 @@ cd8["fraction_within_cd8"] = cd8.n_cells / cd8.groupby(["donor", "day"]).n_cells
 cd8.pivot_table(index=["donor", "day"], columns="label", values="fraction_within_cd8", fill_value=0).mul(100).round(1)
 ```
 
-With the hierarchical exhaustion-over-acute/effector balance, donor 1 CD8 TEX rises
-from 10.7% at day 2 to 30.8% at day 20. Donor 2 rises from 6.7% at day 2 to 40.2%
-at day 11. Activated/effector cells dominate the early timepoint, while TEX and
-resting/memory programs expand later. State proportions are descriptive because
-there is one sample per donor/day.
+Donor 1 CD8 exhausted cells rise from 10.7% at day 2 to 30.8% at day 20. Donor 2
+rises from 6.7% at day 2 to 40.2% at day 11. Activated/effector cells are most
+common at the early timepoint. Exhausted and resting/memory cells become more common
+later. This is the main time-course pattern produced by the marker-based labels.
 
-The rapid donor 2 TEX-like increase by day 11 is an analytical flag, not proof of
-terminal dysfunction. The label records dominance of the exhaustion-associated
-aggregate over acute and effector counter-programs; functional terminal exhaustion
-requires independent protein or perturbational validation.
+## How clearly the markers separate the labels
 
-The provisional TPEX category is not reported. Cells without the full TEX program
-are assigned only when another positive state program is present; otherwise they
-remain `CD8`.
-
-## Positive and negative panel separation
-
-AUROC characterizes whether each assigned category expresses its declared marker
-program in the expected direction relative to other cells of the same lineage.
-Negative panels are direction-reversed, so AUROC above 0.5 indicates the expected
-loss. These panels also create the labels, so the AUROCs characterize classifier
-separation rather than provide independent validation.
+AUROC measures how well each marker set separates an assigned state from other
+cells in the same CD4 or CD8 group. An AUROC of 0.5 means no separation, while an
+AUROC of 1 means complete separation. Only marker sets that define a state are
+shown below. For exhausted cells, early activation and effector rows are omitted
+because they serve as safeguards during assignment rather than positive markers of
+exhaustion.
 
 ```{python}
-PANELS[["donor", "lineage", "state", "module", "expected_direction", "oriented_panel_auroc"]].round(3)
+positive_marker_separation = PANELS[PANELS["expected_direction"].eq("higher")][[
+    "donor", "lineage", "state", "module", "oriented_panel_auroc",
+]].copy()
+positive_marker_separation["module"] = positive_marker_separation["module"].map(simplify_marker_text)
+positive_marker_separation.columns = [
+    "Donor", "CD4/CD8 group", "Assigned state", "Marker set", "AUROC",
+]
+positive_marker_separation.round(3)
 ```
 
 ## Native UMAP context
 
 ![](umap/umap_percell_label_comparison.png){fig-alt="Native Seurat clusters and cycle-independent per-cell marker labels for both donors."}
 
-Per-cell labels can span native UMAP clusters because the method resolves marker
-heterogeneity within clusters. The UMAP is context, not an assignment gate.
-
-## Claim boundary
-
-These are relative RNA/ADT phenotypes, not measurements of dysfunction,
-irreversibility, or killing capacity. `CD8 exhausted (TEX)` denotes
-the terminal-exhaustion-associated marker pattern. ProjecTILs confidence, including
-exact confidence 1, is supporting reference evidence only.
+Labels can span Seurat UMAP clusters because each cell is labeled separately and
+cells within the same cluster can differ in their marker expression. The UMAP shows
+where the labeled cells lie within the original Seurat map.
