@@ -387,12 +387,12 @@ function _renderDecompPanel(hostId, kinase_id, ctx, leadRow) {
   _ensureKinaseIndexes();
   const cid = CONTRASTS.indexOf(ctx.contrast);
   if (cid < 0) {
-    host.innerHTML = `<div class="muted">No decomposition data for this contrast.</div>`;
+    host.innerHTML = `<div class="muted">No projected state MEA data for this contrast.</div>`;
     return;
   }
   const rows = (_decompByKinCtx && _decompByKinCtx.get(`${kinase_id}|${cid}`)) || [];
   if (!rows.length) {
-    host.innerHTML = `<div class="muted">No decomposition rows for this kinase &times; contrast.</div>`;
+    host.innerHTML = `<div class="muted">No projected state MEA rows for this kinase &times; contrast.</div>`;
     return;
   }
   const sorted = rows.slice().sort((a, b) => (a.nes ?? 0) - (b.nes ?? 0));
@@ -412,7 +412,7 @@ function _renderDecompPanel(hostId, kinase_id, ctx, leadRow) {
   const outlines = sigMask.map(s => s ? "#000" : "rgba(0,0,0,0)");
   const lineWidths = sigMask.map(s => s ? 1.2 : 0);
   const hovers = sorted.map((r, i) =>
-    `${r.cell_type}<br>decomp NES ${nes[i].toFixed(2)}` +
+    `${r.cell_type}<br>projected state NES ${nes[i].toFixed(2)}` +
     (r.fdr != null && isFinite(r.fdr) ? `<br>FDR ${Number(r.fdr).toExponential(2)}${sigMask[i] ? " (sig)" : ""}` : "")
   );
   const traces = [{
@@ -421,7 +421,7 @@ function _renderDecompPanel(hostId, kinase_id, ctx, leadRow) {
     marker: {color: colors, line: {color: outlines, width: lineWidths}},
     hovertemplate: "%{customdata}<extra></extra>",
     customdata: hovers,
-    name: "decomp NES",
+    name: "projected state NES",
   }];
   const shapes = [];
   const annotations = [];
@@ -911,8 +911,8 @@ async function renderActiveKinaseAuditTab(kinase_id) {
         `<section class="audit-panel"><h4>Stoichiometry vs raw phospho for ${_escapeHtml(ctx.contrast)} <span class="muted">(mea_stoichiometry.csv vs mea_raw_phospho.csv)</span></h4>` +
         `<p class="kinase-stage-note">Per-metric comparison of the same kinase &times; contrast scored against two preprocessing tracks. Stoichiometry is primary; raw phospho is the sensitivity check. Δ = stoichiometry − raw. Sign-flipping or significance divergence flags abundance-driven vs activity-driven signals.</p>` +
         `<div id="audit-mea-comparison"></div></section>` +
-        `<section class="audit-panel audit-wide"><h4>Per-cell-type decomposition for ${_escapeHtml(ctx.contrast)} <span class="muted">(kinase_enrichment_wmb.csv)</span></h4>` +
-        `<p class="kinase-stage-note">Pseudo-deconvoluted MEA NES per WMB class for this kinase &times; contrast, sorted by NES. Bars are filled when FDR &lt; threshold, faded otherwise. The vertical line marks the bulk NES from the live pipeline (solid black = bulk significant, dashed gray = ns). Comparing the spread of class bars to the bulk line shows whether the bulk signal localizes to a class, is averaged across many, or is masked by canceling classes.</p>` +
+        `<section class="audit-panel audit-wide"><h4>Projected state MEA for ${_escapeHtml(ctx.contrast)} <span class="muted">(raw phosphosite projection)</span></h4>` +
+        `<p class="kinase-stage-note">RNA-deconvolved raw phosphosite MEA NES per T-cell state, sorted by NES. Bars are filled when FDR &lt; threshold and faded otherwise. The vertical line marks the bulk NES. These are projected state-associated signals, not directly measured state-specific phosphoproteomics.</p>` +
         `<div id="audit-mea-decomp"></div></section>`;
       _renderMeaScorecard("audit-mea-scorecard", leadRow, rawRow, ctx);
       _renderRunningEnrichmentPlot("audit-mea-running", ctx);
@@ -921,7 +921,7 @@ async function renderActiveKinaseAuditTab(kinase_id) {
       catch (decompErr) {
         console.error("decomp panel failed", decompErr);
         const dh = document.getElementById("audit-mea-decomp");
-        if (dh) dh.innerHTML = `<div class="muted">Decomposition panel failed: ${_escapeHtml(String(decompErr && decompErr.message || decompErr))}</div>`;
+        if (dh) dh.innerHTML = `<div class="muted">Projected state MEA panel failed: ${_escapeHtml(String(decompErr && decompErr.message || decompErr))}</div>`;
       }
       const cmpRows = _buildMeaComparisonRows(leadRow, rawRow);
       const diag = _diagnoseRawAbsence(ctx, rawRow);
@@ -939,7 +939,7 @@ async function renderActiveKinaseAuditTab(kinase_id) {
       // Table is DAY-INVARIANT (localization is pooled across all scRNA days,
       // so it does not depend on ctx.contrast) — the header therefore drops
       // the "/ {day}" suffix. Day-varying quantities (transcript LFC, per-state
-      // Decomp NES, bulk NES) render as heat-strips inside each row's expand
+      // Projected state NES and bulk NES render as heat-strips inside each row's expand
       // detail; scRNA-less days (d15/d19) draw as gap cells. See plan
       // docs/plans/tcell/tcell_attribution_decouple_contrast.md.
       // Raw attribution rows table retained below the accordion as an audit

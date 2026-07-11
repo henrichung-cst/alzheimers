@@ -67,7 +67,22 @@ def _load_tcell_attribution(donor: str) -> "pd.DataFrame | None":
     if not os.path.exists(path):
         return None
     df = pd.read_csv(path)
-    return df if len(df) else None
+    if df.empty:
+        return None
+    if "cell_type" not in df.columns:
+        return None
+    observed_states = set(df["cell_type"].dropna().astype(str))
+    current_states = set(load_donor_states(donor))
+    unknown_states = observed_states - current_states
+    if unknown_states:
+        print(
+            f"  {donor}: skipping stale within-cohort attribution; "
+            f"historical states are not in the current labels: "
+            f"{sorted(unknown_states)}",
+            flush=True,
+        )
+        return None
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -150,36 +165,6 @@ def _read_projected_state_manifest(path: str) -> list[dict]:
     ]
 
 
-def _read_projected_state_mechanism(path: str) -> list[dict]:
-    if not os.path.exists(path):
-        return []
-    df = pd.read_csv(path)
-    if df.empty:
-        return []
-    keep = [
-        "cohort",
-        "donor",
-        "track",
-        "state",
-        "timepoint",
-        "contrast",
-        "projection",
-        "kinase",
-        "stoich_NES",
-        "stoich_FDR",
-        "raw_NES",
-        "raw_FDR",
-        "stoich_significant",
-        "raw_significant",
-        "sign_relation",
-        "mechanism_call",
-        "skip_reason",
-    ]
-    if "mechanism_score" in df.columns or "mechanism_call" not in df.columns:
-        return []
-    return df[[c for c in keep if c in df.columns]].to_dict(orient="records")
-
-
 def _load_projected_state_mea_payload() -> dict | None:
     """Optional compact projected-state MEA block for the T-cell viewer.
 
@@ -191,7 +176,6 @@ def _load_projected_state_mea_payload() -> dict | None:
     for donor in DONORS:
         donor_rows: list[dict] = []
         donor_manifest: list[dict] = []
-        donor_mechanism: list[dict] = []
         source_files: list[str] = []
 
         for out_dir in _projected_state_candidate_dirs(donor):
@@ -200,7 +184,7 @@ def _load_projected_state_mea_payload() -> dict | None:
             # the decomposition share scales both phosphosite and protein, so the
             # share cancels in the subtraction — collapsing per-state NES to the
             # bulk value (a known limitation). The raw projection keeps the share,
-            # so the per-state NES is genuinely state-specific.
+            # so the NES remains a projected state-associated signal.
             path = os.path.join(out_dir, "mea_projected_state_raw.csv")
             rows = _read_projected_state_rows(path, kind="raw")
             if rows:
@@ -213,19 +197,13 @@ def _load_projected_state_mea_payload() -> dict | None:
                 donor_manifest.extend(manifest)
                 source_files.append(os.path.relpath(manifest_path, UNIFIED_VIEWER_DIR))
 
-            mechanism_path = os.path.join(out_dir, "mechanism_attribution_projected_state.csv")
-            mechanism = _read_projected_state_mechanism(mechanism_path)
-            if mechanism:
-                donor_mechanism.extend(mechanism)
-                source_files.append(os.path.relpath(mechanism_path, UNIFIED_VIEWER_DIR))
-
-        if not (donor_rows or donor_manifest or donor_mechanism):
+        if not (donor_rows or donor_manifest):
             continue
 
         roster = set(load_donor_states(donor))
         projected_states = {
             str(record.get("state"))
-            for record in [*donor_rows, *donor_manifest, *donor_mechanism]
+            for record in [*donor_rows, *donor_manifest]
             if record.get("state") is not None
         }
         unknown_states = sorted(projected_states - roster)
@@ -241,9 +219,9 @@ def _load_projected_state_mea_payload() -> dict | None:
             "timepoints": sorted({str(r.get("timepoint")) for r in donor_rows if r.get("timepoint")}),
             "rows": donor_rows,
             "manifest": donor_manifest,
-            "mechanism_attribution": donor_mechanism,
             "source_files": sorted(set(source_files)),
-            "interpretation": "projected_state_mea",
+            "interpretation": "raw_projected_state_mea",
+            "measurement": "kinase NES from RNA-deconvolved raw phosphosite abundance",
         }
 
     if not by_context:

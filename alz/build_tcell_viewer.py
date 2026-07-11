@@ -619,7 +619,7 @@ def validate(payload: dict | None = None) -> str:
 
         production_default = os.path.join(
             config.REPO_ROOT, "outputs", "reports",
-            "incytr_pair_mode_tcells_percell",
+            "incytr_pair_mode_tcells_percell_posneg",
         )
         if resolve_incytr_pair_mode_tcells_dir({}) != production_default:
             errors.append("T-cell pair-mode resolver does not select production default")
@@ -638,9 +638,13 @@ def validate(payload: dict | None = None) -> str:
         attribution_states = set(
             payload.get("attribution_index", {}).get("cell_type", [])
         )
-        if attribution_states and attribution_states != set(load_donor_states("donor1")):
+        unknown_attribution_states = (
+            attribution_states - set(load_donor_states("donor1"))
+        )
+        if unknown_attribution_states:
             errors.append(
-                "donor1 attribution state roster does not match the per-cell audit"
+                "donor1 attribution contains states outside the per-cell audit: "
+                f"{sorted(unknown_attribution_states)}"
             )
 
         for donor, projected in (

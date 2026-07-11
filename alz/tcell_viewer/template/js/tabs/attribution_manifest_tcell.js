@@ -102,7 +102,7 @@ const TCELL_MANIFEST = (() => {
 
   function getRows(ctx) {
     // Day-invariant: fetch all contrasts. The verdict table renders one row per
-    // cell_type; per-day quantities (LFC, Decomp NES, bulk NES) live in each
+    // cell_type; per-day quantities (LFC, projected state NES, bulk NES) live in each
     // row's expand detail as heat-strips over the 5-day MEA axis. This lets the
     // table render for the scRNA-less days (d15/d19) too — localization is
     // pooled across all scRNA days and does not depend on the day selector.
@@ -331,7 +331,7 @@ const TCELL_MANIFEST = (() => {
         }
       }
 
-      // Decomp NES (per-state, per-day) from the decomposition_index. Same
+      // Projected state NES (per-state, per-day) from the decomposition_index. Same
       // gapping rule: scRNA-less days → null → gap.
       const decByCid = new Array(CONTRASTS.length).fill(null);
       const decFdrByCid = new Array(CONTRASTS.length).fill(null);
@@ -347,7 +347,7 @@ const TCELL_MANIFEST = (() => {
       }
 
       // maxAbs is normalized PER KINASE (max |v| across that kinase's
-      // states×days for LFC/Decomp; across the 5 days for bulk NES) so a
+      // states×days for LFC/projected state NES; across the 5 days for bulk NES) so a
       // flat state reads flat and cross-state magnitude is comparable.
       const bulkMax = Math.max(0, ...bulkByCid.filter(v => v != null && isFinite(v)).map(Math.abs));
       let lfcMax = 0, decMax = 0;
@@ -380,16 +380,16 @@ const TCELL_MANIFEST = (() => {
       });
       const decStrip = _renderAttrHeatStrip(decByCid, {
         maxAbs: decMax, selCid,
-        tipLabel: "decomp NES",
+        tipLabel: "projected state NES",
         tipFmt: (v) => v.toFixed(2),
-        gapTitle: "no scRNA library at this day — decomp NES undefined",
+        gapTitle: "no scRNA library at this day — projected state NES undefined",
       });
 
       const stripsHtml =
         `<div class="attr-heat-strip-stack">` +
           `<div class="attr-heat-strip-row"><span class="attr-heat-strip-label" title="Kinase-level bulk MEA activity (per-kinase, per-day) — the anchor the transcript is asked to concord with. Populated at all 5 MEA days.">Bulk NES</span>${bulkStrip}</div>` +
           `<div class="attr-heat-strip-row"><span class="attr-heat-strip-label" title="Pseudobulk transcript log2 fold change for ${_escapeHtml(cellType)} vs the d2 baseline. Only defined on scRNA days (d13/d17/d20); d15/d19 are ✗ gap cells.">LFC</span>${lfcStrip}</div>` +
-          `<div class="attr-heat-strip-row"><span class="attr-heat-strip-label" title="Per-state deconvoluted kinase NES for ${_escapeHtml(cellType)} from the raw projected-state MEA. Only defined on scRNA days.">Decomp NES</span>${decStrip}</div>` +
+          `<div class="attr-heat-strip-row"><span class="attr-heat-strip-label" title="Kinase NES for ${_escapeHtml(cellType)} from RNA-deconvolved raw phosphosite abundance. This is a projected state-associated signal, not directly measured state-specific phosphoproteomics.">Projected state NES</span>${decStrip}</div>` +
         `</div>`;
 
       // ---- Exact-value numeric table (kept below the strips) ------------
@@ -409,8 +409,8 @@ const TCELL_MANIFEST = (() => {
       traceBody =
         `<p class="muted attr-caption">Within-cohort: ${detHtml} ${enrHtml} ` +
         `(detection and enrichment are pooled across all scRNA days; both are day-invariant). ` +
-        `Below: bulk NES / transcript LFC / decomp NES over the full 5-day MEA axis. ` +
-        `d15/d19 have no scRNA library — LFC/decomp render as gap cells; bulk NES is populated at all 5 days. ` +
+        `Below: bulk NES / transcript LFC / projected state NES over the full 5-day MEA axis. ` +
+        `d15/d19 have no scRNA library — LFC/projected state NES render as gap cells; bulk NES is populated at all 5 days. ` +
         `The currently-selected contrast is outlined.</p>` +
         stripsHtml +
         `<p class="muted attr-caption" style="margin-top:.8em;">Exact per-day values (scRNA days only):</p>` +

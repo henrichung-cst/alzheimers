@@ -458,7 +458,7 @@ main#app-main { padding:14px; }
 .tcell-nes-profile .nes-profile-cell .npc.sel {
   outline:1.5px solid #0f172a; outline-offset:-1px; z-index:1; }
 /* §1 attribution heat-strip stack: label column + strip, one row per metric
-   (Bulk NES / LFC / Decomp NES). Reuses the .tcell-nes-profile grammar for
+   (Bulk NES / LFC / projected state NES). Reuses the .tcell-nes-profile grammar for
    the strip itself; adds only the label-column layout here. */
 .attr-heat-strip-stack { display:flex; flex-direction:column; gap:4px;
   margin:6px 0; }

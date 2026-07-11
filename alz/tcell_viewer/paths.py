@@ -34,9 +34,9 @@ EDGE_SLICES_INCYTR_BACKBONE_DIR = os.path.join(
     UNIFIED_VIEWER_DIR, "edge_slices", "incytr_backbone"
 )
 
-# T-cell pair-mode parquet root (per-donor wide outputs). The default is the
-# evidence-backed per-cell-state run. Diagnostics may select another complete
-# tree explicitly; there is no silent fallback to the historical ProjecTILs run.
+# T-cell pair-mode parquet root (per-donor wide outputs). The production default
+# is the completed positive/negative-marker per-cell labeling rerun. Its state
+# ontology remains report-backed; ProjecTILs is supporting evidence only.
 def resolve_incytr_pair_mode_tcells_dir(
     environ: Mapping[str, str] | None = None,
 ) -> str:
@@ -46,7 +46,7 @@ def resolve_incytr_pair_mode_tcells_dir(
         "TCELL_INCYTR_PAIR_MODE_DIR",
         os.path.join(
             config.REPO_ROOT, "outputs", "reports",
-            "incytr_pair_mode_tcells_percell",
+            "incytr_pair_mode_tcells_percell_posneg",
         ),
     )
 

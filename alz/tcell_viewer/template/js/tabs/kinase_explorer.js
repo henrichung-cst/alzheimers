@@ -473,17 +473,17 @@ function _renderAgreementProfile(r) {
         const stateName = _AGREEMENT_STATE_NAMES[a.state] || "?";
         if (a.state === 1) {
           cls = " agree";
-          tip = `${c}: agree — bulk and decomp both significant, same direction`;
+          tip = `${c}: agree — bulk and projected state MEA both significant, same direction`;
         } else {
           cls = " disagree";
           let detail;
-          if (stateName === "decomp_only") detail = "bulk null, ≥1 decomp class significant";
-          else if (stateName === "bulk_only") detail = "bulk significant, no decomp class significant";
-          else if (stateName === "mixed") detail = "bulk significant, decomp classes split (some match, some oppose)";
-          else if (stateName === "disagree") detail = "bulk significant, all sig decomp classes oppose bulk sign";
+          if (stateName === "decomp_only") detail = "bulk null, ≥1 projected state significant";
+          else if (stateName === "bulk_only") detail = "bulk significant, no projected state significant";
+          else if (stateName === "mixed") detail = "bulk significant, projected states split (some match, some oppose)";
+          else if (stateName === "disagree") detail = "bulk significant, all significant projected states oppose bulk sign";
           else detail = stateName;
           tip = `${c}: ${stateName} — ${detail}`;
-          if (a.top_cell) tip += ` · top decomp ${a.top_cell} NES ${Number(a.top_cell_nes).toFixed(2)}`;
+          if (a.top_cell) tip += ` · top projected state ${a.top_cell} NES ${Number(a.top_cell_nes).toFixed(2)}`;
           if (a.bulk_nes != null && isFinite(a.bulk_nes)) tip += ` · bulk NES ${Number(a.bulk_nes).toFixed(2)}`;
         }
       }
@@ -660,7 +660,7 @@ function renderKinaseExplorer() {
   const tcellMin = Math.max(0, parseFloat(kf.tcellMin) || 0);
 
   // Whitelist mode (cross-tab handoff) has two sub-modes:
-  //   stack=false (default): whitelist bypasses every other gate. Decomp-only
+  //   stack=false (default): whitelist bypasses every other gate. Projected-state-only
   //     kinases that would normally fail the attribution grid still appear.
   //   stack=true: whitelist ANDs with the normal filter chain. Useful for
   //     narrowing within a click-through set, but the attribution grid will
