@@ -1,5 +1,7 @@
 # T-cell proteomics vs. transcriptomics correlation (donor2, day2)
 
+**COMPLETED 2026-07-13.** Built `alz/analysis/tcell_proteome_transcriptome_correlation.py`; output under `outputs/reports/tcell_donor2_day2_protein_rna_correlation/` (`per_gene_correlation.csv` + scatterplot + `analysis.md`). Result: Spearman **rho = 0.546, n = 7693** matched genes (24 zero-RNA). Both silent-failure guards verified against raw data — protein column traces to `Day 2 Total Quantity`, semicolon multi-gene rows dropped, plus 83 duplicate single-gene symbols resolved by highest precursor support (a case the plan did not anticipate).
+
 **Goal:** One genome-wide Spearman correlation at donor2/day2 — across all matched genes, x = bulk protein abundance, y = pseudobulked transcript abundance — plus a standalone per-gene CSV.
 
 **Scope**
@@ -16,7 +18,9 @@ Reading the raw donor2 `.rds` is **read-only**.
 
 **Risk tier:** high. The output is a single correlation coefficient. Its correctness hinges entirely on two silent join/selection decisions — matching `PG.Genes` to transcript symbols, and picking the **correct day2 protein column** out of five day columns. A wrong column or a subtly wrong gene join yields a *plausible* rho that nobody catches downstream. Fails silently, not loudly → high.
 
-**Reuse (do not rebuild):** the raw donor2 Seurat object is the same `.rds` used by `alz/incytr_pair/build_tcells_seurat.R` (`data/datasets/tcells/donor2/scrna/Tcells_d2.singlet (1).rds`) — reuse that read pattern (`readRDS`, `DefaultAssay <- "RNA"`, `DietSeurat`) for the pseudobulk, but aggregate over **all** day2 cells with no state idents.
+**Reuse (do not rebuild):** the raw donor2 Seurat object is the same `.rds` used by `alz/incytr_pair/build_tcells_seurat.R` (`data/datasets/tcells/donor2/scrna/Tcells_d2.singlet (1).rds`) — **read `alz/incytr_pair/build_tcells_seurat.R` first** and reuse that read pattern (`readRDS`, `DefaultAssay <- "RNA"`, `DietSeurat`) for the pseudobulk, but aggregate over **all** day2 cells with no state idents. Do not reinvent the load.
+
+**Memory cap (mandatory — the `.rds` is 4.7 GB on disk and expands to ~15–30 GB in R):** `readRDS` on this object is the step that can OOM the shared box. Run the pseudobulk step under a hard cap — `systemd-run --user --scope -p MemoryMax=40G -p MemorySwapMax=0 pixi run …` — and `DietSeurat` to the RNA assay only *before* aggregating, so the peak stays bounded. Do not load the object without the cap.
 
 ## Operating rules (non-negotiable — this repo's standing constraints)
 

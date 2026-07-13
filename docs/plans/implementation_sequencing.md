@@ -40,7 +40,7 @@ per-cell labeler (`a7d53d2`) is abandoned. The labeler is an **active WIP owned 
 t-cell Incytr input re-key + pair-mode re-run (donor1 3 contrasts, donor2 4), viewer rebuild, report
 regen, `sidechain-02`, and `A3` all wait on those labels **freezing**, not on any further decision.
 **`corr` is the one t-cell plan independent of labeling** (raw-Seurat pseudobulk, no state idents) — it
-can proceed regardless.
+was built independently of the labeling gate (**DONE 2026-07-13**).
 
 ---
 
@@ -92,8 +92,8 @@ D2 ──► E1 (reuse sidechain-01 backend) ──► E2 ───────�
 T2 specificity ──► C4, G2, E2                                    │
 B2 (sankey), C3 (early-change) ─────────────────────────────────┘
 
-corr, tmt (H1), G1 (diagrams), deploy-B  ── independent leaves, no gate
-B1 (covered), A4 (verified) ── done
+tmt (H1), G1 (diagrams), deploy-B  ── independent leaves, no gate
+B1 (covered), A4 (verified), corr (built) ── done
 I1 ── independent (low conflict) · I2 ── isolated window, last (D5)
 ```
 
@@ -120,10 +120,10 @@ I1 ── independent (low conflict) · I2 ── isolated window, last (D5)
   blocked on unobtainable source artifacts, which the no-contact rule forbids requesting).
 - `A4` T-cell data structure — verified on disk (donor1 has IMAC, donor2 does not; both total+pY+scRNA).
 - `matt` labeling — RESOLVED to Matt cluster-relabel (D1/T4); the labeler is user-owned active WIP.
+- `corr` proteome↔transcriptome correlation — BUILT 2026-07-13 (rho=0.546, n=7693); archived to `standalone_done/`.
 - All adjudications resolved: D2 (shared backend), D3 (un-pin), D4 (prose checklist), D5 (I2 last).
 
 **Wave 1 — independent builds (parallel, disjoint outputs, no gate).**
-- `corr` (labeling-independent standalone script + CSV) — the one unblocked t-cell task.
 - `H1` TMT paper IMAC fetch + enrichment.
 - `G1` workflow diagrams (docs).
 - `deploy` Option B (shard-hash manifest) — infra layer, separate from analysis.

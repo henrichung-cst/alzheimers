@@ -14,7 +14,6 @@ Status legend: **active** = in-flight / approved-pending · **deferred** = parke
 |---|---|---|
 | [`kinase_sidechain_incytr_graph/`](kinase_sidechain_incytr_graph/) | active | one-spine + kinase-sidechain cytoscape tab — `/orchestrate`-decomposed subplan set (`_index.md` + 01–04); all four parts unbuilt |
 | [`ad_geneuse_unpin_from_sce4.md`](ad_geneuse_unpin_from_sce4.md) | active | un-pin AD Incytr `gene.use` from sce4's frozen node sets to derived DEG∪prG — decided (un-pin); needs AD re-run + viewer rebuild |
-| [`tcell-proteome-transcriptome-correlation.md`](tcell-proteome-transcriptome-correlation.md) | active | genome-wide donor2/day2 bulk-protein vs pseudobulk-transcript Spearman — standalone CSV, unbuilt |
 | [`tcell-matt-report-restoration.md`](tcell-matt-report-restoration.md) | active WIP | Matt cluster-relabel labeling (Seurat clusters → small biological set) as canonical; ProjecTILs permanently retired. User-owned; gates the t-cell Incytr re-run |
 | [`deployment/todo9_viewer_aws_deployment.md`](deployment/todo9_viewer_aws_deployment.md) | partial | viewer AWS deployment scaling — Option A (`deploy_viewer.sh` s3 sync) shipped; B/C/D open |
 
