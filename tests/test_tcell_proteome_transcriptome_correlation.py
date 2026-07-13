@@ -84,3 +84,18 @@ def test_write_output_uses_spearman_on_raw_values(tmp_path: Path) -> None:
     assert (tmp_path / "result.csv").read_text().splitlines()[0] == (
         "gene,protein_abundance,pseudobulk_transcript_abundance,rank"
     )
+
+
+def test_writes_scatterplot_and_analysis(tmp_path: Path) -> None:
+    rows = correlation.matched_rows(
+        {"A": 1.0, "B": 2.0, "C": 3.0},
+        {"A": 0.0, "B": 20.0, "C": 10.0},
+    )
+
+    plot_path = tmp_path / "plot.png"
+    analysis_path = tmp_path / "analysis.md"
+    correlation.write_scatterplot(rows, plot_path)
+    correlation.write_analysis(rows, analysis_path)
+
+    assert plot_path.is_file() and plot_path.stat().st_size > 0
+    assert "## Interpretation" in analysis_path.read_text()

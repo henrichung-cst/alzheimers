@@ -19,6 +19,7 @@ import tempfile
 from collections import defaultdict
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 from scipy.stats import rankdata, spearmanr
 
 
@@ -28,12 +29,20 @@ PROTEOME_PATH = REPO_ROOT / (
     "10Feb2026_Donor2_TotalProteome_ForPerseus.txt"
 )
 RDS_PATH = REPO_ROOT / "data/datasets/tcells/donor2/scrna/Tcells_d2.singlet (1).rds"
-OUTPUT_PATH = REPO_ROOT / "outputs/reports/tcell_donor2_day2_protein_rna_correlation.csv"
+OUTPUT_DIR = REPO_ROOT / "outputs/reports/tcell_donor2_day2_protein_rna_correlation"
+OUTPUT_PATH = OUTPUT_DIR / "per_gene_correlation.csv"
+PLOT_PATH = OUTPUT_DIR / "protein_rna_scatterplot.png"
+WRITEUP_PATH = OUTPUT_DIR / "analysis.md"
 
 GENE_COLUMN = "PG.Genes"
 PRECURSOR_COLUMN = "PG.NrOfPrecursorsIdentified (Experiment-wide)"
 PROTEIN_COLUMN = "Day 2 Total Quantity"
 PSEUDOBULK_COLUMN = "pseudobulk_transcript_abundance"
+
+
+def format_p_value(p_value: float) -> str:
+    """Format a p-value without misrepresenting numerical underflow as zero."""
+    return "below numerical precision" if p_value == 0 else f"{p_value:.6g}"
 
 
 def _pixi_executable() -> str:
@@ -184,17 +193,116 @@ def write_output(rows: list[dict[str, float | str]], output_path: Path) -> tuple
     return float(result.statistic), float(result.pvalue), len(rows)
 
 
+def write_scatterplot(rows: list[dict[str, float | str]], output_path: Path) -> None:
+    """Write the all-gene scatterplot with zero RNA counts retained by log1p."""
+    protein = [float(row["protein_abundance"]) for row in rows]
+    transcript = [float(row[PSEUDOBULK_COLUMN]) for row in rows]
+    rho = float(spearmanr(protein, transcript).statistic)
+    fig, axis = plt.subplots(figsize=(8, 6), constrained_layout=True)
+    axis.scatter(
+        protein,
+        [math.log1p(value) for value in transcript],
+        s=9,
+        alpha=0.35,
+        linewidths=0,
+        color="#2563eb",
+    )
+    axis.set_xscale("log")
+    axis.set_xlabel("Bulk protein abundance (Day 2 Total Quantity; log scale)")
+    axis.set_ylabel("log1p(raw donor2 day2 RNA pseudobulk counts)")
+    axis.set_title("Donor2 day2: bulk protein vs. all-cell RNA pseudobulk")
+    axis.text(
+        0.02,
+        0.98,
+        f"Spearman $\\rho$ = {rho:.3f}\\nn = {len(rows):,}",
+        transform=axis.transAxes,
+        va="top",
+        bbox={"facecolor": "white", "edgecolor": "#9ca3af", "alpha": 0.9, "pad": 5},
+    )
+    axis.grid(True, which="both", color="#d1d5db", linewidth=0.6, alpha=0.7)
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+
+
+def write_analysis(rows: list[dict[str, float | str]], output_path: Path) -> None:
+    """Write a compact interpretation of the descriptive cross-modal result."""
+    protein = [float(row["protein_abundance"]) for row in rows]
+    transcript = [float(row[PSEUDOBULK_COLUMN]) for row in rows]
+    rho, p_value = spearmanr(protein, transcript)
+    zero_rna = sum(value == 0 for value in transcript)
+    p_value_text = format_p_value(float(p_value))
+    protein_ranks = rankdata(protein, method="average")
+    transcript_ranks = rankdata(transcript, method="average")
+    ranked = [
+        (row, float(protein_rank), float(transcript_rank))
+        for row, protein_rank, transcript_rank in zip(
+            rows, protein_ranks, transcript_ranks, strict=True
+        )
+    ]
+    rank_delta = [item[2] - item[1] for item in ranked]
+    largest_rna_excess = max(rank_delta)
+    largest_protein_excess = min(rank_delta)
+    rna_excess = [item for item in ranked if item[2] - item[1] == largest_rna_excess]
+    protein_excess = [item for item in ranked if item[2] - item[1] == largest_protein_excess]
+
+    def table(entries: list[tuple[dict[str, float | str], float, float]]) -> str:
+        lines = [
+            "| gene | protein abundance | RNA pseudobulk counts | protein rank | RNA rank |",
+            "|---|---:|---:|---:|---:|",
+        ]
+        for row, protein_rank, transcript_rank in entries:
+            lines.append(
+                f"| {row['gene']} | {float(row['protein_abundance']):.6g} | "
+                f"{float(row[PSEUDOBULK_COLUMN]):.6g} | {protein_rank:.1f} | "
+                f"{transcript_rank:.1f} |"
+            )
+        return "\n".join(lines)
+
+    direction = "positive" if rho > 0 else "negative" if rho < 0 else "zero"
+    output_path.write_text(
+        f"# Donor2 day2 protein–RNA correlation\n\n"
+        f"## Result\n\n"
+        f"Across {len(rows):,} direct gene-symbol matches, raw bulk protein abundance and "
+        f"all-cell raw RNA pseudobulk have Spearman rho = {rho:.6g} "
+        f"(two-sided p-value {p_value_text}). The scatterplot uses log-scaled protein "
+        f"abundance and log1p RNA counts only for visualization; the reported statistic "
+        f"uses raw values. {zero_rna:,} matched genes have zero RNA pseudobulk counts.\n\n"
+        f"## Interpretation\n\n"
+        f"The {direction} but incomplete concordance is descriptive and exploratory. This "
+        f"analysis has one matched donor/timepoint measurement per gene, so it cannot "
+        f"estimate a separate correlation or p-value for an individual gene. Individual "
+        f"genes should instead be read as rank-concordant or rank-discordant observations.\n\n"
+        f"## Largest rank discordances\n\n"
+        f"The tables list the maximum rank difference in each direction, including all "
+        f"ties; ranks are computed directly from the raw abundance columns, with average "
+        f"ranks for ties.\n\n"
+        f"### Maximum RNA rank excess\n\n{table(rna_excess)}\n\n"
+        f"### Maximum protein rank excess\n\n{table(protein_excess)}\n\n"
+        f"These observations are hypotheses, not gene-level validation. Membrane-protein "
+        f"recovery, histone transcript capture, blood/plasma material, non-T-cell material, "
+        f"and protein-group inference can each produce cross-modal discordance.\n\n"
+        f"## Recommended use\n\n"
+        f"Use the CSV as raw evidence. Before interpreting a discordant gene, inspect its "
+        f"protein-group/precursor support and whether it is histone, membrane, mitochondrial, "
+        f"plasma, hemoglobin, or immunoglobulin-associated. Replicated matched samples or a "
+        f"targeted protein assay are required to establish gene-specific regulation.\n"
+    )
+
+
 def main() -> None:
     preflight_inputs()
     proteome = read_proteome(PROTEOME_PATH)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="tcell_donor2_day2_", dir=OUTPUT_PATH.parent) as temp_dir:
         pseudobulk_path = Path(temp_dir) / "pseudobulk.csv"
         extract_day2_pseudobulk(pseudobulk_path)
         pseudobulk = read_pseudobulk(pseudobulk_path)
     rows = matched_rows(proteome, pseudobulk)
     rho, p_value, n = write_output(rows, OUTPUT_PATH)
-    print(f"Spearman rho={rho:.6g} p_value={p_value:.6g} n={n}")
-    print(f"Wrote {OUTPUT_PATH.relative_to(REPO_ROOT)}")
+    write_scatterplot(rows, PLOT_PATH)
+    write_analysis(rows, WRITEUP_PATH)
+    print(f"Spearman rho={rho:.6g} p_value={format_p_value(p_value)} n={n}")
+    print(f"Wrote {OUTPUT_DIR.relative_to(REPO_ROOT)}")
 
 
 if __name__ == "__main__":
