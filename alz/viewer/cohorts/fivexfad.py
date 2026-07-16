@@ -1768,6 +1768,10 @@ def _5xfad_annotate_trajectory_columns(
         df,
         timepoints=_5XFAD_TRAJ_TIMEPOINTS,
         valid_diseases=_5XFAD_TRAJ_VALID_DISEASES,
+        series_key=lambda frame: frame["contrast"].str.split("_", n=1).str[0],
+        axis_value=lambda frame: frame["contrast"].str.split("_", n=1).str[1],
+        ordered_axis=_5XFAD_TRAJ_TIMEPOINTS,
+        valid_series=_5XFAD_TRAJ_VALID_DISEASES,
         source_label=source_label,
     )
 

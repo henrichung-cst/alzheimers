@@ -29,8 +29,10 @@ from alz.viewer.shared.incytr_index import (  # noqa: E402
     _INCYTR_LABEL_VOCAB,
     _INCYTR_SCORE_COLS_BASE,
     _INCYTR_SCORE_COLS_OPTIONAL,
+    _SIGN_VEC_LABELS,
     _active_optional_score_cols,
     _idx_label_bits,
+    _idx_traj_bits,
     write_incytr_backbone_grains,
 )
 from alz.tcell_viewer.paths import (  # noqa: E402
@@ -489,6 +491,32 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         }
 
     pathway_counts = _build_pathway_counts()
+
+    # Annotate against the complete donor-local long table before selecting
+    # top instances or streaming pair shards. The completeness gate must see
+    # every follow-up day, not only rows that survive an output cut.
+    ordered_days = tuple(sorted(
+        {_timepoint_label(c) for c in present_contrasts},
+        key=lambda day: int(day[1:]) if day.startswith("d") else day,
+    ))
+    from alz.viewer.shared.trajectory import annotate_trajectory_columns
+    trajectory_source = con.execute("""
+        SELECT sender, receiver, Path, contrast, PDS
+        FROM src
+        WHERE PDS IS NOT NULL
+    """).fetchdf()
+    trajectory_source, _, traj_summary = annotate_trajectory_columns(
+        trajectory_source,
+        series_key=lambda frame: pd.Series(donor, index=frame.index),
+        axis_value=lambda frame: frame["contrast"].map(_timepoint_label),
+        ordered_axis=ordered_days,
+        valid_series={donor},
+        source_label=f"tcell/{donor}",
+    )
+    trajectory_map = trajectory_source[
+        ["sender", "receiver", "Path", "traj_labels", "sign_vec"]
+    ].drop_duplicates(["sender", "receiver", "Path"])
+
     # Complete donor-local top-mode index. This mirrors the unified viewer's
     # packed-column contract so the shared Incytr Pathways tab can filter over
     # every row instead of a pre-capped top_instances table.
@@ -525,7 +553,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
             "emId": _idx_gene_ids(frame["EM"]),
             "targetId": _idx_gene_ids(frame["Target"]),
             "labelBits": _idx_label_bits(frame),
-            "trajBits": np.zeros(n, dtype="<u1"),
+            "trajBits": _idx_traj_bits(frame["traj_labels"]),
             "PDS": frame["PDS"].to_numpy(dtype="<f4"),
             "pvalue": frame["pvalue"].to_numpy(dtype="<f4"),
         }
@@ -549,8 +577,13 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
     """).fetchdf()
     if len(top):
         top["rank"] = np.arange(1, len(top) + 1, dtype=int)
-        top["traj_labels"] = ""
-        top["sign_vec"] = ""
+        top = top.merge(
+            trajectory_map,
+            on=["sender", "receiver", "Path"],
+            how="left",
+        )
+        top["traj_labels"] = top["traj_labels"].fillna("")
+        top["sign_vec"] = top["sign_vec"].fillna("")
     top_cols = [
         "rank", "sender", "receiver", "Path", "Ligand", "Receptor", "EM",
         "Target", "contrast", "pvalue", "PDS", "abs_pds", "traj_labels",
@@ -594,7 +627,21 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
             if col in sub.columns:
                 sub[col] = pd.Categorical(sub[col], categories=_INCYTR_LABEL_VOCAB)
         s, r = key
+        sub["sender"] = s
+        sub["receiver"] = r
+        sub["Path"] = (sub["Ligand"].astype(str) + "|"
+                        + sub["Receptor"].astype(str) + "|"
+                        + sub["EM"].astype(str) + "|"
+                        + sub["Target"].astype(str))
+        sub = sub.merge(
+            trajectory_map,
+            on=["sender", "receiver", "Path"],
+            how="left",
+        )
+        sub["traj_labels"] = sub["traj_labels"].fillna("")
+        sub["sign_vec"] = sub["sign_vec"].fillna("")
         _accumulate_index(s, r, sub)
+        sub = sub.drop(columns=["sender", "receiver", "Path"])
         for col in float32_cols:
             if col in sub.columns:
                 sub[col] = sub[col].astype("float32")
@@ -693,7 +740,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
             "receiver_vocab": receivers_canonical,
             "contrast_vocab": list(present_contrasts),
             "gene_vocab": idx_gene_vocab,
-            "traj_label_vocab": [],
+            "traj_label_vocab": list(_SIGN_VEC_LABELS),
             "label_states": ["", *_INCYTR_LABEL_VOCAB],
             "label_nodes": list(_INCYTR_LABEL_NODES),
             "score_columns": list(effective_score_cols),
@@ -725,26 +772,15 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         schema_version=SCHEMA_VERSION,
     )
 
-    # T-cell contrasts are of the form "<day>_d2" — derive the day axis once
-    # so the JS doesn't have to parse contrast strings at render time. "Disease"
-    # in the unified-viewer JS vocabulary maps to the variable day for T-cell;
-    # "timepoint" is the baseline (degenerate single-valued).
+    # T-cell contrasts are of the form "<day>_d2" — expose the follow-up day
+    # axis for the shared Incytr trend chart and controls.
     contrasts_list = list(present_contrasts)
-    days = []
-    baselines = []
-    for c in contrasts_list:
-        parts = c.split("_", 1)
-        head = parts[0]
-        tail = parts[1] if len(parts) > 1 else c
-        if head not in days:
-            days.append(head)
-        if tail not in baselines:
-            baselines.append(tail)
+    days = list(ordered_days)
     return {
         "donor": donor,
         "contrasts": contrasts_list,
         "diseases": days,
-        "timepoints": baselines,
+        "timepoints": days,
         "senders": senders_canonical,
         "receivers": receivers_canonical,
         "celltype_qc": celltype_qc,
@@ -759,6 +795,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         "label_columns": list(_INCYTR_LABEL_COLS),
         "label_nodes": list(_INCYTR_LABEL_NODES),
         "label_vocab": list(_INCYTR_LABEL_VOCAB),
+        "trajectory_summary": traj_summary,
         "direction_flag_columns": list(dir_flag_cols),
         "path_metric_columns": list(extra_path_cols),
         "top_instances": top_instances,
