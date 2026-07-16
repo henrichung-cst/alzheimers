@@ -46,7 +46,7 @@ def resolve_incytr_pair_mode_tcells_dir(
         "TCELL_INCYTR_PAIR_MODE_DIR",
         os.path.join(
             config.REPO_ROOT, "outputs", "reports",
-            "incytr_pair_mode_tcells_percell_posneg",
+            "incytr_pair_mode_tcells",
         ),
     )
 

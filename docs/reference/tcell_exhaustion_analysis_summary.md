@@ -160,7 +160,7 @@ fresh validation:
 - `outputs/reports/tcell_viewer/tcell_viewer.payload.json`
 - `outputs/reports/kinase_attribution_tcells/donor1/unified_attribution_tcells.csv`
 - `outputs/reports/kinase_attribution_tcells/donor1/mea/`
-- `outputs/reports/incytr_pair_mode_tcells_percell_posneg/<donor>/wide/`
+- `outputs/reports/incytr_pair_mode_tcells/<donor>/wide/`
 
 Useful commands:
 

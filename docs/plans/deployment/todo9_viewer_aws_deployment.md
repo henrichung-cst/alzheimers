@@ -171,6 +171,8 @@ abstraction needs a new backend. Test coverage must verify byte-range correctnes
 
 ---
 
+\\  
+
 ## Option D — DuckDB-Wasm (exploratory, weeks)
 
 **What:** Run DuckDB in the browser via WASM, querying Parquet files on S3 directly

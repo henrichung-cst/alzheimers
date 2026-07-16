@@ -16,7 +16,6 @@ suppressPackageStartupMessages({library(Seurat); library(SeuratObject)})
 
 args <- commandArgs(trailingOnly = TRUE)
 donor <- if (length(args) >= 1) args[[1]] else stop("usage: Rscript ... <donor>")
-umap_seed <- 42L
 
 rds <- list(
   donor1 = "data/datasets/tcells/donor1/scrna/Tcells.singlet.rds",
@@ -47,7 +46,6 @@ obj <- ScaleData(obj, vars.to.regress = c("S.Score", "G2M.Score"), verbose = FAL
 obj <- RunPCA(obj, npcs = 30, verbose = FALSE)
 obj <- FindNeighbors(obj, dims = 1:30, verbose = FALSE)
 obj <- FindClusters(obj, resolution = 0.8, verbose = FALSE)
-obj <- RunUMAP(obj, dims = 1:30, seed.use = umap_seed, verbose = FALSE)
 message("[", donor, "] cc-regressed clusters: ", length(levels(Idents(obj))))
 
 # per-cell: old vs new cluster + phase/scores for cross-tab downstream
@@ -55,8 +53,6 @@ cells <- data.frame(
   barcode = colnames(obj),
   old_cluster = as.character(old_clusters),
   cc_cluster  = as.character(Idents(obj)),
-  UMAP_1 = Embeddings(obj, "umap")[colnames(obj), 1],
-  UMAP_2 = Embeddings(obj, "umap")[colnames(obj), 2],
   Phase = obj$Phase, S.Score = round(obj$S.Score, 3), G2M.Score = round(obj$G2M.Score, 3),
   check.names = FALSE)
 write.csv(cells, file.path(outdir, paste0(donor, "_cc_recluster_cells.csv")), row.names = FALSE)

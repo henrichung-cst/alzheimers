@@ -60,6 +60,33 @@ async function _loadPayload() {
 }
 
 // ---------------------------------------------------------------------------
+// T-cell per-cell state color palette — the ONE canonical state vocabulary,
+// shared by the donor scRNA, attribution manifest, kinase explorer, Incytr
+// chord, and the labeling-evidence report (a cell's `type` in
+// outputs/reports/tcell_labeling/cells/<donor>_state_labels.csv, validated to
+// this 12-state roster by alz/ingest/tcells_state_labels.R). CD4 states in
+// matplotlib `Oranges`, CD8 in `Blues`, pale -> dark along the biological
+// progression (unknown -> naive-like -> resting/memory -> activated/effector ->
+// cytotoxic -> exhausted). Values are the report's EXACT gradient (cmap sampled
+// 0.28 -> 0.85 at n=6 per lineage) so viewer and report read identically.
+// ---------------------------------------------------------------------------
+const TCELL_STATE_COLOR = {
+  "CD4": "#fdc895", "CD4NaiveLike": "#fda965", "CD4RestingMemory": "#fc8a39",
+  "CD4ActivatedEffector": "#f16913", "CD4Cytotoxic": "#db4b03",
+  "CD4ExhaustionAssociated": "#b03903",
+  "CD8": "#bdd7ec", "CD8NaiveLike": "#97c6df", "CD8RestingMemory": "#68acd5",
+  "CD8ActivatedEffector": "#4292c6", "CD8CytotoxicEffector": "#2474b7",
+  "CD8Exhausted": "#0d57a1",
+};
+
+// Colored swatch preceding a state label; empty string for states not in the
+// palette (so a pipeline typo surfaces as a missing dot, not a wrong color).
+function tcellStateSwatch(state) {
+  const c = TCELL_STATE_COLOR[state];
+  return c ? `<span class="tcell-state-dot" style="background:${c}" aria-hidden="true"></span>` : "";
+}
+
+// ---------------------------------------------------------------------------
 // Store — reducer-style with {selection, filters, view} slices
 // ---------------------------------------------------------------------------
 // Populated after _loadPayload() resolves.
@@ -105,6 +132,18 @@ const Store = (function(){
 })();
 window.Store = Store;  // expose for console smoke test
 
+// Search by exact, case-insensitive tokens. A gene inside a pathway string
+// (e.g. "X*PDCD1*Y") counts as exact, while PDCD10 and PDCD11 do not match a
+// PDCD1 query.
+function _searchValueHasExactToken(value, query) {
+  return String(value ?? "").toLowerCase()
+    .split(/[^a-z0-9_.-]+/).filter(Boolean).includes(query);
+}
+
+function _searchValuesMatch(values, query) {
+  return values.some(v => _searchValueHasExactToken(v, query));
+}
+
 // ---------------------------------------------------------------------------
 // Canonical metric glossary — single source of truth for tooltips, column
 // header labels, and the per-tab "How to read" drawer. Static HTML uses
@@ -148,6 +187,8 @@ const METRIC_DEFS = {
   topCelltype:   { label: "Top cell type", short: "Top attributed receiver cell type from the attribution evidence table." },
   highConfAttr:  { label: "Location confidence", short: "Whether the kinase has high-confidence cell-type attribution." },
   nBackbones:    { label: "#Backbones",    short: "Number of distinct pathway backbones with significant support from this kinase, across all contrasts." },
+  incytrPathways:{ label: "Incytr pathways", short: "Substrate-based pathway participation: count and % of all predicted pathways whose Ligand/Receptor/EM/Target node includes ≥1 gene this kinase phosphorylates (its MEA substrate set). Denominator is the donor's full predicted-pathway universe. n/a = no MEA substrate set for this kinase." },
+  incytrBackbones:{ label: "Incytr backbones", short: "Substrate-based backbone participation: count and % of all predicted pathways whose Ligand/Receptor/EM node (Target excluded) includes ≥1 gene this kinase phosphorylates (its MEA substrate set). Denominator is the donor's full predicted-pathway universe. n/a = no MEA substrate set for this kinase." },
 
   // Pathway browser columns
   receiverCol:     { label: "Receiver",         short: "Receiver cell type for the backbone." },
@@ -440,7 +481,7 @@ class AuditTable {
   filteredRows() {
     const q = this.query.trim().toLowerCase();
     let rows = this.rows;
-    if (q) rows = rows.filter(r => Object.values(r).some(v => String(v ?? "").toLowerCase().includes(q)));
+    if (q) rows = rows.filter(r => _searchValuesMatch(Object.values(r), q));
     if (this.sortCol) {
       const c = this.sortCol, asc = this.sortAsc;
       rows = rows.slice().sort((a, b) => {

@@ -73,6 +73,8 @@
               <th data-col="tcell_max_enrich" data-metric="tcellMaxEnrich" title="Peak within-cohort enrichment across the evidence-backed states. Detection and raw pooled cell counts are reported separately; no minimum-cell gate is applied.">Enrichment</th>
               <th data-col="n_attributed_celltypes" data-metric="nAttributedCelltypes" title="Evidence-backed states in which this kinase is detected (fraction expressing ≥10%). The denominator is the active donor's state roster.">Cell states</th>
               <th data-col="nsclc_specificity_count" data-metric="nsclcSpecificity" title="NSCLC specificity (N/7, fewer = more specific) — how many of the 7 coarse cell types (T_NK + non-T: B_plasma, Myeloid, Epithelial, Endothelial, Fibroblast, Mast) express this kinase in ≥10% of their cells (cell-weighted prevalence, at the shared 10% detection floor), with the dominant cell type badged. Fewer = more cell-type-restricted in the independent NSCLC reference (10x 897k-cell). n/a = outside the NSCLC probe panel. Click to sort.">NSCLC spec</th>
+              <th data-col="incytr_pathways" data-metric="incytrPathways" title="Incytr pathway participation (substrate-based) — count and % of all predicted pathways whose Ligand/Receptor/EM/Target node includes ≥1 gene this kinase phosphorylates (its MEA substrate set). Percentage denominator is the donor's full predicted-pathway universe. n/a = no MEA substrate set for this kinase. Click to sort.">Incytr pathways</th>
+              <th data-col="incytr_backbones" data-metric="incytrBackbones" title="Incytr backbone participation (substrate-based) — count and % of all predicted pathways whose Ligand/Receptor/EM node (Target excluded) includes ≥1 gene this kinase phosphorylates (its MEA substrate set). Percentage denominator is the donor's full predicted-pathway universe. n/a = no MEA substrate set for this kinase. Click to sort.">Incytr backbones</th>
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -282,23 +284,26 @@
     <div class="card glossary-card">
       <section class="glossary-section">
         <h2>Cell-state nomenclature</h2>
-        <p class="muted">Evidence-backed per-cell states used consistently across donor scRNA, attribution, and pathway views.</p>
+        <p class="muted">Evidence-backed per-cell states, used consistently across donor scRNA, attribution, kinase-explorer, and pathway (Incytr) views. Lineage (CD4/CD8) is assigned from CITE-seq surface protein; each cell then gets one functional state scored from marker panels (see the labeling-evidence report). Colors: CD4 in oranges, CD8 in blues, pale → dark along the naive → exhausted progression.</p>
         <h3>CD8<sup>+</sup> T-cells</h3>
         <dl>
-          <dt>CD8PrecursorExhausted</dt><dd>Operational precursor-exhausted state: multiple checkpoint-associated transcripts plus a coherent TCF7-positive memory program.</dd>
-          <dt>CD8Exhausted</dt><dd>Operational exhausted state: multiple checkpoint-associated transcripts without the supported memory program. This does not imply terminal exhaustion.</dd>
-          <dt>CD8Memory</dt><dd>CD8 cells with a coherent TCF7-positive memory program and without measured checkpoint coexpression.</dd>
-          <dt>CD8Cytotoxic</dt><dd>CD8 cells with detected perforin plus granzyme cytotoxic machinery.</dd>
-          <dt>CD8Effector</dt><dd>Broad residual CD8 effector compartment after the higher-specificity exhaustion, memory, and cytotoxic programs.</dd>
+          <dt><span class="tcell-state-dot" style="background:#bdd7ec"></span>CD8</dt><dd>Bare-lineage CD8 cell eligible for no named state (annotated by lineage alone).</dd>
+          <dt><span class="tcell-state-dot" style="background:#97c6df"></span>CD8NaiveLike</dt><dd>Naive stemness (TCF7, LEF1) and homing (CCR7, SELL), without cytotoxic, activation, or exhaustion programs.</dd>
+          <dt><span class="tcell-state-dot" style="background:#68acd5"></span>CD8RestingMemory</dt><dd>Resting/memory identity (IL7R, CD27), without acute activation or exhaustion.</dd>
+          <dt><span class="tcell-state-dot" style="background:#4292c6"></span>CD8ActivatedEffector</dt><dd>Acute activation (CD69, IL2RA, TNFRSF4, ICOS, CD40LG) plus effector function (GZMB, PRF1, IFNG, TNF), without exhaustion.</dd>
+          <dt><span class="tcell-state-dot" style="background:#2474b7"></span>CD8CytotoxicEffector</dt><dd>Granzyme program (GZMB, GZMH, GNLY) plus perforin (PRF1), without the exhaustion transcription-factor program.</dd>
+          <dt><span class="tcell-state-dot" style="background:#0d57a1"></span>CD8Exhausted</dt><dd>Late exhaustion signature (HAVCR2, LAG3, ENTPD1, TOX, NR4A1) positive and exceeding the acute-activation and effector-function scores.</dd>
         </dl>
         <h3>CD4<sup>+</sup> T-cells</h3>
         <dl>
-          <dt>CD4Proliferating</dt><dd>CD4 cells assigned to S or G2/M by the RNA cell-cycle program.</dd>
-          <dt>CD4Memory</dt><dd>G1-scored CD4 cells with a coherent TCF7-positive memory program.</dd>
-          <dt>CD4Cytotoxic</dt><dd>G1-scored CD4 cells with detected perforin plus granzyme cytotoxic machinery.</dd>
-          <dt>CD4Resting</dt><dd>Remaining G1-scored CD4 cells without the named memory or cytotoxic program.</dd>
+          <dt><span class="tcell-state-dot" style="background:#fdc895"></span>CD4</dt><dd>Bare-lineage CD4 cell eligible for no named state (annotated by lineage alone).</dd>
+          <dt><span class="tcell-state-dot" style="background:#fda965"></span>CD4NaiveLike</dt><dd>Naive stemness (TCF7, LEF1) and homing (CCR7, SELL), without cytotoxic, activation, or exhaustion programs.</dd>
+          <dt><span class="tcell-state-dot" style="background:#fc8a39"></span>CD4RestingMemory</dt><dd>Resting/memory identity (IL7R, CD27), without acute activation or exhaustion.</dd>
+          <dt><span class="tcell-state-dot" style="background:#f16913"></span>CD4ActivatedEffector</dt><dd>Acute activation (CD69, IL2RA, TNFRSF4, ICOS, CD40LG) plus effector function (GZMB, PRF1, IFNG, TNF), without exhaustion.</dd>
+          <dt><span class="tcell-state-dot" style="background:#db4b03"></span>CD4Cytotoxic</dt><dd>Granzyme program (GZMB, GZMH, GNLY) plus perforin (PRF1), without the exhaustion transcription-factor program.</dd>
+          <dt><span class="tcell-state-dot" style="background:#b03903"></span>CD4ExhaustionAssociated</dt><dd>Late exhaustion signature (HAVCR2, LAG3, ENTPD1, TOX, NR4A1) positive and exceeding the acute-activation and effector-function scores.</dd>
         </dl>
-        <p class="muted">These are operational biological state labels for this chronic-stimulation experiment. Raw marker evidence and independent ProjecTILs confidence remain available in the labeling audit. They do not claim terminal exhaustion or directly measured functional dysfunction.</p>
+        <p class="muted">These are operational biological state labels for this chronic-stimulation experiment; raw marker evidence remains available in the labeling audit. They do not claim terminal exhaustion or directly measured functional dysfunction.</p>
       </section>
     </div>
   </div>

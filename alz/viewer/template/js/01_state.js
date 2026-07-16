@@ -146,6 +146,18 @@ const Store = (function(){
 })();
 window.Store = Store;  // expose for console smoke test
 
+// Search by exact, case-insensitive tokens. A gene inside a pathway string
+// (e.g. "X*PDCD1*Y") counts as exact, while PDCD10 and PDCD11 do not match a
+// PDCD1 query.
+function _searchValueHasExactToken(value, query) {
+  return String(value ?? "").toLowerCase()
+    .split(/[^a-z0-9_.-]+/).filter(Boolean).includes(query);
+}
+
+function _searchValuesMatch(values, query) {
+  return values.some(v => _searchValueHasExactToken(v, query));
+}
+
 // ---------------------------------------------------------------------------
 // Canonical metric glossary — single source of truth for tooltips, column
 // header labels, and the per-tab "How to read" drawer. Static HTML uses
@@ -528,7 +540,7 @@ class AuditTable {
   filteredRows() {
     const q = this.query.trim().toLowerCase();
     let rows = this.rows;
-    if (q) rows = rows.filter(r => Object.values(r).some(v => String(v ?? "").toLowerCase().includes(q)));
+    if (q) rows = rows.filter(r => _searchValuesMatch(Object.values(r), q));
     if (this.sortCol) {
       const c = this.sortCol, asc = this.sortAsc;
       rows = rows.slice().sort((a, b) => {

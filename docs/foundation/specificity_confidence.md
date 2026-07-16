@@ -162,6 +162,26 @@ corroborated = (WMB top class == WMB class of the dominant unit's home cluster)
             OR (human strong AND human's top class == that same WMB class)
 ```
 
+### 3a. Cross-species breadth caveat (review-time guard)
+
+Because human references only ever **promote** the tier and **never veto** (§3),
+one failure mode survives the pill: a kinase can read as cell-type-specific on the
+within-cohort signal (`eff ≤ 1.5` → `high`/`very_high`) while the human reference
+shows it expressed **broadly across many human cell types**. The pill does not
+catch this — human breadth is not a gate, by design.
+
+This is caught at **review time, not in code** (a veto would contradict the
+never-veto invariant above). Before finalizing any target as cell-type-specific,
+check the human breadth already computed per kinase:
+
+- AD: `celltype_specificity.csv` (`human_celltype_attribution.py`, top-N specific
+  human cell types per kinase) and `human_location_score`.
+- T-cell: NSCLC detection at the crosswalked home state.
+
+**Never finalize a target where the kinase is pinned to a single mouse cell type
+but the human reference shows it across multiple cell types** — drop the
+specificity claim when human contradicts it.
+
 ---
 
 ## 4. The tier

@@ -46,7 +46,7 @@ declare -A DONOR_DAYS=( [donor1]="13 17 20" [donor2]="5 7 9 11" )
 declare -A DONOR_CHANNELS=( [donor1]="pr,py,ps" [donor2]="pr,py" )
 FULL_NBOOT="${FULL_NBOOT:-100}"
 
-LOG_DIR="${OUTPUT_DIR_OVERRIDE:-outputs/reports/incytr_pair_mode_tcells_percell_posneg}"
+LOG_DIR="${OUTPUT_DIR_OVERRIDE:-outputs/reports/incytr_pair_mode_tcells}"
 mkdir -p "$LOG_DIR"
 
 preflight() {

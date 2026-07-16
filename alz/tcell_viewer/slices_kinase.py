@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import re
@@ -580,6 +581,109 @@ def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list,
     return cols
 
 
+# ---------------------------------------------------------------------------
+# Incytr pathway participation (substrate-based)
+# ---------------------------------------------------------------------------
+
+def _substrate_genes_by_kinase(donor: str, substrate_file: str,
+                               phospho_file: str) -> dict[str, set[str]]:
+    """Kinase NAME → set of substrate gene symbols (upper-case) for one track.
+
+    The MEA substrate set lists the kinase's positive phosphosite motifs; the
+    motif → gene map comes from the same donor's normalized phospho table (join
+    is 100% after upper-casing the lower-cased phospho-residue in the motif).
+    """
+    base = os.path.join(KINASE_ATTRIBUTION_TCELLS_DIR, donor)
+    sub_path = os.path.join(base, "mea", substrate_file)
+    ph_path = os.path.join(base, phospho_file)
+    if not (os.path.exists(sub_path) and os.path.exists(ph_path)):
+        return {}
+    ph = pd.read_csv(ph_path, usecols=["motif", "gene_symbol"])
+    motif2gene = {
+        str(m).upper(): str(g).upper()
+        for m, g in zip(ph["motif"], ph["gene_symbol"]) if pd.notna(g)
+    }
+    ss = pd.read_csv(sub_path, usecols=["kinase", "motif"])
+    ss["gene"] = ss["motif"].str.upper().map(motif2gene)
+    ss = ss.dropna(subset=["gene"])
+    return {str(k): set(v) for k, v in ss.groupby("kinase")["gene"]}
+
+
+def _incytr_pathway_participation(
+    donor: str, incytr_block: dict,
+    name_residue_rows: list[tuple[str, str]],
+) -> tuple[list, list, int] | None:
+    """Substrate-based Incytr pathway participation for the donor's kinases.
+
+    For each (kinase, residue) slice row, count the distinct predicted-pathway
+    rows with ≥1 node gene the kinase phosphorylates (its MEA substrate set on
+    the matching track: ST→ST file, Y→pY file), across two node scopes:
+      pathway  — Ligand/Receptor/EM/Target (the full pathway)
+      backbone — Ligand/Receptor/EM (Target excluded)
+    Denominator is the donor's full predicted-pathway universe (global_index
+    nrows) for both. Direct node membership is deliberately not used — a kinase
+    is a pathway node in ≤0.07% of rows, degenerate as a percentage.
+
+    Returns (pathway_counts, backbone_counts, total) aligned to
+    name_residue_rows (None per row when the kinase has no substrate set on its
+    track), or None when the donor has no Incytr global index.
+    """
+    gi = (incytr_block or {}).get("global_index")
+    if not gi:
+        return None
+    bin_path = os.path.join(UNIFIED_VIEWER_DIR, gi["url"])
+    if not os.path.exists(bin_path):
+        return None
+
+    n = int(gi["nrows"])
+    with gzip.open(bin_path, "rb") as f:
+        raw = f.read()
+    dt_map = {"f4": "<f4", "u2": "<u2", "u1": "<u1"}
+    want = {"ligandId", "receptorId", "emId", "targetId"}
+    node: dict[str, np.ndarray] = {}
+    off = 0
+    for c in gi["columns"]:
+        if c["name"] in want:
+            node[c["name"]] = np.frombuffer(
+                raw, dtype=dt_map[c["type"]], count=n, offset=off)
+        off += int(c["bytes"])
+    if len(node) != len(want):
+        return None
+    lig, rec, em, tgt = (node["ligandId"], node["receptorId"],
+                         node["emId"], node["targetId"])
+
+    vocab = gi["gene_vocab"]
+    vocab_up = {str(g).upper(): i for i, g in enumerate(vocab)}
+    sub_by_track = {
+        "ST": _substrate_genes_by_kinase(
+            donor, "mea_substrate_sets.csv", "raw_phospho_normalized.csv"),
+        "Y": _substrate_genes_by_kinase(
+            donor, "mea_substrate_sets_pY.csv", "raw_phospho_normalized_pY.csv"),
+    }
+
+    pathway_counts: list = []
+    backbone_counts: list = []
+    mask = np.zeros(len(vocab), dtype=bool)
+    for name, residue in name_residue_rows:
+        subs = sub_by_track.get(residue, {}).get(name)
+        if subs is None:                 # no substrate set on this track → n/a
+            pathway_counts.append(None)
+            backbone_counts.append(None)
+            continue
+        ids = [vocab_up[g] for g in subs if g in vocab_up]
+        if not ids:                      # substrate set exists but hits no node
+            pathway_counts.append(0)
+            backbone_counts.append(0)
+            continue
+        mask[:] = False
+        mask[ids] = True
+        backbone = mask[lig] | mask[rec] | mask[em]
+        pathway = backbone | mask[tgt]
+        pathway_counts.append(int(pathway.sum()))
+        backbone_counts.append(int(backbone.sum()))
+    return pathway_counts, backbone_counts, n
+
+
 def _build_donor_kinases_slice(donor: str) -> dict | None:
     """Columnar kinases table for one donor.
 
@@ -650,6 +754,14 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
         "nsclc_groups_total": [None] * len(rows),
         "nsclc_expressing_groups": [None] * len(rows),
         "nsclc_top_group": [""] * len(rows),
+        # Substrate-based Incytr pathway participation (filled in the assembler,
+        # once the pair-mode global index exists). count = distinct pathways with
+        # ≥1 node gene this kinase phosphorylates; pathway scope = L/R/EM/Target,
+        # backbone scope = L/R/EM (Target excluded); total = the donor's full
+        # predicted-pathway universe (shared denominator).
+        "incytr_pathway_count": [None] * len(rows),
+        "incytr_backbone_count": [None] * len(rows),
+        "incytr_pathway_total": [None] * len(rows),
     }
     for sc in short_contrasts:
         cols[f"NES_{sc}"] = []

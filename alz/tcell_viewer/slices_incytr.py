@@ -94,6 +94,20 @@ def _timepoint_label(contrast: str) -> str:
     return contrast.split("_", 1)[0] if "_" in contrast else contrast
 
 
+def _contrast_pvalue_column(column_names: set[str], contrast: str) -> str | None:
+    """Return the follow-up-day p-value column for a day-vs-baseline contrast."""
+    follow_up = _timepoint_label(contrast)
+    column = f"p_value_{follow_up}"
+    return column if column in column_names else None
+
+
+def _pvalue_filter_sql(threshold: float, has_pvalue: bool) -> str:
+    """SQL for a precomputed p-value band; the final band is truly ungated."""
+    if not has_pvalue or threshold >= 1.0:
+        return "TRUE"
+    return f"pvalue < {threshold}"
+
+
 # ---------------------------------------------------------------------------
 # Cell-type QC
 # ---------------------------------------------------------------------------
@@ -279,12 +293,13 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
     for fpath, contrast in file_to_contrast:
         sch = pq.read_schema(fpath)
         names = {f.name for f in sch}
-        pcol_disease = None
-        for n in names:
-            if n.startswith("p_value_") and not n.endswith("_WTyp"):
-                pcol_disease = n
-                has_pvalue = True
-                break
+        pcol_disease = _contrast_pvalue_column(names, contrast)
+        has_pvalue = has_pvalue or pcol_disease is not None
+        if pcol_disease is None:
+            print(
+                f"    (warn) no follow-up p-value column for {contrast}; using NULL",
+                flush=True,
+            )
         pcol_clause = f'CAST("{pcol_disease}" AS DOUBLE)' if pcol_disease else "CAST(NULL AS DOUBLE)"
 
         # SiK_score is emitted per-condition (SiK_score_<cond1> / SiK_score_d2);
@@ -370,8 +385,8 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
     # Heatmap counts cube.
     n_thr = len(_INCYTR_PATHWAY_PVALUES)
     n_ap = len(_INCYTR_PATHWAY_ABS_PDS)
-    pval_filter = (lambda tp: f"pvalue < {tp}") if has_pvalue else (lambda tp: "TRUE")
-    pval_where = "WHERE pvalue IS NOT NULL" if has_pvalue else ""
+    def pval_filter(threshold: float) -> str:
+        return _pvalue_filter_sql(threshold, has_pvalue)
     hm_clauses = ", ".join(
         f"COUNT(*) FILTER (WHERE {pval_filter(tp)} AND COALESCE(ABS(PDS), 0) >= {tap}) AS c_{ip}_{iap}"
         for ip, tp in enumerate(_INCYTR_PATHWAY_PVALUES)
@@ -379,7 +394,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
     )
     hm_rows = con.execute(f"""
         SELECT sender, receiver, contrast, {hm_clauses}
-        FROM src {pval_where} GROUP BY sender, receiver, contrast
+        FROM src GROUP BY sender, receiver, contrast
     """).fetchall()
     grid = np.zeros((n_s, n_r, n_c, n_thr, n_ap), dtype=np.uint32)
     for row in hm_rows:
@@ -409,7 +424,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         SELECT sender, receiver, contrast,
                CASE WHEN PDS > 0 THEN 2 WHEN PDS < 0 THEN 0 ELSE 1 END AS s,
                {hm_clauses}
-        FROM src {pval_where} GROUP BY sender, receiver, contrast, s
+        FROM src GROUP BY sender, receiver, contrast, s
     """).fetchall()
     signed_grid = np.zeros((n_s, n_r, n_c, 3, n_thr, n_ap), dtype=np.uint32)
     for row in hm_signed_rows:
@@ -446,8 +461,6 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
             for iap, tap in enumerate(_INCYTR_PATHWAY_ABS_PDS)
         )
         where_parts = []
-        if has_pvalue:
-            where_parts.append("pvalue IS NOT NULL")
         if where_extra:
             where_parts.append(where_extra)
         where_clause = "WHERE " + " AND ".join(where_parts) if where_parts else ""

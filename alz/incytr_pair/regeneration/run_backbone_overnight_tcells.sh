@@ -4,7 +4,7 @@
 # Run before bed (from repo root in a tmux session):
 #   bash alz/incytr_pair/regeneration/run_backbone_overnight_tcells.sh
 #
-# Log: outputs/reports/incytr_pair_mode_tcells_percell_posneg/overnight_<timestamp>.log
+# Log: outputs/reports/incytr_pair_mode_tcells/overnight_<timestamp>.log
 #
 # Sequence:
 #   [1/2] donor1 projected-state kinase MEA on decomposed ST + pY inputs.
@@ -36,7 +36,7 @@ if [[ ! -x "$PIXI" ]]; then
     exit 1
 fi
 
-OUTPUT_ROOT="${OUTPUT_DIR_OVERRIDE:-outputs/reports/incytr_pair_mode_tcells_percell_posneg}"
+OUTPUT_ROOT="${OUTPUT_DIR_OVERRIDE:-outputs/reports/incytr_pair_mode_tcells}"
 LOG_DIR="$OUTPUT_ROOT"
 mkdir -p "$LOG_DIR"
 TS="$(date +%Y%m%d_%H%M%S)"

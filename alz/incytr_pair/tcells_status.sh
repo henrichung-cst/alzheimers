@@ -14,8 +14,8 @@ set -uo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT"
 
-ROOT="${INCYTR_TCELLS_OUTPUT_ROOT:-outputs/reports/incytr_pair_mode_tcells_percell_posneg}"
-DEFAULT_ROOT="outputs/reports/incytr_pair_mode_tcells_percell_posneg"
+ROOT="${INCYTR_TCELLS_OUTPUT_ROOT:-outputs/reports/incytr_pair_mode_tcells}"
+DEFAULT_ROOT="outputs/reports/incytr_pair_mode_tcells"
 WATCH_SECONDS=""
 
 usage() {

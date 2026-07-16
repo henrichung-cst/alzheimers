@@ -67,6 +67,7 @@ from alz.tcell_viewer.slices_incytr import (  # noqa: E402
 from alz.tcell_viewer.slices_kinase import (  # noqa: E402
     _build_donor_kinases_slice,
     _build_celltypes_slice,
+    _incytr_pathway_participation,
     _load_projected_state_mea_payload,
     _build_decomposition_index_from_state_mea,
 )
@@ -221,6 +222,27 @@ def build_tcell_payload() -> dict:
 
     print("[build_tcell_payload] pair-mode shards:", flush=True)
     incytr_pathways_block = _write_tcell_pair_pathways()
+
+    # Substrate-based Incytr pathway participation — needs both the kinases slice
+    # and the pair-mode global index, so it is filled here rather than in the
+    # per-donor slice builder.
+    for donor, kslice in kinases_by_context.items():
+        rows = list(zip(kslice.get("name", []), kslice.get("residue_type", [])))
+        if not rows:
+            continue
+        ip_block = incytr_pathways_block.get("by_context", {}).get(donor)
+        if not ip_block:
+            continue
+        result = _incytr_pathway_participation(donor, ip_block, rows)
+        if result is None:
+            continue
+        pathway_counts, backbone_counts, total = result
+        kslice["incytr_pathway_count"] = pathway_counts
+        kslice["incytr_backbone_count"] = backbone_counts
+        kslice["incytr_pathway_total"] = [total] * len(pathway_counts)
+        n_hit = sum(1 for c in pathway_counts if c)
+        print(f"  {donor}: incytr pathway participation for {n_hit}/{len(pathway_counts)} "
+              f"kinases (of {total:,} pathways)", flush=True)
 
     print("[build_tcell_payload] transcript_trace shards:", flush=True)
     transcript_trace_meta = _write_tcell_transcript_trace()
@@ -619,7 +641,7 @@ def validate(payload: dict | None = None) -> str:
 
         production_default = os.path.join(
             config.REPO_ROOT, "outputs", "reports",
-            "incytr_pair_mode_tcells_percell_posneg",
+            "incytr_pair_mode_tcells",
         )
         if resolve_incytr_pair_mode_tcells_dir({}) != production_default:
             errors.append("T-cell pair-mode resolver does not select production default")

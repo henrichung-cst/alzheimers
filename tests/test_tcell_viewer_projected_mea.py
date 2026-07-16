@@ -21,7 +21,7 @@ class ProjectedStateMeaViewerTests(unittest.TestCase):
 
         self.assertEqual(
             selected.name,
-            "incytr_pair_mode_tcells_percell_posneg",
+            "incytr_pair_mode_tcells",
         )
 
     def test_current_attribution_subset_is_retained(self) -> None:

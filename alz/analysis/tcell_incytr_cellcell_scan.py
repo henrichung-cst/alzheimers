@@ -1,10 +1,16 @@
 """Build bounded cell-to-cell signaling evidence from T-cell pair-mode Incytr.
 
 The seven canonical wide parquet files are scanned with DuckDB. Wide pathway
-tables are never materialized in pandas; only donor/day/state/channel
-aggregates and the leading molecular backbones are exported. Cell fractions
-come from the per-cell state-label CSVs and retain stateless CD4 and CD8 as
-their own categories.
+tables are never materialized in pandas; only donor/day/state/pair aggregates
+and the molecular backbones within the consistently-directed pairs are exported.
+Cell fractions come from the per-cell state-label CSVs and retain stateless CD4
+and CD8 as their own categories.
+
+No count caps are applied anywhere. Every sender->receiver pair that forms is
+exported; the driving subset is defined by a reproducible consistent-direction
+criterion, not a top-N cut. Backbones are exported for every driving pair, and
+each backbone carries its own consistent-direction flag so the report can bound
+the table by criterion rather than by a fixed count.
 """
 
 from __future__ import annotations
@@ -21,7 +27,7 @@ DEFAULT_INPUT_DIR = (
     PROJECT_ROOT
     / "outputs"
     / "reports"
-    / "incytr_pair_mode_tcells_percell_posneg"
+    / "incytr_pair_mode_tcells"
 )
 DEFAULT_LABELS_DIR = PROJECT_ROOT / "outputs" / "reports" / "tcell_labeling" / "cells"
 DEFAULT_OUTPUT_DIR = DEFAULT_INPUT_DIR / "derived_cellcell"
@@ -30,11 +36,6 @@ CONTRASTS = {
     "donor1": ("d13_d2", "d17_d2", "d20_d2"),
     "donor2": ("d5_d2", "d7_d2", "d9_d2", "d11_d2"),
 }
-
-# Display bounds requested by the approved report plan. They limit the bounded
-# molecular evidence table; they are not analysis scores or pathway gates.
-TOP_CHANNELS_PER_DONOR = 8
-TOP_BACKBONES_PER_CHANNEL = 5
 
 
 def _parse_args() -> argparse.Namespace:
@@ -129,7 +130,7 @@ def _build_summary_tables(connection: duckdb.DuckDBPyConnection) -> None:
             contrast,
             day,
             count(*) AS path_count,
-            count(DISTINCT (sender_state, receiver_state)) AS channel_count,
+            count(DISTINCT (sender_state, receiver_state)) AS pair_count,
             count(*) FILTER (WHERE pds > 0) AS up_path_count,
             count(*) FILTER (WHERE pds < 0) AS down_path_count,
             coalesce(sum(pds) FILTER (WHERE pds > 0), 0.0) AS up_pds_mass,
@@ -246,7 +247,7 @@ def _build_summary_tables(connection: duckdb.DuckDBPyConnection) -> None:
 
     connection.execute(
         """
-        CREATE TEMP TABLE channel_summary AS
+        CREATE TEMP TABLE pair_summary AS
         SELECT
             donor,
             contrast,
@@ -270,17 +271,24 @@ def _build_summary_tables(connection: duckdb.DuckDBPyConnection) -> None:
     )
 
 
-def _build_channel_trends(connection: duckdb.DuckDBPyConnection) -> None:
+def _build_pair_trends(connection: duckdb.DuckDBPyConnection) -> None:
+    """Per sender->receiver pair: direction over days and consistency flag.
+
+    A pair is 'consistent' (a driver) when it is present on every day in the
+    donor's window and its per-day mean PDS moves in one direction throughout.
+    No count cap: every pair that forms is retained; driver_rank orders the
+    consistent subset by mean daily |PDS| so the report can show all of them.
+    """
     connection.execute(
         """
-        CREATE TEMP TABLE channel_trend_base AS
+        CREATE TEMP TABLE pair_trend_base AS
         WITH ordered AS (
             SELECT
                 *,
                 lag(mean_pds) OVER (
                     PARTITION BY donor, sender_state, receiver_state ORDER BY day
                 ) AS previous_mean_pds
-            FROM channel_summary
+            FROM pair_summary
         ), donor_coverage AS (
             SELECT donor, count(*) AS donor_day_count
             FROM macro_summary
@@ -341,7 +349,7 @@ def _build_channel_trends(connection: duckdb.DuckDBPyConnection) -> None:
 
     connection.execute(
         """
-        CREATE TEMP TABLE channel_trend_ranked AS
+        CREATE TEMP TABLE pair_trend_ranked AS
         SELECT
             *,
             CASE
@@ -354,13 +362,13 @@ def _build_channel_trends(connection: duckdb.DuckDBPyConnection) -> None:
                                  receiver_state
                     )
             END AS driver_rank
-        FROM channel_trend_base
+        FROM pair_trend_base
         """
     )
 
     connection.execute(
         """
-        CREATE TEMP TABLE channel_agreement AS
+        CREATE TEMP TABLE pair_agreement AS
         SELECT
             coalesce(d1.sender_state, d2.sender_state) AS sender_state,
             coalesce(d1.receiver_state, d2.receiver_state) AS receiver_state,
@@ -373,38 +381,147 @@ def _build_channel_trends(connection: duckdb.DuckDBPyConnection) -> None:
                 WHEN d1.direction = d2.direction THEN 'same_direction'
                 ELSE 'opposite_direction'
             END AS cross_donor_agreement
-        FROM (SELECT * FROM channel_trend_ranked WHERE donor = 'donor1') d1
-        FULL OUTER JOIN (SELECT * FROM channel_trend_ranked WHERE donor = 'donor2') d2
+        FROM (SELECT * FROM pair_trend_ranked WHERE donor = 'donor1') d1
+        FULL OUTER JOIN (SELECT * FROM pair_trend_ranked WHERE donor = 'donor2') d2
           USING (sender_state, receiver_state)
         """
     )
 
     connection.execute(
         """
-        CREATE TEMP TABLE channel_trends AS
+        CREATE TEMP TABLE pair_trends AS
         SELECT
             t.*,
             a.donor1_direction,
             a.donor2_direction,
             a.cross_donor_agreement
-        FROM channel_trend_ranked t
-        LEFT JOIN channel_agreement a USING (sender_state, receiver_state)
+        FROM pair_trend_ranked t
+        LEFT JOIN pair_agreement a USING (sender_state, receiver_state)
         """
     )
 
 
 def _build_backbone_table(connection: duckdb.DuckDBPyConnection) -> None:
+    """Molecular backbones within every driving (consistent-direction) pair.
+
+    No cap on pairs or backbones. Backbones are computed for all pairs whose
+    trend is consistent (driver_rank is not null). Each backbone carries its own
+    consistent-direction flag, computed with the same day-coverage + monotonic
+    rule as pairs, so the report bounds the shown table by criterion, not count.
+    """
     connection.execute(
-        f"""
-        CREATE TEMP TABLE channel_top_backbones AS
-        WITH top_channels AS (
-            SELECT donor, sender_state, receiver_state, driver_rank
-            FROM channel_trends
-            WHERE driver_rank <= {TOP_CHANNELS_PER_DONOR}
-        ), backbone AS (
+        """
+        CREATE TEMP TABLE driver_pairs AS
+        SELECT donor, sender_state, receiver_state, driver_rank
+        FROM pair_trends
+        WHERE driver_rank IS NOT NULL
+        """
+    )
+
+    connection.execute(
+        """
+        CREATE TEMP TABLE backbone_daily AS
+        SELECT
+            s.donor,
+            s.sender_state,
+            s.receiver_state,
+            s.ligand,
+            s.receptor,
+            s.em,
+            s.day,
+            avg(s.pds) AS mean_pds,
+            avg(abs(s.pds)) AS mean_abs_pds,
+            count(*) AS path_count
+        FROM surface s
+        INNER JOIN driver_pairs t
+          ON t.donor = s.donor
+         AND t.sender_state = s.sender_state
+         AND t.receiver_state = s.receiver_state
+        GROUP BY s.donor, s.sender_state, s.receiver_state, s.ligand, s.receptor, s.em, s.day
+        """
+    )
+
+    connection.execute(
+        """
+        CREATE TEMP TABLE backbone_trend AS
+        WITH ordered AS (
+            SELECT
+                *,
+                lag(mean_pds) OVER (
+                    PARTITION BY donor, sender_state, receiver_state, ligand, receptor, em
+                    ORDER BY day
+                ) AS previous_mean_pds
+            FROM backbone_daily
+        ), donor_coverage AS (
+            SELECT donor, count(*) AS donor_day_count
+            FROM macro_summary
+            GROUP BY donor
+        ), trend AS (
+            SELECT
+                b.donor,
+                sender_state,
+                receiver_state,
+                ligand,
+                receptor,
+                em,
+                count(*) AS days_observed,
+                max(d.donor_day_count) AS donor_day_count,
+                regr_slope(mean_pds, day) AS pds_per_day
+            FROM ordered b
+            INNER JOIN donor_coverage d USING (donor)
+            GROUP BY b.donor, sender_state, receiver_state, ligand, receptor, em
+        ), steps AS (
+            SELECT
+                o.donor,
+                o.sender_state,
+                o.receiver_state,
+                o.ligand,
+                o.receptor,
+                o.em,
+                count(*) FILTER (WHERE o.previous_mean_pds IS NOT NULL) AS step_count,
+                count(*) FILTER (
+                    WHERE o.previous_mean_pds IS NOT NULL
+                      AND (o.mean_pds - o.previous_mean_pds) * t.pds_per_day > 0
+                ) AS aligned_step_count
+            FROM ordered o
+            INNER JOIN trend t
+              USING (donor, sender_state, receiver_state, ligand, receptor, em)
+            GROUP BY o.donor, o.sender_state, o.receiver_state, o.ligand, o.receptor, o.em
+        )
+        SELECT
+            t.donor,
+            t.sender_state,
+            t.receiver_state,
+            t.ligand,
+            t.receptor,
+            t.em,
+            t.pds_per_day,
+            CASE
+                WHEN t.days_observed < 2 THEN 'insufficient_days'
+                WHEN t.days_observed < t.donor_day_count THEN 'partial_coverage'
+                WHEN t.pds_per_day > 0 THEN 'rising'
+                WHEN t.pds_per_day < 0 THEN 'falling'
+                ELSE 'flat'
+            END AS backbone_direction,
+            (
+                t.days_observed >= 2
+                AND t.days_observed = t.donor_day_count
+                AND t.pds_per_day <> 0
+                AND s.aligned_step_count = s.step_count
+            ) AS backbone_consistent
+        FROM trend t
+        INNER JOIN steps s
+          USING (donor, sender_state, receiver_state, ligand, receptor, em)
+        """
+    )
+
+    connection.execute(
+        """
+        CREATE TEMP TABLE pair_backbones AS
+        WITH aggregate AS (
             SELECT
                 s.donor,
-                t.driver_rank AS channel_driver_rank,
+                t.driver_rank AS pair_driver_rank,
                 s.sender_state,
                 s.receiver_state,
                 s.ligand,
@@ -419,31 +536,27 @@ def _build_backbone_table(connection: duckdb.DuckDBPyConnection) -> None:
                 avg(abs(s.pds)) AS mean_abs_pds,
                 max(abs(s.pds)) AS max_abs_pds
             FROM surface s
-            INNER JOIN top_channels t
+            INNER JOIN driver_pairs t
               ON t.donor = s.donor
              AND t.sender_state = s.sender_state
              AND t.receiver_state = s.receiver_state
             GROUP BY
-                s.donor,
-                t.driver_rank,
-                s.sender_state,
-                s.receiver_state,
-                s.ligand,
-                s.receptor,
-                s.em
-        ), ranked AS (
-            SELECT
-                *,
-                row_number() OVER (
-                    PARTITION BY donor, sender_state, receiver_state
-                    ORDER BY mean_abs_pds DESC, max_abs_pds DESC,
-                             ligand, receptor, em
-                ) AS backbone_rank
-            FROM backbone
+                s.donor, t.driver_rank, s.sender_state, s.receiver_state,
+                s.ligand, s.receptor, s.em
         )
-        SELECT *
-        FROM ranked
-        WHERE backbone_rank <= {TOP_BACKBONES_PER_CHANNEL}
+        SELECT
+            a.*,
+            b.pds_per_day,
+            b.backbone_direction,
+            b.backbone_consistent,
+            row_number() OVER (
+                PARTITION BY a.donor, a.sender_state, a.receiver_state
+                ORDER BY a.mean_abs_pds DESC, a.max_abs_pds DESC,
+                         a.ligand, a.receptor, a.em
+            ) AS backbone_rank
+        FROM aggregate a
+        LEFT JOIN backbone_trend b
+          USING (donor, sender_state, receiver_state, ligand, receptor, em)
         """
     )
 
@@ -496,30 +609,32 @@ def _export_table(
 
 def _print_summary(connection: duckdb.DuckDBPyConnection) -> None:
     print("\n=== Cell-to-cell signaling surface ===")
-    for donor, day, paths, channels in connection.execute(
+    for donor, day, paths, pairs in connection.execute(
         """
-        SELECT donor, day, path_count, channel_count
+        SELECT donor, day, path_count, pair_count
         FROM macro_summary ORDER BY donor, day
         """
     ).fetchall():
-        print(f"{donor} day {day}: {paths:,} paths across {channels} channels")
+        print(f"{donor} day {day}: {paths:,} paths across {pairs} pairs")
 
-    print("\n=== Leading consistent channel trends ===")
-    for row in connection.execute(
-        f"""
-        SELECT donor, driver_rank, sender_state, receiver_state, direction,
-               mean_daily_abs_pds, pds_per_day, cross_donor_agreement
-        FROM channel_trends
-        WHERE driver_rank <= {TOP_CHANNELS_PER_DONOR}
-        ORDER BY donor, driver_rank
+    print("\n=== Consistently-directed (driving) pairs ===")
+    for donor, n_pairs in connection.execute(
+        """
+        SELECT donor, count(*) FROM pair_trends
+        WHERE driver_rank IS NOT NULL GROUP BY donor ORDER BY donor
         """
     ).fetchall():
-        donor, rank, sender, receiver, direction, magnitude, slope, agreement = row
-        print(
-            f"{donor} #{rank}: {sender} → {receiver}; {direction}; "
-            f"mean daily |PDS|={magnitude:.3f}; slope={slope:+.4f} PDS/day; "
-            f"{agreement}"
-        )
+        print(f"{donor}: {n_pairs} driving pairs (of 144 possible)")
+
+    print("\n=== Consistently-directed backbones within driving pairs ===")
+    for donor, n_all, n_consistent in connection.execute(
+        """
+        SELECT donor, count(*),
+               count(*) FILTER (WHERE backbone_consistent)
+        FROM pair_backbones GROUP BY donor ORDER BY donor
+        """
+    ).fetchall():
+        print(f"{donor}: {n_consistent} consistent backbones of {n_all} total")
 
 
 def main() -> None:
@@ -534,17 +649,17 @@ def main() -> None:
         _configure_connection(connection)
         _register_inputs(connection, surface_files, label_files)
         _build_summary_tables(connection)
-        _build_channel_trends(connection)
+        _build_pair_trends(connection)
         _build_backbone_table(connection)
         _validate(connection)
 
         exports = {
             "macro_summary": "donor, day",
             "state_role_summary": "donor, day, role, state",
-            "channel_summary": "donor, day, sender_state, receiver_state",
-            "channel_trends": "donor, driver_rank NULLS LAST, sender_state, receiver_state",
-            "channel_top_backbones": (
-                "donor, channel_driver_rank, sender_state, receiver_state, backbone_rank"
+            "pair_summary": "donor, day, sender_state, receiver_state",
+            "pair_trends": "donor, driver_rank NULLS LAST, sender_state, receiver_state",
+            "pair_backbones": (
+                "donor, pair_driver_rank, sender_state, receiver_state, backbone_rank"
             ),
         }
         for table, order_by in exports.items():

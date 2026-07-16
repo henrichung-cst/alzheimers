@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract every displayed table from Matt's historical HTML into its fixture."""
+"""Extract every displayed table from the original historical HTML into its fixture."""
 from __future__ import annotations
 
 import argparse
@@ -91,12 +91,12 @@ def main() -> int:
     fixture = json.loads(args.fixture.read_text())
     tables = extract_displayed_tables(Path(fixture["source_report"]))
     if not tables:
-        raise ValueError("no displayed tables found in Matt's report")
+        raise ValueError("no displayed tables found in the original report")
     fixture["displayed_table_count"] = len(tables)
     fixture["displayed_tables"] = tables
     sections = extract_top_level_sections(Path(fixture["source_report"]))
     if not sections:
-        raise ValueError("no top-level sections found in Matt's report")
+        raise ValueError("no top-level sections found in the original report")
     fixture["historical_sections"] = sections
     state_counts: dict[str, dict[str, int]] = {"donor1": {}, "donor2": {}}
     for table in tables:

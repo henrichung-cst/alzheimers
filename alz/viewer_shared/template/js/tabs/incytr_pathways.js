@@ -1140,14 +1140,34 @@ function _ipStampRowsForPair(rows, sender, receiver) {
       r.Path = (r.Ligand || "") + "|" + (r.Receptor || "") + "|"
              + (r.EM || "") + "|" + (r.Target || "");
     r._pathStr = sPipe + r.Path;
-    r._hay = (
-      sender + "\n" + receiver + "\n" +
-      (r.Ligand || "") + "\n" + (r.Receptor || "") + "\n" +
-      (r.EM || "") + "\n" + (r.Target || "") + "\n" +
-      r.Path + "\n" + (r.contrast || "")
-    ).toLowerCase();
   }
   return rows || [];
+}
+
+function _ipRowHasExactGeneSearchValue(r, token) {
+  return String(r.Ligand || "").toLowerCase() === token
+    || String(r.Receptor || "").toLowerCase() === token
+    || String(r.EM || "").toLowerCase() === token
+    || String(r.Target || "").toLowerCase() === token;
+}
+
+// Split a cell-state / contrast label into lowercased search segments on
+// camelCase humps, digit boundaries, and non-alphanumeric delimiters:
+// "CD8CytotoxicEffector" -> ["cd8", "cytotoxic", "effector"], "d20_d2" -> ["d20", "d2"].
+// Descriptive search matches a token only when it is a PREFIX of a segment, so
+// a gene query like "tox" is not swallowed mid-word by "cytotoxic" while
+// "exhaust" still matches "CD8Exhausted".
+function _ipSearchSegments(value) {
+  return String(value == null ? "" : value)
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function _ipRowHasDescriptiveSearchValue(r, token) {
+  const hit = (v) => _ipSearchSegments(v).some(seg => seg.startsWith(token));
+  return hit(r._sender) || hit(r._receiver) || hit(r.contrast);
 }
 
 function _ipBuildPathIndexes(rows) {
@@ -1326,9 +1346,12 @@ function _ipFilterRows() {
     if (!_ipScoreGatesPass(r, scoreGates)) continue;
 
     if (hasSearch) {
-      const hay = r._hay || "";
       let ok = true;
-      for (const t of searchTokens) { if (hay.indexOf(t) < 0) { ok = false; break; } }
+      for (const t of searchTokens) {
+        const matched = _ipRowHasExactGeneSearchValue(r, t)
+          || _ipRowHasDescriptiveSearchValue(r, t);
+        if (!matched) { ok = false; break; }
+      }
       if (!ok) continue;
     }
 

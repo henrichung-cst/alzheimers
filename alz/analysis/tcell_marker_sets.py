@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Canonical T-cell marker-set definitions (the single source of truth).
 
-Used by Matt's historical AUROC reproduction and the current native-cluster
+Used by the original historical AUROC reproduction and the current native-cluster
 annotation. These are canonical marker biology; the panels named *_lineage carry
 cell-type (CD4/CD8) info, tcell_core is pan-T, and the rest are functional
 sub-state panels.
 
-``SIGNATURES`` is frozen to the panels used in Matt's historical report. The
+``SIGNATURES`` is frozen to the panels used in the original historical report. The
 additional tuples are non-cycle programs used as positive and negative evidence
 for the current per-cell classifier. Internal signed module values are not
 exported as analysis scores.

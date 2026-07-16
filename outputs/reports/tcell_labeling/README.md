@@ -19,8 +19,8 @@ pixi run tcells-label
 This command refreshes compact RNA/ADT inputs when needed, writes per-cell labels
 and evidence summaries, generates native-UMAP figures, and renders the HTML report.
 
-Matt's original report remains preserved historical context at
-`tcell_state_labeling_evidence_matt.html`, but its reference-label audit is not part
+The original report remains preserved historical context at
+`tcell_state_labeling_evidence_original.html`, but its reference-label audit is not part
 of the current labeling runner.
 
 The matching downstream Incytr root is

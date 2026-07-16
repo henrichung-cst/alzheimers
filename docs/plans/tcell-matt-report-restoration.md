@@ -60,7 +60,7 @@ to the measured marker programs.
 - Preserved Matt report:
   `outputs/reports/tcell_labeling/tcell_state_labeling_evidence_matt.html`
 - Pending compatible Incytr root:
-  `outputs/reports/incytr_pair_mode_tcells_percell_posneg`
+  `outputs/reports/incytr_pair_mode_tcells`
 
 ## Run order
 

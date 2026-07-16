@@ -31,7 +31,12 @@ deploy_viewer() {
     echo ""
 
     # --- Pass 1: edge_slices/ and audit_sources/ — long cache (content-stable) ---
-    # These shards don't change unless a pipeline stage re-ran.
+    # These parquet shards / audit CSVs are addressed by name, not by byte layout,
+    # so a stale copy stays readable. The *.bin.gz index files are the exception:
+    # their exact decompressed byte length is recorded in the payload manifest
+    # (nrows × column bytes), so a stale binary against a fresh manifest overflows
+    # the TypedArray views in incytr_global_index.js. They are excluded here and
+    # given the payload's short cache in Pass 2 so manifest + binary expire together.
     echo "  [1/3] edge_slices/ + audit_sources/ (max-age=86400)…"
     aws s3 sync "$local_dir" "$s3_prefix" \
         --profile "$PROFILE" \
@@ -39,11 +44,15 @@ deploy_viewer() {
         --exclude "*" \
         --include "edge_slices/*" \
         --include "audit_sources/*" \
+        --exclude "*.bin.gz" \
         --cache-control "max-age=86400, public" \
         --no-progress
 
-    # --- Pass 2: payload sidecar (.json.gz) — short cache ---
-    # Payload changes on every full viewer build.
+    # --- Pass 2: payload sidecar (.json.gz) + manifest-coupled *.bin.gz — short cache ---
+    # Payload changes on every full viewer build. The *.bin.gz binary indexes are
+    # byte-coupled to the payload manifest (see Pass 1), so they share the payload's
+    # cache lifetime — the two must expire together or a rebuilt binary desyncs from
+    # a still-cached manifest and overflows the client-side TypedArray views.
     # NO Content-Encoding: gzip. The viewer fetches these .gz objects as opaque
     # bytes and decompresses them client-side via DecompressionStream("gzip")
     # (01_state.js:_loadPayload, incytr_global_index.js, incytr_pathways.js).
@@ -57,6 +66,7 @@ deploy_viewer() {
         --exclude "*" \
         --include "*.payload.json.gz" \
         --include "*_gene_node_index.json.gz" \
+        --include "*.bin.gz" \
         --cache-control "max-age=300, public" \
         --no-progress
 

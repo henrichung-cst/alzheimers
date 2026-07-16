@@ -90,11 +90,11 @@ window.IncytrGlobalIndex = (function() {
       }
       // Precompute: lowercased vocabs (search), locale ranks (string sort),
       // parsed disease/timepoint per contrast, and a reusable match scratch.
+      // Only the gene vocab needs a lowercased copy (exact match). Descriptive
+      // sender/receiver/contrast search reads the original-case vocab directly so
+      // _searchSegments can split on camelCase boundaries.
       const lc = {
         gene: gi.gene_vocab.map(s => s.toLowerCase()),
-        sender: gi.sender_vocab.map(s => s.toLowerCase()),
-        receiver: gi.receiver_vocab.map(s => s.toLowerCase()),
-        contrast: gi.contrast_vocab.map(s => s.toLowerCase()),
       };
       const contrastDis = [], contrastTp = [];
       for (const c of gi.contrast_vocab) {
@@ -127,11 +127,31 @@ window.IncytrGlobalIndex = (function() {
     _pathRowsCache.clear();
   }
 
-  // Build a Uint8 membership mask of `vocab` ids whose lowercased name includes
-  // `tok`. Used per search token across each searchable vocab.
-  function _member(lcVocab, tok) {
-    const m = new Uint8Array(lcVocab.length);
-    for (let i = 0; i < lcVocab.length; i++) if (lcVocab[i].indexOf(tok) >= 0) m[i] = 1;
+  // Split a label into lowercased search segments on camelCase humps, digit
+  // boundaries, and non-alphanumeric delimiters: "CD8CytotoxicEffector" ->
+  // ["cd8", "cytotoxic", "effector"]. Callers must pass the ORIGINAL-case vocab so the
+  // camelCase boundaries survive.
+  function _searchSegments(value) {
+    return String(value == null ? "" : value)
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean);
+  }
+
+  // Build a Uint8 membership mask for one lowercased search token. Gene symbols
+  // use exact matching (PDCD1 must never expand to PDCD10 or PDCD11). The
+  // descriptive sender/receiver/contrast vocabularies use segment-prefix search
+  // so a gene token ("tox") is not swallowed mid-word by a state name
+  // ("CD8CytotoxicEffector") while a descriptive token ("exhaust") still matches
+  // "CD8Exhausted".
+  function _member(vocab, tok, allowSubstring = false) {
+    const m = new Uint8Array(vocab.length);
+    for (let i = 0; i < vocab.length; i++) {
+      if (allowSubstring
+            ? _searchSegments(vocab[i]).some(seg => seg.startsWith(tok))
+            : String(vocab[i]).toLowerCase() === tok) m[i] = 1;
+    }
     return m;
   }
 
@@ -245,9 +265,9 @@ window.IncytrGlobalIndex = (function() {
     const tokens = (f.searchText || "").toLowerCase().split(/\s+/).filter(Boolean);
     const tokMasks = tokens.map(t => ({
       gene: _member(lc.gene, t),
-      sender: _member(lc.sender, t),
-      receiver: _member(lc.receiver, t),
-      contrast: _member(lc.contrast, t),
+      sender: _member(gi.sender_vocab, t, true),
+      receiver: _member(gi.receiver_vocab, t, true),
+      contrast: _member(gi.contrast_vocab, t, true),
     }));
 
     // --- single scan over the universe ----------------------------------

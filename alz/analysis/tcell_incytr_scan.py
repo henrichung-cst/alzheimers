@@ -23,7 +23,7 @@ DEFAULT_INPUT_DIR = (
     PROJECT_ROOT
     / "outputs"
     / "reports"
-    / "incytr_pair_mode_tcells_percell_posneg"
+    / "incytr_pair_mode_tcells"
 )
 DEFAULT_OUTPUT_DIR = DEFAULT_INPUT_DIR / "derived_evidence"
 

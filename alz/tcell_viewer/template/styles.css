@@ -261,6 +261,9 @@ main#app-main { padding:14px; }
 .attr-num { text-align:right; font-family:var(--font-mono); color:#0f172a; }
 .attr-num-lfc { font-weight:600; color:#0f172a; }
 .attr-celltype { font-weight:500; }
+/* Categorical state color (CD4 oranges / CD8 blues) — see TCELL_STATE_COLOR. */
+.tcell-state-dot { display:inline-block; width:9px; height:9px; border-radius:2px;
+  margin-right:5px; vertical-align:baseline; border:1px solid rgba(0,0,0,0.15); }
 .attr-subclass-marker { color:#94a3b8; font-size:10px; cursor:help; margin-left:2px; }
 .attr-empty { color:#94a3b8; }
 .attr-conf { display:inline-block; padding:1px 7px; border-radius:9px; font-size:11px;

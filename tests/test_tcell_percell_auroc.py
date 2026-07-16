@@ -12,7 +12,6 @@ from alz.analysis.tcell_percell_auroc import (
     calculate_evidence_tables,
     load_donor_data,
     mann_whitney_auroc,
-    residualize_marker_expression,
     verify_historical_reproduction,
 )
 
@@ -35,52 +34,8 @@ class MannWhitneyAurocTests(unittest.TestCase):
         self.assertEqual(actual, 1.0)
 
 
-class CycleRegressionTests(unittest.TestCase):
-    def test_returns_the_known_residual_after_removing_both_cycle_axes(self) -> None:
-        cycle = pd.DataFrame(
-            {
-                "S.Score": [-1.0, -1.0, 1.0, 1.0],
-                "G2M.Score": [-1.0, 1.0, -1.0, 1.0],
-            },
-            index=["a", "b", "c", "d"],
-        )
-        expression = pd.DataFrame(
-            {"GENE1": [7.0, -1.0, 9.0, 5.0]},
-            index=cycle.index,
-        )
-
-        residuals = residualize_marker_expression(expression, cycle)
-
-        np.testing.assert_allclose(
-            residuals["GENE1"].to_numpy(),
-            np.array([1.0, -1.0, -1.0, 1.0]),
-            atol=1e-12,
-        )
-        design = np.column_stack(
-            [np.ones(len(cycle)), cycle["S.Score"], cycle["G2M.Score"]]
-        )
-        np.testing.assert_allclose(design.T @ residuals.to_numpy(), 0.0, atol=1e-12)
-
-    def test_binary_phase_cannot_change_the_adjusted_values(self) -> None:
-        expression = pd.DataFrame({"GENE1": [0.0, 1.0, 4.0, 9.0]})
-        first = pd.DataFrame(
-            {
-                "S.Score": [-0.2, 0.1, 0.4, 0.7],
-                "G2M.Score": [0.6, 0.2, -0.1, -0.5],
-                "Phase": ["G1", "S", "S", "G2M"],
-            }
-        )
-        second = first.copy()
-        second["Phase"] = list(reversed(second["Phase"]))
-
-        pd.testing.assert_frame_equal(
-            residualize_marker_expression(expression, first),
-            residualize_marker_expression(expression, second),
-        )
-
-
 class EvidenceTableTests(unittest.TestCase):
-    def test_type_question_uses_only_opposite_lineage_as_comparison(self) -> None:
+    def test_type_question_reproduces_matts_all_other_cells_comparison(self) -> None:
         cells = pd.DataFrame(
             {
                 "functional.cluster": [
@@ -102,9 +57,9 @@ class EvidenceTableTests(unittest.TestCase):
             & (panels["panel"] == "cd8_lineage")
         ].iloc[0]
 
-        self.assertEqual(row["comparison"], "opposite-lineage CD4 cells")
+        self.assertEqual(row["comparison"], "all other projected T cells")
         self.assertEqual(row["n_cells_target"], 1)
-        self.assertEqual(row["n_cells_comparison"], 2)
+        self.assertEqual(row["n_cells_comparison"], 3)
 
     def test_state_question_uses_only_same_lineage_siblings(self) -> None:
         cells = pd.DataFrame(
@@ -131,39 +86,14 @@ class EvidenceTableTests(unittest.TestCase):
         self.assertTrue(markers[["n_cells_target", "n_cells_comparison"]].notna().all().all())
         self.assertTrue(panels[["n_cells_target", "n_cells_comparison"]].notna().all().all())
 
-    def test_residual_tables_do_not_call_above_zero_values_detected_rna(self) -> None:
-        cells = pd.DataFrame(
-            {
-                "functional.cluster": ["CD8.TEX", "CD8.EM"],
-                "HAVCR2": [0.25, -0.25],
-            }
-        )
-
-        markers, _ = calculate_evidence_tables(
-            "test",
-            cells,
-            signatures={"exhaustion": ["HAVCR2"]},
-            value_kind="cycle_regressed_residual",
-        )
-
-        self.assertTrue(markers["target_detection_fraction"].isna().all())
-        self.assertTrue(markers["comparison_detection_fraction"].isna().all())
-        self.assertEqual(
-            markers.loc[0, "marker_value_unit"],
-            "cycle-regressed log-normalized-expression residual",
-        )
-
-
 class DonorInputTests(unittest.TestCase):
     def test_barcode_join_preserves_each_projected_cell_once(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             expression_root = root / "expression"
             embedding_root = root / "embedding"
-            cycle_root = root / "cycle"
             expression_root.mkdir()
             (embedding_root / "donor" / "scrna").mkdir(parents=True)
-            cycle_root.mkdir()
 
             pd.DataFrame(
                 {"barcode": ["a", "b", "c"], "GENE1": [1.0, 2.0, 3.0]}
@@ -180,66 +110,16 @@ class DonorInputTests(unittest.TestCase):
                 embedding_root / "donor" / "scrna" / "projectils_embeddings.csv",
                 index=False,
             )
-            pd.DataFrame(
-                {
-                    "barcode": ["a", "b", "c"],
-                    "Phase": ["S", "G1", "G2M"],
-                    "S.Score": [0.5, -0.2, 0.1],
-                    "G2M.Score": [0.0, -0.1, 0.7],
-                }
-            ).to_csv(cycle_root / "donor_cc_recluster_cells.csv", index=False)
-
             joined = load_donor_data(
                 "donor",
                 expression_root=expression_root,
                 embedding_root=embedding_root,
-                cycle_root=cycle_root,
             )
 
             self.assertEqual(joined.index.tolist(), ["a", "b"])
             self.assertTrue(joined.index.is_unique)
             self.assertEqual(joined.loc["a", "functional.cluster"], "CD8.TEX")
-            self.assertEqual(joined.loc["b", "S.Score"], -0.2)
-
-    def test_cycle_scores_embedded_by_the_extractor_need_no_cluster_artifact(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            expression_root = root / "expression"
-            embedding_root = root / "embedding"
-            cycle_root = root / "missing-cycle-directory"
-            expression_root.mkdir()
-            (embedding_root / "donor" / "scrna").mkdir(parents=True)
-            pd.DataFrame(
-                {
-                    "barcode": ["a", "b"],
-                    "GENE1": [1.0, 2.0],
-                    "Phase": ["S", "G1"],
-                    "S.Score": [0.12345, -0.23456],
-                    "G2M.Score": [-0.34567, 0.45678],
-                }
-            ).to_csv(expression_root / "donor_marker_cell_expr.csv", index=False)
-            pd.DataFrame(
-                {
-                    "barcode": ["a", "b"],
-                    "projection_reference": ["CD8", "CD4"],
-                    "reduction": ["pca", "pca"],
-                    "functional.cluster": ["CD8.TEX", "CD4.Th17"],
-                    "functional.cluster.conf": [0.9, 0.8],
-                }
-            ).to_csv(
-                embedding_root / "donor" / "scrna" / "projectils_embeddings.csv",
-                index=False,
-            )
-
-            joined = load_donor_data(
-                "donor",
-                expression_root=expression_root,
-                embedding_root=embedding_root,
-                cycle_root=cycle_root,
-            )
-
-            self.assertEqual(joined.loc["a", "S.Score"], 0.12345)
-            self.assertEqual(joined.loc["b", "G2M.Score"], 0.45678)
+            self.assertEqual(joined.loc["b", "GENE1"], 2.0)
 
 
 class HistoricalReproductionTests(unittest.TestCase):
@@ -287,7 +167,6 @@ class HistoricalReproductionTests(unittest.TestCase):
                 {
                     "expression_input": ["expression/donor1.csv"],
                     "projection_input": ["projection/donor1.csv"],
-                    "cycle_score_input": ["cycle/donor1.csv"],
                     "n_projected_cells": [4],
                     "n_marker_genes": [1],
                 }

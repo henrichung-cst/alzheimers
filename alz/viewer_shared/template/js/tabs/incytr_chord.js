@@ -27,12 +27,18 @@ function _icSyncControls() {
 
 function _icPalette(nodes) {
   const N = nodes.length;
-  // ≤10 nodes (the grouped/tissue default): the categorical Tableau palette is
-  // maximally distinct. More than 10 (full cell-type spine): spread Turbo so
-  // every arc still gets a unique hue.
-  if (N <= 10 && window.d3 && d3.schemeTableau10)
-    return nodes.map((_, i) => d3.schemeTableau10[i % 10]);
-  return nodes.map((_, i) => d3.interpolateTurbo((i + 0.5) / N));
+  // Per-node fallback when a node has no cohort-supplied color: ≤10 nodes
+  // (the grouped/tissue default) → categorical Tableau (maximally distinct);
+  // more (full cell-type spine) → spread Turbo so every arc gets a unique hue.
+  const fallback = (i) => (N <= 10 && window.d3 && d3.schemeTableau10)
+    ? d3.schemeTableau10[i % 10]
+    : d3.interpolateTurbo((i + 0.5) / N);
+  // When the active cohort defines a categorical state palette (T-cell: CD4
+  // oranges / CD8 blues, from the labeling-evidence report), honor it so the
+  // chord reads the same orange/blue scheme as the report. typeof-guarded like
+  // COHORT_LABELS — non-T-cell cohorts leave it undefined and fall through.
+  const map = (typeof TCELL_STATE_COLOR !== "undefined") ? TCELL_STATE_COLOR : null;
+  return nodes.map((n, i) => (map && map[n]) || fallback(i));
 }
 
 // Path-count matrix for a single contrast over the shared node ring (rows =

@@ -1,6 +1,6 @@
 ---
 title: "T-cell state labeling from per-cell marker evidence"
-subtitle: "Matt's marker-based method applied to each cell, with cell-cycle signals excluded"
+subtitle: "Marker-based method applied to each cell, with cell-cycle signals excluded"
 format:
   html:
     toc: true
@@ -18,7 +18,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from alz.analysis.tcell_marker_sets import STATE_COLORS
 
 ROOT = Path("outputs/reports/tcell_labeling")
 EVIDENCE = ROOT / "percell_evidence"
@@ -26,25 +25,18 @@ DONORS = ("donor1", "donor2")
 BY_DAY = pd.read_csv(EVIDENCE / "state_by_day.csv")
 PANELS = pd.read_csv(EVIDENCE / "state_panel_evidence.csv")
 DEFINITIONS = pd.read_csv(EVIDENCE / "state_marker_definitions.csv")
-COLORS = STATE_COLORS
 ```
 
 ## Main result
 
 Each cell receives its own state label from its RNA and CITE-seq markers. Raw
 CITE-seq CD4 and CD8 counts determine whether a cell belongs to the CD4 or CD8
-group. When those counts are inconclusive, the CD4 or CD8 identity of the cell's
-Seurat cluster is used. A named state requires detected RNA markers that define
+group. A named state requires detected RNA markers that define
 that state. If no named state meets its marker requirements, the label remains
-simply `CD4` or `CD8`.
+simply `CD4 unknown` or `CD8 unknown`.
 
 Cell-cycle genes, phase, cycle scores, and `% dividing` are excluded because
-proliferation was induced in silico. The RNA and CITE-seq markers determine the
-final label.
-
-Labeling each cell separately preserves differences among cells within the same
-Seurat cluster. Separating naive-like cells from resting/memory cells removes most
-of the misleading rise in naive-like cells at later days. The CD8 exhausted label
+proliferation was induced in silico. The CD8 exhausted label
 requires the combined expression of five exhaustion markers to be stronger than
 both early activation and effector marker expression.
 
@@ -113,10 +105,54 @@ Composition is the percentage of retained T cells assigned to each label for a
 given donor and day. This allows cell-state percentages to be compared across days
 despite differences in the number of recovered cells.
 
+CD4 states are shown in oranges and CD8 states in blues. Within each lineage the
+tone runs from pale to dark along the state progression, so the stack order and
+color both read as unknown &rarr; naive-like &rarr; resting/memory &rarr;
+activated/effector &rarr; cytotoxic &rarr; exhausted.
+
 ```{python}
+# State progression per lineage (pale -> dark); bare-lineage cells are "unknown".
+STATE_ORDER = {
+    "CD4": ["CD4 unknown", "CD4 naive-like", "CD4 resting/memory",
+            "CD4 activated/effector", "CD4 cytotoxic", "CD4 exhaustion-associated"],
+    "CD8": ["CD8 unknown", "CD8 naive-like", "CD8 resting/memory",
+            "CD8 activated/effector", "CD8 cytotoxic effector", "CD8 exhausted (TEX)"],
+}
+
+def _gradient(cmap_name, n, lo=0.28, hi=0.85):
+    cmap = plt.get_cmap(cmap_name)
+    return [cmap(lo + (hi - lo) * i / (n - 1)) for i in range(n)]
+
+STATE_PALETTE = {}
+for _lineage, _cmap in (("CD4", "Oranges"), ("CD8", "Blues")):
+    for _label, _color in zip(STATE_ORDER[_lineage], _gradient(_cmap, len(STATE_ORDER[_lineage]))):
+        STATE_PALETTE[_label] = _color
+LINEAGE_PALETTE = {"CD4": plt.get_cmap("Oranges")(0.6), "CD8": plt.get_cmap("Blues")(0.6)}
+FULL_ORDER = STATE_ORDER["CD4"] + STATE_ORDER["CD8"]
+
 analysis = BY_DAY[(BY_DAY.day >= 2) & BY_DAY.type.notna()].copy()
+analysis["label"] = analysis["label"].replace({"CD4": "CD4 unknown", "CD8": "CD8 unknown"})
 analysis["fraction_all_t"] = analysis.n_cells / analysis.groupby(["donor", "day"]).n_cells.transform("sum")
-analysis.pivot_table(index=["donor", "day"], columns="state" if "state" in analysis else "label", values="fraction_all_t", fill_value=0).mul(100).round(1)
+analysis["fraction_within_lineage"] = analysis.n_cells / analysis.groupby(["donor", "day", "lineage"]).n_cells.transform("sum")
+
+def stacked_by_donor(frame, value_col, color_map, order, ylabel, key="label"):
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6), sharey=True, layout="constrained")
+    for ax, donor in zip(axes, DONORS):
+        pivot = frame[frame.donor.eq(donor)].pivot_table(
+            index="day", columns=key, values=value_col, fill_value=0)
+        cols = [c for c in order if c in pivot.columns]
+        bottom = np.zeros(len(pivot))
+        for col in cols:
+            ax.bar(pivot.index.astype(str), pivot[col], bottom=bottom,
+                   color=color_map[col], label=col)
+            bottom += pivot[col].to_numpy()
+        ax.set_title(donor)
+        ax.set_xlabel("stimulation day")
+        ax.set_ylim(0, 1)
+    axes[0].set_ylabel(ylabel)
+    axes[1].legend(frameon=False, fontsize=7, bbox_to_anchor=(1.02, 1), loc="upper left")
+
+analysis.pivot_table(index=["donor", "day"], columns="label", values="fraction_all_t", fill_value=0).mul(100).round(1)
 ```
 
 ```{python}
@@ -124,20 +160,53 @@ analysis.pivot_table(index=["donor", "day"], columns="state" if "state" in analy
 #| fig-cap: "Per-cell marker-state composition from day 2 onward, with cell-cycle signals excluded."
 #| fig-width: 15
 #| fig-height: 6
-fig, axes = plt.subplots(1, 2, figsize=(15, 6), sharey=True, layout="constrained")
-for ax, donor in zip(axes, DONORS):
-    rows = analysis[analysis.donor.eq(donor)]
-    fractions = rows.pivot_table(index="day", columns="label", values="fraction_all_t", fill_value=0)
-    bottom = np.zeros(len(fractions))
-    for label in fractions.columns:
-        ax.bar(fractions.index.astype(str), fractions[label], bottom=bottom,
-               color=COLORS[label], label=label)
-        bottom += fractions[label].to_numpy()
-    ax.set_title(donor)
-    ax.set_xlabel("stimulation day")
-    ax.set_ylim(0, 1)
-axes[0].set_ylabel("fraction of retained T cells")
-axes[1].legend(frameon=False, fontsize=7, bbox_to_anchor=(1.02, 1), loc="upper left")
+stacked_by_donor(analysis, "fraction_all_t", STATE_PALETTE, FULL_ORDER,
+                 "fraction of retained T cells")
+```
+
+## Lineage composition
+
+States collapsed to their CD4 or CD8 lineage, as a fraction of all retained T
+cells. This isolates the overall CD4/CD8 balance across the time course from any
+within-lineage state shifts.
+
+```{python}
+#| label: fig-lineage-composition
+#| fig-cap: "CD4 vs CD8 lineage composition from day 2 onward."
+#| fig-width: 15
+#| fig-height: 6
+lineage_frame = analysis.groupby(["donor", "day", "lineage"], as_index=False).n_cells.sum()
+lineage_frame["fraction_all_t"] = lineage_frame.n_cells / lineage_frame.groupby(["donor", "day"]).n_cells.transform("sum")
+stacked_by_donor(lineage_frame, "fraction_all_t", LINEAGE_PALETTE, ["CD4", "CD8"],
+                 "fraction of retained T cells", key="lineage")
+```
+
+## CD4 state composition
+
+State composition within the CD4 compartment; each bar fills the full CD4
+population for that donor and day.
+
+```{python}
+#| label: fig-cd4-composition
+#| fig-cap: "CD4 state composition as a fraction of CD4 cells, from day 2 onward."
+#| fig-width: 15
+#| fig-height: 6
+stacked_by_donor(analysis[analysis.lineage.eq("CD4")], "fraction_within_lineage",
+                 STATE_PALETTE, STATE_ORDER["CD4"], "fraction of CD4 T cells")
+```
+
+## CD8 state composition
+
+State composition within the CD8 compartment; each bar fills the full CD8
+population for that donor and day.
+
+```{python}
+#| label: fig-cd8-composition
+#| fig-cap: "CD8 state composition as a fraction of CD8 cells, from day 2 onward."
+#| fig-width: 15
+#| fig-height: 6
+stacked_by_donor(analysis[analysis.lineage.eq("CD8")], "fraction_within_lineage",
+                 STATE_PALETTE, STATE_ORDER["CD8"], "fraction of CD8 T cells")
 ```
 
 ## CD8 trajectory

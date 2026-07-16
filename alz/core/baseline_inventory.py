@@ -524,7 +524,7 @@ _PRODUCER_MAP: list[tuple[str, str]] = [
     ("decomposition/levy_t5/", "pixi run decompose (or python alz/decomposition_mea/...)"),
     ("attribution_recovery/", "pixi run recover (or python alz/integration/recover.py)"),
     ("incytr_pair_mode/", "pixi run incytr-pair (or Rscript alz/incytr_pair/incytr_commandline.R)"),
-    ("incytr_pair_mode_tcells/", "pixi run incytr-pair-tcells"),
+    ("incytr_pair_mode_tcells/", "pixi run tcells-incytr"),
     ("unified_viewer/", "pixi run viewer (or python alz/build_unified_viewer.py)"),
     ("tcell_viewer/", "pixi run tcell-viewer (or python alz/tcell_viewer/build_tcell_viewer.py)"),
 ]

@@ -1,133 +1,90 @@
 ---
 name: check-controls
 description: >
-  Positive-control sanity check for the kinase-activity pipeline. Given a cohort
-  (song / fivexfad / mukesh / tcells), looks up a curated set of control genes in
-  the pipeline's existing output artifacts and renders an agent-judged verdict
-  (agrees / off / borderline / not-built) on whether specificity and enrichment
-  metrics behave as externally expected. Output is conversational — nothing is
-  written to disk. Invoke as: /check-controls [cohort]
+  Sanity-check a just-produced result for biological plausibility. Forms prior
+  expectations in-the-moment from the analysis scope (using model biological
+  knowledge, cited where possible), then judges whether the result agrees. No
+  predefined control list — expectations are derived per result. The one hard
+  rule: expectations are sourced to external biology, never to our own pipeline
+  output. Output is conversational; nothing is written to disk. Invoke as:
+  /check-controls [optional hint].
 allowed-tools:
   - Read
   - Bash
   - Glob
 ---
 
-# Positive-control signal check
+# Biological plausibility check
 
-## Curated control table
+Judge whether a result the analysis just produced is biologically plausible,
+against prior expectations formed **now** from the scope of that analysis. This
+is a control check: it catches results that are internally consistent but
+externally implausible.
 
-Maintain this table as the single source of control expectations. `expected` columns are sourced to external knowledge, never to our own pipeline output. Hypotheses are flagged — a disagreement against a hypothesis is noted as such, not treated as a pipeline bug.
+## The one hard rule
 
-To add a new robust control: append a row, fill `source of expectation` with a literature citation or atlas reference, and mark the expectation as **hypothesis** if it is not yet consensus.
+**Expectations come from external biology — literature, atlases, established
+mechanism — never from our own pipeline output.** A result cannot be its own
+control. If the only reason to expect X is that our pipeline reported X, that is
+not an expectation; say so and skip the axis.
 
-| gene | kinase? | cohorts | expected cell-type home | expected AD direction | source of expectation | notes |
-|---|---|---|---|---|---|---|
-| PHKG1 | yes | song, fivexfad, mukesh | astrocyte *(hypothesis)* | TBD | TODO candidate; appears in MEA + unified_attribution | Phosphorylase kinase γ1; astrocyte hypothesis from WMB/Song specificity signal; direction not yet established externally |
-| ATP9A | no (flippase) | mukesh | endothelial / vascular *(hypothesis)* | TBD | TODO candidate; atp9a_ad_export precedent | P4-ATPase lipid flippase; endothelial hypothesis from literature (vascular ATP9A expression); direction not established |
-| APOE | no | song, fivexfad, mukesh | astrocyte / microglia | up in AD | established AD biology (PMID 2629601, GTEx/Allen atlas) | Canonical AD risk gene; strong astrocyte enrichment in mouse + human scRNA; upregulated in AD across all major study designs |
-
----
+Expectations are model biological knowledge. Cite a PMID / atlas / mechanism
+when one is available; when the expectation is a reasoned guess rather than
+consensus, **flag it as a hypothesis** — a result disagreeing with a hypothesis
+is noted as such, not treated as a pipeline bug.
 
 ## Procedure
 
-### 1. Resolve cohort
+### 1. Identify the result and its scope (from context)
 
-Read the invocation argument. If absent, infer from working context (e.g. a recently opened file path under `outputs/reports/kinase_attribution_human/` → mukesh; `kinase_attribution_5xfad/` → fivexfad; `kinase_attribution_tcells/` → tcells; `kinase_attribution/` with no cohort qualifier → song).
+Read the recent conversation and any artifact just produced or discussed. Pin
+down:
+- **What quantity** — cell-type home / specificity, disease direction (sign),
+  enrichment or magnitude, a specific gene-cohort claim, etc.
+- **What scope** — cohort, tissue/region, contrast, cell population. Scope
+  determines which biology is the right yardstick (a 5xFAD cortex kinase
+  enrichment is judged against different priors than a T-cell exhaustion state).
 
-Valid keys: `song` · `fivexfad` · `mukesh` · `tcells`
+If the result or scope is ambiguous, state what you inferred and proceed; ask
+only if you genuinely cannot tell what is being checked.
 
-Confirm the key and note the cohort's MEA output kind:
-- song, fivexfad → OLS tables (`mea_stoichiometry.csv` carries NES/FDR per kinase per contrast)
-- mukesh, tcells → NES/FDR matrices (`kinase_donor_nes.csv` etc.)
+### 2. Read the actual values
 
-### 2. Select applicable controls
+Fetch the real numbers from the artifact or context — do **not** re-derive or
+re-run the analysis. If the value isn't available on disk / in context, name the
+file or step that would produce it and continue with what is present.
 
-Filter the table above to rows whose `cohorts` field includes the target. Skip a control if the cohort is not listed, and report it as "not applicable for this cohort".
+### 3. Form prior expectations — before judging
 
-For `tcells`: no control biology is authored in this table yet — report the gap and move on.
+State, for each axis of the result, what known biology predicts **for this
+scope**: expected cell-type home / family, expected direction, rough magnitude
+if meaningful. Write these down *before* comparing, so the judgment isn't
+back-fitted to the result. Cite where possible; flag hypotheses.
 
-### 3. Per control, branch on kinase?
+### 4. Compare and judge each axis
 
-**Kinase path:**
+Show the actual value next to the expectation, then apply one verdict:
 
-a. **Cell-type home** — check in order of availability:
+- `✓ as-expected` — agrees with a settled external expectation
+- `⚠ off` — disagrees with a settled (non-hypothesis) expectation
+- `~ borderline` — right family but weak, related subtype, or sign present but
+  small
+- `? vs hypothesis` — expectation was flagged a hypothesis; note agree/disagree
+- `– N/A` — no external expectation exists, or the value isn't available
 
-   - Primary (mouse WMB): `outputs/reports/wmb_expression/wmb_kinase_expression.csv` → column `specificity_score`, top cell-type. **Likely absent** — if missing, report "run `pixi run wmb-export`" and skip to fallback.
-   - Fallback (unified attribution): `outputs/reports/kinase_attribution/unified_attribution.csv` → columns `wmb_top_celltype`, `wmb_concentration_tier`, `song_top_celltype`. Filter to `kinase == <GENE>`, read the most-represented `wmb_top_celltype` and `song_top_celltype`.
-   - Human specificity: `outputs/reports/kinase_attribution_human/celltype_specificity.csv` → columns `kinase`, `reference`, `celltype`, `specificity_score`, `rank`. Filter to `kinase == <GENE>`, read the rank-1 celltype per reference.
-   - snRNA specificity (song): `outputs/reports/snrna_integration/song_expression_specificity.csv` → `top_cluster`, `specificity_score`, `tau`. **Likely absent** — if missing, fall back to `outputs/reports/snrna_integration/song_detection.csv` (`gene_symbol`, `cell_type`, `fraction_cells_expressing`) and take the top-fraction cell type. Note the fallback.
+Judge by biological family, not a numeric threshold: astrocyte vs astrocyte
+subtype is agreement; astrocyte vs microglia is borderline; astrocyte vs neuron
+is off. For a direction/sign, consider whether it is stable across contrasts.
 
-b. **Disease direction** — check MEA NES sign:
+### 5. Report to conversation
 
-   - song: `outputs/reports/kinase_attribution/mea_stoichiometry.csv` → columns `kinase`, `NES`, `FDR`, `contrast`. Filter to `kinase == <GENE>`. Summarise the sign distribution across contrasts (how many positive/negative, which are FDR < 0.25).
-   - fivexfad: per-region files under `outputs/reports/kinase_attribution_5xfad/` (e.g. `cortex_st_mea_stoichiometry.csv`). Same columns.
-   - mukesh: `outputs/reports/kinase_attribution_human/perdonor/kinase_donor_nes.csv` → wide matrix (kinase × donor). Filter to row `kinase == <GENE>`, read per-donor NES values. Also check `outputs/reports/kinase_attribution_human/perdonor/kinase_donor_fdr.csv` for significance. Summarise sign and recurrence.
-
-**Non-kinase path:**
-
-a. **Cell-type home (mouse snRNA):** `outputs/reports/snrna_integration/song_detection.csv` → `gene_symbol`, `cell_type`, `fraction_cells_expressing`. Mouse gene symbols are lowercase-first (Apoe, Atp9a). Read the top-fraction cell types. For human gene symbols (APOE, ATP9A), try both casings.
-
-b. **Cell-type home (human atlas):** `data/derived/aggregates/seaad/expression_by_supertype.csv` → gene-per-row, supertype-per-column matrix; column `gene`. Read the row for the target gene, identify the highest-expression supertype columns. For vascular/endothelial home, look at `Endo_*` columns. `data/derived/aggregates/hbca/expression_by_class.csv` → same structure, broader cell-class resolution.
-
-c. **Disease direction (expression LFC):** `outputs/reports/kinase_attribution/sea_ad_supertype_lfc.csv` → columns `gene_symbol`, `stratum`, `supertype`, `subclass`, `supertype_lfc`. Note: this file contains only the 384 kinases in the attribution panel. For non-kinase controls (APOE, ATP9A), this file will NOT have the entry — say "LFC not computed for non-kinase genes in current pipeline artifacts; direction sourced from external literature only".
-
-### 4. Show actual values
-
-For each axis, print the raw number(s) — do not summarise to a verdict only. Example output pattern:
+Render a compact table — one row per (result, axis) — with the actual value, the
+prior expectation (+ source), and the verdict. Follow it with a one-line overall
+read. **Write nothing to disk.**
 
 ```
-PHKG1 | song
-  home (wmb_top_celltype): '30 Astro-Epen'  [wmb_concentration_tier=5]
-  home (song snRNA): Astrocytes (fraction 0.44), fallback via song_detection.csv
-  home (human, seaad): <celltype from celltype_specificity.csv>
-  NES across contrasts: App_4mo=-1.69 (FDR<0.001), App_6mo=+1.88 (FDR<0.001), [...]
+<result> | <scope>
+  <axis>: actual=<value>  |  expected=<expectation> [source / hypothesis]  →  <verdict>
 ```
 
-If an artifact is missing, write which file and which task produces it, then continue with what is available.
-
-### 5. Judge each axis
-
-Apply one of:
-- `✓ as-expected` — actual result agrees with the external expectation
-- `⚠ off` — actual result disagrees with a settled (non-hypothesis) expectation
-- `~ borderline` — right family but weak tier, related subtype, or sign present but small; or expected direction is TBD and result is weak
-- `– not built / N/A` — required artifact absent, or control not applicable to this cohort
-- `? vs hypothesis` — expected is flagged *(hypothesis)*; actual agrees or disagrees; note which
-
-This is agent judgment. Do NOT apply a numeric threshold. Reason about cell-type family (astrocyte vs astrocyte subtype is agreement; astrocyte vs microglia is borderline; astrocyte vs neuron is off). For NES sign: consider whether the sign is stable across contrasts and whether FDR < 0.25 in at least some.
-
-### 6. Report to conversation
-
-Render a compact table:
-
-| control | axis | actual | verdict |
-|---|---|---|---|
-| PHKG1 | cell-type home (mouse) | '30 Astro-Epen' / Astrocytes | ✓ as-expected (? vs hypothesis) |
-| PHKG1 | disease direction (song) | mixed: 4/9 neg FDR<0.25, 2/9 pos FDR<0.25 | ~ borderline / TBD |
-| APOE | cell-type home (snRNA) | Astrocytes frac=0.61 | ✓ as-expected |
-| APOE | disease direction | not computed for non-kinase genes | – not built |
-
-Follow the table with a one-line overall read (e.g. "specificity signal looks credible for song; direction check needs wmb-export and human-specific LFC artifacts").
-
-**Write nothing to disk.** If ALL required artifacts are missing for a given cohort, say which tasks to run first and stop.
-
----
-
-## Artifact availability summary (as of last audit)
-
-| artifact | path | present? | builds via |
-|---|---|---|---|
-| unified_attribution (song) | `outputs/reports/kinase_attribution/unified_attribution.csv` | yes | `pixi run attribution` |
-| mea_stoichiometry (song) | `outputs/reports/kinase_attribution/mea_stoichiometry.csv` | yes | `pixi run mea` |
-| mea_stoichiometry (5xfad) | `outputs/reports/kinase_attribution_5xfad/<region>_<track>_mea_stoichiometry.csv` | yes | `pixi run mea` |
-| kinase_donor_nes (mukesh) | `outputs/reports/kinase_attribution_human/perdonor/kinase_donor_nes.csv` | yes | `pixi run attribution` |
-| celltype_specificity (human) | `outputs/reports/kinase_attribution_human/celltype_specificity.csv` | yes | `pixi run attribution` |
-| song snRNA detection | `outputs/reports/snrna_integration/song_detection.csv` | yes | `pixi run snrna` |
-| seaad expression by supertype | `data/derived/aggregates/seaad/expression_by_supertype.csv` | yes | upstream ingest |
-| hbca expression by class | `data/derived/aggregates/hbca/expression_by_class.csv` | yes | upstream ingest |
-| wmb_kinase_expression | `outputs/reports/wmb_expression/wmb_kinase_expression.csv` | **no** | `pixi run wmb-export` |
-| wmb_proteome_expression | `outputs/reports/wmb_expression/wmb_proteome_expression.csv` | **no** | `pixi run wmb-export` |
-| song_expression_specificity | `outputs/reports/snrna_integration/song_expression_specificity.csv` | **no** | `pixi run snrna` |
-| human_reference_expression | `outputs/reports/kinase_attribution/human_reference_expression/` | **no** | `pixi run attribution` |
-| sea_ad_supertype_lfc | `outputs/reports/kinase_attribution/sea_ad_supertype_lfc.csv` | yes (kinases only) | `pixi run attribution` |
+If nothing checkable is present, say what result or artifact you'd need and stop.

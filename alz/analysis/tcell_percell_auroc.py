@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
-"""Reproduce Matt's per-cell T-cell AUROC analysis with cycle regression.
+"""Reproduce the original per-cell T-cell marker AUROC analysis.
 
-The historical ProjecTILs ``functional.cluster`` call remains the label being
-evaluated.  Marker expression is evaluated twice: once as log-normalized RNA
-expression and once after donor-wide ordinary least-squares regression on the
-continuous Seurat ``S.Score`` and ``G2M.Score`` covariates.
-
-The primary type-panel comparison is a state against cells of the opposite
-lineage.  A separate historical reproduction uses Matt's implemented
-all-other-cells background so the values displayed in the historical HTML can
-be reproduced exactly despite the HTML describing an opposite-lineage test.
+The historical ProjecTILs ``functional.cluster`` call is the label being
+evaluated. Marker expression is log-normalized RNA expression, and the
+original all-other-cells background is retained so the AUROCs displayed in
+the original report can be reproduced exactly.
 """
 from __future__ import annotations
 
@@ -24,18 +19,22 @@ import pandas as pd
 from scipy.stats import rankdata
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tcell_marker_sets import CORE_PANELS, SIGNATURES, _marker_class  # noqa: E402
+from tcell_marker_sets import (  # noqa: E402
+    CORE_PANELS,
+    SIGNATURES,
+    _marker_class,
+    per_cell_marker_genes,
+)
 
 
 DONORS = ("donor1", "donor2")
 REPORT_ROOT = Path("outputs/reports/tcell_labeling")
 EXPRESSION_ROOT = REPORT_ROOT / "auroc"
 EMBEDDING_ROOT = Path("data/derived/tcells_incytr_inputs")
-CYCLE_ROOT = REPORT_ROOT / "clusters"
 REPRODUCTION_FIXTURE = (
     Path(__file__).resolve().parent
     / "fixtures"
-    / "tcell_matt_report_expected.json"
+    / "tcell_original_report_expected.json"
 )
 
 PANEL_LABELS: dict[str, set[str]] = {
@@ -62,7 +61,6 @@ PROJECTION_COLUMNS = {
     "functional.cluster",
     "functional.cluster.conf",
 }
-CYCLE_COLUMNS = ("Phase", "S.Score", "G2M.Score")
 
 
 def lineage_for_state(state: str) -> str:
@@ -102,11 +100,11 @@ def _read_unique_csv(path: Path, *, name: str) -> pd.DataFrame:
 
 
 def _collapse_projection_rows(path: Path) -> pd.DataFrame:
-    """Collapse PCA/UMAP duplicates while preserving Matt's projection choice.
+    """Collapse PCA/UMAP duplicates while preserving the original projection choice.
 
     Within a lineage-specific projection the PCA and UMAP rows must agree on the
     state and confidence.  A small number of cells passed both CD4 and CD8 gates
-    historically; Matt's analysis kept the first PCA projection in file order.
+    historically; the original analysis kept the first PCA projection in file order.
     We retain that behavior only to make the original report reproducible.
     """
     projections = pd.read_csv(path)
@@ -141,75 +139,32 @@ def load_donor_data(
     *,
     expression_root: Path = EXPRESSION_ROOT,
     embedding_root: Path = EMBEDDING_ROOT,
-    cycle_root: Path = CYCLE_ROOT,
 ) -> pd.DataFrame:
-    """Load and strictly join projected labels, marker RNA, and cycle scores."""
+    """Load and strictly join projected labels to marker RNA by barcode."""
     expression_path = expression_root / f"{donor}_marker_cell_expr.csv"
     projection_path = (
         embedding_root / donor / "scrna" / "projectils_embeddings.csv"
     )
-    cycle_path = cycle_root / f"{donor}_cc_recluster_cells.csv"
-
     expression = _read_unique_csv(expression_path, name="marker expression")
     projection = _collapse_projection_rows(projection_path)
-    if set(CYCLE_COLUMNS).issubset(expression.columns):
-        cycle = expression[list(CYCLE_COLUMNS)].copy()
-        expression = expression.drop(columns=list(CYCLE_COLUMNS))
-        cycle_score_source = expression_path
-    else:
-        cycle = _read_unique_csv(cycle_path, name="cell-cycle scores")
-        cycle_score_source = cycle_path
-        missing_cycle = set(CYCLE_COLUMNS) - set(cycle.columns)
-        if missing_cycle:
-            raise ValueError(
-                f"cell-cycle file lacks columns {sorted(missing_cycle)}: {cycle_path}"
-            )
 
     projected_barcodes = set(projection.index)
     missing_expression = projected_barcodes - set(expression.index)
-    missing_scores = projected_barcodes - set(cycle.index)
-    if missing_expression or missing_scores:
+    if missing_expression:
         raise ValueError(
-            f"{donor}: projected barcodes missing from expression={len(missing_expression)} "
-            f"or cell-cycle scores={len(missing_scores)}"
+            f"{donor}: projected barcodes missing from marker expression="
+            f"{len(missing_expression)}"
         )
 
     joined = projection.join(expression, how="left", validate="one_to_one")
-    joined = joined.join(cycle[list(CYCLE_COLUMNS)], how="left", validate="one_to_one")
     if len(joined) != len(projection) or not joined.index.is_unique:
         raise AssertionError(f"{donor}: barcode join did not preserve projected cells one-to-one")
-    if joined[["functional.cluster", "S.Score", "G2M.Score"]].isna().any().any():
-        raise ValueError(f"{donor}: incomplete label or cycle-score join")
+    if joined["functional.cluster"].isna().any():
+        raise ValueError(f"{donor}: incomplete projected-state join")
     joined["lineage"] = joined["functional.cluster"].map(lineage_for_state)
     joined.attrs["expression_input"] = str(expression_path)
     joined.attrs["projection_input"] = str(projection_path)
-    joined.attrs["cycle_score_input"] = str(cycle_score_source)
     return joined
-
-
-def residualize_marker_expression(
-    expression: pd.DataFrame,
-    cycle_scores: pd.DataFrame,
-) -> pd.DataFrame:
-    """Remove donor-wide linear S.Score and G2M.Score effects from each gene."""
-    if not expression.index.equals(cycle_scores.index):
-        raise ValueError("expression and cycle-score rows must have identical indexes")
-    required = ["S.Score", "G2M.Score"]
-    missing = set(required) - set(cycle_scores.columns)
-    if missing:
-        raise ValueError(f"cycle scores lack columns: {sorted(missing)}")
-
-    response = expression.apply(pd.to_numeric, errors="raise").to_numpy(dtype=float)
-    covariates = cycle_scores[required].apply(pd.to_numeric, errors="raise")
-    design = np.column_stack([np.ones(len(covariates)), covariates.to_numpy(dtype=float)])
-    if not np.isfinite(response).all() or not np.isfinite(design).all():
-        raise ValueError("cycle regression requires finite expression and covariates")
-    if np.linalg.matrix_rank(design) != design.shape[1]:
-        raise ValueError("cycle-regression design matrix is not full rank")
-
-    coefficients, *_ = np.linalg.lstsq(design, response, rcond=None)
-    residuals = response - design @ coefficients
-    return pd.DataFrame(residuals, index=expression.index, columns=expression.columns)
 
 
 def _panel_class(panel: str) -> str:
@@ -243,7 +198,7 @@ def _comparison_mask(
         label = f"opposite-lineage {other} cells"
     elif marker_class == "type" and type_background == "all_other_cells":
         comparison = ~positive
-        label = "all other projected T cells (historical implementation)"
+        label = "all other projected T cells"
     else:
         comparison = lineages.eq(lineage).to_numpy() & ~positive
         label = f"same-lineage sibling {lineage} states"
@@ -263,19 +218,11 @@ def calculate_evidence_tables(
     cells: pd.DataFrame,
     *,
     signatures: Mapping[str, Sequence[str]] = SIGNATURES,
-    type_background: str = "opposite_lineage",
-    value_kind: str = "log_normalized_expression",
+    type_background: str = "all_other_cells",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Calculate per-gene and z-scored panel AUROC for every projected state."""
     if type_background not in {"opposite_lineage", "all_other_cells"}:
         raise ValueError(f"unsupported type background: {type_background}")
-    value_units = {
-        "log_normalized_expression": "log-normalized RNA expression",
-        "cycle_regressed_residual": "cycle-regressed log-normalized-expression residual",
-    }
-    if value_kind not in value_units:
-        raise ValueError(f"unsupported marker value kind: {value_kind}")
-    is_raw_expression = value_kind == "log_normalized_expression"
     if "functional.cluster" not in cells:
         raise ValueError("cells must contain functional.cluster")
     states = cells["functional.cluster"].astype(str)
@@ -318,18 +265,18 @@ def calculate_evidence_tables(
                         "marker_class": marker_class,
                         "is_matching_panel": matching,
                         "present": present,
-                        "marker_value_unit": value_units[value_kind],
+                        "marker_value_unit": "log-normalized RNA expression",
                         "comparison": comparison_label,
                         "n_cells_target": int(positive.sum()),
                         "n_cells_comparison": int(comparison.sum()),
                         "target_detection_fraction": (
                             float(np.mean(values[positive] > 0))
-                            if present and is_raw_expression
+                            if present
                             else np.nan
                         ),
                         "comparison_detection_fraction": (
                             float(np.mean(values[comparison] > 0))
-                            if present and is_raw_expression
+                            if present
                             else np.nan
                         ),
                         "target_mean_marker_value": (
@@ -377,24 +324,12 @@ def _write_donor_results(donor: str, cells: pd.DataFrame, output_root: Path) -> 
         dict.fromkeys(gene for genes in SIGNATURES.values() for gene in genes)
     )
     present_markers = [gene for gene in declared_markers if gene in cells]
-    raw = cells[present_markers].apply(pd.to_numeric, errors="raise")
-    residuals = residualize_marker_expression(raw, cells[list(CYCLE_COLUMNS)])
-
-    adjusted_cells = cells.drop(columns=present_markers).join(residuals)
-    adjusted_matt_marker, adjusted_matt_panel = calculate_evidence_tables(
-        donor,
-        adjusted_cells,
-        type_background="all_other_cells",
-        value_kind="cycle_regressed_residual",
-    )
     unadjusted_matt_marker, unadjusted_matt_panel = calculate_evidence_tables(
         donor, cells, type_background="all_other_cells"
     )
 
     unadjusted_dir = output_root / "reproduced_unadjusted"
-    adjusted_dir = output_root / "cycle_regressed"
     unadjusted_dir.mkdir(parents=True, exist_ok=True)
-    adjusted_dir.mkdir(parents=True, exist_ok=True)
 
     unadjusted_matt_marker.to_csv(
         unadjusted_dir / f"{donor}_historical_percell_marker_auroc.csv", index=False
@@ -402,54 +337,20 @@ def _write_donor_results(donor: str, cells: pd.DataFrame, output_root: Path) -> 
     unadjusted_matt_panel.to_csv(
         unadjusted_dir / f"{donor}_historical_percell_panel_auroc.csv", index=False
     )
-    adjusted_matt_marker.to_csv(
-        adjusted_dir / f"{donor}_matt_method_percell_marker_auroc.csv", index=False
-    )
-    adjusted_matt_panel.to_csv(
-        adjusted_dir / f"{donor}_matt_method_percell_panel_auroc.csv", index=False
-    )
-
-    values = pd.DataFrame(index=cells.index)
-    values.index.name = "barcode"
-    values["functional_cluster"] = cells["functional.cluster"].astype(str)
-    values["lineage"] = cells["lineage"].astype(str)
-    for column in CYCLE_COLUMNS:
-        values[column] = cells[column]
-    for gene in present_markers:
-        values[f"{gene}_log_normalized_expression"] = raw[gene]
-        values[f"{gene}_cycle_regressed_residual"] = residuals[gene]
-    values.to_csv(adjusted_dir / f"{donor}_marker_cell_values.csv")
-
-    design = np.column_stack(
-        [np.ones(len(cells)), cells[["S.Score", "G2M.Score"]].to_numpy(dtype=float)]
-    )
-    max_orthogonality_error = float(np.abs(design.T @ residuals.to_numpy()).max())
-    residual_cycle_correlations = residuals.apply(
-        lambda gene: max(
-            abs(gene.corr(cells["S.Score"])),
-            abs(gene.corr(cells["G2M.Score"])),
-        )
-    )
     inventory = pd.DataFrame(
         [
             {
                 "donor": donor,
                 "expression_input": cells.attrs.get("expression_input", "unknown"),
                 "projection_input": cells.attrs.get("projection_input", "unknown"),
-                "cycle_score_input": cells.attrs.get("cycle_score_input", "unknown"),
                 "n_projected_cells": len(cells),
                 "n_marker_genes": len(present_markers),
-                "max_abs_design_transpose_residual": max_orthogonality_error,
-                "max_abs_residual_cycle_correlation": float(
-                    residual_cycle_correlations.max()
-                ),
             }
         ]
     )
     inventory.to_csv(unadjusted_dir / f"{donor}_input_inventory.csv", index=False)
     print(
-        f"[{donor}] {len(cells)} projected cells, {len(present_markers)} markers; "
-        f"max |X' residual|={max_orthogonality_error:.3g}"
+        f"[{donor}] {len(cells)} projected cells, {len(present_markers)} markers"
     )
 
 
@@ -459,7 +360,7 @@ def verify_historical_reproduction(
     fixture_path: Path = REPRODUCTION_FIXTURE,
     donors: Sequence[str] = DONORS,
 ) -> pd.DataFrame:
-    """Verify Matt's recorded panels and displayed AUROCs from versioned inputs."""
+    """Verify the original recorded panels and displayed AUROCs from versioned inputs."""
     fixture = json.loads(fixture_path.read_text())
     displayed_tables = fixture.get("displayed_tables", [])
     expected_table_count = fixture.get("displayed_table_count")
@@ -468,7 +369,7 @@ def verify_historical_reproduction(
         or len(displayed_tables) != expected_table_count
         or any("rows" not in table for table in displayed_tables)
     ):
-        raise ValueError("Matt report fixture does not inventory every displayed table")
+        raise ValueError("original report fixture does not inventory every displayed table")
     fixture_panels = fixture["marker_panels"]
     implemented_panels = {
         panel: list(genes)
@@ -476,7 +377,7 @@ def verify_historical_reproduction(
         if panel in fixture_panels
     }
     if implemented_panels != fixture_panels:
-        raise ValueError("versioned marker panels do not match the Matt report fixture")
+        raise ValueError("versioned marker panels do not match the original report fixture")
 
     rows: list[dict[str, object]] = []
     for donor in donors:
@@ -535,12 +436,18 @@ def main() -> int:
     parser.add_argument("--donor", choices=(*DONORS, "all"), default="all")
     parser.add_argument("--expression-root", type=Path, default=EXPRESSION_ROOT)
     parser.add_argument("--embedding-root", type=Path, default=EMBEDDING_ROOT)
-    parser.add_argument("--cycle-root", type=Path, default=CYCLE_ROOT)
     parser.add_argument("--output-root", type=Path, default=REPORT_ROOT)
     parser.add_argument("--reproduction-fixture", type=Path, default=REPRODUCTION_FIXTURE)
     args = parser.parse_args()
     if args.write_markers:
-        genes = sorted({gene for genes in SIGNATURES.values() for gene in genes})
+        genes = sorted(
+            {
+                gene
+                for genes in SIGNATURES.values()
+                for gene in genes
+            }
+            | set(per_cell_marker_genes())
+        )
         args.write_markers.parent.mkdir(parents=True, exist_ok=True)
         args.write_markers.write_text("\n".join(genes) + "\n")
         print(f"wrote {len(genes)} marker genes to {args.write_markers}")
@@ -552,7 +459,6 @@ def main() -> int:
             donor,
             expression_root=args.expression_root,
             embedding_root=args.embedding_root,
-            cycle_root=args.cycle_root,
         )
         _write_donor_results(donor, cells, args.output_root)
     check = verify_historical_reproduction(

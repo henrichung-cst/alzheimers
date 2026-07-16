@@ -51,7 +51,7 @@ function _tcellEnrichBadge(fold, state) {
   // state-enriched (≥1.5×). Below that the argmax state is a near-tie and would
   // misread as a home — same rule as the Cell type column's "broad".
   const statePill = state
-    ? ` <span class="ke-state-pill" title="Most-enriched T-cell state (all timepoints): ${_escapeHtml(state)}">${_escapeHtml(state)}</span>`
+    ? ` <span class="ke-state-pill" title="Most-enriched T-cell state (all timepoints): ${_escapeHtml(state)}">${tcellStateSwatch(state)}${_escapeHtml(state)}</span>`
     : "";
   return `<span class="badge ${cls}" title="${lbl} the kinase's baseline (mean-state) expression — enriched in this state vs a typical T-cell state">${lbl}</span>${statePill}`;
 }
@@ -168,6 +168,12 @@ function _buildKinaseRowModel() {
         ? K.nsclc_groups_total[i] : null,
       nsclc_expressing_groups: (K.nsclc_expressing_groups && K.nsclc_expressing_groups[i]) || null,
       nsclc_top_group: (K.nsclc_top_group && K.nsclc_top_group[i]) || "",
+      incytr_pathway_count: (K.incytr_pathway_count && K.incytr_pathway_count[i] != null)
+        ? K.incytr_pathway_count[i] : null,
+      incytr_backbone_count: (K.incytr_backbone_count && K.incytr_backbone_count[i] != null)
+        ? K.incytr_backbone_count[i] : null,
+      incytr_pathway_total: (K.incytr_pathway_total && K.incytr_pathway_total[i] != null)
+        ? K.incytr_pathway_total[i] : null,
       _fdr: CONTRASTS.map(c => K["FDR_" + c][i]),
       _nes: CONTRASTS.map(c => K["NES_" + c][i]),
     });
@@ -402,6 +408,14 @@ function _makeKeCompare(scopedCtxIds) {
       // Categorical: rising → falling, no-trend last.
       va = _tkTrendRank(a); vb = _tkTrendRank(b);
     }
+    else if (col === "incytr_pathways") {
+      va = a.incytr_pathway_count;
+      vb = b.incytr_pathway_count;
+    }
+    else if (col === "incytr_backbones") {
+      va = a.incytr_backbone_count;
+      vb = b.incytr_backbone_count;
+    }
     else { va = a[col]; vb = b[col]; }
     if (typeof va === "string" || typeof vb === "string") {
       const sa = va == null ? "" : String(va), sb = vb == null ? "" : String(vb);
@@ -571,6 +585,32 @@ function _renderNSCLCSpecificityCountCell(r) {
   return `<span title="${_escapeHtml(tip)}"><strong>${cnt}</strong><span class="muted" style="font-size:10px;"> / ${total}</span>${badge}${memberInline}</span>`;
 }
 
+// Substrate-based Incytr participation: N (and % of all predicted pathways)
+// whose node set includes ≥1 gene this kinase phosphorylates (its MEA substrate
+// set). Precomputed in Python. Two scopes share the denominator:
+//   pathway  — Ligand/Receptor/EM/Target
+//   backbone — Ligand/Receptor/EM (Target excluded)
+// Direct node membership is NOT used — a kinase is a pathway node in <0.1% of
+// rows. n/a = no MEA substrate set for this kinase on its track.
+function _renderSubstrateCoverageCell(n, total, nodeScope) {
+  if (n == null || !total) {
+    return `<span class="muted" title="No MEA substrate set for this kinase — it cannot be linked to pathways by substrate.">n/a</span>`;
+  }
+  const pct = 100 * n / total;
+  const pctStr = pct >= 10 ? pct.toFixed(0) : pct.toFixed(1);
+  const cls = pct >= 50 ? "hi" : (pct >= 20 ? "mid" : "lo");
+  const tip = `${n.toLocaleString()} of ${total.toLocaleString()} predicted pathways `
+    + `(${pctStr}%) have a ${nodeScope} node containing a gene this kinase phosphorylates (its MEA substrate set).`;
+  return `<span title="${_escapeHtml(tip)}"><strong>${n.toLocaleString()}</strong>`
+    + `<span class="badge ${cls}" style="margin-left:4px;">${pctStr}%</span></span>`;
+}
+function _renderIncytrPathwayCell(r) {
+  return _renderSubstrateCoverageCell(r.incytr_pathway_count, r.incytr_pathway_total, "Ligand/Receptor/EM/Target");
+}
+function _renderIncytrBackboneCell(r) {
+  return _renderSubstrateCoverageCell(r.incytr_backbone_count, r.incytr_pathway_total, "Ligand/Receptor/EM");
+}
+
 function _renderKinaseWhitelistBanner(wl) {
   const wrap = document.querySelector(".ke-table-wrap");
   if (!wrap) return;
@@ -618,7 +658,7 @@ function renderKinaseExplorer() {
   const donor = ViewerPayload.activeContext();
   const meaDonor = (PAYLOAD.meta && PAYLOAD.meta.mea_kinase_donor) || "donor1";
   if (donor !== meaDonor) {
-    tbody.innerHTML = '<tr><td colspan="8" class="muted" style="padding:24px;text-align:center;">'
+    tbody.innerHTML = '<tr><td colspan="12" class="muted" style="padding:24px;text-align:center;">'
       + 'Kinase MEA is ' + _escapeHtml(meaDonor) + '-only — ' + _escapeHtml(donor)
       + ' has no IMAC. Switch to ' + _escapeHtml(meaDonor) + ' to see kinase activity.'
       + '</td></tr>';
@@ -673,8 +713,7 @@ function renderKinaseExplorer() {
       // Stack mode: fall through to the normal predicate chain below.
     }
     // Text search
-    if (q && !(r.name.toLowerCase().includes(q) ||
-               r.gene_symbol.toLowerCase().includes(q))) continue;
+    if (q && !_searchValuesMatch([r.name, r.gene_symbol], q)) continue;
     const scopedSig = _kineSigCountScoped(r, fdr, scopedCtxIds);
     if (!q) {
       // n_sig minimum (numeric filter).
@@ -755,6 +794,8 @@ function renderKinaseExplorer() {
     const specBadge = _tcellEnrichBadge(_enr.fold, _enr.state);
     const cellStatesCell = _renderCellTypesCell(r, colFilter);
     const nsclcSpecCell = _renderNSCLCSpecificityCountCell(r);
+    const incytrPathCell = _renderIncytrPathwayCell(r);
+    const incytrBackboneCell = _renderIncytrBackboneCell(r);
 
     const residueBadge = r.residue_type === "Y"
       ? ' <span class="track-badge track-y" title="Tyrosine kinase (pY track)">pY</span>'
@@ -773,6 +814,8 @@ function renderKinaseExplorer() {
       `<td>${specBadge}</td>` +
       `<td>${cellStatesCell}</td>` +
       `<td>${nsclcSpecCell}</td>` +
+      `<td>${incytrPathCell}</td>` +
+      `<td>${incytrBackboneCell}</td>` +
       `</tr>`
     );
   }
@@ -784,8 +827,8 @@ function renderKinaseExplorer() {
 
 function exportKinaseCsv() {
   const donor = (ViewerPayload.activeContext && ViewerPayload.activeContext()) || "donor1";
-  const headers = ["Kinase","Gene","Family","Residue","n_sig","trend","tcell_top_celltype"];
-  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportTrend","_exportTopCelltype"];
+  const headers = ["Kinase","Gene","Family","Residue","n_sig","trend","tcell_top_celltype","incytr_pathway_count","incytr_backbone_count","incytr_pathway_total"];
+  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportTrend","_exportTopCelltype","incytr_pathway_count","incytr_backbone_count","incytr_pathway_total"];
   csvDownload(csvSerialize(headers, keys, _keVisible), exportFilename(donor, "kinase"));
 }
 
