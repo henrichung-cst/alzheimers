@@ -34,7 +34,7 @@ Candidate work, one file per item. Delete a file when it ships — git holds the
 | [`never-read-sidecar-cleanup.md`](never-read-sidecar-cleanup.md) | Refactor carryover | stop emitting `_raw`/`_all`/`_per_cluster` sidecars |
 | [`cohort-namespace-frozen-layer-moves.md`](cohort-namespace-frozen-layer-moves.md) | Refactor carryover | migrate held-back frozen Incytr/decomposition paths into `alz/cohorts/*` |
 
-Dated snapshot cross-referencing every plan against commits (2026-07-10; predates the T-cell Incytr report thread): [`plans_state_audit_2026-07-10.md`](plans_state_audit_2026-07-10.md). Sequencing, cross-cutting threads, and blocking adjudications: [`implementation_sequencing.md`](implementation_sequencing.md). The T-cell labeling direction is resolved — canonical = per-cell marker assignment, ProjecTILs corroboration-only.
+Sequencing, cross-cutting threads, and blocking adjudications: [`implementation_sequencing.md`](implementation_sequencing.md). The T-cell labeling direction is resolved — canonical = per-cell marker assignment, ProjecTILs corroboration-only.
 
 ---
 

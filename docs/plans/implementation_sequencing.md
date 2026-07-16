@@ -1,7 +1,7 @@
 # Plans — implementation sequencing & adjudication
 
 Goal: implement every plan in `docs/plans/`. This maps the cross-cutting threads, the blocking
-decisions, the conflicts, and a parallel execution order. Companion to `plans_state_audit_2026-07-10.md`.
+decisions, the conflicts, and a parallel execution order.
 
 Plan shorthand used below:
 `sidechain` = `kinase_sidechain_incytr_graph/` (01–04) · `geneuse` = `ad_geneuse_unpin_from_sce4`
