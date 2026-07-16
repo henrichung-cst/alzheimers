@@ -5,9 +5,9 @@ decisions, the conflicts, and a parallel execution order. Companion to `plans_st
 
 Plan shorthand used below:
 `sidechain` = `kinase_sidechain_incytr_graph/` (01–04) · `geneuse` = `ad_geneuse_unpin_from_sce4`
-`corr` = `tcell-proteome-transcriptome-correlation` · `labels` = `tcell-matt-report-restoration` (per-cell labeling standard)
+`labels` = `tcell-matt-report-restoration` (per-cell labeling standard)
 `apriori` = `tcell_apriori_expectations` (blind exhaustion prediction set → `docs/reference/`, unbuilt)
-`deploy` = `deployment/todo9_viewer_aws_deployment` · A3/A4/B1/B2/C3/E1/E2/G1/H1/I1/I2 = backlog files.
+`deploy` = `deployment/todo9_viewer_aws_deployment` · A3/B2/C3/E1/E2/G1/H1/I1/I2 = backlog files.
 
 ---
 
@@ -23,16 +23,15 @@ atlas and cannot emit kinase→kinase edges). E1 is a directional/disease-overla
 interactome, not a parallel network.**
 
 **T2 — cell-type specificity engine.** `E2` consumes the existing per-kinase cell-type specificity
-basis to split same-family kinases — the one remaining open consumer. (`C4`, the human-vs-mouse-breadth
-review guard, cleared to `foundation/specificity_confidence.md` §3a; `G2`, positive controls, retracted
-— the curated per-cohort control list is gone, replaced by the general in-the-moment plausibility
-`check-controls` skill that sources expectations from external biology, not the specificity basis.)
+basis to split same-family kinases — the only open consumer. The review-time cross-species breadth
+constraint lives in `foundation/specificity_confidence.md` §3a.
 
 **T3 — Incytr recompute + viewer rebuild.** `geneuse` (un-pin → AD re-run), `sidechain` (consumes
-Incytr `wide/` output), `B2`, `C3`, `E1/E2` tabs, and the t-cell relabel all end in a viewer payload
-rebuild. `B1` (IncytrDB version audit) is **covered** — the six DB objects are version-pinned
-(2026-03-09, MD5s in `current_manifest.json`) and species selection is per-dataset correct, so
-recomputes are not DB-blocked. Payload writers (`build_unified_viewer.py`, `build_tcell_viewer.py`,
+Incytr `wide/` output), `B2`, `C3`, and `E1/E2` tabs all end in a viewer payload rebuild. Recomputes are
+**not DB-blocked**: the six IncytrDB objects are version-pinned (2026-03-09, MD5s in the audit manifest
+at `~/Projects/work/incytr/inst/extdata/incytrdb_audit/`) and species selection is per-dataset correct;
+a first-principles DB rebuild is blocked on source artifacts that no longer exist, which the no-contact
+rule forbids requesting. Payload writers (`build_unified_viewer.py`, `build_tcell_viewer.py`,
 cohort `*.py`, `slices_incytr.py`) cannot be written concurrently — serialize integration, not authoring.
 
 **T4 — T-cell labeling standard (SETTLED, nothing outstanding).** Canonical = **per-cell marker
@@ -56,11 +55,6 @@ resolver default), and the report suite. `sidechain-02` and `A3` are the only op
 
 ## 2. Adjudications required (blocking — resolve before the dependent wave)
 
-**D1 — T-cell labeling ontology. RESOLVED** (see T4): canonical = per-cell marker assignment;
-by-cluster annotation rejected as day-confounded; ProjecTILs corroboration-only. No longer an open
-adjudication — the consolidation is enforced in code by the shared validator, and the labels are
-verified current. Nothing outstanding.
-
 **D2 — E1 vs sidechain scope. RESOLVED: shared backend.** E1's reference hierarchy (A→B regulation)
 is sourced from PSP's `Kinase_Substrate_Dataset` — the same file `sidechain-01` already loads. The
 Johnson Kinase Library is a motif-scoring atlas and cannot emit kinase→kinase edges, so it is not a
@@ -75,11 +69,6 @@ Removes the `use_frozen_geneuse` branch + `extract_sce4_geneuse.R` (anti-shim). 
 changing — requires a full AD re-run + viewer rebuild (Wave 3). Touch points in
 `ad_geneuse_unpin_from_sce4.md`.
 
-**D4 — C4 form. RESOLVED: prose checklist / skill. CLEARED.** C4 stays a review-time operational
-constraint (the human checks mouse-vs-human cell-type breadth per candidate before reporting), not an
-automated guard — a veto would contradict the never-veto invariant in `specificity_confidence.md` §3.
-Landed as `foundation/specificity_confidence.md` §3a; plan file removed.
-
 **D5 — I2 timing.** `sidechain-01/02` import the exact frozen-layer modules `I2` relocates
 (`*_decompose.py`, `song.py`, R extractors). Running `I2` mid-stream breaks those imports.
 Recommendation: **do `I2` last, in an isolated window**, updating all importers in the same pass; or
@@ -92,18 +81,14 @@ skip until the sidechain work lands. Never interleave it with other file-touchin
 ```
 D3 ──► geneuse re-run ──► AD viewer rebuild ─────────────────────┐
                                                                  ├─► serialized
-t-cell labels / Incytr re-run / t-cell viewer ── done, no gate    │   viewer
-   └─► sidechain-02 ∥ A3 ── ungated, runnable now                 │   integration
-                                                                 │
-sidechain-01 (PSP backend) ──┬─► sidechain-03 ──► sidechain-04 ──┤
-sidechain-02 ────────────────┘                                   │
+sidechain-01 (PSP backend) ──┬─► sidechain-03 ──► sidechain-04 ──┤   viewer
+sidechain-02 ────────────────┘                                   │   integration
                                                                  │
 D2 ──► E1 (reuse sidechain-01 backend) ──► E2 ───────────────────┤
 T2 specificity ──► E2                                            │
 B2 (sankey), C3 (early-change) ─────────────────────────────────┘
 
-tmt (H1), G1 (diagrams), apriori (docs), deploy-B  ── independent leaves, no gate
-B1 (covered), A4 (verified), corr (built), tcell-incytr reports (built), C4 (cleared), G2 (retracted) ── done
+tmt (H1), G1 (diagrams), apriori (docs), deploy-B, A3 ── independent leaves, no gate
 I1 ── independent (low conflict) · I2 ── isolated window, last (D5)
 ```
 
@@ -124,22 +109,6 @@ I1 ── independent (low conflict) · I2 ── isolated window, last (D5)
 ---
 
 ## 5. Parallel execution waves
-
-**Wave 0 — DONE / resolved.**
-- `B1` IncytrDB — covered by the existing `incytrdb_audit/` (version-pinned, species-correct; rebuild
-  blocked on unobtainable source artifacts, which the no-contact rule forbids requesting).
-- `A4` T-cell data structure — verified on disk (donor1 has IMAC, donor2 does not; both total+pY+scRNA).
-- `labels` labeling standard — per-cell marker assignment (D1/T4); one producer, one validator, no
-  competing path. Labels verified current; nothing outstanding.
-- t-cell Incytr **re-key + pair-mode re-run** — DONE (donor1 ×3, donor2 ×4 contrasts in
-  `incytr_pair_mode_tcells`), and the **t-cell viewer** reads that root as its asserted
-  production default (`build_tcell_viewer.py`).
-- `corr` proteome↔transcriptome correlation — BUILT 2026-07-13 (rho=0.546, n=7693); archived to `standalone_done/`.
-- `C4` cross-species specificity guard — CLEARED; documented as review constraint in `foundation/specificity_confidence.md` §3a (D4: prose, not code).
-- `G2` positive controls — RETRACTED; curated per-cohort control list dropped, `check-controls` skill rewritten as a general in-the-moment biological-plausibility check (expectations from external biology, cited where possible).
-- t-cell Incytr **report suite** — BUILT (cell-cell, a-priori/novelty, anchor-landing, protein-RNA
-  timecourse) on the current labels; plan files removed from `docs/plans/` on ship.
-- All adjudications resolved: D2 (shared backend), D3 (un-pin), D4 (prose checklist), D5 (I2 last).
 
 **Wave 1 — independent builds (parallel, disjoint outputs, no gate).**
 - `H1` TMT paper IMAC fetch + enrichment.
@@ -165,5 +134,4 @@ I1 ── independent (low conflict) · I2 ── isolated window, last (D5)
 
 **Isolated — `I2`** frozen-layer namespace moves, dedicated window, last (D5).
 
-All adjudications (D1–D5) are resolved, and the T-cell labeling gate is cleared (labels verified current
-2026-07-16). No T-cell work is blocked on labeling.
+Nothing is blocked on an open decision: D2, D3, and D5 are settled and direct the waves above.

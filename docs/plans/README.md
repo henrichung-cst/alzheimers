@@ -24,9 +24,7 @@ Candidate work, one file per item. Delete a file when it ships — git holds the
 | Doc | Theme | What |
 |---|---|---|
 | [`tcell-incytr-trend-timepoint-coverage.md`](tcell-incytr-trend-timepoint-coverage.md) | T-cell | verify Incytr trends cover all 3 timepoints |
-| [`tcell-data-structure-verification.md`](tcell-data-structure-verification.md) | T-cell | confirm donor1/donor2 data shape matches the pipeline's assumptions |
 | [`tcell_apriori_expectations.md`](tcell_apriori_expectations.md) | T-cell | blind literature-grounded exhaustion prediction set → `docs/reference/tcell_apriori_expectations.md` (unbuilt) |
-| [`incytrdb-provenance-audit.md`](incytrdb-provenance-audit.md) | Incytr | IncytrDB source, freshness, correct mouse/human version per dataset |
 | [`incytr-sankey-diagram.md`](incytr-sankey-diagram.md) | Incytr | add sankey view + collapse excitatory clusters (chord already ships) |
 | [`disease-direction-site-level-early-change.md`](disease-direction-site-level-early-change.md) | Cross-cohort | Disease Direction Stage 4 — site-level early-change phosphosites |
 | [`kinase-regulation-network.md`](kinase-regulation-network.md) | Kinase hierarchy | PhosphoSite-based regulation network + observed disease overlay (precedes family discrimination) |
