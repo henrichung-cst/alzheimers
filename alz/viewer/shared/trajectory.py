@@ -19,14 +19,12 @@ if TYPE_CHECKING:
 
 def annotate_trajectory_columns(
     df: "pd.DataFrame",
-    timepoints: "tuple[str, ...] | None" = None,
-    valid_diseases: "set[str] | None" = None,
     source_label: str = "pair_mode",
     *,
-    series_key: "Callable[[Any], Any]",
-    axis_value: "Callable[[Any], Any]",
-    ordered_axis: "tuple[str, ...] | None" = None,
-    valid_series: "set[str] | None" = None,
+    series_key: "Callable[[pd.DataFrame], Any]",
+    axis_value: "Callable[[pd.DataFrame], Any]",
+    ordered_axis: "tuple[str, ...]",
+    valid_series: "set[str]",
 ) -> "tuple[pd.DataFrame, dict, dict]":
     """Add ``traj_labels`` and ``sign_vec`` columns to a long-form shard DataFrame.
 
@@ -38,17 +36,13 @@ def annotate_trajectory_columns(
     df:
         Long-form shard DataFrame.  Must have columns: sender, receiver, Path,
         contrast, PDS.
-    timepoints / valid_diseases:
-        Backwards-compatible names for ``ordered_axis`` / ``valid_series``.
-        They preserve the existing cohort-wrapper call shape; the extractors
-        define how those values are obtained from the input rows.
     series_key:
-        Extracts the trajectory series for each row.  The callable may accept
-        the complete DataFrame and return a same-index Series, or accept one
-        row and return a scalar.
+        Vectorized extractor: accepts the whole DataFrame and returns a
+        same-index Series (or a scalar broadcast to every row) giving the
+        trajectory series each row belongs to.
     axis_value:
-        Extracts the ordered-axis value for each row, with the same callable
-        conventions as ``series_key``.
+        Vectorized extractor with the same contract, giving each row's
+        ordered-axis value.
     ordered_axis:
         Complete ordered axis.  A trajectory is labelled only when it has a
         real PDS at every value in this tuple.
@@ -67,17 +61,8 @@ def annotate_trajectory_columns(
     traj_summary:
         ``{ label → count }`` aggregate across all (path, series) pairs.
     """
-    if ordered_axis is None:
-        ordered_axis = tuple(timepoints or ())
-    if valid_series is None:
-        valid_series = set(valid_diseases or ())
-
-    def _extract(mapping: "Callable[[Any], Any]", name: str) -> "pd.Series":
-        """Evaluate a vectorized extractor, or a row extractor for callers."""
-        try:
-            values = mapping(df)
-        except (AttributeError, IndexError, KeyError, TypeError):
-            values = df.apply(mapping, axis=1)
+    def _extract(mapping: "Callable[[pd.DataFrame], Any]", name: str) -> "pd.Series":
+        values = mapping(df)
         if isinstance(values, pd.Series):
             return values.reindex(df.index)
         if pd.api.types.is_scalar(values):

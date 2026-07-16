@@ -501,7 +501,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
     ))
     from alz.viewer.shared.trajectory import annotate_trajectory_columns
     trajectory_source = con.execute("""
-        SELECT sender, receiver, Path, contrast, PDS
+        SELECT sender, receiver, Ligand, Receptor, EM, Target, Path, contrast, PDS
         FROM src
         WHERE PDS IS NOT NULL
     """).fetchdf()
@@ -513,9 +513,13 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         valid_series={donor},
         source_label=f"tcell/{donor}",
     )
+    # Key on the path component columns, not the joined Path string: Incytr's
+    # Path uses "*" as its separator, so any client-side re-join would silently
+    # miss every row.
+    _traj_merge_cols = ["sender", "receiver", "Ligand", "Receptor", "EM", "Target"]
     trajectory_map = trajectory_source[
-        ["sender", "receiver", "Path", "traj_labels", "sign_vec"]
-    ].drop_duplicates(["sender", "receiver", "Path"])
+        [*_traj_merge_cols, "traj_labels", "sign_vec"]
+    ].drop_duplicates(_traj_merge_cols)
 
     # Complete donor-local top-mode index. This mirrors the unified viewer's
     # packed-column contract so the shared Incytr Pathways tab can filter over
@@ -579,7 +583,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         top["rank"] = np.arange(1, len(top) + 1, dtype=int)
         top = top.merge(
             trajectory_map,
-            on=["sender", "receiver", "Path"],
+            on=_traj_merge_cols,
             how="left",
         )
         top["traj_labels"] = top["traj_labels"].fillna("")
@@ -629,19 +633,15 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         s, r = key
         sub["sender"] = s
         sub["receiver"] = r
-        sub["Path"] = (sub["Ligand"].astype(str) + "|"
-                        + sub["Receptor"].astype(str) + "|"
-                        + sub["EM"].astype(str) + "|"
-                        + sub["Target"].astype(str))
         sub = sub.merge(
             trajectory_map,
-            on=["sender", "receiver", "Path"],
+            on=_traj_merge_cols,
             how="left",
         )
         sub["traj_labels"] = sub["traj_labels"].fillna("")
         sub["sign_vec"] = sub["sign_vec"].fillna("")
         _accumulate_index(s, r, sub)
-        sub = sub.drop(columns=["sender", "receiver", "Path"])
+        sub = sub.drop(columns=["sender", "receiver"])
         for col in float32_cols:
             if col in sub.columns:
                 sub[col] = sub[col].astype("float32")
