@@ -150,9 +150,9 @@ class KinaseSidechainViewerTests(unittest.TestCase):
             if (!src.includes("requestFullscreen") || !src.includes("fullscreenchange")
                 || !src.includes("cy.resize()"))
               throw new Error("fullscreen control does not refit Cytoscape after resizing");
-            if (!src.includes("infoPanel.append(filterControls, legend, edgeDetail)")
+            if (!src.includes("infoPanel.append(filterControls, legend, edgeDetail, nodeRelationDetail)")
                 || !src.includes("nodeRelationDetail.replaceChildren(_isNodeRelationTable(evt.target, cy))")
-                || !src.includes("nodeRelationDetail.textContent = \"Tap a node for its relationships.\";")
+                || !src.includes('nodeRelationDetail.textContent = "Tap a node for its relationships.";')
                 || !src.includes("panel.append(graphHost, fullscreenButton, infoPanel)"))
               throw new Error("fullscreen panel does not retain legend and edge evidence");
             if (!src.includes('selector: "edge.is-focus-edge"')
