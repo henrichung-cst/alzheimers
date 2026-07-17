@@ -1836,7 +1836,7 @@ function _ipRenderDetailPanel(r, rk, activeTab, allowTrajectory = true) {
   }
   if (activeTab === "sidechains" && showSidechains) {
     return tabBar + `<div id="${_escapeHtml(_isHostId(rk))}">`
-      + `<div class="muted" style="font-size:11px;padding:8px 0;">Loading kinase sidechains…</div>`
+      + `<div class="muted">Loading kinase sidechains…</div>`
       + `</div>`;
   }
   // Default: Evidence tab.
