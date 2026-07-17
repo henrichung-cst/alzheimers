@@ -30,7 +30,6 @@ Candidate work, one file per item. Delete a file when it ships — git holds the
 | [`kinase-family-discrimination.md`](kinase-family-discrimination.md) | Kinase hierarchy | separate same-family kinases by cell-type specificity (needs the network first) |
 | [`methods-workflow-diagrams.md`](methods-workflow-diagrams.md) | Docs | workflow flowcharts for AD + T-cell pipelines |
 | [`tmt-paper-imac-replication.md`](tmt-paper-imac-replication.md) | External | fetch TMT-paper IMAC data, compare kinase enrichment (exploratory) |
-| [`never-read-sidecar-cleanup.md`](never-read-sidecar-cleanup.md) | Refactor carryover | stop emitting `_raw`/`_all`/`_per_cluster` sidecars |
 | [`cohort-namespace-frozen-layer-moves.md`](cohort-namespace-frozen-layer-moves.md) | Refactor carryover | migrate held-back frozen Incytr/decomposition paths into `alz/cohorts/*` |
 
 Sequencing, cross-cutting threads, and blocking adjudications: [`implementation_sequencing.md`](implementation_sequencing.md). The T-cell labeling direction is resolved — canonical = per-cell marker assignment, ProjecTILs corroboration-only.

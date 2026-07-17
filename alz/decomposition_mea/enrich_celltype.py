@@ -16,9 +16,6 @@ For each cluster:
 Outputs (under `outputs/reports/decomposition/{spine}/`, track-suffixed):
   - `mea_per_cluster.parquet`            — long: cluster, contrast, kinase, NES, pval, FDR, ...
   - `site_level_ols_per_cluster.parquet` — long: cluster, site_id, contrast, lfc, se, pval, fdr
-  - `mea_global_shift_per_cluster.csv`   — per (cluster, contrast) median shift / winsorization summary
-  - `winsorized_sites_per_cluster.csv`   — clipped sites with original/clipped LFCs
-  - `mea_substrate_sets_per_cluster.csv` — substrate sets used per (cluster, contrast, kinase)
   - `enrich_audit.json`                  — per-cluster status (ok / skipped + reason)
 
 Single-track (default `st`); pass `--track py` for the tyrosine track.
@@ -339,7 +336,7 @@ def main():
     clusters = sorted(phospho_long["cluster"].unique())
     print(f"  Iterating {len(clusters)} clusters ...\n")
 
-    all_mea, all_shift, all_wins, all_substrate, all_site_ols = [], [], [], [], []
+    all_mea, all_site_ols = [], []
     audit_per_cluster = {}
 
     for cluster in clusters:
@@ -356,7 +353,7 @@ def main():
         audit_per_cluster[cluster] = audit
         all_site_ols.append(site_ols)
 
-        mea_df, shift_df, wins_df, subs_df = _run_mea(
+        mea_df, _, _, _ = _run_mea(
             motif_series=motif_series,
             results_by_contrast=mea_input,
             lfc_key="lfc",
@@ -364,25 +361,14 @@ def main():
             gene_symbols=None,
             track=track_cfg,
         )
-        for d in (mea_df, shift_df, wins_df, subs_df):
-            if isinstance(d, pd.DataFrame) and not d.empty:
-                d.insert(0, "cluster", cluster)
         if isinstance(mea_df, pd.DataFrame) and not mea_df.empty:
+            mea_df.insert(0, "cluster", cluster)
             all_mea.append(mea_df)
-        if isinstance(shift_df, pd.DataFrame) and not shift_df.empty:
-            all_shift.append(shift_df)
-        if isinstance(wins_df, pd.DataFrame) and not wins_df.empty:
-            all_wins.append(wins_df)
-        if isinstance(subs_df, pd.DataFrame) and not subs_df.empty:
-            all_substrate.append(subs_df)
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
     mea_out = out_dir / f"mea_per_cluster{suffix}.parquet"
     site_out = out_dir / f"site_level_ols_per_cluster{suffix}.parquet"
-    shift_out = out_dir / f"mea_global_shift_per_cluster{suffix}.csv"
-    wins_out = out_dir / f"winsorized_sites_per_cluster{suffix}.csv"
-    subs_out = out_dir / f"mea_substrate_sets_per_cluster{suffix}.csv"
     audit_path = out_dir / f"enrich_audit{suffix}.json"
 
     if all_mea:
@@ -393,12 +379,6 @@ def main():
     if all_site_ols:
         pd.concat(all_site_ols, ignore_index=True).to_parquet(site_out, index=False)
         print(f"Wrote {site_out}")
-    if all_shift:
-        pd.concat(all_shift, ignore_index=True).to_csv(shift_out, index=False)
-    if all_wins:
-        pd.concat(all_wins, ignore_index=True).to_csv(wins_out, index=False)
-    if all_substrate:
-        pd.concat(all_substrate, ignore_index=True).to_csv(subs_out, index=False)
 
     with open(audit_path, "w") as fh:
         json.dump({

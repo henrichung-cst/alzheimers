@@ -7,7 +7,7 @@ Plan shorthand used below:
 `sidechain` = `kinase_sidechain_incytr_graph/` (01–04) · `geneuse` = `ad_geneuse_unpin_from_sce4`
 `labels` = `tcell-matt-report-restoration` (per-cell labeling standard)
 `apriori` = `tcell_apriori_expectations` (blind exhaustion prediction set → `docs/reference/`, unbuilt)
-`deploy` = `deployment/todo9_viewer_aws_deployment` · B2/C3/E1/E2/G1/H1/I1/I2 = backlog files.
+`deploy` = `deployment/todo9_viewer_aws_deployment` · B2/C3/E1/E2/G1/H1/I2 = backlog files.
 
 ---
 
@@ -89,7 +89,7 @@ T2 specificity ──► E2                                            │
 B2 (sankey), C3 (early-change) ─────────────────────────────────┘
 
 tmt (H1), G1 (diagrams), apriori (docs), deploy-B ── independent leaves, no gate
-I1 ── independent (low conflict) · I2 ── isolated window, last (D5)
+I2 ── isolated window, last (D5)
 ```
 
 ---
@@ -114,7 +114,6 @@ I1 ── independent (low conflict) · I2 ── isolated window, last (D5)
 - `H1` TMT paper IMAC fetch + enrichment.
 - `G1` workflow diagrams (docs).
 - `deploy` Option B (shard-hash manifest) — infra layer, separate from analysis.
-- `I1` sidecar cleanup — low file-conflict, any time.
 - `apriori` blind exhaustion prediction set (docs) — literature-grounded, authored before final
   outputs; feeds the `/check-controls` plausibility skill. Blindness caveat: the t-cell
   Incytr report suite is already built, so ground the predictions in literature only, not those outputs.
