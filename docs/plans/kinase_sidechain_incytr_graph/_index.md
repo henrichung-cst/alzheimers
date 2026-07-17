@@ -11,8 +11,8 @@ contract, but its acceptance check only passes once its upstream lands.
 |---|------|------|------|---------------|
 | 01 | `01_backend-edge-model.md` | PSP loader + kinase→kinase interactome + terminal-edge map (song, 5xFAD) | **high** | **new** `alz/cross_reference/kinase_kinase_edges.py` |
 | 02 | `02_tcell-motif-bridge.md` | T-cell single-hop motif bridge, per-donor + celltype attribution | **medium** | `alz/cross_reference/kinase_incytr_bridge.py` |
-| 03 | `03_payload-slice.md` | Per-cohort edge_slice_ref for the sidechain tab | **medium** | `alz/viewer/shared/compose.py`, `alz/viewer/shared/incytr_index.py`, `alz/viewer/cohorts/song.py`, `alz/viewer/cohorts/fivexfad.py`, `alz/tcell_viewer/slices_incytr.py` |
-| 04 | `04_viewer-tab.md` | Cytoscape one-pathway tab + registration | **low** | **new** `alz/viewer_shared/template/js/tabs/incytr_sidechains.js`, `alz/viewer/template/js/02_ui_chrome.js`, `alz/tcell_viewer/template/js/02_ui_chrome.js` |
+| 03 | `03_payload-slice.md` | Per-cohort edge_slice_ref for the sidechain panel | **medium** | `alz/viewer/shared/compose.py`, `alz/viewer/shared/payload_helpers.py`, `alz/viewer/cohorts/song.py`, `alz/viewer/cohorts/fivexfad.py`, `alz/tcell_viewer/slices_incytr.py`, `alz/tcell_viewer/build_tcell_viewer.py` |
+| 04 | `04_viewer-tab.md` | Cytoscape one-pathway sidechain sub-tab in the pathways detail panel | **low** | **new** `alz/viewer_shared/template/js/tabs/incytr_sidechains.js`, `alz/viewer_shared/template/js/tabs/incytr_pathways.js`, `alz/viewer_shared/template/index.html.j2` |
 
 ## Model-mapping policy
 
@@ -29,21 +29,20 @@ would have mis-routed it to the strongest model and 01 (small, silent) to the ch
 
 ## Collisions
 
-**None.** All four subplans are file-disjoint (confirmed in-code, not from the graph). No serialize
-order is forced by a shared file; no merge is required.
+01–03 are file-disjoint. **04 is not:** it wires the sidechain panel into
+`alz/viewer_shared/template/js/tabs/incytr_pathways.js` (4 sites) rather than registering a top-level
+tab, because no path-selection event exists to drive a separate tab from — see 04's "Navigation".
+Do not run 04 concurrently with other work in that file.
 
 ## Declared data dependencies (prerequisite order, not file locks)
 
-- **01 and 02 are independent producers** — run in parallel. 01 builds the literature backbone + the
-  cohort-parameterized terminal-map builder (song/5xFAD motif already exists in
-  `kinase_incytr_bridge.py`); 02 produces the t-cell motif edges in the *same schema* as song/5xFAD.
-  Contract between them: 01's terminal-map builder must accept a motif-edge input so 02's t-cell output
-  can be assembled by 03. Surfaced in both subplans.
-- **03 depends on 01 + 02** — the payload slice reads 01's per-cohort backend artifact (all cohorts)
-  and, for the t-cell arm, 02's motif edges. Cannot verify without both.
-- **04 depends on 03** — the tab renders the real `edge_slice_ref` payload keys 03 emits.
+- **02 feeds 01.** 02's `kinase_node_hits.parquet` is the motif source 01 reads, for every cohort — 01
+  reduces it into the interactome + terminal map. They are not independent producers.
+- **03 depends on 01 only** — the payload slice reads 01's per-cohort backend artifact for all four
+  cohort dirs. 02 is transitive: 03 never opens `kinase_node_hits.parquet`.
+- **04 depends on 03** — the panel renders the real `incytr_sidechains` payload keys 03 emits.
 
-Effective order: **[01 ∥ 02] → 03 → 04.**
+Effective order: **02 → 01 → 03 → 04.**
 
 ## Before merge
 
