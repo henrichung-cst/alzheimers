@@ -51,7 +51,6 @@ TOP_LEVEL_ORDER: tuple[str, ...] = (
     "substrate_compare",
 )
 
-
 def merge_capabilities(
     base: dict[str, Any], slices: Iterable[CohortViewerSlice]
 ) -> dict[str, Any]:

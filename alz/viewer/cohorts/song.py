@@ -55,9 +55,12 @@ from alz.viewer.shared.incytr_index import (
 from alz.viewer.shared.cohort_slice import CohortViewerSlice, EdgeSliceContribution
 from alz.viewer.shared.payload_helpers import (
     _INCYTR_FC_NODES,
+    _INCYTR_SIDECHAIN_INDEX_FILENAME,
     _build_incytr_gene_node_index,
     _configure_duckdb_tempdir,
+    _reset_incytr_sidechain_slices,
     _sanitize,
+    _write_incytr_sidechain_slice,
     _write_gene_node_index_shard,
 )
 
@@ -79,6 +82,10 @@ TISSUE_CATEGORIES = {
     "Non-neuronal": ["30 Astro-Epen", "31 OPC-Oligo", "32 OEC",
                      "33 Vascular", "34 Immune"],
 }
+
+_KINASE_SIDECHAIN_EDGE_DIR = os.path.join(
+    config.REPO_ROOT, "outputs", "reports", "kinase_kinase_edges"
+)
 RECEIVER_TO_TISSUE = {r: t for t, rs in TISSUE_CATEGORIES.items() for r in rs}
 
 
@@ -1791,6 +1798,13 @@ def build_song_viewer_slice(data: "UnifiedData") -> SongBuild:
 
     incytr_pathways_block = _write_incytr_pair_pathways()
     context_id = "song_ad"
+    _reset_incytr_sidechain_slices(EDGE_SLICES_INCYTR_PATHWAYS_DIR)
+    _write_incytr_sidechain_slice(
+        os.path.join(_KINASE_SIDECHAIN_EDGE_DIR, "song"),
+        EDGE_SLICES_INCYTR_PATHWAYS_DIR,
+        "sidechains__song_ad.json.gz",
+        context_id,
+    )
 
     kinase_celltype_evidence = _build_kinase_celltype_evidence(data, kid)
     attribution_index = _build_attribution_index(data, kid, contrast_to_id)
@@ -1830,6 +1844,12 @@ def build_song_viewer_slice(data: "UnifiedData") -> SongBuild:
             EdgeSliceContribution("incytr_pathways", {
                 "incytr_pathways_url": "edge_slices/incytr_pathways/",
                 "incytr_pathways_index": "edge_slices/incytr_pathways/index.json",
+            }),
+            EdgeSliceContribution("incytr_sidechains", {
+                "incytr_sidechains_url": "edge_slices/incytr_pathways/",
+                "incytr_sidechains_index": (
+                    f"edge_slices/incytr_pathways/{_INCYTR_SIDECHAIN_INDEX_FILENAME}"
+                ),
             }),
             EdgeSliceContribution("song_concordance", {
                 "song_concordance_url": "edge_slices/song_concordance/",

@@ -13,6 +13,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
+HERE = Path(__file__).resolve().parents[2]
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
+from alz.viewer.shared.payload_helpers import (
+    _INCYTR_SIDECHAIN_INTERACTOME_COLUMNS,
+    _INCYTR_SIDECHAIN_TERMINAL_COLUMNS,
+)
+
 
 REQUIRED_CONTEXT_FIELDS = {
     "id",
@@ -22,6 +31,13 @@ REQUIRED_CONTEXT_FIELDS = {
     "capabilities",
 }
 CONTEXT_BLOCKS = ("kinases", "celltypes", "incytr_pathways")
+
+_INCYTR_SIDECHAIN_EXPECTED_COUNTS = {
+    "song_ad": (3701, 373, 113437),
+    "fivexfad_cortex": (2977, 375, 64193),
+    "fivexfad_hippocampus": (1606, 345, 19968),
+    "donor1": (6676, 392, 351641),
+}
 
 
 def _load_payload(path: Path) -> dict[str, Any]:
@@ -130,6 +146,130 @@ def _check_incytr(payload: dict[str, Any], context_ids: list[str], errors: list[
             errors.append(f"incytr slice_index for {ctx_id} present must be a list")
         elif block.get("n_total_rows", 0) and not present:
             errors.append(f"incytr slice_index for {ctx_id} has rows but no present pairs")
+
+
+def _check_incytr_sidechains(
+    payload: dict[str, Any],
+    context_ids: list[str],
+    payload_path: Path,
+    errors: list[str],
+) -> None:
+    """Validate the context-indexed kinase-sidechain lazy shards when present."""
+    ref = payload.get("edge_slice_ref", {})
+    if not isinstance(ref, dict):
+        errors.append("edge_slice_ref missing or not an object")
+        return
+    url = ref.get("incytr_sidechains_url")
+    index_rel = ref.get("incytr_sidechains_index")
+    if url is None and index_rel is None:
+        return
+    if not isinstance(url, str) or not isinstance(index_rel, str):
+        errors.append("Incytr sidechain URL and index must both be strings")
+        return
+    index_path = payload_path.parent / index_rel
+    if not index_path.is_file():
+        errors.append(f"Incytr sidechain index missing: {index_rel}")
+        return
+    with open(index_path, encoding="utf-8") as fh:
+        index = json.load(fh)
+    by_context = index.get("by_context")
+    if (
+        index.get("schema_version") != 1
+        or index.get("slice_type") != "incytr_kinase_sidechains"
+        or not isinstance(by_context, dict)
+        or not by_context
+    ):
+        errors.append("Incytr sidechain index has an invalid schema")
+        return
+    unknown_contexts = set(by_context) - set(context_ids)
+    if unknown_contexts:
+        errors.append(
+            f"Incytr sidechain index has unknown contexts: {sorted(unknown_contexts)}"
+        )
+    expected_contexts = (
+        {"donor1"}
+        if payload.get("meta", {}).get("cohort") == "tcell"
+        else set(context_ids)
+    )
+    if set(by_context) != expected_contexts:
+        errors.append(
+            "Incytr sidechain index context coverage mismatch: "
+            f"expected {sorted(expected_contexts)}, found {sorted(by_context)}"
+        )
+    for context_id, entry in by_context.items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("url"), str):
+            errors.append(f"Incytr sidechain index entry {context_id!r} is invalid")
+            continue
+        if not entry["url"].startswith(url):
+            errors.append(
+                f"Incytr sidechain shard {context_id!r} is outside its declared URL"
+            )
+            continue
+        shard_path = payload_path.parent / entry["url"]
+        if not shard_path.is_file():
+            errors.append(f"Incytr sidechain shard missing: {entry['url']}")
+            continue
+        with gzip.open(shard_path, "rt", encoding="utf-8") as fh:
+            shard = json.load(fh)
+        if (
+            shard.get("schema_version") != 1
+            or shard.get("slice_type") != "incytr_kinase_sidechains"
+            or shard.get("context_id") != context_id
+        ):
+            errors.append(f"Incytr sidechain shard {context_id!r} has an invalid schema")
+            continue
+        expected_counts = _INCYTR_SIDECHAIN_EXPECTED_COUNTS.get(context_id)
+        observed_counts = (
+            shard.get("interactome_edge_count"),
+            shard.get("interactome_node_count"),
+            shard.get("terminal_edge_count"),
+        )
+        if expected_counts is not None and observed_counts != expected_counts:
+            errors.append(
+                f"Incytr sidechain shard {context_id!r} counts "
+                f"{observed_counts!r} != expected {expected_counts!r}"
+            )
+        index_counts = (
+            entry.get("interactome_edge_count"),
+            entry.get("interactome_node_count"),
+            entry.get("terminal_edge_count"),
+        )
+        if index_counts != observed_counts:
+            errors.append(
+                f"Incytr sidechain index counts for {context_id!r} do not match shard"
+            )
+        for table, count_key, expected_columns in (
+            ("interactome", "interactome_edge_count", _INCYTR_SIDECHAIN_INTERACTOME_COLUMNS),
+            ("terminal_edges", "terminal_edge_count", _INCYTR_SIDECHAIN_TERMINAL_COLUMNS),
+        ):
+            columns = shard.get(table)
+            count = shard.get(count_key)
+            if not isinstance(columns, dict) or not isinstance(count, int):
+                errors.append(f"Incytr sidechain shard {context_id!r} lacks {table}")
+                continue
+            if tuple(columns) != expected_columns:
+                errors.append(
+                    f"Incytr sidechain shard {context_id!r} has an invalid {table} schema"
+                )
+                continue
+            if any(not isinstance(values, list) for values in columns.values()):
+                errors.append(
+                    f"Incytr sidechain shard {context_id!r} {table} is not columnar"
+                )
+                continue
+            lengths = {len(values) for values in columns.values()}
+            if not lengths or len(lengths) != 1 or count not in lengths:
+                errors.append(
+                    f"Incytr sidechain shard {context_id!r} {table} count mismatch"
+                )
+        interactome = shard.get("interactome", {})
+        if isinstance(interactome, dict):
+            nodes = set(interactome.get("source_gene", []))
+            nodes.update(interactome.get("target_gene", []))
+            if shard.get("interactome_node_count") != len(nodes):
+                errors.append(
+                    f"Incytr sidechain shard {context_id!r} node count mismatch"
+                )
 
 
 def _check_capabilities(
@@ -251,6 +391,7 @@ def validate(path: Path) -> tuple[bool, list[str], dict[str, Any]]:
     if context_ids:
         _check_context_blocks(payload, context_ids, errors)
         _check_incytr(payload, context_ids, errors)
+        _check_incytr_sidechains(payload, context_ids, path, errors)
         _check_capabilities(payload, context_ids, errors)
         _check_tcell_contract(payload, errors)
     summary = {

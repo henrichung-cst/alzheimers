@@ -21,6 +21,7 @@ from alz.viewer.shared.payload_helpers import (  # noqa: E402
     _configure_duckdb_tempdir,
     _INCYTR_FC_NODES,
     _build_incytr_gene_node_index,
+    _write_incytr_sidechain_slice,
     _write_gene_node_index_shard,
 )
 from alz.viewer.shared.incytr_index import (  # noqa: E402
@@ -64,6 +65,9 @@ _INCYTR_INDEX_FILENAME = "incytr_index.bin.gz"
 
 _PAIR_FILE_RE = re.compile(r"(d\d+_d\d+)_incytr_output\.parquet$")
 _BACKBONE_FILE_RE = re.compile(r"(d\d+_d\d+)_backbone_output\.parquet$")
+_KINASE_SIDECHAIN_EDGE_DIR = os.path.join(
+    config.REPO_ROOT, "outputs", "reports", "kinase_kinase_edges"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -816,6 +820,22 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         # Absent when backbone parquets have not been produced for this donor.
         **({"backbone_grains": backbone_grains} if backbone_grains else {}),
     }
+
+
+def _write_tcell_sidechain_slices() -> None:
+    """Write the donor1-only kinase-sidechain shard for the T-cell viewer.
+
+    Donor2 has no within-cohort kinase attribution and therefore no backend
+    motif source or sidechain artifact. It is absent rather than represented by
+    an empty shard.
+    """
+    donor = "donor1"
+    _write_incytr_sidechain_slice(
+        os.path.join(_KINASE_SIDECHAIN_EDGE_DIR, "tcells_donor1"),
+        EDGE_SLICES_INCYTR_PATHWAYS_DIR,
+        f"{donor}__sidechains.json.gz",
+        donor,
+    )
 
 
 def _write_tcell_pair_pathways() -> dict:

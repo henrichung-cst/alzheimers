@@ -17,6 +17,17 @@ import pandas as pd
 
 _INCYTR_FC_NODES = ("Ligand", "Receptor", "EM", "Target")
 
+_INCYTR_SIDECHAIN_INTERACTOME_COLUMNS = (
+    "source_gene", "target_gene", "provenance", "weight", "weight_lit",
+    "weight_motif", "in_vivo_refs", "in_vitro_refs", "n_motif_contrasts",
+    "motif_contrasts",
+)
+_INCYTR_SIDECHAIN_TERMINAL_COLUMNS = (
+    "source_gene", "target_gene", "role", "contrast", "celltype_match",
+    "provenance", "weight", "weight_lit", "weight_motif", "best_abs_pds",
+)
+_INCYTR_SIDECHAIN_INDEX_FILENAME = "sidechains_index.json"
+
 _KINASE_LIBRARY_MOTIF_ALIASES = {
     # Kinase Library may expose activin receptor-like kinase aliases by either
     # receptor shorthand or HGNC symbol, depending on the package data table.
@@ -181,6 +192,120 @@ def _write_gene_node_index_shard(gene_node_index: dict, out_dir: str,
         f.write(raw)
     os.replace(tmp_path, out_path)
     return f"{url_prefix}{filename}"
+
+
+def _sidechain_columns(df: pd.DataFrame, columns: tuple[str, ...]) -> dict:
+    """Encode a small, fixed-schema edge table column-wise for a lazy shard."""
+    return {
+        column: [_json_clean_value(value) for value in df[column].tolist()]
+        for column in columns
+    }
+
+
+def _write_incytr_sidechain_slice(
+    source_dir: str,
+    out_dir: str,
+    filename: str,
+    context_id: str,
+    url_prefix: str = "edge_slices/incytr_pathways/",
+) -> dict:
+    """Write one cohort-native kinase-sidechain lazy shard.
+
+    ``kinase_kinase_edges.py`` has already reduced the motif and PSP inputs to
+    kinome-bounded ``interactome.csv`` and ``terminal_edges.csv`` files.  This
+    helper copies their exact row sets into a compact columnar JSON sidecar; it
+    never opens the multi-gigabyte Incytr wide shards or derives pathway rows.
+    """
+    interactome_path = os.path.join(source_dir, "interactome.csv")
+    terminal_path = os.path.join(source_dir, "terminal_edges.csv")
+    missing = [path for path in (interactome_path, terminal_path)
+               if not os.path.isfile(path)]
+    if missing:
+        raise FileNotFoundError(
+            "missing kinase-sidechain backend artifact: " + ", ".join(missing)
+        )
+
+    interactome = pd.read_csv(interactome_path, keep_default_na=False)
+    terminal = pd.read_csv(terminal_path, keep_default_na=False)
+    if tuple(interactome.columns) != _INCYTR_SIDECHAIN_INTERACTOME_COLUMNS:
+        raise ValueError(
+            f"{interactome_path}: unexpected interactome schema "
+            f"{list(interactome.columns)!r}"
+        )
+    if tuple(terminal.columns) != _INCYTR_SIDECHAIN_TERMINAL_COLUMNS:
+        raise ValueError(
+            f"{terminal_path}: unexpected terminal-edge schema "
+            f"{list(terminal.columns)!r}"
+        )
+    if terminal["provenance"].eq("psp").any():
+        raise ValueError(
+            f"{terminal_path}: terminal edges must be motif-anchored, not psp-only"
+        )
+
+    nodes = set(interactome["source_gene"].dropna())
+    nodes.update(interactome["target_gene"].dropna())
+    payload = {
+        "schema_version": 1,
+        "slice_type": "incytr_kinase_sidechains",
+        "context_id": context_id,
+        "interactome_edge_count": int(len(interactome)),
+        "interactome_node_count": int(len(nodes)),
+        "terminal_edge_count": int(len(terminal)),
+        "interactome": _sidechain_columns(
+            interactome, _INCYTR_SIDECHAIN_INTERACTOME_COLUMNS
+        ),
+        "terminal_edges": _sidechain_columns(
+            terminal, _INCYTR_SIDECHAIN_TERMINAL_COLUMNS
+        ),
+    }
+
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, filename)
+    tmp_path = f"{out_path}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    with gzip.open(tmp_path, "wb", compresslevel=6) as f:
+        f.write(raw)
+    os.replace(tmp_path, out_path)
+    entry = {
+        "url": f"{url_prefix}{filename}",
+        "interactome_edge_count": payload["interactome_edge_count"],
+        "interactome_node_count": payload["interactome_node_count"],
+        "terminal_edge_count": payload["terminal_edge_count"],
+    }
+    index_path = os.path.join(out_dir, _INCYTR_SIDECHAIN_INDEX_FILENAME)
+    if os.path.isfile(index_path):
+        with open(index_path, encoding="utf-8") as f:
+            index = json.load(f)
+    else:
+        index = {
+            "schema_version": 1,
+            "slice_type": "incytr_kinase_sidechains",
+            "by_context": {},
+        }
+    if (
+        index.get("schema_version") != 1
+        or index.get("slice_type") != "incytr_kinase_sidechains"
+        or not isinstance(index.get("by_context"), dict)
+    ):
+        raise ValueError(f"{index_path}: unexpected sidechain-index schema")
+    index["by_context"][context_id] = entry
+    tmp_index_path = f"{index_path}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    with open(tmp_index_path, "w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, separators=(",", ":"))
+    os.replace(tmp_index_path, index_path)
+    return entry
+
+
+def _reset_incytr_sidechain_slices(out_dir: str) -> None:
+    """Clear one viewer's sidechain index and shards before a fresh build."""
+    if not os.path.isdir(out_dir):
+        return
+    for filename in os.listdir(out_dir):
+        if (
+            filename == _INCYTR_SIDECHAIN_INDEX_FILENAME
+            or (filename.startswith("sidechains__") and filename.endswith(".json.gz"))
+        ):
+            os.remove(os.path.join(out_dir, filename))
 
 
 def _build_kinase_motifs(kinase_names: list[str]) -> dict[str, dict]:

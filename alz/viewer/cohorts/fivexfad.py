@@ -64,6 +64,7 @@ from alz.viewer.shared.payload_helpers import (
     _build_incytr_gene_node_index,
     _configure_duckdb_tempdir,
     _sanitize,
+    _write_incytr_sidechain_slice,
     _write_gene_node_index_shard,
 )
 
@@ -73,6 +74,12 @@ if TYPE_CHECKING:
 
 FIVEXFAD_DETAIL_DIR = os.path.join(
     UNIFIED_VIEWER_DIR, "edge_slices", "fivexfad_detail"
+)
+_KINASE_SIDECHAIN_EDGE_DIR = os.path.join(
+    config.REPO_ROOT, "outputs", "reports", "kinase_kinase_edges"
+)
+_INCYTR_SIDECHAIN_DIR = os.path.join(
+    UNIFIED_VIEWER_DIR, "edge_slices", "incytr_pathways"
 )
 FIVEXFAD_CELLTYPE_DIR = os.path.join(FIVEXFAD_KINASE_DIR, "celltype_mea")
 FIVEXFAD_CELLTYPE_OLS_DIR = os.path.join(
@@ -2397,6 +2404,12 @@ def build_5xfad_incytr_blocks() -> dict[str, dict]:
         context_id = _5XFAD_INCYTR_TISSUE[tissue]["context_id"]
         block = _write_5xfad_incytr_pair_pathways(tissue)
         if block is not None:
+            _write_incytr_sidechain_slice(
+                os.path.join(_KINASE_SIDECHAIN_EDGE_DIR, f"fivexfad_{tissue}"),
+                _INCYTR_SIDECHAIN_DIR,
+                f"sidechains__{context_id}.json.gz",
+                context_id,
+            )
             blocks[context_id] = block
     return blocks
 

@@ -62,8 +62,10 @@ from alz.tcell_viewer.common import (  # noqa: E402
 )
 from alz.tcell_viewer.slices_incytr import (  # noqa: E402
     _write_tcell_pair_pathways,
+    _write_tcell_sidechain_slices,
     _timepoint_label,
 )
+from alz.viewer.shared.payload_helpers import _INCYTR_SIDECHAIN_INDEX_FILENAME  # noqa: E402
 from alz.tcell_viewer.slices_kinase import (  # noqa: E402
     _build_donor_kinases_slice,
     _build_celltypes_slice,
@@ -222,6 +224,7 @@ def build_tcell_payload() -> dict:
 
     print("[build_tcell_payload] pair-mode shards:", flush=True)
     incytr_pathways_block = _write_tcell_pair_pathways()
+    _write_tcell_sidechain_slices()
 
     # Substrate-based Incytr pathway participation — needs both the kinases slice
     # and the pair-mode global index, so it is filled here rather than in the
@@ -405,6 +408,10 @@ def build_tcell_payload() -> dict:
             "schema_version": SCHEMA_VERSION,
             "incytr_pathways_url": "edge_slices/incytr_pathways/",
             "incytr_pathways_index": "edge_slices/incytr_pathways/index.json",
+            "incytr_sidechains_url": "edge_slices/incytr_pathways/",
+            "incytr_sidechains_index": (
+                f"edge_slices/incytr_pathways/{_INCYTR_SIDECHAIN_INDEX_FILENAME}"
+            ),
         },
         "incytr_pathways": incytr_pathways_block,
         "meta": meta,
@@ -481,6 +488,29 @@ def validate(payload: dict | None = None) -> str:
         ip_idx_path = os.path.join(EDGE_SLICES_INCYTR_PATHWAYS_DIR, "index.json")
         if not os.path.exists(ip_idx_path):
             errors.append(f"missing edge_slices/incytr_pathways/index.json")
+
+        sidechain_index_rel = payload.get("edge_slice_ref", {}).get(
+            "incytr_sidechains_index"
+        )
+        sidechain_index_path = (
+            os.path.join(UNIFIED_VIEWER_DIR, sidechain_index_rel)
+            if isinstance(sidechain_index_rel, str) else None
+        )
+        if sidechain_index_path is None or not os.path.exists(sidechain_index_path):
+            errors.append(f"missing T-cell sidechain index: {sidechain_index_rel}")
+        else:
+            with open(sidechain_index_path, encoding="utf-8") as f:
+                sidechain_index = json.load(f)
+            sidechain_slices = sidechain_index.get("by_context", {})
+            if set(sidechain_slices) != {"donor1"}:
+                errors.append(
+                    "T-cell sidechain slices must contain donor1 only; "
+                    f"found {sorted(sidechain_slices)}"
+                )
+            for donor, entry in sidechain_slices.items():
+                rel = entry.get("url") if isinstance(entry, dict) else None
+                if not rel or not os.path.exists(os.path.join(UNIFIED_VIEWER_DIR, rel)):
+                    errors.append(f"missing T-cell sidechain slice for {donor}: {rel}")
 
         celltypes_by_context = payload.get("celltypes", {}).get("by_context", {})
         incytr_by_context = payload.get("incytr_pathways", {}).get("by_context", {})
