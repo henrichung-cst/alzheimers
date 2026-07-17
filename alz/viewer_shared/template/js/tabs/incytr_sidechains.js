@@ -125,12 +125,13 @@ const _IS_LAYOUT = {
   centerKinaseLane: 4,
   laneAlternationPeriod: 2,
   baseLaneSpacingPx: 38,
-  depthLaneExpansionPx: 8,
-  depthXOffsetPx: 54,
   fitPaddingPx: 48,
   minZoom: 0.08,
   maxZoom: 3,
 };
+const _IS_FDR_MAX = 0.05;
+const _IS_TERMINAL_TOP_N_PER_ROLE = 10;
+const _IS_CHAIN_WEIGHT_MIN = 0;
 const _IS_STYLE = {
   smallTextPx: 11,
   loadingVerticalPaddingPx: 8,
@@ -183,6 +184,12 @@ function _isNumeric(value) {
   return isFinite(number) ? number : 0;
 }
 
+function _isFiniteNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function _isEdgeWidth(weight, observedMax) {
   const minimumVisibleWidth = 1.25;
   const maximumRenderedWidth = 7;
@@ -207,54 +214,45 @@ function _isGraphForRow(shard, row) {
   ]).filter(edge => edge.source_gene && edge.target_gene);
   const terminal = _isSafeRows(shard.terminal_edges, [
     "source_gene", "target_gene", "role", "contrast", "provenance", "weight",
+    "best_abs_nes", "best_fdr",
   ]).filter(edge => edge.source_gene && edge.target_gene);
   const spine = _isSpineNodes(row);
   const spineByRole = new Map(spine.map(node => [node.role, node]));
-  const terminalEdges = terminal.filter(edge => {
+  const contrastMatchedTerminal = terminal.filter(edge => {
     const node = spineByRole.get(String(edge.role || ""));
     return !!node && String(edge.target_gene).toUpperCase() === node.gene.toUpperCase()
       && String(edge.contrast || "") === String(row.contrast || "");
   });
-  const roots = new Set(terminalEdges.map(edge => String(edge.source_gene)));
-  const incoming = new Map();
-  interactome.forEach((edge, index) => {
-    const target = String(edge.target_gene);
-    if (!incoming.has(target)) incoming.set(target, []);
-    incoming.get(target).push(index);
-  });
-
-  // Reverse traversal follows source → target kinase edges upstream from the
-  // terminal kinases. A visited-node set makes cycles finite while preserving
-  // every edge in the reachable subgraph.
-  const queue = [...roots];
-  const seenNodes = new Set(queue);
-  const selectedIndices = new Set();
-  const distance = new Map(queue.map(gene => [gene, 0]));
-  while (queue.length) {
-    const target = queue.shift();
-    const targetDistance = distance.get(target) || 0;
-    for (const index of incoming.get(target) || []) {
-      selectedIndices.add(index);
-      const source = String(interactome[index].source_gene);
-      const nextDistance = targetDistance + 1;
-      if (!distance.has(source) || nextDistance < distance.get(source)) {
-        distance.set(source, nextDistance);
-      }
-      if (!seenNodes.has(source)) {
-        seenNodes.add(source);
-        queue.push(source);
-      }
+  const terminalByRole = new Map(spine.map(node => [node.role, []]));
+  contrastMatchedTerminal.forEach(edge => {
+    const fdr = _isFiniteNumber(edge.best_fdr);
+    if (fdr !== null && fdr < _IS_FDR_MAX) {
+      terminalByRole.get(String(edge.role)).push(edge);
     }
-  }
-  const chainEdges = [...selectedIndices].map(index => interactome[index]);
-  const kinaseGenes = new Set(roots);
-  chainEdges.forEach(edge => {
-    kinaseGenes.add(String(edge.source_gene));
-    kinaseGenes.add(String(edge.target_gene));
   });
-  const observedMax = interactome.concat(terminal).reduce(
+  const terminalEdges = [];
+  const hiddenTerminalCounts = {};
+  spine.forEach(node => {
+    const candidates = terminalByRole.get(node.role) || [];
+    candidates.sort((left, right) => {
+      const weightDelta = _isNumeric(right.weight) - _isNumeric(left.weight);
+      return weightDelta || String(left.source_gene).localeCompare(String(right.source_gene));
+    });
+    const selected = candidates.slice(0, _IS_TERMINAL_TOP_N_PER_ROLE);
+    terminalEdges.push(...selected);
+    hiddenTerminalCounts[node.role] = Math.max(0, candidates.length - selected.length);
+  });
+  const kinaseGenes = new Set(terminalEdges.map(edge => String(edge.source_gene)));
+  const chainEdges = interactome.filter(edge => {
+    const weight = _isFiniteNumber(edge.weight);
+    return weight !== null
+      && weight >= _IS_CHAIN_WEIGHT_MIN
+      && kinaseGenes.has(String(edge.source_gene))
+      && kinaseGenes.has(String(edge.target_gene));
+  });
+  const observedMax = chainEdges.concat(terminalEdges).reduce(
     (maximum, edge) => Math.max(maximum, _isNumeric(edge.weight)), 0);
-  return { spine, terminalEdges, chainEdges, kinaseGenes, distance, observedMax };
+  return { spine, terminalEdges, chainEdges, kinaseGenes, hiddenTerminalCounts, observedMax };
 }
 
 function _isPositionedElements(graph, width, height) {
@@ -289,12 +287,11 @@ function _isPositionedElements(graph, width, height) {
     const anchor = terminalAnchors.length
       ? terminalAnchors.reduce((sum, x) => sum + x, 0) / terminalAnchors.length
       : left + ((_isHash(gene) + index) % graph.spine.length) * gap;
-    const depth = graph.distance.get(gene) || 0;
     const lane = (_isHash(gene) % _IS_LAYOUT.kinaseLaneCount) - _IS_LAYOUT.centerKinaseLane;
     const y = middle + (lane === 0 ? (index % _IS_LAYOUT.laneAlternationPeriod ? -1 : 1) : lane)
-      * (_IS_LAYOUT.baseLaneSpacingPx + depth * _IS_LAYOUT.depthLaneExpansionPx);
+      * _IS_LAYOUT.baseLaneSpacingPx;
     elements.push({ data: { id: `kinase:${gene}`, label: gene, kind: "kinase-node" },
-      position: { x: anchor - depth * _IS_LAYOUT.depthXOffsetPx, y } });
+      position: { x: anchor, y } });
   });
 
   const seenEdges = new Set();
@@ -334,8 +331,12 @@ function _isRenderCytoscape(host, graph) {
   const caption = document.createElement("div");
   caption.style.cssText = `margin-top:${_IS_STYLE.captionTopMarginPx}px;`
     + `font-size:${_IS_STYLE.smallTextPx}px;color:#555;`;
-  caption.textContent = `${graph.terminalEdges.length.toLocaleString()} contrast-matched terminal link(s); `
-    + `${graph.chainEdges.length.toLocaleString()} upstream kinase edge(s). `
+  const hiddenByRole = graph.spine
+    .map(node => `${node.role} ${graph.hiddenTerminalCounts[node.role] || 0}`)
+    .join(", ");
+  caption.textContent = `${_IS_TERMINAL_TOP_N_PER_ROLE} strongest regulators per node (|NES|), `
+    + `FDR<${_IS_FDR_MAX}; ${graph.chainEdges.length.toLocaleString()} upstream kinase edges. `
+    + `Hidden FDR-passing regulators not shown: ${hiddenByRole}. `
     + "Chain edge color: motif (blue), PSP (orange), both (purple).";
   host.replaceChildren(graphHost, caption);
   const cy = window.cytoscape({

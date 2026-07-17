@@ -6,13 +6,13 @@ the viewer walks to draw a single pathway's kinase sidechains:
   - literature (PhosphoSitePlus ``Kinase_Substrate_Dataset``): kinase→kinase edges
     where the substrate gene is itself a kinase; weight = log1p(IN_VIVO_REF_COUNT).
   - motif (the existing MEA/kldata bridge, ``kinase_incytr_bridge.py``): a kinase's
-    leading-substrate genes mapped onto pathway nodes; corroboration strength = |PDS|.
+    leading-substrate genes mapped onto pathway nodes; corroboration strength = |NES|.
 
 Two artifacts per cohort:
 
   interactome.csv    kinase→kinase edges (the internal signaling cascade the client
                      walks upstream from a terminal kinase). Provenance ``motif`` /
-                     ``psp`` / ``both``; weight = norm(log1p in_vivo) + norm(|PDS|).
+                     ``psp`` / ``both``; weight = norm(log1p in_vivo) + norm(|NES|).
   terminal_edges.csv kinase→pathway-node edges (the last hop attaching a kinase to a
                      pathway). Motif-derived, PSP-corroborated (tag ``both`` when PSP
                      confirms the same kinase→node pair, else ``motif``).
@@ -156,7 +156,8 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
     (pathway-node) gene is already cohort-native (mouse for song/5xFAD).
 
     Contract schema (also produced by subplan 02 for t-cells):
-      kinase_gene, target_gene, role, contrast, best_abs_pds, celltype_match
+      kinase_gene, target_gene, role, contrast, best_abs_pds, best_abs_nes, best_fdr,
+      celltype_match
     """
     parquet = BRIDGE_ROOT / bridge_dir / "kinase_node_hits.parquet"
     if not parquet.exists():
@@ -178,6 +179,8 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
                role,
                contrast,
                MAX(best_abs_pds) AS best_abs_pds,
+               MAX(ABS(NES)) AS best_abs_nes,
+               MIN(FDR) AS best_fdr,
                BOOL_OR(celltype_match) AS celltype_match
         FROM read_parquet('{safe}')
         GROUP BY kinase, gene_symbol, role, contrast
@@ -196,7 +199,10 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
         agg = _homology_map(agg, ["kinase_gene"])
 
     return agg[
-        ["kinase_gene", "target_gene", "role", "contrast", "best_abs_pds", "celltype_match"]
+        [
+            "kinase_gene", "target_gene", "role", "contrast", "best_abs_pds",
+            "best_abs_nes", "best_fdr", "celltype_match",
+        ]
     ].reset_index(drop=True)
 
 
@@ -233,7 +239,7 @@ def build_interactome(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd.
     Both frames must be in the same (cohort-native) gene space. The motif arm is
     restricted to edges whose target gene is itself a kinase (a source in either arm);
     the psp arm is the full literature kinase→kinase set. Motif contrasts are collapsed
-    (max |PDS|) — the interactome is contrast-agnostic; per-contrast corroboration lives
+    (max |NES|) — the interactome is contrast-agnostic; per-contrast corroboration lives
     in terminal_edges.csv.
 
     Returns: source_gene, target_gene, provenance, weight, weight_lit, weight_motif,
@@ -248,7 +254,7 @@ def build_interactome(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd.
     motif_agg = (
         mkk.groupby(["kinase_gene", "target_gene"])
         .agg(
-            weight_motif_raw=("best_abs_pds", "max"),
+            weight_motif_raw=("best_abs_nes", "max"),
             n_motif_contrasts=("contrast", "nunique"),
             motif_contrasts=("contrast", lambda s: ",".join(sorted(set(s)))),
         )
@@ -290,10 +296,10 @@ def build_terminal_map(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd
     kinase→kinase edges with no motif support live in the interactome, not here.
 
     Returns: source_gene, target_gene, role, contrast, celltype_match, provenance,
-             weight, weight_lit, weight_motif, best_abs_pds
+             weight, weight_lit, weight_motif, best_abs_pds, best_abs_nes, best_fdr
     """
     lit_ceiling = float(np.log1p(psp_edges["in_vivo_refs"]).max()) if not psp_edges.empty else 0.0
-    motif_ceiling = float(motif_edges["best_abs_pds"].max()) if not motif_edges.empty else 0.0
+    motif_ceiling = float(motif_edges["best_abs_nes"].max()) if not motif_edges.empty else 0.0
 
     psp_lit = psp_edges[["source_gene", "target_gene", "in_vivo_refs"]].copy()
     psp_lit["weight_lit_raw"] = np.log1p(psp_lit["in_vivo_refs"])
@@ -304,12 +310,12 @@ def build_terminal_map(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd
     )
     df["provenance"] = np.where(df["weight_lit_raw"].notna(), "both", "motif")
     df["weight_lit"] = _norm(df["weight_lit_raw"].fillna(0.0), lit_ceiling)
-    df["weight_motif"] = _norm(df["best_abs_pds"].fillna(0.0), motif_ceiling)
+    df["weight_motif"] = _norm(df["best_abs_nes"].fillna(0.0), motif_ceiling)
     df["weight"] = df["weight_lit"] + df["weight_motif"]
 
     cols = [
         "source_gene", "target_gene", "role", "contrast", "celltype_match", "provenance",
-        "weight", "weight_lit", "weight_motif", "best_abs_pds",
+        "weight", "weight_lit", "weight_motif", "best_abs_pds", "best_abs_nes", "best_fdr",
     ]
     return df[cols].sort_values("weight", ascending=False).reset_index(drop=True)
 
@@ -396,8 +402,8 @@ def run_cohort_dir(bridge_dir: str, is_mouse: bool) -> None:
         f"- edges: {len(terminal)}\n"
         f"- provenance: motif={tprov.get('motif',0)} both={tprov.get('both',0)}\n\n"
         f"## Weight\n"
-        f"- normalized-additive: norm(log1p(in_vivo_refs)) + norm(|PDS|), range [0,2].\n"
-        f"- weight_lit / weight_motif kept separately. Rank on weight or |PDS|, never p_value.\n"
+        f"- normalized-additive: norm(log1p(in_vivo_refs)) + norm(|NES|), range [0,2].\n"
+        f"- weight_lit / weight_motif kept separately. Rank on weight or |NES|, never p_value.\n"
     )
     (out_dir / "MANIFEST.md").write_text(manifest)
 
