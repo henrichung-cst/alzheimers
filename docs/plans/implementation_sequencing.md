@@ -7,7 +7,7 @@ Plan shorthand used below:
 `sidechain` = `kinase_sidechain_incytr_graph/` (01–04) · `geneuse` = `ad_geneuse_unpin_from_sce4`
 `labels` = `tcell-matt-report-restoration` (per-cell labeling standard)
 `apriori` = `tcell_apriori_expectations` (blind exhaustion prediction set → `docs/reference/`, unbuilt)
-`deploy` = `deployment/todo9_viewer_aws_deployment` · A3/B2/C3/E1/E2/G1/H1/I1/I2 = backlog files.
+`deploy` = `deployment/todo9_viewer_aws_deployment` · B2/C3/E1/E2/G1/H1/I1/I2 = backlog files.
 
 ---
 
@@ -49,7 +49,7 @@ everything downstream, so a deliberate future re-labeling is a supported operati
 
 The whole t-cell chain is built on this standard and consistent with it: Incytr `wide/` (donor1 ×3,
 donor2 ×4), the viewer (`build_tcell_viewer.py` asserts `incytr_pair_mode_tcells` is the
-resolver default), and the report suite. `sidechain-02` and `A3` are the only open t-cell items.
+resolver default), and the report suite. `sidechain-02` is the only open t-cell item.
 
 ---
 
@@ -88,7 +88,7 @@ D2 ──► E1 (reuse sidechain-01 backend) ──► E2 ───────�
 T2 specificity ──► E2                                            │
 B2 (sankey), C3 (early-change) ─────────────────────────────────┘
 
-tmt (H1), G1 (diagrams), apriori (docs), deploy-B, A3 ── independent leaves, no gate
+tmt (H1), G1 (diagrams), apriori (docs), deploy-B ── independent leaves, no gate
 I1 ── independent (low conflict) · I2 ── isolated window, last (D5)
 ```
 
@@ -116,10 +116,8 @@ I1 ── independent (low conflict) · I2 ── isolated window, last (D5)
 - `deploy` Option B (shard-hash manifest) — infra layer, separate from analysis.
 - `I1` sidecar cleanup — low file-conflict, any time.
 - `apriori` blind exhaustion prediction set (docs) — literature-grounded, authored before final
-  outputs; feeds the `/check-controls` plausibility skill and the `A3` validation lens. Blindness caveat: the t-cell
+  outputs; feeds the `/check-controls` plausibility skill. Blindness caveat: the t-cell
   Incytr report suite is already built, so ground the predictions in literature only, not those outputs.
-- `A3` t-cell Incytr trend coverage — verifies the completed t-cell Incytr run (donor1 ×3, donor2 ×4);
-  ungated, runnable now.
 
 **Wave 2 — kinase backends + specificity thread.**
 - `sidechain-01` (PSP interactome) ∥ `sidechain-02` (t-cell motif — ungated).

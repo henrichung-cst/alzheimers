@@ -23,7 +23,6 @@ Candidate work, one file per item. Delete a file when it ships — git holds the
 
 | Doc | Theme | What |
 |---|---|---|
-| [`tcell-incytr-trend-timepoint-coverage.md`](tcell-incytr-trend-timepoint-coverage.md) | T-cell | verify Incytr trends cover all 3 timepoints |
 | [`tcell_apriori_expectations.md`](tcell_apriori_expectations.md) | T-cell | blind literature-grounded exhaustion prediction set → `docs/reference/tcell_apriori_expectations.md` (unbuilt) |
 | [`incytr-sankey-diagram.md`](incytr-sankey-diagram.md) | Incytr | add sankey view + collapse excitatory clusters (chord already ships) |
 | [`disease-direction-site-level-early-change.md`](disease-direction-site-level-early-change.md) | Cross-cohort | Disease Direction Stage 4 — site-level early-change phosphosites |
