@@ -170,6 +170,7 @@ const _IS_STYLE = {
   graphBorderWidthPx: 1,
   graphCornerRadiusPx: 4,
   captionTopMarginPx: 6,
+  relationMaxHeightPx: 180,
   kinaseNodeDiameterPx: 34,
   kinaseNodeBorderWidthPx: 1,
   spineNodeBorderWidthPx: 2,
@@ -285,6 +286,133 @@ function _isLegendLine(label, samples) {
   samples.forEach(sample => line.appendChild(sample));
   line.appendChild(document.createTextNode(label));
   return line;
+}
+
+function _isNodeRelationTable(node, cy) {
+  const nodeId = String(node.id());
+  const nodeKind = String(node.data("kind") || "");
+  const nodeLabel = String(node.data("label") || nodeId);
+  const terminalRows = [];
+  const chainRows = [];
+  const connectedEdges = node.connectedEdges();
+  const endpointLabel = endpoint => String(endpoint.data("label") || endpoint.id());
+
+  connectedEdges.forEach(edge => {
+    const kind = String(edge.data("kind") || "");
+    const source = edge.source();
+    const target = edge.target();
+    const sourceId = String(source.id());
+    const targetId = String(target.id());
+    if (kind === "terminal-edge") {
+      const signedNes = _isNumeric(edge.data("signed_nes"));
+      if (nodeKind === "spine-node" && targetId === nodeId) {
+        terminalRows.push({
+          relationship: `${endpointLabel(source)} → ${nodeLabel}`,
+          role: String(edge.data("role") || node.data("role") || ""),
+          signedNes,
+          direction: _isNesDirection(signedNes),
+          evidence: String(edge.data("provenance") || "motif"),
+          weight: null,
+        });
+      } else if (nodeKind === "kinase-node" && sourceId === nodeId) {
+        terminalRows.push({
+          relationship: `${nodeLabel} → ${endpointLabel(target)}`,
+          role: String(edge.data("role") || ""),
+          signedNes,
+          direction: _isNesDirection(signedNes),
+          evidence: String(edge.data("provenance") || "motif"),
+          weight: null,
+          target: targetId,
+        });
+      }
+      return;
+    }
+    if (kind === "chain-edge" && nodeKind === "kinase-node") {
+      const other = sourceId === nodeId ? target : source;
+      const otherId = String(other.id());
+      if (otherId === nodeId) return;
+      chainRows.push({
+        relationship: `${sourceId === nodeId ? nodeLabel : endpointLabel(other)} → `
+          + `${sourceId === nodeId ? endpointLabel(other) : nodeLabel}`,
+        role: "kinase chain",
+        signedNes: null,
+        direction: null,
+        evidence: String(edge.data("provenance") || "motif"),
+        weight: _isNumeric(edge.data("weight")),
+        other: otherId,
+      });
+    }
+  });
+
+  terminalRows.sort((a, b) =>
+    Math.abs(b.signedNes) - Math.abs(a.signedNes)
+      || a.relationship.localeCompare(b.relationship));
+  chainRows.sort((a, b) =>
+    b.weight - a.weight || a.relationship.localeCompare(b.relationship));
+  const rows = terminalRows.concat(chainRows);
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.textContent = "No relationships.";
+    return empty;
+  }
+
+  let summary;
+  if (nodeKind === "spine-node") {
+    const enriched = terminalRows.filter(row => row.direction === "enriched").length;
+    const depleted = terminalRows.filter(row => row.direction === "depleted").length;
+    summary = `${terminalRows.length} kinases affecting · ${enriched} enriched · ${depleted} depleted`;
+  } else {
+    const targetCount = new Set(terminalRows.map(row => row.target)).size;
+    const kinaseCount = new Set(chainRows.map(row => row.other)).size;
+    summary = `targets ${targetCount} nodes · ${kinaseCount} kinases`;
+  }
+
+  const table = document.createElement("table");
+  table.setAttribute("aria-label", `${nodeLabel} relationships`);
+  table.style.cssText = "border-collapse:collapse;width:100%;font-size:11px;";
+  const caption = document.createElement("caption");
+  caption.textContent = summary;
+  caption.style.cssText = "caption-side:top;text-align:left;font-weight:700;"
+    + "color:#1e3a5f;padding-bottom:4px;";
+  table.appendChild(caption);
+  const head = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  ["Relationship", "Role", "Signed NES", "Direction", "Evidence", "Weight"]
+    .forEach(label => {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = label;
+      cell.style.cssText = "padding:2px 5px;text-align:left;white-space:nowrap;";
+      headerRow.appendChild(cell);
+    });
+  head.appendChild(headerRow);
+  table.appendChild(head);
+  const body = document.createElement("tbody");
+  rows.forEach(row => {
+    const tableRow = document.createElement("tr");
+    const values = [
+      row.relationship,
+      row.role,
+      row.signedNes === null ? "—" : row.signedNes.toFixed(3),
+      row.direction || "—",
+      row.evidence,
+      row.weight === null ? "—" : row.weight.toFixed(3),
+    ];
+    values.forEach((value, index) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      cell.style.cssText = "padding:2px 5px;border-top:1px solid #e2e8f0;"
+        + (index === 0 ? "white-space:nowrap;" : "");
+      if (index === 3 && row.direction && _IS_COLORS[row.direction]) {
+        cell.style.color = _IS_COLORS[row.direction];
+        cell.style.fontWeight = "600";
+      }
+      tableRow.appendChild(cell);
+    });
+    body.appendChild(tableRow);
+  });
+  table.appendChild(body);
+  return table;
 }
 
 function _isGraphForRow(shard, row) {
@@ -453,7 +581,8 @@ function _isPositionedElements(graph, width, height) {
     const emphasis = nesEmphasis * siteFactor;
     elements.push({ data: {
       id: `terminal:${index}`, source: `kinase:${String(edge.source_gene)}`,
-      target: `path:${role}`, kind: "terminal-edge",
+      target: `path:${role}`, kind: "terminal-edge", role,
+      provenance: String(edge.provenance || "motif"),
       width: _isEmphasisWidth(emphasis), opacity: _isEmphasisOpacity(emphasis),
       signed_nes: _isNumeric(edge.signed_nes), nes_direction: _isNesDirection(edge.signed_nes),
       best_abs_nes: _isNumeric(edge.best_abs_nes), best_fdr: _isNumeric(edge.best_fdr),
@@ -510,15 +639,27 @@ function _isRenderCytoscape(host, graph) {
   edgeDetail.style.cssText = `margin-top:${_IS_STYLE.captionTopMarginPx}px;`
     + `font-size:${_IS_STYLE.smallTextPx}px;color:#334155;min-height:1.3em;`;
   edgeDetail.textContent = "Tap an edge for its evidence.";
-  const chainFilter = document.createElement("label");
-  chainFilter.style.cssText = `display:flex;align-items:center;gap:6px;`
+  const nodeRelationDetail = document.createElement("div");
+  nodeRelationDetail.style.cssText = `margin-top:${_IS_STYLE.captionTopMarginPx}px;`
+    + `max-height:${_IS_STYLE.relationMaxHeightPx}px;overflow:auto;`
+    + `font-size:${_IS_STYLE.smallTextPx}px;color:#334155;`;
+  nodeRelationDetail.textContent = "Tap a node for its relationships.";
+  const filterControls = document.createElement("div");
+  filterControls.style.cssText = `display:grid;gap:4px;`
     + `margin-bottom:${_IS_STYLE.captionTopMarginPx}px;font-size:${_IS_STYLE.smallTextPx}px;`
-    + "font-weight:600;color:#1e3a5f;cursor:pointer;";
+    + "font-weight:600;color:#1e3a5f;";
+  const makeFilterLabel = () => {
+    const label = document.createElement("label");
+    label.style.cssText = "display:flex;align-items:center;gap:6px;cursor:pointer;";
+    return label;
+  };
+  const chainFilter = makeFilterLabel();
   const showChains = document.createElement("input");
   showChains.type = "checkbox";
   showChains.checked = false;
   showChains.setAttribute("aria-label", "Show kinase to kinase chains");
   chainFilter.append(showChains, document.createTextNode("Show kinase→kinase chains"));
+  filterControls.append(chainFilter);
   // Kept inside the graph panel so the legend and selected-edge NES evidence
   // remain available when this panel enters browser full-screen mode.
   const infoPanel = document.createElement("div");
@@ -526,7 +667,7 @@ function _isRenderCytoscape(host, graph) {
     + "max-width:min(520px,calc(100% - 20px));padding:8px 10px;"
     + "border:1px solid #cbd5e1;border-radius:5px;background:#fffffff0;"
     + "box-shadow:0 2px 8px #0002;";
-  infoPanel.append(chainFilter, legend, edgeDetail);
+  infoPanel.append(filterControls, legend, edgeDetail, nodeRelationDetail);
   panel.append(graphHost, fullscreenButton, infoPanel);
   host.replaceChildren(panel, caption);
   const cy = window.cytoscape({
@@ -594,7 +735,9 @@ function _isRenderCytoscape(host, graph) {
       // A focus has only a handful of edges. Reset their opacity so the selected
       // relationship is readable instead of inheriting full-graph attenuation.
       { selector: "edge.is-focus-edge", style: { "opacity": 1 } },
-      { selector: ".is-hidden, .is-filtered", style: { "display": "none" } },
+      { selector: ".is-hidden, .is-chain-filtered, .is-node-filtered", style: {
+        "display": "none",
+      } },
     ],
     layout: { name: "preset", fit: true, padding: _IS_LAYOUT.fitPaddingPx },
     minZoom: _IS_LAYOUT.minZoom,
@@ -623,7 +766,7 @@ function _isRenderCytoscape(host, graph) {
     fullscreenButton.setAttribute("aria-label", isFullscreen
       ? "Exit sidechain graph full screen" : "View sidechain graph full screen");
     cy.resize();
-    cy.fit(cy.elements().not(".is-filtered"), _IS_LAYOUT.fitPaddingPx);
+    cy.fit(visibleElements(cy.elements()), _IS_LAYOUT.fitPaddingPx);
   };
   const requestFullscreen = () => {
     if (document.fullscreenElement === panel) {
@@ -636,39 +779,54 @@ function _isRenderCytoscape(host, graph) {
   document.addEventListener("fullscreenchange", resetGraphSize);
   window.addEventListener("resize", resetGraphSize);
   const spine = cy.elements("node[kind = 'spine-node'], edge[kind = 'spine-edge']");
+  const visibleElements = elements => elements.filter(element =>
+    !element.hasClass("is-chain-filtered")
+      && !element.hasClass("is-node-filtered"));
   const updateCaption = () => {
-    const visibleKinaseCount = cy.nodes("node[kind = 'kinase-node']").not(".is-filtered").length;
-    const visibleChainCount = cy.edges("edge[kind = 'chain-edge']").not(".is-filtered").length;
+    const visibleKinaseCount = visibleElements(cy.nodes("node[kind = 'kinase-node']")).length;
+    const visibleTerminalCount = visibleElements(cy.edges("edge[kind = 'terminal-edge']")).length;
+    const visibleChainCount = visibleElements(cy.edges("edge[kind = 'chain-edge']")).length;
     const chainState = showChains.checked ? "Full kinase chain view." :
       "First-order kinase→gene view.";
     caption.textContent = `${visibleKinaseCount.toLocaleString()} kinase regulators; `
-      + `${graph.terminalEdges.length.toLocaleString()} kinase→node, `
-      + `${visibleChainCount.toLocaleString()} kinase→kinase links. ${chainState} `
+      + `${visibleTerminalCount.toLocaleString()} kinase→node, `
+      + `${visibleChainCount.toLocaleString()} kinase→kinase links. All motif / PSP evidence. ${chainState} `
       + "Tap a node or edge to isolate its neighborhood; hover a kinase for its label.";
   };
-  const applyChainFilter = () => {
+  const applyFilters = () => {
     const chains = cy.edges("edge[kind = 'chain-edge']");
-    const chainOnlyKinases = cy.nodes("node[kind = 'kinase-node'][direct_terminal = 0]");
     if (showChains.checked) {
-      chains.removeClass("is-filtered");
-      chainOnlyKinases.removeClass("is-filtered");
+      chains.removeClass("is-chain-filtered");
     } else {
-      chains.addClass("is-filtered");
-      chainOnlyKinases.addClass("is-filtered");
+      chains.addClass("is-chain-filtered");
     }
+    cy.nodes("node[kind = 'kinase-node']").forEach(node => {
+      let hasVisibleEvidence = false;
+      visibleElements(node.connectedEdges()).forEach(edge => {
+        if (edge.data("kind") === "terminal-edge" || edge.data("kind") === "chain-edge") {
+          hasVisibleEvidence = true;
+        }
+      });
+      if (hasVisibleEvidence) {
+        node.removeClass("is-node-filtered");
+      } else {
+        node.addClass("is-node-filtered");
+      }
+    });
     cy.elements().removeClass("is-hidden is-focus is-focus-edge");
-    cy.fit(cy.elements().not(".is-filtered"), _IS_LAYOUT.fitPaddingPx);
+    cy.fit(visibleElements(cy.elements()), _IS_LAYOUT.fitPaddingPx);
     edgeDetail.textContent = "Tap an edge for its evidence.";
+    nodeRelationDetail.textContent = "Tap a node for its relationships.";
     updateCaption();
   };
-  showChains.addEventListener("change", applyChainFilter);
-  applyChainFilter();
+  showChains.addEventListener("change", applyFilters);
+  applyFilters();
   const focus = (keep, detail) => {
     cy.elements().addClass("is-hidden").removeClass("is-focus is-focus-edge");
     keep.removeClass("is-hidden");
     keep.nodes().addClass("is-focus");
     keep.edges().addClass("is-focus-edge");
-    cy.fit(keep, _IS_LAYOUT.fitPaddingPx);
+    cy.fit(visibleElements(keep), _IS_LAYOUT.fitPaddingPx);
     if (detail) edgeDetail.textContent = detail;
   };
   cy.on("tap", "edge", evt => {
@@ -694,13 +852,15 @@ function _isRenderCytoscape(host, graph) {
   cy.on("tap", "node", evt => {
     // Tap any node → keep only its neighborhood + the pathway spine; hard-hide the
     // rest so no faint edges remain, then zoom to what's left.
+    nodeRelationDetail.replaceChildren(_isNodeRelationTable(evt.target, cy));
     focus(evt.target.closedNeighborhood().union(spine));
   });
   cy.on("tap", evt => {
     if (evt.target === cy) {
       cy.elements().removeClass("is-hidden is-focus is-focus-edge");
-      cy.fit(cy.elements().not(".is-filtered"), _IS_LAYOUT.fitPaddingPx);
+      cy.fit(visibleElements(cy.elements()), _IS_LAYOUT.fitPaddingPx);
       edgeDetail.textContent = "Tap an edge for its evidence.";
+      nodeRelationDetail.textContent = "Tap a node for its relationships.";
     }
   });
   host._incytrSidechainCy = cy;
@@ -708,7 +868,7 @@ function _isRenderCytoscape(host, graph) {
     fullscreenButton.removeEventListener("click", requestFullscreen);
     document.removeEventListener("fullscreenchange", resetGraphSize);
     window.removeEventListener("resize", resetGraphSize);
-    showChains.removeEventListener("change", applyChainFilter);
+    showChains.removeEventListener("change", applyFilters);
   };
 }
 

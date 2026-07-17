@@ -150,7 +150,9 @@ class KinaseSidechainViewerTests(unittest.TestCase):
             if (!src.includes("requestFullscreen") || !src.includes("fullscreenchange")
                 || !src.includes("cy.resize()"))
               throw new Error("fullscreen control does not refit Cytoscape after resizing");
-            if (!src.includes("infoPanel.append(chainFilter, legend, edgeDetail)")
+            if (!src.includes("infoPanel.append(filterControls, legend, edgeDetail)")
+                || !src.includes("nodeRelationDetail.replaceChildren(_isNodeRelationTable(evt.target, cy))")
+                || !src.includes("nodeRelationDetail.textContent = \"Tap a node for its relationships.\";")
                 || !src.includes("panel.append(graphHost, fullscreenButton, infoPanel)"))
               throw new Error("fullscreen panel does not retain legend and edge evidence");
             if (!src.includes('selector: "edge.is-focus-edge"')
@@ -158,10 +160,11 @@ class KinaseSidechainViewerTests(unittest.TestCase):
               throw new Error("focused connectors do not reset opacity");
             if (!src.includes('focus(edge.closedNeighborhood().union(spine), detail)'))
               throw new Error("edge taps do not focus the selected edge and endpoints");
-            if (!src.includes('showChains.checked = false')
+            if (src.includes('showAllEvidence')
+                || !src.includes('showChains.checked = false')
                 || !src.includes(`const chains = cy.edges("edge[kind = 'chain-edge']")`)
-                || !src.includes('chainOnlyKinases.addClass("is-filtered")'))
-              throw new Error("first-order mode does not hide kinase chain edges and nodes");
+                || !src.includes('node.addClass("is-node-filtered")'))
+              throw new Error("first-order filter does not constrain kinase-chain nodes");
             if (!src.includes("_isLegendSample") || src.includes("Bold ${{_IS_COLORS"))
               throw new Error("legend does not use visual color samples");
 
@@ -291,6 +294,8 @@ class KinaseSidechainViewerTests(unittest.TestCase):
               throw new Error("positive signed NES was not carried onto the edge");
             if (!(negative.signed_nes < 0) || negative.nes_direction !== "depleted")
               throw new Error("negative signed NES was not carried onto the edge");
+            if (strong.role !== "Receptor")
+              throw new Error("terminal edge did not carry its pathway role");
 
             // The arc layout assigns each single-target regulator to a deterministic
             // outward wedge of its pathway node rather than alternating up/down lanes.
@@ -304,6 +309,102 @@ class KinaseSidechainViewerTests(unittest.TestCase):
             const halfWedge = Math.PI * 90 / 180 / (2 * 3);
             if (Math.abs(nodeAngle - kinaseAngle) > halfWedge)
               throw new Error("kinase did not land in its receptor wedge");
+
+            // Node relation tables are direction-aware and independent of the
+            // graph's chain visibility filter.
+            class FakeElement {{
+              constructor(tagName) {{
+                this.tagName = tagName.toUpperCase();
+                this.children = [];
+                this.attributes = {{}};
+                this.style = {{}};
+                this._text = "";
+              }}
+              append(...children) {{ this.children.push(...children); }}
+              appendChild(child) {{ this.children.push(child); return child; }}
+              setAttribute(name, value) {{ this.attributes[name] = String(value); }}
+              set textContent(value) {{ this._text = String(value); this.children = []; }}
+              get textContent() {{
+                return this._text + this.children.map(child => child.textContent || "").join("");
+              }}
+            }}
+            ctx.document = {{
+              createElement: tagName => new FakeElement(tagName),
+              createTextNode: value => ({{textContent: String(value)}}),
+            }};
+            const makeNode = (id, kind, label, role = "") => {{
+              const node = {{
+                id: () => id,
+                data: key => ({{id, kind, label, role}})[key],
+                connectedEdges: () => node._edges,
+                _edges: [],
+              }};
+              return node;
+            }};
+            const spineNode = makeNode("path:Receptor", "spine-node", "R", "Receptor");
+            const high = makeNode("kinase:HIGH", "kinase-node", "HIGH");
+            const medium = makeNode("kinase:MEDIUM", "kinase-node", "MEDIUM");
+            const low = makeNode("kinase:LOW", "kinase-node", "LOW");
+            const upstream = makeNode("kinase:UPSTREAM", "kinase-node", "UPSTREAM");
+            const downstream = makeNode("kinase:DOWNSTREAM", "kinase-node", "DOWNSTREAM");
+            const makeEdge = (source, target, data) => {{
+              const edge = {{
+                source: () => source,
+                target: () => target,
+                data: key => data[key],
+              }};
+              source._edges.push(edge);
+              target._edges.push(edge);
+              return edge;
+            }};
+            makeEdge(high, spineNode, {{
+              kind: "terminal-edge", role: "Receptor", signed_nes: 4,
+              nes_direction: "enriched", provenance: "motif",
+            }});
+            makeEdge(medium, spineNode, {{
+              kind: "terminal-edge", role: "Receptor", signed_nes: 2,
+              nes_direction: "enriched", provenance: "motif",
+            }});
+            makeEdge(low, spineNode, {{
+              kind: "terminal-edge", role: "Receptor", signed_nes: -1,
+              nes_direction: "depleted", provenance: "psp",
+            }});
+            makeEdge(upstream, high, {{
+              kind: "chain-edge", provenance: "psp", weight: 0.8,
+            }});
+            makeEdge(high, downstream, {{
+              kind: "chain-edge", provenance: "both", weight: 1.5,
+            }});
+            const spineTable = ctx._isNodeRelationTable(spineNode, {{}});
+            if (spineTable.tagName !== "TABLE") throw new Error("spine tap did not produce a table");
+            if (!spineTable.textContent.includes("3 kinases affecting · 2 enriched · 1 depleted"))
+              throw new Error(`unexpected spine summary: ${{spineTable.textContent}}`);
+            const spineBody = spineTable.children.find(child => child.tagName === "TBODY");
+            if (!spineBody || spineBody.children.length !== 3)
+              throw new Error("spine table row count was wrong");
+            if (!spineBody.children[0].textContent.includes("HIGH → R")
+                || !spineBody.children[1].textContent.includes("MEDIUM → R")
+                || !spineBody.children[2].textContent.includes("LOW → R"))
+              throw new Error("spine rows were not ordered by absolute NES");
+            if (!spineTable.textContent.includes("4.000")
+                || !spineTable.textContent.includes("-1.000"))
+              throw new Error("spine table omitted signed NES evidence");
+
+            const kinaseTable = ctx._isNodeRelationTable(high, {{}});
+            if (kinaseTable.tagName !== "TABLE") throw new Error("kinase tap did not produce a table");
+            if (!kinaseTable.textContent.includes("targets 1 nodes · 2 kinases"))
+              throw new Error(`unexpected kinase summary: ${{kinaseTable.textContent}}`);
+            const kinaseBody = kinaseTable.children.find(child => child.tagName === "TBODY");
+            if (!kinaseBody || kinaseBody.children.length !== 3)
+              throw new Error("kinase table row count was wrong");
+            if (!kinaseBody.children[0].textContent.includes("HIGH → R")
+                || !kinaseBody.children[0].textContent.includes("Receptor")
+                || !kinaseBody.children[1].textContent.includes("HIGH → DOWNSTREAM")
+                || !kinaseBody.children[2].textContent.includes("UPSTREAM → HIGH"))
+              throw new Error("kinase rows did not put terminal NES rows before chains");
+            if (!kinaseBody.children[1].textContent.includes("1.500")
+                || !kinaseBody.children[2].textContent.includes("0.800"))
+              throw new Error("chain rows were not ordered by weight");
             """
         )
         result = subprocess.run(
