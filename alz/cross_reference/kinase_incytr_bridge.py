@@ -136,12 +136,16 @@ def load_gene_node_index(path: Path) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def build_substrate_bridge(mea_stoich: pd.DataFrame, stoich_matrix: pd.DataFrame) -> pd.DataFrame:
-    """Parse 'Leading substrates' motif strings → unique (kinase, contrast, gene_symbol).
+    """Parse leading substrates into per-gene, per-enrichment motif multiplicities.
 
     'Leading substrates' motifs are 15-char _;-delimited strings like _QSTPSStPHASPK_.
     stoich_matrix.motif is 13-char uppercase (strip _ and uppercase to match).
 
-    Returns columns: kinase, contrast, channel, NES, FDR, gene_symbol
+    ``n_sites`` is the number of distinct leading-substrate motifs for the MEA
+    row that map to a gene. It is deliberately counted before the node-index
+    join, so every role/sender/receiver fan-out retains the same raw evidence.
+
+    Returns columns: kinase, contrast, channel, NES, FDR, gene_symbol, n_sites
     """
     rows: list[dict] = []
     motif_to_genes: dict[str, list[str]] = {}
@@ -161,25 +165,30 @@ def build_substrate_bridge(mea_stoich: pd.DataFrame, stoich_matrix: pd.DataFrame
         channel = str(row.get("track", "st"))
         nes = float(row["NES"]) if row["NES"] == row["NES"] else float("nan")
         fdr = float(row["FDR"])
-        seen_genes: set[str] = set()
+        gene_site_counts: dict[str, int] = {}
+        seen_motifs: set[str] = set()
         for motif_raw in ls.split(";"):
             motif_raw = motif_raw.strip()
             if not motif_raw:
                 continue
             key = motif_raw.upper().strip("_")
-            for g in motif_to_genes.get(key, []):
-                if g not in seen_genes:
-                    seen_genes.add(g)
-                    rows.append({
-                        "kinase": kinase,
-                        "contrast": contrast,
-                        "channel": channel,
-                        "NES": nes,
-                        "FDR": fdr,
-                        "gene_symbol": g,
-                    })
+            if key in seen_motifs:
+                continue
+            seen_motifs.add(key)
+            for g in set(motif_to_genes.get(key, [])):
+                gene_site_counts[g] = gene_site_counts.get(g, 0) + 1
+        for g, n_sites in gene_site_counts.items():
+            rows.append({
+                "kinase": kinase,
+                "contrast": contrast,
+                "channel": channel,
+                "NES": nes,
+                "FDR": fdr,
+                "gene_symbol": g,
+                "n_sites": n_sites,
+            })
     return pd.DataFrame(rows) if rows else pd.DataFrame(
-        columns=["kinase", "contrast", "channel", "NES", "FDR", "gene_symbol"]
+        columns=["kinase", "contrast", "channel", "NES", "FDR", "gene_symbol", "n_sites"]
     )
 
 
@@ -198,7 +207,7 @@ def gene_node_hits(
       Receptor / EM / Target -> receiver cluster owns the node
 
     Returns flat hit table with columns:
-      kinase, contrast, channel, NES, FDR, gene_symbol, role, sender, receiver,
+      kinase, contrast, channel, NES, FDR, gene_symbol, n_sites, role, sender, receiver,
       owning_cluster (the cluster that "owns" this node per position rule)
     """
     if substrate_df.empty:
@@ -1059,7 +1068,7 @@ def write_fivexfad_streamed(tissue: str, out_dir: Path, wide_glob: str) -> bool:
 
         final_sql = f"""
             WITH hits AS (
-                SELECT s.kinase, s.contrast, s.channel, s.NES, s.FDR,
+                SELECT s.kinase, s.contrast, s.channel, s.NES, s.FDR, s.n_sites,
                        s.gene_symbol, n.role, n.sender, n.receiver,
                        CASE WHEN n.role = 'Ligand' THEN n.sender ELSE n.receiver END AS owning_cluster,
                        n.n_rows, n.best_abs_pds
@@ -1069,7 +1078,7 @@ def write_fivexfad_streamed(tissue: str, out_dir: Path, wide_glob: str) -> bool:
             annotated AS (
                 SELECT 'fivexfad' AS cohort,
                        $tissue AS tissue,
-                       h.kinase, h.contrast, h.channel, h.NES, h.FDR,
+                       h.kinase, h.contrast, h.channel, h.NES, h.FDR, h.n_sites,
                        h.gene_symbol, h.role, h.sender, h.receiver,
                        h.owning_cluster,
                        r.celltype_match_rank IS NOT NULL AS celltype_match,
@@ -1155,7 +1164,7 @@ def write_fivexfad_streamed(tissue: str, out_dir: Path, wide_glob: str) -> bool:
 # ---------------------------------------------------------------------------
 
 FINAL_COLS = [
-    "cohort", "tissue", "kinase", "contrast", "channel", "NES", "FDR",
+    "cohort", "tissue", "kinase", "contrast", "channel", "NES", "FDR", "n_sites",
     "gene_symbol", "role", "sender", "receiver", "owning_cluster",
     "celltype_match", "celltype_match_rank",
     "n_rows", "best_abs_pds",
@@ -1325,7 +1334,7 @@ def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
         log.info("T-cell %s: writing kinase_node_hits", donor)
         final_sql = f"""
             WITH hits AS (
-                SELECT s.kinase, s.contrast, s.channel, s.NES, s.FDR,
+                SELECT s.kinase, s.contrast, s.channel, s.NES, s.FDR, s.n_sites,
                        s.gene_symbol, n.role, n.sender, n.receiver,
                        CASE WHEN n.role = 'Ligand' THEN n.sender ELSE n.receiver END AS owning_cluster,
                        n.n_rows, n.best_abs_pds
@@ -1335,7 +1344,7 @@ def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
             annotated AS (
                 SELECT 'tcells' AS cohort,
                        $donor AS tissue,
-                       h.kinase, h.contrast, h.channel, h.NES, h.FDR,
+                       h.kinase, h.contrast, h.channel, h.NES, h.FDR, h.n_sites,
                        h.gene_symbol, h.role, h.sender, h.receiver,
                        h.owning_cluster,
                        a.owning_cluster IS NOT NULL AS celltype_match,

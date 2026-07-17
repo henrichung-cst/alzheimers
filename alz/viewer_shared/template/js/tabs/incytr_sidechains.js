@@ -121,17 +121,49 @@ const _IS_LAYOUT = {
   minimumSpineSegmentCount: 1,
   fallbackGraphWidthPx: 900,
   graphHeightPx: 500,
-  kinaseLaneCount: 9,
-  centerKinaseLane: 4,
-  laneAlternationPeriod: 2,
-  baseLaneSpacingPx: 38,
+  spineArcRadiusPx: 440,
+  spineSweepDeg: 90,
+  spineArcCenterBelowGraphPx: 220,
+  // Radial fan per spine node: inner arc = strongest kinases (short edges hugging
+  // the node), outer arcs = weak (long, faint, angularly spread so edges radiate
+  // instead of stacking into a parallel band).
+  fanInnerRadiusPx: 64,
+  fanRingStepPx: 52,
+  fanArcSpacingPx: 46,
+  fanAngleMargin: 0.12,
   fitPaddingPx: 48,
   minZoom: 0.08,
   maxZoom: 3,
 };
-const _IS_FDR_MAX = 0.05;
-const _IS_TERMINAL_TOP_N_PER_ROLE = 10;
-const _IS_CHAIN_WEIGHT_MIN = 0;
+_IS_LAYOUT.halfWedgeRad = _IS_LAYOUT.spineSweepDeg * Math.PI / 180
+  / (2 * Math.max(_IS_LAYOUT.minimumSpineSegmentCount, 3));
+// Node prominence + focus. A kinase node's size and label visibility track its
+// own strongest motif enrichment (|NES| emphasis): strong regulators are large
+// and labeled; near-null ones shrink to unlabeled dots and recede. Tap a pathway
+// node to pull its fan; hover any kinase to reveal its label.
+const _IS_FOCUS = {
+  minNodeDiameterPx: 9,
+  maxNodeDiameterPx: 34,
+  labelEmphasisMin: 0.15,
+  focusBorderColor: "#dc2626",
+  focusBorderWidthPx: 2,
+};
+// Edges are never cut. Strength is encoded as width + opacity through a convex
+// (gamma) remap that strongly diminishes low signal while preserving strong.
+// Terminal (kinase→node) strength is |NES| anchored at 1.0 — the biological null
+// (no motif enrichment), an absolute floor, not this pathway's observed minimum —
+// so "no enrichment → no ink". Chain (kinase→kinase) strength is the combined
+// interactome weight anchored at 0.
+const _IS_EMPHASIS = {
+  nesNull: 1.0,
+  // Presentation-only visibility floor; never exported as analytical evidence.
+  siteFloor: 0.4,
+  gamma: 3.5,
+  minWidthPx: 0.35,
+  maxWidthPx: 7.0,
+  minOpacity: 0.03,
+  maxOpacity: 0.95,
+};
 const _IS_STYLE = {
   smallTextPx: 11,
   loadingVerticalPaddingPx: 8,
@@ -149,6 +181,15 @@ const _IS_STYLE = {
   normalArrowScale: 0.7,
   emphasizedArrowScale: 1,
   edgeOpacity: 0.9,
+};
+const _IS_COLORS = {
+  corePath: "#1f4ea3",
+  enriched: "#d73027",
+  depleted: "#4575b4",
+  neutral: "#64748b",
+  motif: "#2563eb",
+  psp: "#d97706",
+  both: "#7e22ce",
 };
 
 function _isSafeRows(columns, fields) {
@@ -184,28 +225,66 @@ function _isNumeric(value) {
   return isFinite(number) ? number : 0;
 }
 
-function _isFiniteNumber(value) {
-  if (value === null || value === undefined || value === "") return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
+// Convex remap of a raw strength to [0,1], anchored at [lo, hi]. gamma > 1 makes
+// it accelerate: low values collapse toward 0, strong values stay high. Nothing is
+// thresholded — the weakest still returns a small positive emphasis, floored to a
+// faint-but-present width/opacity by the helpers below.
+function _isEmphasis(value, lo, hi) {
+  if (!(hi > lo)) return 0;
+  const x = Math.max(0, Math.min(1, (_isNumeric(value) - lo) / (hi - lo)));
+  return Math.pow(x, _IS_EMPHASIS.gamma);
 }
 
-function _isEdgeWidth(weight, observedMax) {
-  const minimumVisibleWidth = 1.25;
-  const maximumRenderedWidth = 7;
-  if (!(observedMax > 0)) return minimumVisibleWidth;
-  const proportion = Math.max(0, Math.min(1, _isNumeric(weight) / observedMax));
-  return minimumVisibleWidth + proportion * (maximumRenderedWidth - minimumVisibleWidth);
+function _isEmphasisWidth(emphasis) {
+  return _IS_EMPHASIS.minWidthPx + emphasis * (_IS_EMPHASIS.maxWidthPx - _IS_EMPHASIS.minWidthPx);
 }
 
-function _isHash(value) {
-  const hashShift = 5;
-  let hash = 0;
-  const text = String(value || "");
-  for (let i = 0; i < text.length; i++) {
-    hash = ((hash << hashShift) - hash + text.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash);
+function _isEmphasisOpacity(emphasis) {
+  return _IS_EMPHASIS.minOpacity + emphasis * (_IS_EMPHASIS.maxOpacity - _IS_EMPHASIS.minOpacity);
+}
+
+function _isEmphasisNodeSize(emphasis) {
+  return _IS_FOCUS.minNodeDiameterPx
+    + emphasis * (_IS_FOCUS.maxNodeDiameterPx - _IS_FOCUS.minNodeDiameterPx);
+}
+
+function _isArcCenter(width, height) {
+  const left = _IS_LAYOUT.horizontalMarginPx;
+  const right = Math.max(left + _IS_LAYOUT.minimumSpineSpanPx,
+    width - _IS_LAYOUT.horizontalMarginPx);
+  return {
+    x: (left + right) / 2,
+    y: height + _IS_LAYOUT.spineArcCenterBelowGraphPx,
+  };
+}
+
+function _isMeanAngle(angles) {
+  const vector = angles.reduce((sum, angle) => ({
+    x: sum.x + Math.cos(angle), y: sum.y + Math.sin(angle),
+  }), { x: 0, y: 0 });
+  return Math.atan2(vector.y, vector.x);
+}
+
+function _isNesDirection(signedNes) {
+  if (_isNumeric(signedNes) > 0) return "enriched";
+  if (_isNumeric(signedNes) < 0) return "depleted";
+  return "neutral";
+}
+
+function _isLegendSample(color, lineStyle = "solid", width = 3) {
+  const sample = document.createElement("span");
+  sample.setAttribute("aria-hidden", "true");
+  sample.style.cssText = "display:inline-block;width:26px;margin-right:6px;vertical-align:middle;"
+    + `border-top:${width}px ${lineStyle} ${color};`;
+  return sample;
+}
+
+function _isLegendLine(label, samples) {
+  const line = document.createElement("div");
+  line.style.cssText = "display:flex;align-items:center;gap:3px;min-height:20px;";
+  samples.forEach(sample => line.appendChild(sample));
+  line.appendChild(document.createTextNode(label));
+  return line;
 }
 
 function _isGraphForRow(shard, row) {
@@ -214,7 +293,7 @@ function _isGraphForRow(shard, row) {
   ]).filter(edge => edge.source_gene && edge.target_gene);
   const terminal = _isSafeRows(shard.terminal_edges, [
     "source_gene", "target_gene", "role", "contrast", "provenance", "weight",
-    "best_abs_nes", "best_fdr",
+    "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
   ]).filter(edge => edge.source_gene && edge.target_gene);
   const spine = _isSpineNodes(row);
   const spineByRole = new Map(spine.map(node => [node.role, node]));
@@ -223,56 +302,68 @@ function _isGraphForRow(shard, row) {
     return !!node && String(edge.target_gene).toUpperCase() === node.gene.toUpperCase()
       && String(edge.contrast || "") === String(row.contrast || "");
   });
-  const terminalByRole = new Map(spine.map(node => [node.role, []]));
-  contrastMatchedTerminal.forEach(edge => {
-    const fdr = _isFiniteNumber(edge.best_fdr);
-    if (fdr !== null && fdr < _IS_FDR_MAX) {
-      terminalByRole.get(String(edge.role)).push(edge);
-    }
+  // No cutoff: every contrast-matched kinase→node edge is drawn. Weak ones are
+  // suppressed by the |NES| emphasis at render time, not filtered out here.
+  const terminalEdges = contrastMatchedTerminal;
+  const directKinaseGenes = new Set(terminalEdges.map(edge => String(edge.source_gene)));
+  // Include one-hop kinase regulators in the full view. The default first-order
+  // filter hides these chain-only nodes with their kinase→kinase links.
+  const chainEdges = interactome.filter(edge =>
+    directKinaseGenes.has(String(edge.source_gene)) || directKinaseGenes.has(String(edge.target_gene)));
+  const kinaseGenes = new Set(directKinaseGenes);
+  chainEdges.forEach(edge => {
+    kinaseGenes.add(String(edge.source_gene));
+    kinaseGenes.add(String(edge.target_gene));
   });
-  const terminalEdges = [];
-  const hiddenTerminalCounts = {};
-  spine.forEach(node => {
-    const candidates = terminalByRole.get(node.role) || [];
-    candidates.sort((left, right) => {
-      const weightDelta = _isNumeric(right.weight) - _isNumeric(left.weight);
-      return weightDelta || String(left.source_gene).localeCompare(String(right.source_gene));
-    });
-    const selected = candidates.slice(0, _IS_TERMINAL_TOP_N_PER_ROLE);
-    terminalEdges.push(...selected);
-    hiddenTerminalCounts[node.role] = Math.max(0, candidates.length - selected.length);
-  });
-  const kinaseGenes = new Set(terminalEdges.map(edge => String(edge.source_gene)));
-  const chainEdges = interactome.filter(edge => {
-    const weight = _isFiniteNumber(edge.weight);
-    return weight !== null
-      && weight >= _IS_CHAIN_WEIGHT_MIN
-      && kinaseGenes.has(String(edge.source_gene))
-      && kinaseGenes.has(String(edge.target_gene));
-  });
-  const observedMax = chainEdges.concat(terminalEdges).reduce(
+  const nesMax = terminalEdges.reduce(
+    (maximum, edge) => Math.max(maximum, _isNumeric(edge.best_abs_nes)), 0);
+  const sitesMax = terminalEdges.reduce(
+    (maximum, edge) => Math.max(maximum, _isNumeric(edge.n_sites)), 0);
+  const chainMax = chainEdges.reduce(
     (maximum, edge) => Math.max(maximum, _isNumeric(edge.weight)), 0);
-  return { spine, terminalEdges, chainEdges, kinaseGenes, hiddenTerminalCounts, observedMax };
+  return {
+    spine, terminalEdges, chainEdges, kinaseGenes, directKinaseGenes,
+    nesMax, sitesMax, chainMax,
+  };
 }
 
 function _isPositionedElements(graph, width, height) {
-  const middle = Math.max(_IS_LAYOUT.minimumCenterYPx, height / 2);
-  const left = _IS_LAYOUT.horizontalMarginPx;
-  const right = Math.max(left + _IS_LAYOUT.minimumSpineSpanPx,
-    width - _IS_LAYOUT.horizontalMarginPx);
-  const gap = (right - left) / Math.max(_IS_LAYOUT.minimumSpineSegmentCount, graph.spine.length - 1);
-  const roleX = new Map(graph.spine.map(node => [node.role, left + node.order * gap]));
-  const anchors = new Map();
+  const arcCenter = _isArcCenter(width, height);
+  const spineSegments = Math.max(_IS_LAYOUT.minimumSpineSegmentCount, graph.spine.length - 1);
+  const sweepRad = _IS_LAYOUT.spineSweepDeg * Math.PI / 180;
+  const startAngle = -Math.PI / 2 - sweepRad / 2;
+  const roleAngle = new Map(graph.spine.map(node => [node.role,
+    startAngle + node.order * sweepRad / spineSegments]));
+  const rolePosition = new Map(graph.spine.map(node => {
+    const angle = roleAngle.get(node.role);
+    return [node.role, {
+      x: arcCenter.x + _IS_LAYOUT.spineArcRadiusPx * Math.cos(angle),
+      y: arcCenter.y + _IS_LAYOUT.spineArcRadiusPx * Math.sin(angle),
+    }];
+  }));
+  const targetAngles = new Map();
   graph.terminalEdges.forEach(edge => {
     const gene = String(edge.source_gene);
-    if (!anchors.has(gene)) anchors.set(gene, []);
-    anchors.get(gene).push(roleX.get(String(edge.role)) || left);
+    if (!targetAngles.has(gene)) targetAngles.set(gene, []);
+    targetAngles.get(gene).push(roleAngle.get(String(edge.role)) || startAngle);
+  });
+  const chainAngles = new Map();
+  const addChainAngles = (gene, angles) => {
+    if (!angles || !angles.length) return;
+    if (!chainAngles.has(gene)) chainAngles.set(gene, []);
+    chainAngles.get(gene).push(...angles);
+  };
+  graph.chainEdges.forEach(edge => {
+    const source = String(edge.source_gene);
+    const target = String(edge.target_gene);
+    addChainAngles(source, targetAngles.get(target));
+    addChainAngles(target, targetAngles.get(source));
   });
 
   const elements = [];
   graph.spine.forEach(node => {
     elements.push({ data: { id: node.id, label: node.gene, kind: "spine-node", role: node.role },
-      position: { x: roleX.get(node.role), y: middle } });
+      position: rolePosition.get(node.role) });
   });
   for (let i = 0; i < graph.spine.length - 1; i++) {
     elements.push({ data: {
@@ -281,17 +372,58 @@ function _isPositionedElements(graph, width, height) {
     } });
   }
 
-  const kinaseGenes = [...graph.kinaseGenes].sort((a, b) => a.localeCompare(b));
-  kinaseGenes.forEach((gene, index) => {
-    const terminalAnchors = anchors.get(gene) || [];
-    const anchor = terminalAnchors.length
-      ? terminalAnchors.reduce((sum, x) => sum + x, 0) / terminalAnchors.length
-      : left + ((_isHash(gene) + index) % graph.spine.length) * gap;
-    const lane = (_isHash(gene) % _IS_LAYOUT.kinaseLaneCount) - _IS_LAYOUT.centerKinaseLane;
-    const y = middle + (lane === 0 ? (index % _IS_LAYOUT.laneAlternationPeriod ? -1 : 1) : lane)
-      * _IS_LAYOUT.baseLaneSpacingPx;
-    elements.push({ data: { id: `kinase:${gene}`, label: gene, kind: "kinase-node" },
-      position: { x: anchor, y } });
+  // Per-kinase node emphasis = its strongest terminal |NES| hit. Drives node size
+  // (A) and radius in the fan (B): strong kinases hug the spine node, weak fan out.
+  const kinaseEmphasis = new Map();
+  graph.terminalEdges.forEach(edge => {
+    const gene = String(edge.source_gene);
+    const emphasis = _isEmphasis(edge.best_abs_nes, _IS_EMPHASIS.nesNull, graph.nesMax);
+    kinaseEmphasis.set(gene, Math.max(kinaseEmphasis.get(gene) || 0, emphasis));
+  });
+  const anchorAngle = new Map();
+  graph.kinaseGenes.forEach(gene => {
+    const angles = targetAngles.get(gene) || chainAngles.get(gene) || [];
+    anchorAngle.set(gene, angles.length ? _isMeanAngle(angles) : -Math.PI / 2);
+  });
+  // Each pathway node owns an outward radial wedge. Multi-target kinases use the
+  // circular mean of their target wedges; all other kinases stay within their
+  // node's wedge, preventing adjacent fans from interleaving.
+  const groups = new Map();
+  [...graph.kinaseGenes].forEach(gene => {
+    const key = anchorAngle.get(gene).toFixed(12);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(gene);
+  });
+  const orderedKeys = [...groups.keys()].sort((a, b) => Number(a) - Number(b));
+  orderedKeys.forEach(key => {
+    const baseAngle = Number(key);
+    const genes = groups.get(key).sort((a, b) =>
+      (kinaseEmphasis.get(b) || 0) - (kinaseEmphasis.get(a) || 0) || a.localeCompare(b));
+    let placed = 0;
+    let ring = 0;
+    while (placed < genes.length) {
+      const radius = _IS_LAYOUT.fanInnerRadiusPx + ring * _IS_LAYOUT.fanRingStepPx;
+      const wedgeWidth = 2 * _IS_LAYOUT.halfWedgeRad * (1 - 2 * _IS_LAYOUT.fanAngleMargin);
+      const capacity = Math.max(1, Math.floor(wedgeWidth * radius / _IS_LAYOUT.fanArcSpacingPx));
+      const ringGenes = genes.slice(placed, placed + capacity);
+      ringGenes.forEach((gene, j) => {
+        const fraction = ringGenes.length === 1 ? 0.5 : j / (ringGenes.length - 1);
+        const wedgeOffset = (fraction - 0.5) * 2 * _IS_LAYOUT.halfWedgeRad
+          * (1 - 2 * _IS_LAYOUT.fanAngleMargin);
+        const theta = baseAngle + wedgeOffset;
+        const emphasis = kinaseEmphasis.get(gene) || 0;
+        elements.push({ data: {
+          id: `kinase:${gene}`, label: gene, kind: "kinase-node",
+          emphasis, size: _isEmphasisNodeSize(emphasis),
+          direct_terminal: graph.directKinaseGenes.has(gene) ? 1 : 0,
+        }, position: {
+          x: arcCenter.x + (_IS_LAYOUT.spineArcRadiusPx + radius) * Math.cos(theta),
+          y: arcCenter.y + (_IS_LAYOUT.spineArcRadiusPx + radius) * Math.sin(theta),
+        } });
+      });
+      placed += ringGenes.length;
+      ring += 1;
+    }
   });
 
   const seenEdges = new Set();
@@ -301,18 +433,31 @@ function _isPositionedElements(graph, width, height) {
     const key = `${source}|${target}|${edge.provenance || ""}`;
     if (seenEdges.has(key)) return;
     seenEdges.add(key);
+    const emphasis = _isEmphasis(edge.weight, 0, graph.chainMax);
     elements.push({ data: {
       id: `chain:${index}`, source, target, kind: "chain-edge",
       provenance: String(edge.provenance || "motif"),
-      width: _isEdgeWidth(edge.weight, graph.observedMax),
+      weight: _isNumeric(edge.weight), width: _isEmphasisWidth(emphasis),
+      opacity: _isEmphasisOpacity(emphasis),
     } });
   });
   graph.terminalEdges.forEach((edge, index) => {
     const role = String(edge.role);
+    const nesEmphasis = _isEmphasis(edge.best_abs_nes, _IS_EMPHASIS.nesNull, graph.nesMax);
+    const sites = _isNumeric(edge.n_sites);
+    const siteFraction = graph.sitesMax > 0
+      ? Math.max(0, Math.min(1, Math.log1p(sites) / Math.log1p(graph.sitesMax)))
+      : 0;
+    const siteFactor = _IS_EMPHASIS.siteFloor
+      + (1 - _IS_EMPHASIS.siteFloor) * siteFraction;
+    const emphasis = nesEmphasis * siteFactor;
     elements.push({ data: {
       id: `terminal:${index}`, source: `kinase:${String(edge.source_gene)}`,
       target: `path:${role}`, kind: "terminal-edge",
-      width: _isEdgeWidth(edge.weight, graph.observedMax),
+      width: _isEmphasisWidth(emphasis), opacity: _isEmphasisOpacity(emphasis),
+      signed_nes: _isNumeric(edge.signed_nes), nes_direction: _isNesDirection(edge.signed_nes),
+      best_abs_nes: _isNumeric(edge.best_abs_nes), best_fdr: _isNumeric(edge.best_fdr),
+      n_sites: sites,
     } });
   });
   return elements;
@@ -323,22 +468,67 @@ function _isRenderCytoscape(host, graph) {
     host.innerHTML = '<div class="muted">Sidechain graph unavailable because Cytoscape did not load.</div>';
     return;
   }
+  if (host._incytrSidechainCleanup) host._incytrSidechainCleanup();
   if (host._incytrSidechainCy) host._incytrSidechainCy.destroy();
+  const panel = document.createElement("div");
+  panel.style.cssText = "position:relative;background:#fff;";
   const graphHost = document.createElement("div");
   graphHost.style.cssText = `width:100%;height:${_IS_LAYOUT.graphHeightPx}px;`
     + `border:${_IS_STYLE.graphBorderWidthPx}px solid #ddd;`
     + `border-radius:${_IS_STYLE.graphCornerRadiusPx}px;background:#fff;`;
+  const fullscreenButton = document.createElement("button");
+  fullscreenButton.type = "button";
+  fullscreenButton.textContent = "⛶ Full screen";
+  fullscreenButton.setAttribute("aria-label", "View sidechain graph full screen");
+  fullscreenButton.style.cssText = "position:absolute;top:10px;right:10px;z-index:2;"
+    + "padding:6px 9px;border:1px solid #94a3b8;border-radius:4px;background:#fff;"
+    + "color:#1e3a5f;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 1px 3px #0002;";
   const caption = document.createElement("div");
   caption.style.cssText = `margin-top:${_IS_STYLE.captionTopMarginPx}px;`
     + `font-size:${_IS_STYLE.smallTextPx}px;color:#555;`;
-  const hiddenByRole = graph.spine
-    .map(node => `${node.role} ${graph.hiddenTerminalCounts[node.role] || 0}`)
-    .join(", ");
-  caption.textContent = `${_IS_TERMINAL_TOP_N_PER_ROLE} strongest regulators per node (|NES|), `
-    + `FDR<${_IS_FDR_MAX}; ${graph.chainEdges.length.toLocaleString()} upstream kinase edges. `
-    + `Hidden FDR-passing regulators not shown: ${hiddenByRole}. `
-    + "Chain edge color: motif (blue), PSP (orange), both (purple).";
-  host.replaceChildren(graphHost, caption);
+  caption.textContent = `${graph.kinaseGenes.size.toLocaleString()} kinase regulators; `
+    + `${graph.terminalEdges.length.toLocaleString()} kinase→node, `
+    + `${graph.chainEdges.length.toLocaleString()} kinase→kinase links. `
+    + "Tap a node to isolate its neighborhood; hover a kinase for its label.";
+  const legend = document.createElement("div");
+  legend.style.cssText = `font-size:${_IS_STYLE.smallTextPx}px;color:#334155;`;
+  legend.append(
+    _isLegendLine("Core pathway", [_isLegendSample(_IS_COLORS.corePath, "solid", 5)]),
+    _isLegendLine("Kinase → node: enriched / depleted", [
+      _isLegendSample(_IS_COLORS.enriched, "dotted"),
+      _isLegendSample(_IS_COLORS.depleted, "dotted"),
+    ]),
+    _isLegendLine("Node size: |NES| strength", []),
+    _isLegendLine("Width and opacity: |NES| × #substrates (edge strength)", []),
+    _isLegendLine("Chain evidence: motif / PSP / both", [
+      _isLegendSample(_IS_COLORS.motif),
+      _isLegendSample(_IS_COLORS.psp, "dashed"),
+      _isLegendSample(_IS_COLORS.both, "dotted"),
+    ]),
+  );
+  const edgeDetail = document.createElement("div");
+  edgeDetail.style.cssText = `margin-top:${_IS_STYLE.captionTopMarginPx}px;`
+    + `font-size:${_IS_STYLE.smallTextPx}px;color:#334155;min-height:1.3em;`;
+  edgeDetail.textContent = "Tap an edge for its evidence.";
+  const chainFilter = document.createElement("label");
+  chainFilter.style.cssText = `display:flex;align-items:center;gap:6px;`
+    + `margin-bottom:${_IS_STYLE.captionTopMarginPx}px;font-size:${_IS_STYLE.smallTextPx}px;`
+    + "font-weight:600;color:#1e3a5f;cursor:pointer;";
+  const showChains = document.createElement("input");
+  showChains.type = "checkbox";
+  showChains.checked = false;
+  showChains.setAttribute("aria-label", "Show kinase to kinase chains");
+  chainFilter.append(showChains, document.createTextNode("Show kinase→kinase chains"));
+  // Kept inside the graph panel so the legend and selected-edge NES evidence
+  // remain available when this panel enters browser full-screen mode.
+  const infoPanel = document.createElement("div");
+  infoPanel.style.cssText = "position:absolute;left:10px;bottom:10px;z-index:2;"
+    + "max-width:min(520px,calc(100% - 20px));padding:8px 10px;"
+    + "border:1px solid #cbd5e1;border-radius:5px;background:#fffffff0;"
+    + "box-shadow:0 2px 8px #0002;";
+  infoPanel.append(chainFilter, legend, edgeDetail);
+  panel.append(graphHost, fullscreenButton, infoPanel);
+  host.replaceChildren(panel, caption);
   const cy = window.cytoscape({
     container: graphHost,
     elements: _isPositionedElements(graph, graphHost.clientWidth || _IS_LAYOUT.fallbackGraphWidthPx,
@@ -350,6 +540,12 @@ function _isRenderCytoscape(host, graph) {
         "background-color": "#f8fafc", "border-width": _IS_STYLE.kinaseNodeBorderWidthPx, "border-color": "#64748b",
         "width": _IS_STYLE.kinaseNodeDiameterPx, "height": _IS_STYLE.kinaseNodeDiameterPx,
       } },
+      { selector: "node[kind = 'kinase-node']", style: {
+        "width": "data(size)", "height": "data(size)",
+      } },
+      { selector: `node[kind = 'kinase-node'][emphasis < ${_IS_FOCUS.labelEmphasisMin}]`, style: {
+        "label": "",
+      } },
       { selector: "node[kind = 'spine-node']", style: {
         "shape": "round-rectangle", "width": _IS_STYLE.spineNodeWidthPx, "height": _IS_STYLE.spineNodeHeightPx,
         "background-color": "#e7f0ff", "border-width": _IS_STYLE.spineNodeBorderWidthPx, "border-color": "#1f4ea3",
@@ -360,24 +556,45 @@ function _isRenderCytoscape(host, graph) {
         "arrow-scale": _IS_STYLE.normalArrowScale, "opacity": _IS_STYLE.edgeOpacity,
       } },
       { selector: "edge[kind = 'spine-edge']", style: {
-        "width": _IS_STYLE.spineEdgeWidthPx, "line-color": "#1f4ea3", "target-arrow-color": "#1f4ea3",
-        "arrow-scale": _IS_STYLE.emphasizedArrowScale,
+        "width": _IS_STYLE.spineEdgeWidthPx, "line-color": _IS_COLORS.corePath,
+        "target-arrow-color": _IS_COLORS.corePath, "arrow-scale": _IS_STYLE.emphasizedArrowScale,
+        "curve-style": "unbundled-bezier", "control-point-distances": "-38px",
       } },
       { selector: "edge[kind = 'terminal-edge']", style: {
-        "width": "data(width)", "line-color": "#475569", "target-arrow-color": "#475569",
+        "width": "data(width)", "opacity": "data(opacity)",
+        "line-color": _IS_COLORS.neutral, "target-arrow-color": _IS_COLORS.neutral,
         "line-style": "dotted",
       } },
+      { selector: "edge[kind = 'terminal-edge'][nes_direction = 'enriched']", style: {
+        "line-color": _IS_COLORS.enriched, "target-arrow-color": _IS_COLORS.enriched,
+      } },
+      { selector: "edge[kind = 'terminal-edge'][nes_direction = 'depleted']", style: {
+        "line-color": _IS_COLORS.depleted, "target-arrow-color": _IS_COLORS.depleted,
+      } },
       { selector: "edge[kind = 'chain-edge'][provenance = 'motif']", style: {
-        "width": "data(width)", "line-color": "#2563eb", "target-arrow-color": "#2563eb",
+        "width": "data(width)", "opacity": "data(opacity)",
+        "line-color": _IS_COLORS.motif, "target-arrow-color": _IS_COLORS.motif,
       } },
       { selector: "edge[kind = 'chain-edge'][provenance = 'psp']", style: {
-        "width": "data(width)", "line-color": "#d97706", "target-arrow-color": "#d97706",
+        "width": "data(width)", "opacity": "data(opacity)",
+        "line-color": _IS_COLORS.psp, "target-arrow-color": _IS_COLORS.psp,
         "line-style": "dashed",
       } },
       { selector: "edge[kind = 'chain-edge'][provenance = 'both']", style: {
-        "width": "data(width)", "line-color": "#7e22ce", "target-arrow-color": "#7e22ce",
+        "width": "data(width)", "opacity": "data(opacity)",
+        "line-color": _IS_COLORS.both, "target-arrow-color": _IS_COLORS.both,
         "line-style": "dotted", "arrow-scale": _IS_STYLE.emphasizedArrowScale,
       } },
+      // Focus/hover (C): reveal a weak node's label on hover or when tapped; a tap
+      // hard-hides everything outside the tapped node's neighborhood (not dimmed).
+      { selector: "node.is-hover, node.is-focus", style: { "label": "data(label)" } },
+      { selector: "node.is-focus", style: {
+        "border-color": _IS_FOCUS.focusBorderColor, "border-width": _IS_FOCUS.focusBorderWidthPx,
+      } },
+      // A focus has only a handful of edges. Reset their opacity so the selected
+      // relationship is readable instead of inheriting full-graph attenuation.
+      { selector: "edge.is-focus-edge", style: { "opacity": 1 } },
+      { selector: ".is-hidden, .is-filtered", style: { "display": "none" } },
     ],
     layout: { name: "preset", fit: true, padding: _IS_LAYOUT.fitPaddingPx },
     minZoom: _IS_LAYOUT.minZoom,
@@ -397,7 +614,102 @@ function _isRenderCytoscape(host, graph) {
       y: cy.height() / 2 - spineCenterY / spineNodes.length,
     });
   }
+  const resetGraphSize = () => {
+    const isFullscreen = document.fullscreenElement === panel;
+    graphHost.style.height = isFullscreen
+      ? `${Math.max(_IS_LAYOUT.graphHeightPx, window.innerHeight - 180)}px`
+      : `${_IS_LAYOUT.graphHeightPx}px`;
+    fullscreenButton.textContent = isFullscreen ? "⛶ Exit full screen" : "⛶ Full screen";
+    fullscreenButton.setAttribute("aria-label", isFullscreen
+      ? "Exit sidechain graph full screen" : "View sidechain graph full screen");
+    cy.resize();
+    cy.fit(cy.elements().not(".is-filtered"), _IS_LAYOUT.fitPaddingPx);
+  };
+  const requestFullscreen = () => {
+    if (document.fullscreenElement === panel) {
+      document.exitFullscreen();
+    } else if (panel.requestFullscreen) {
+      panel.requestFullscreen();
+    }
+  };
+  fullscreenButton.addEventListener("click", requestFullscreen);
+  document.addEventListener("fullscreenchange", resetGraphSize);
+  window.addEventListener("resize", resetGraphSize);
+  const spine = cy.elements("node[kind = 'spine-node'], edge[kind = 'spine-edge']");
+  const updateCaption = () => {
+    const visibleKinaseCount = cy.nodes("node[kind = 'kinase-node']").not(".is-filtered").length;
+    const visibleChainCount = cy.edges("edge[kind = 'chain-edge']").not(".is-filtered").length;
+    const chainState = showChains.checked ? "Full kinase chain view." :
+      "First-order kinase→gene view.";
+    caption.textContent = `${visibleKinaseCount.toLocaleString()} kinase regulators; `
+      + `${graph.terminalEdges.length.toLocaleString()} kinase→node, `
+      + `${visibleChainCount.toLocaleString()} kinase→kinase links. ${chainState} `
+      + "Tap a node or edge to isolate its neighborhood; hover a kinase for its label.";
+  };
+  const applyChainFilter = () => {
+    const chains = cy.edges("edge[kind = 'chain-edge']");
+    const chainOnlyKinases = cy.nodes("node[kind = 'kinase-node'][direct_terminal = 0]");
+    if (showChains.checked) {
+      chains.removeClass("is-filtered");
+      chainOnlyKinases.removeClass("is-filtered");
+    } else {
+      chains.addClass("is-filtered");
+      chainOnlyKinases.addClass("is-filtered");
+    }
+    cy.elements().removeClass("is-hidden is-focus is-focus-edge");
+    cy.fit(cy.elements().not(".is-filtered"), _IS_LAYOUT.fitPaddingPx);
+    edgeDetail.textContent = "Tap an edge for its evidence.";
+    updateCaption();
+  };
+  showChains.addEventListener("change", applyChainFilter);
+  applyChainFilter();
+  const focus = (keep, detail) => {
+    cy.elements().addClass("is-hidden").removeClass("is-focus is-focus-edge");
+    keep.removeClass("is-hidden");
+    keep.nodes().addClass("is-focus");
+    keep.edges().addClass("is-focus-edge");
+    cy.fit(keep, _IS_LAYOUT.fitPaddingPx);
+    if (detail) edgeDetail.textContent = detail;
+  };
+  cy.on("tap", "edge", evt => {
+    const edge = evt.target;
+    const source = String(edge.source().data("label") || edge.data("source"));
+    const target = String(edge.target().data("label") || edge.data("target"));
+    if (edge.data("kind") === "terminal-edge") {
+      const signedNes = _isNumeric(edge.data("signed_nes"));
+      const direction = String(edge.data("nes_direction"));
+      const detail = `${source} → ${target}: NES ${signedNes.toFixed(3)} `
+        + `(${direction}), FDR ${_isNumeric(edge.data("best_fdr")).toPrecision(3)}, `
+        + `|NES| ${_isNumeric(edge.data("best_abs_nes")).toFixed(3)}, `
+        + `sites ${_isNumeric(edge.data("n_sites"))}.`;
+      focus(edge.closedNeighborhood().union(spine), detail);
+      return;
+    }
+    const detail = `${source} → ${target}: ${String(edge.data("provenance"))} `
+      + `evidence, weight ${_isNumeric(edge.data("weight")).toFixed(3)}.`;
+    focus(edge.closedNeighborhood().union(spine), detail);
+  });
+  cy.on("mouseover", "node[kind = 'kinase-node']", evt => evt.target.addClass("is-hover"));
+  cy.on("mouseout", "node[kind = 'kinase-node']", evt => evt.target.removeClass("is-hover"));
+  cy.on("tap", "node", evt => {
+    // Tap any node → keep only its neighborhood + the pathway spine; hard-hide the
+    // rest so no faint edges remain, then zoom to what's left.
+    focus(evt.target.closedNeighborhood().union(spine));
+  });
+  cy.on("tap", evt => {
+    if (evt.target === cy) {
+      cy.elements().removeClass("is-hidden is-focus is-focus-edge");
+      cy.fit(cy.elements().not(".is-filtered"), _IS_LAYOUT.fitPaddingPx);
+      edgeDetail.textContent = "Tap an edge for its evidence.";
+    }
+  });
   host._incytrSidechainCy = cy;
+  host._incytrSidechainCleanup = () => {
+    fullscreenButton.removeEventListener("click", requestFullscreen);
+    document.removeEventListener("fullscreenchange", resetGraphSize);
+    window.removeEventListener("resize", resetGraphSize);
+    showChains.removeEventListener("change", applyChainFilter);
+  };
 }
 
 // Called by the pathways detail-panel switcher after it has mounted the host.

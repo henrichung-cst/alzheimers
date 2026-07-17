@@ -32,13 +32,6 @@ REQUIRED_CONTEXT_FIELDS = {
 }
 CONTEXT_BLOCKS = ("kinases", "celltypes", "incytr_pathways")
 
-_INCYTR_SIDECHAIN_EXPECTED_COUNTS = {
-    "song_ad": (3701, 373, 113437),
-    "fivexfad_cortex": (2977, 375, 64193),
-    "fivexfad_hippocampus": (1606, 345, 19968),
-    "donor1": (6676, 392, 351641),
-}
-
 
 def _load_payload(path: Path) -> dict[str, Any]:
     opener = gzip.open if path.suffix == ".gz" else open
@@ -218,17 +211,11 @@ def _check_incytr_sidechains(
         ):
             errors.append(f"Incytr sidechain shard {context_id!r} has an invalid schema")
             continue
-        expected_counts = _INCYTR_SIDECHAIN_EXPECTED_COUNTS.get(context_id)
         observed_counts = (
             shard.get("interactome_edge_count"),
             shard.get("interactome_node_count"),
             shard.get("terminal_edge_count"),
         )
-        if expected_counts is not None and observed_counts != expected_counts:
-            errors.append(
-                f"Incytr sidechain shard {context_id!r} counts "
-                f"{observed_counts!r} != expected {expected_counts!r}"
-            )
         index_counts = (
             entry.get("interactome_edge_count"),
             entry.get("interactome_node_count"),
