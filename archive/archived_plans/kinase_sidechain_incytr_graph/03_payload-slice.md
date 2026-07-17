@@ -1,22 +1,28 @@
 # kinase_sidechain_incytr_graph — subplan 03: viewer payload slice
 
 **Goal:** Slice subplan 01's per-cohort backend artifact (kinase→kinase interactome + terminal-edge
-map), plus subplan 02's t-cell motif edges, into the `edge_slice_ref` payload the sidechain viewer tab
-consumes — for song, 5xFAD, and t-cells. Bounded by the kinome, not the pathway count (no per-pathway
-precompute).
+map) into the `edge_slice_ref` payload the sidechain viewer tab consumes — for song, 5xFAD, and
+t-cells. Bounded by the kinome, not the pathway count (no per-pathway precompute).
+
+All four cohort dirs are already built and on disk under `outputs/reports/kinase_kinase_edges/`:
+`song/`, `fivexfad_cortex/`, `fivexfad_hippocampus/`, `tcells_donor1/`. Each holds `interactome.csv`
++ `terminal_edges.csv` with an identical schema, so **one slice writer covers every cohort** — the
+t-cell arm is not a special case.
 
 **Scope**
 - In: Add a sidechain edge-slice writer (the interactome + terminal-edge map, provenance-tagged and
   weighted) and register it in each cohort's slice assembly. Emit the slice under the existing
   `edge_slices/incytr_pathways/` convention; wire the `edge_slice_ref` entry through `compose.py`.
-- Out: No backend edge computation (01/02 own the math — this only *shapes* their output). No new tab
+- Out: No backend edge computation (01 owns the math — this only *shapes* its output). No new tab
   or JS (04). No change to existing slices (kinases, celltypes, decomp, concordance, backbone) — this is
   purely additive.
 
-**Files touched:** `alz/viewer/shared/compose.py`, `alz/viewer/shared/incytr_index.py`,
+**Files touched:** `alz/viewer/shared/compose.py`, `alz/viewer/shared/payload_helpers.py`,
 `alz/viewer/cohorts/song.py`, `alz/viewer/cohorts/fivexfad.py`, `alz/tcell_viewer/slices_incytr.py`.
+(`incytr_index.py` is **not** in scope — it owns backbone grains and sign-vector labels, nothing this
+subplan needs.)
 
-**Risk tier:** **medium** — plumbing that shapes 01/02's output into the payload contract. Most failure
+**Risk tier:** **medium** — plumbing that shapes 01's output into the payload contract. Most failure
 modes are loud: a duplicate slice key throws at `merge_edge_slice_ref`, a schema break fails contract
 validation. The silent mode is a mis-shaped-but-valid payload (right keys, wrong values — e.g. weights
 transposed, a cohort's slice keyed to another) that renders as a plausible-but-wrong graph. Medium.
@@ -24,8 +30,10 @@ transposed, a cohort's slice keyed to another) that renders as a plausible-but-w
 **Reuse (do not rebuild):**
 - `merge_edge_slice_ref` (`compose.py`) — the per-cohort `edge_slice_ref` merge; it **errors on
   duplicate keys**, so pick a unique slice key.
-- `_write_gene_node_index_shard` / `_build_incytr_gene_node_index` (`incytr_index.py`) — the existing
-  columnar-shard writer pattern; follow it for the new slice's on-disk form.
+- `_write_gene_node_index_shard` / `_build_incytr_gene_node_index` (**`alz/viewer/shared/payload_helpers.py`**)
+  — the existing columnar-shard writer pattern; follow it for the new slice's on-disk form. All three
+  cohort files already import both from there (`song.py:58`, `fivexfad.py:64`, `slices_incytr.py:23`);
+  follow that same import, and keep any new shared helper in `payload_helpers.py` beside them.
 - The existing `_write_incytr_pair_pathways` (song) / `_write_donor_pair_pathways` (t-cell) as the
   per-cohort registration pattern.
 
@@ -82,19 +90,47 @@ transposed, a cohort's slice keyed to another) that renders as a plausible-but-w
   map only. Do **not** precompute a per-pathway artifact; the client walks the interactome on selection.
 - **On-disk slices go under `edge_slices/incytr_pathways/`;** t-cell shards use the `{donor}__` prefix
   (existing convention in `slices_incytr.py`).
-- **Reads streamed** — slice builders that touch parquet use DuckDB, never `pd.read_parquet` on a wide
-  shard.
+- **The t-cell arm is donor1-only, and must say so.** `tcells_donor1` is the only t-cell cohort dir that
+  exists: donor2 has no within-cohort attribution, so the bridge emits no donor2 motif source and 01
+  produces no donor2 edges. Emit the donor1 slice and nothing else. Do **not** synthesize a donor2 slice,
+  reuse donor1's under a donor2 key, or leave a donor2 placeholder — if the tab offers a donor selector,
+  donor2 must be absent rather than empty-but-present.
+- **Terminal edges are motif-anchored (settled — do not "fix" this).** Every `terminal_edges.csv` row is a
+  motif edge; PhosphoSitePlus only corroborates (`provenance` = `both`), so **psp-only terminal edges do
+  not exist by design** (verified 0 in all four cohorts). Purely-literature kinases still reach a pathway
+  via the interactome walk. A slice that shows zero psp-only terminal edges is correct, not a bug.
+- **01's artifacts are small — measured, not assumed.** Largest is `tcells_donor1/terminal_edges.csv` at
+  31 MB (~352k rows × 10 cols); every other file is ≤ 9.5 MB. A direct `pd.read_csv` of these is fine and
+  is the expected approach — do not build DuckDB streaming for a 31 MB CSV. The standing memory rule still
+  binds for the **wide Incytr shards**, which this subplan has no reason to open: 01 already reduced them,
+  so re-deriving anything from `incytr_pair_mode*/wide/` here is both a memory risk and duplicated math.
 - After a rebuild, PAYLOAD is inlined into `index.html` by `build_unified_viewer.py`; a stale browser
   cache serves old data — verify against `PAYLOAD.meta.generated_at`, not a soft refresh.
 
 **Acceptance / verify:**
 - The compose/build step (`pixi run viewer`, or the cohort slice task — check `pixi task list`) emits an
-  `edge_slice_ref` entry for the sidechain slice for **all three cohorts**, and `merge_edge_slice_ref`
-  raises **no duplicate-key error**.
+  `edge_slice_ref` entry for the sidechain slice for **all three cohorts / four cohort dirs**, and
+  `merge_edge_slice_ref` raises **no duplicate-key error**.
 - The emitted slice loads and, for one known song pathway, exposes the 4 node genes' terminal kinases +
   a reachable multi-hop chain (the same cascade subplan 01 verified).
 - Payload keys validate against `viewer_payload_contract.md`.
+- **Edge counts survive the slice unchanged** — 01's verified output, which the slice only reshapes:
 
-**Declared dependencies:** **01 and 02** (data). Reads 01's per-cohort backend artifact (all cohorts)
-and 02's t-cell motif edges (t-cell arm). File-disjoint from both — the dependency is artifact
-consumption, not a shared file. Consumed by subplan 04.
+  | cohort dir | interactome edges | nodes | terminal edges |
+  |---|---|---|---|
+  | `song` | 3701 | 373 | 113437 |
+  | `fivexfad_cortex` | 2977 | 375 | 64193 |
+  | `fivexfad_hippocampus` | 1606 | 345 | 19968 |
+  | `tcells_donor1` | 6676 | 392 | 351641 |
+
+  A slice whose row count differs from these has dropped or duplicated edges — investigate, do not
+  reconcile by adjusting the number.
+- **Gene space stays cohort-native:** song/5xFAD nodes are mouse (`Gucy1b1`), t-cell nodes are human
+  (`HEG1`). A cohort's slice containing the other's casing means a cross-species leak.
+
+**Declared dependencies:** **01** (data) — reads 01's per-cohort backend artifact for *all four* cohort
+dirs, t-cells included. 02 is a transitive dependency only: its bridge output is 01's motif source, so
+the real t-cell chain is **02 → 01 → 03**, not `[01 ∥ 02] → 03`. 03 never reads 02's
+`kinase_node_hits.parquet` directly — that is the raw motif hit table, not the interactome/terminal
+structure this subplan slices. Both are satisfied and on disk; nothing here is blocked. File-disjoint
+from both — the dependency is artifact consumption, not a shared file. Consumed by subplan 04.

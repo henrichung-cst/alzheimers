@@ -12,7 +12,6 @@ Status legend: **active** = in-flight / approved-pending · **deferred** = parke
 
 | Doc | Status | What |
 |---|---|---|
-| [`kinase_sidechain_incytr_graph/`](kinase_sidechain_incytr_graph/) | active | one-spine + kinase-sidechain cytoscape tab — `/orchestrate`-decomposed subplan set (`_index.md` + 01–04); all four parts unbuilt |
 | [`ad_geneuse_unpin_from_sce4.md`](ad_geneuse_unpin_from_sce4.md) | active | un-pin AD Incytr `gene.use` from sce4's frozen node sets to derived DEG∪prG — decided (un-pin); needs AD re-run + viewer rebuild |
 | [`tcell-matt-report-restoration.md`](tcell-matt-report-restoration.md) | active | per-cell marker assignment is the labeling standard (by-cluster rejected as day-confounded; ProjecTILs corroboration-only). Labels verified current 2026-07-16 — no longer gates the t-cell Incytr re-run |
 | [`deployment/todo9_viewer_aws_deployment.md`](deployment/todo9_viewer_aws_deployment.md) | partial | viewer AWS deployment scaling — Option A (`deploy_viewer.sh` s3 sync) shipped; B/C/D open |
@@ -45,6 +44,10 @@ Sequencing, cross-cutting threads, and blocking adjudications: [`implementation_
   Its live contracts were promoted: cohort-rename (C2) → `foundation/cohort_contract.md §2.5`,
   kinase-trend vocabulary → `foundation/kinase_explorer_attribution.md`, backbone-grain spec →
   `foundation/backbone_incytr_track.md`.
+- **Kinase sidechain Incytr graph** — shipped 2026-07-17 (subplans 01–07). Architecture promoted to
+  [`../foundation/kinase_sidechain_incytr_graph.md`](../foundation/kinase_sidechain_incytr_graph.md);
+  the subplan set is archived under
+  [`../../archive/archived_plans/kinase_sidechain_incytr_graph/`](../../archive/archived_plans/kinase_sidechain_incytr_graph/).
 - **`standard_attribution_metric.md`** — the implemented cross-cohort metric spec (cited by path
   in 5 source files); moved to [`../foundation/standard_attribution_metric.md`](../foundation/standard_attribution_metric.md).
 - **Completed standalone plans** — moved to
