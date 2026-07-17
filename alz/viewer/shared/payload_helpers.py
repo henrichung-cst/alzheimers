@@ -5,6 +5,7 @@ import gzip
 import json
 import os
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -208,6 +209,7 @@ def _write_incytr_sidechain_slice(
     filename: str,
     context_id: str,
     url_prefix: str = "edge_slices/incytr_pathways/",
+    contrast_transform: Callable[[str], str] | None = None,
 ) -> dict:
     """Write one cohort-native kinase-sidechain lazy shard.
 
@@ -215,6 +217,13 @@ def _write_incytr_sidechain_slice(
     kinome-bounded ``interactome.csv`` and ``terminal_edges.csv`` files.  This
     helper copies their exact row sets into a compact columnar JSON sidecar; it
     never opens the multi-gigabyte Incytr wide shards or derives pathway rows.
+
+    ``contrast_transform`` rewrites each terminal-edge ``contrast`` value so it
+    matches the consuming pathways-table row vocabulary.  The sidechain tab
+    joins terminal edges to a selected row on exact ``contrast`` equality; the
+    t-cell cohort's backend contrast (``D1_d13_vs_d2``) differs from its
+    pathways-row contrast (``d13_d2``), so it passes a normalizer.  song/5xFAD
+    share one vocabulary and pass ``None``.
     """
     interactome_path = os.path.join(source_dir, "interactome.csv")
     terminal_path = os.path.join(source_dir, "terminal_edges.csv")
@@ -241,6 +250,8 @@ def _write_incytr_sidechain_slice(
         raise ValueError(
             f"{terminal_path}: terminal edges must be motif-anchored, not psp-only"
         )
+    if contrast_transform is not None:
+        terminal["contrast"] = terminal["contrast"].map(contrast_transform)
 
     nodes = set(interactome["source_gene"].dropna())
     nodes.update(interactome["target_gene"].dropna())

@@ -822,6 +822,21 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
     }
 
 
+_TERMINAL_CONTRAST_RE = re.compile(r"^D\d+_(d\d+)_vs_(d\d+)$")
+
+
+def _terminal_contrast_to_row(contrast: str) -> str:
+    """`D1_d13_vs_d2` -> `d13_d2`, the pathways-row contrast vocabulary.
+
+    The backend terminal edges carry the donor-prefixed MEA contrast; the
+    pathways table rows key on the filename-derived `d<x>_d<y>` form
+    (`_contrast_from_filename`). The sidechain tab joins on exact equality, so
+    the shard must speak the row vocabulary. Unrecognized values pass through.
+    """
+    m = _TERMINAL_CONTRAST_RE.match(str(contrast))
+    return f"{m.group(1)}_{m.group(2)}" if m else str(contrast)
+
+
 def _write_tcell_sidechain_slices() -> None:
     """Write the donor1-only kinase-sidechain shard for the T-cell viewer.
 
@@ -835,6 +850,7 @@ def _write_tcell_sidechain_slices() -> None:
         EDGE_SLICES_INCYTR_PATHWAYS_DIR,
         f"{donor}__sidechains.json.gz",
         donor,
+        contrast_transform=_terminal_contrast_to_row,
     )
 
 
