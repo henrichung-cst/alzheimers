@@ -143,7 +143,7 @@ const _ipRuntime = {
   loading:        false,
   loadError:      null,
   openKeys:       new Set(),    // keys of rows whose Evidence detail is expanded
-  detailTab:      {},           // rk → "evidence" | "trajectory" (which sub-tab is active)
+  detailTab:      {},           // rk → active row-detail sub-tab
   trajSettings:   {},           // rk → { group: "<axis group>"|"__all__", metrics: [...], view: "both"|"line"|"bar" }
   trajRows:       {},           // rk → currently loaded sibling rows for drawer controls
   trajPromises:   {},           // rk → in-flight sibling-row load promises
@@ -1085,6 +1085,7 @@ function _ipRenderTopTable() {
       if (tab === "evidence") _ipRenderEvidencePanel(rk, r);
       // Related-pairs lookup is async; populate when the tab opens.
       if (tab === "expands-to") _ipRenderRelatedPairs(rk, r);
+      if (tab === "sidechains") _isRenderSidechains(rk, r);
       return;
     }
   });
@@ -1093,6 +1094,7 @@ function _ipRenderTopTable() {
     const tab = _ipRuntime.detailTab[rk] || "evidence";
     if (idx >= 0 && tab === "trajectory") _ipRenderTrajChart(rk, visible[idx]);
     else if (idx >= 0 && tab === "expands-to") _ipRenderRelatedPairs(rk, visible[idx]);
+    else if (idx >= 0 && tab === "sidechains") _isRenderSidechains(rk, visible[idx]);
     else if (idx >= 0) _ipRenderEvidencePanel(rk, visible[idx]);
   }
 }
@@ -1758,6 +1760,7 @@ function _ipRenderTable() {
       if (tab === "evidence") _ipRenderEvidencePanel(rk, r);
       // Related-pairs lookup is async; populate when the tab opens.
       if (tab === "expands-to") _ipRenderRelatedPairs(rk, r);
+      if (tab === "sidechains") _isRenderSidechains(rk, r);
       return;
     }
   });
@@ -1774,6 +1777,9 @@ function _ipRenderTable() {
     } else if (tab === "expands-to") {
       const idx = visible.findIndex(r => _ipRowKey(r) === rk);
       if (idx >= 0) _ipRenderRelatedPairs(rk, visible[idx]);
+    } else if (tab === "sidechains") {
+      const idx = visible.findIndex(r => _ipRowKey(r) === rk);
+      if (idx >= 0) _isRenderSidechains(rk, visible[idx]);
     }
   }
 }
@@ -1795,6 +1801,12 @@ function _ipRenderDetailPanel(r, rk, activeTab, allowTrajectory = true) {
   const hasBackboneGrains = !!(parentBlock && parentBlock.backbone_grains
     && Object.keys(parentBlock.backbone_grains).length);
   const showExpandsTo = grain !== "Full" || hasBackboneGrains;
+  const showSidechains = typeof IncytrSidechains !== "undefined"
+    && IncytrSidechains.hasActiveSlice();
+  if (activeTab === "sidechains" && !showSidechains) {
+    _ipRuntime.detailTab[rk] = "evidence";
+    activeTab = "evidence";
+  }
   const btn = (tab, label) =>
     `<button type="button" data-ip-detail-tab="${tab}" data-ip-detail-rk="${_escapeHtml(rk)}"
        style="padding:2px 12px;border-radius:4px;font-size:12px;cursor:pointer;
@@ -1807,6 +1819,7 @@ function _ipRenderDetailPanel(r, rk, activeTab, allowTrajectory = true) {
       + btn("evidence", "Evidence")
       + (hasTrajIdx ? btn("trajectory", "Scores") : "")
       + (showExpandsTo ? btn("expands-to", "Related pathways") : "")
+      + (showSidechains ? btn("sidechains", "Sidechains") : "")
       + `</div>`)
     : "";
   if (activeTab === "trajectory" && hasTrajIdx) {
@@ -1820,6 +1833,11 @@ function _ipRenderDetailPanel(r, rk, activeTab, allowTrajectory = true) {
   // B-6: "Expands to" tab — grain drill / expansion navigation peek.
   if (activeTab === "expands-to" && showExpandsTo) {
     return tabBar + _ipRenderExpandsToPanel(r, rk);
+  }
+  if (activeTab === "sidechains" && showSidechains) {
+    return tabBar + `<div id="${_escapeHtml(_isHostId(rk))}">`
+      + `<div class="muted" style="font-size:11px;padding:8px 0;">Loading kinase sidechains…</div>`
+      + `</div>`;
   }
   // Default: Evidence tab.
   const hostId = `ip-ev-${rk.replace(/[^a-zA-Z0-9]/g, "_")}`;
@@ -2489,5 +2507,8 @@ function renderIncytrPathways() {
     _ipResetPage();
   }
   _ipSyncControls(block);
+  if (typeof IncytrSidechains !== "undefined") {
+    IncytrSidechains.ensureIndex().then(() => _ipRenderTable(), () => _ipRenderTable());
+  }
   _ipEnsureShards();
 }
