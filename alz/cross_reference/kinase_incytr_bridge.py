@@ -13,11 +13,14 @@ Cohorts implemented:
                fivexfad_celltype_mea.parquet; expression from
                fivexfad_expression_specificity.csv (age-pooled); disease
                context from fivexfad_snrna_attribution.csv (age-matched)
+  - tcells  : one donor per run, using the donor's within-cohort state
+               attribution emitted by tcell_within_cohort.py
 
 Pathway set used:
   Song    : outputs/reports/incytr_pair_mode/wide/
   5xFAD   : outputs/reports/incytr_pair_mode_5xfad/{tissue}/wide/
-  (gene_node_index.json.gz confirms the wide/ shards for both)
+  T-cells : outputs/reports/incytr_pair_mode_tcells/{donor}/wide/
+  (Each cohort's gene_node_index.json.gz confirms its corresponding wide/ shards.)
 
 B4 emits:
   - recep_em_fan.csv         : per Receptor-EM spine fan characterization
@@ -28,9 +31,10 @@ B4 emits:
       exactly via DuckDB (not estimated).
 
 Usage:
-  pixi run kinase-incytr-bridge            # all cohorts
+  pixi run kinase-incytr-bridge            # Song + 5xFAD cohorts
   pixi run kinase-incytr-bridge -- --cohort song
   pixi run kinase-incytr-bridge -- --cohort fivexfad --tissue cortex
+  pixi run kinase-incytr-bridge -- --cohort tcells --donor donor1
 """
 from __future__ import annotations
 
@@ -61,9 +65,11 @@ FIVEXFAD_MEA_DIR = REPORTS / "kinase_attribution_5xfad"
 SONG_WIDE_DIR = REPORTS / "incytr_pair_mode" / "wide"
 FIVEXFAD_WIDE_DIR = REPORTS / "incytr_pair_mode_5xfad"
 UNIFIED_VIEWER_DIR = REPORTS / "unified_viewer" / "edge_slices"
+TCELL_VIEWER_DIR = REPORTS / "tcell_viewer" / "edge_slices"
 
 SONG_INDEX = UNIFIED_VIEWER_DIR / "incytr_pathways" / "gene_node_index.json.gz"
 FIVEXFAD_INDEX_TMPL = UNIFIED_VIEWER_DIR / "incytr_pathways_fivexfad_{tissue}" / "gene_node_index.json.gz"
+TCELL_INDEX_TMPL = TCELL_VIEWER_DIR / "incytr_pathways" / "{donor}__gene_node_index.json.gz"
 
 SONG_STOICH_MATRIX = SONG_MEA_DIR / "stoichiometry_matrix.csv"
 SONG_MEA_STOICH = SONG_MEA_DIR / "mea_stoichiometry.csv"
@@ -73,6 +79,7 @@ SONG_KINASE_HYP = REPORTS / "attribution_recovery" / "kinase_hypothesis_table.cs
 FIVEXFAD_EXPR_SPEC = FIVEXFAD_MEA_DIR / "fivexfad_expression_specificity.csv"
 FIVEXFAD_SNRNA_ATTR = FIVEXFAD_MEA_DIR / "fivexfad_snrna_attribution.csv"
 FIVEXFAD_CELLTYPE_MEA = FIVEXFAD_MEA_DIR / "celltype_mea" / "fivexfad_celltype_mea.parquet"
+TCELL_ATTRIBUTION_DIR = REPORTS / "kinase_attribution_tcells"
 
 OUT_ROOT = REPORTS / "kinase_incytr_bridge"
 
@@ -326,6 +333,72 @@ def annotate_celltype_match_fivexfad(
     )["celltype_match_rank"].min()
 
     return _apply_celltype_ranks(hits, ranks, ["kinase", "contrast", "owning_cluster"])
+
+
+def load_tcell_detected_attribution(donor: str) -> pd.DataFrame:
+    """Load detected within-cohort T-cell states for one donor.
+
+    ``tcell_within_cohort.py`` owns the state-detection calculation and its
+    cross-cohort detection floor.  This bridge only consumes its emitted
+    categorical call plus the raw fraction of cells expressing the kinase gene;
+    it does not recreate an external-reference or cross-species attribution.
+
+    Returns one row per (kinase, contrast, owning_cluster), with
+    ``expression_fraction`` carrying the within-cohort fraction of cells
+    expressing the kinase gene.  A state is eligible only when the upstream
+    module has already called it detected.
+    """
+    path = TCELL_ATTRIBUTION_DIR / donor / "unified_attribution_tcells.csv"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"T-cell {donor}: missing within-cohort attribution at {path}; "
+            "cannot attribute motif hits without donor-specific state evidence."
+        )
+
+    cols = [
+        "kinase", "contrast", "cell_type", "tcell_detected",
+        "tcell_fraction_expressing",
+    ]
+    attribution = pd.read_csv(path, usecols=cols)
+    detected = attribution.loc[
+        attribution["tcell_detected"].astype("string").str.lower().eq("true"),
+        cols,
+    ].copy()
+    if detected.empty:
+        raise ValueError(f"T-cell {donor}: no detected state calls in {path}")
+
+    # Import the gate from its owner, rather than copying a local threshold.
+    from alz.cross_reference import tcell_within_cohort
+
+    detected["tcell_fraction_expressing"] = pd.to_numeric(
+        detected["tcell_fraction_expressing"], errors="raise"
+    )
+    below_floor = detected["tcell_fraction_expressing"] < (
+        tcell_within_cohort.DETECTION_FRAC_MIN
+    )
+    if below_floor.any():
+        raise ValueError(
+            f"T-cell {donor}: detected state calls below the "
+            "tcell_within_cohort detection floor"
+        )
+
+    detected = detected.rename(columns={
+        "cell_type": "owning_cluster",
+        "tcell_fraction_expressing": "expression_fraction",
+    })
+    key_cols = ["kinase", "contrast", "owning_cluster"]
+    inconsistent = (
+        detected.groupby(key_cols, dropna=False)["expression_fraction"]
+        .nunique(dropna=False)
+        .gt(1)
+    )
+    if inconsistent.any():
+        raise ValueError(
+            f"T-cell {donor}: inconsistent detected-state fractions in {path}"
+        )
+    return detected.drop_duplicates(subset=key_cols)[
+        key_cols + ["expression_fraction"]
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1151,7 +1224,8 @@ def write_outputs(hits_all: pd.DataFrame, out_dir: Path, cohort_label: str,
     ## Pathway set
     - Song: outputs/reports/incytr_pair_mode/wide/
     - 5xFAD: outputs/reports/incytr_pair_mode_5xfad/{{tissue}}/wide/
-    (gene_node_index.json.gz confirms wide/ is the indexed pathway set for both cohorts)
+    - T-cells: outputs/reports/incytr_pair_mode_tcells/{{donor}}/wide/
+    (Each run uses the cohort-scoped gene_node_index.json.gz for its wide/ shards.)
 
     ## Exclusions
     - 15 cluster-* cell types in 5xFAD expression/attribution tables have no
@@ -1159,7 +1233,8 @@ def write_outputs(hits_all: pd.DataFrame, out_dir: Path, cohort_label: str,
       from celltype_match; they never appear in the owning_cluster column.
     - Song expression/disease-context columns (expression_fraction, concentration_tier,
       disease_lfc) are NULL — deferred to B5's snrna step.
-    - T-cell cohort excluded (mea_timecourse.csv format, different scoping).
+    - T-cell runs are scoped to one donor and use that donor's existing
+      within-cohort state-attribution output.
 
     ## Output files
     - kinase_node_hits.parquet : flat hit table (all rows; celltype_match=False rows
@@ -1176,16 +1251,184 @@ def write_outputs(hits_all: pd.DataFrame, out_dir: Path, cohort_label: str,
     log.info(f"Wrote MANIFEST to {manifest_path}")
 
 
+def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
+    """Write one donor's T-cell bridge from its pre-built node index.
+
+    The only cell-type attribution admitted here is the donor's detected
+    within-cohort state call from ``tcell_within_cohort.py``.  Its raw fraction
+    of state cells expressing the kinase is retained in ``expression_fraction``;
+    the existing cross-cohort-only context fields remain null.
+    """
+    attribution_path = TCELL_ATTRIBUTION_DIR / donor / "unified_attribution_tcells.csv"
+    if not attribution_path.exists():
+        log.error(
+            "T-cell %s: within-cohort attribution is unavailable at %s; "
+            "no motif edges were emitted. Donor-specific attribution is required "
+            "and donor1 evidence will not be reused.",
+            donor,
+            attribution_path,
+        )
+        return False
+
+    mea_path = TCELL_ATTRIBUTION_DIR / donor / "mea" / "mea_timecourse.csv"
+    stoich_path = TCELL_ATTRIBUTION_DIR / donor / "stoichiometry_matrix.csv"
+    index_path = Path(str(TCELL_INDEX_TMPL).replace("{donor}", donor))
+    required = (mea_path, stoich_path, index_path)
+    missing = [str(path) for path in required if not path.exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"T-cell {donor}: required bridge input missing: {', '.join(missing)}"
+        )
+
+    log.info("T-cell %s: loading MEA and stoichiometry matrix", donor)
+    mea = pd.read_csv(mea_path)
+    stoich = pd.read_csv(stoich_path, usecols=["site_id", "gene_symbol", "motif"])
+    subs = build_substrate_bridge(mea, stoich).drop_duplicates()
+    log.info("T-cell %s: %s (kinase,contrast,gene) substrate rows", donor, len(subs))
+    if subs.empty:
+        log.warning("T-cell %s: no active leading-substrate rows", donor)
+        return False
+
+    log.info("T-cell %s: loading gene_node_index", donor)
+    node_index = load_gene_node_index(index_path).rename(columns={"gene": "gene_symbol"})
+    attribution = load_tcell_detected_attribution(donor)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    parquet_path = out_dir / "kinase_node_hits.parquet"
+    spill = os.environ.get(
+        "DUCKDB_TEMP_DIR",
+        os.path.join(os.path.expanduser("~"), ".cache", "duckdb"),
+    )
+    os.makedirs(spill, exist_ok=True)
+    db_path = os.path.join(
+        spill,
+        f"kinase_bridge_tcells_{donor}_{os.getpid()}_{uuid.uuid4().hex}.duckdb",
+    )
+    con = duckdb.connect(db_path)
+    con.execute("PRAGMA memory_limit='4GB'")
+    con.execute("PRAGMA threads=2")
+    con.execute("SET preserve_insertion_order=false")
+    con.execute(f"SET temp_directory='{spill}'")
+    try:
+        con.register("subs_df", subs)
+        con.register("node_index_df", node_index)
+        con.register("attribution_df", attribution)
+        con.execute("CREATE TABLE subs AS SELECT * FROM subs_df")
+        con.execute("CREATE TABLE node_index AS SELECT * FROM node_index_df")
+        con.execute("CREATE TABLE attribution AS SELECT * FROM attribution_df")
+        con.unregister("subs_df")
+        con.unregister("node_index_df")
+        con.unregister("attribution_df")
+        del subs, node_index, attribution
+
+        safe_parquet = str(parquet_path).replace("'", "''")
+        log.info("T-cell %s: writing kinase_node_hits", donor)
+        final_sql = f"""
+            WITH hits AS (
+                SELECT s.kinase, s.contrast, s.channel, s.NES, s.FDR,
+                       s.gene_symbol, n.role, n.sender, n.receiver,
+                       CASE WHEN n.role = 'Ligand' THEN n.sender ELSE n.receiver END AS owning_cluster,
+                       n.n_rows, n.best_abs_pds
+                FROM subs s
+                JOIN node_index n USING (gene_symbol)
+            ),
+            annotated AS (
+                SELECT 'tcells' AS cohort,
+                       $donor AS tissue,
+                       h.kinase, h.contrast, h.channel, h.NES, h.FDR,
+                       h.gene_symbol, h.role, h.sender, h.receiver,
+                       h.owning_cluster,
+                       a.owning_cluster IS NOT NULL AS celltype_match,
+                       CAST(NULL AS INTEGER) AS celltype_match_rank,
+                       h.n_rows, h.best_abs_pds,
+                       a.expression_fraction,
+                       CAST(NULL AS VARCHAR) AS concentration_tier,
+                       CAST(NULL AS DOUBLE) AS disease_lfc
+                FROM hits h
+                LEFT JOIN attribution a
+                  ON h.kinase = a.kinase
+                 AND regexp_extract(h.contrast, '_(d[0-9]+)_vs_', 1) = a.contrast
+                 AND h.owning_cluster = a.owning_cluster
+            )
+            SELECT {", ".join(_q(c) for c in FINAL_COLS)}
+            FROM annotated
+        """
+        con.execute(
+            f"COPY ({final_sql}) TO '{safe_parquet}' (FORMAT PARQUET)",
+            {"donor": donor},
+        )
+        stats = con.execute(f"""
+            SELECT COUNT(*) AS n_total,
+                   COUNT(DISTINCT kinase || '\x1f' || contrast) AS n_active,
+                   SUM(CASE WHEN celltype_match THEN 1 ELSE 0 END) AS n_matched
+            FROM read_parquet('{safe_parquet}')
+        """).fetchone()
+    finally:
+        con.close()
+        for suffix in ("", ".wal"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
+
+    n_total, n_active, n_matched = stats
+    log.info(
+        "T-cell %s: %s node hits; %s active kinase-contrast pairs; %s state-attributed hits",
+        donor,
+        n_total,
+        n_active,
+        int(n_matched or 0),
+    )
+
+    manifest = textwrap.dedent(f"""\
+    # kinase_incytr_bridge — T-cell {donor}
+
+    Generated by alz/cross_reference/kinase_incytr_bridge.py (B4)
+
+    ## Parameters
+    - MEA_FDR_THRESH: {MEA_FDR_THRESH}
+    - Backbone floor: SigProb > {SIGPROB_CUTOFF} (either side) AND |PDS| >= {ABS_PDS_CUTOFF}
+
+    ## Counts
+    - Active (kinase,contrast) pairs: {n_active}
+    - Total node hit rows: {n_total}
+    - Cell-type-matched hits: {int(n_matched or 0)}
+
+    ## Attribution
+    - Donor-scoped within-cohort state calls from
+      outputs/reports/kinase_attribution_tcells/{donor}/unified_attribution_tcells.csv.
+    - celltype_match is true only for states already called detected by
+      tcell_within_cohort.py; expression_fraction is the raw fraction of that
+      state expressing the kinase gene.
+
+    ## Pathway set
+    - outputs/reports/incytr_pair_mode_tcells/{donor}/wide/
+
+    ## Output files
+    - kinase_node_hits.parquet : flat hit table
+    - MANIFEST.md : this file
+    """)
+    manifest_path = out_dir / "MANIFEST.md"
+    manifest_path.write_text(manifest)
+    log.info("Wrote MANIFEST to %s", manifest_path)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Kinase → Incytr pathway bridge (B4)")
-    parser.add_argument("--cohort", choices=["song", "fivexfad", "all"], default="all")
+    parser.add_argument("--cohort", choices=["song", "fivexfad", "tcells", "all"], default="all")
     parser.add_argument("--tissue", choices=["cortex", "hippocampus", "both"], default="both",
                         help="5xFAD tissue (ignored for song cohort)")
+    parser.add_argument("--donor", choices=["donor1", "donor2"],
+                        help="T-cell donor (required with --cohort tcells)")
     args = parser.parse_args()
+
+    if args.cohort == "tcells" and args.donor is None:
+        parser.error("--donor is required with --cohort tcells")
 
     all_hits: list[pd.DataFrame] = []
     produced_any = False
@@ -1212,6 +1455,15 @@ def main() -> None:
                 produced_any = True
             else:
                 log.warning(f"5xFAD {tissue}: no hits produced")
+
+    if args.cohort == "tcells":
+        donor = args.donor
+        assert donor is not None  # validated by argparse above
+        out_dir = OUT_ROOT / f"tcells_{donor}"
+        if write_tcells_streamed(donor, out_dir):
+            produced_any = True
+        else:
+            log.warning("T-cell %s: no bridge output produced", donor)
 
     if all_hits:
         combined = pd.concat(all_hits, ignore_index=True)
