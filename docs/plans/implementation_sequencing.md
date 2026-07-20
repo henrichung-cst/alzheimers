@@ -73,7 +73,7 @@ D2 ──► E1 (on kinase_kinase_edges.py) ──► E2 ───────�
 T2 specificity ──► E2                                            │   integration
 B2 (sankey), C3 (early-change) ──────────────────────────────────┘
 
-G1 (diagrams), apriori (docs), deploy-C/D ── independent leaves, no gate
+G1 (diagrams), apriori (docs), deploy-C/D ── ungated leaves, deprioritized to last
 I2 ── isolated window (D5)
 ```
 
@@ -93,23 +93,29 @@ I2 ── isolated window (D5)
 
 ## 5. Parallel execution waves
 
-**Wave 1 — independent builds (parallel, disjoint outputs, no gate).**
-- `G1` workflow diagrams (docs).
-- `deploy` Options C (parquet + HTTP Range) and D (DuckDB-Wasm) — infra layer, separate from analysis.
-- `apriori` blind exhaustion prediction set (docs) — literature-grounded, authored before final
-  outputs; feeds the `/check-controls` plausibility skill. Blindness caveat: the t-cell
-  Incytr report suite is already built, so ground the predictions in literature only, not those outputs.
+Ordered by analysis value. Docs and infra are ungated but deliberately last — they produce no
+result on our own data.
 
-**Wave 2 — kinase backends + specificity thread.**
+**Wave 1 — Incytr recompute (long pole, start first).**
+- `geneuse` un-pin (D3) → AD re-run → AD viewer rebuild. Production-output-changing, and the re-run
+  window invalidates any AD payload built during it — so it leads, and the Wave 3 tabs merge after it.
+
+**Wave 2 — kinase backends + specificity thread (parallel with Wave 1's re-run).**
 - `E1` on the shared `kinase_kinase_edges.py` backend (D2), then `E2` (needs T2 specificity).
+  Authoring touches no AD payload, so it runs concurrently with the re-run.
 
-**Wave 3 — Incytr recompute.**
-- `geneuse` un-pin (D3) → AD re-run → AD viewer rebuild.
-
-**Wave 4 — viewer tabs (serialize the payload/integration step).**
+**Wave 3 — viewer tabs (serialize the payload/integration step).**
 - `B2` sankey, `C3` early-change tab, `E1/E2` tab(s). Author in parallel; merge and rebuild one at a
-  time.
+  time, after the AD rebuild lands.
 
 **Isolated — `I2`** frozen-layer namespace moves, dedicated window (D5).
+
+**Back of queue — no analysis output, no gate, pick up when the above clears.**
+- `G1` workflow diagrams (docs).
+- `apriori` blind exhaustion prediction set (docs) — feeds the `/check-controls` plausibility skill.
+  Blindness caveat: the t-cell Incytr report suite is already built, so ground the predictions in
+  literature only, not those outputs.
+- `deploy` Options C (parquet + HTTP Range) and D (DuckDB-Wasm) — infra; worth doing only once
+  payload size actually hurts load time.
 
 Nothing is blocked on an open decision: D2, D3, and D5 are settled and direct the waves above.
