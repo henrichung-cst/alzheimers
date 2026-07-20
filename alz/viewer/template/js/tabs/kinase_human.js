@@ -326,16 +326,10 @@ function _khSort(rows) {
       return numCmp(a.median_nes_sig_only, b.median_nes_sig_only, 1);
     });
   }
-  // Cell-type-populated rows always rank above rows whose Cell type renders "—"
-  // (_khRenderCelltypePills → no high/moderate attribution rows). A stable sort
-  // preserves the chosen column's order within each group.
-  if (_khHasCelltypeSpec()) {
-    out.sort((a, b) => {
-      const ha = _khAttributionSummary(a).count > 0;
-      const hb = _khAttributionSummary(b).count > 0;
-      return ha === hb ? 0 : (ha ? -1 : 1);
-    });
-  }
+  // The clicked column is the only ordering. There is no pre-partition on
+  // whether the Cell type cell is populated: grouping ahead of the sort key
+  // produced two independent descending runs in every numeric column, which
+  // reads as an unsorted table.
   return out;
 }
 

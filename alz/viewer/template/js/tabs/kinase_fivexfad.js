@@ -339,6 +339,25 @@ function _f5CellTypesCell(group) {
   return `<span title="${_f5Esc(tip)}"><strong>${displayRows.length}</strong> ${pills}${extra}</span>`;
 }
 
+// Distinct cell types in this (kinase, tissue, age) group where the kinase is the
+// sole plausible source of the MEA signal (motif survivors k = 1). Reads the
+// group's full cell-type roster, not the filtered one, so the count does not move
+// with the toolbar — matching the Song and T-cell explorers. N is per-tissue
+// (cohort `fivexfad_<tissue>`), so counts are not comparable across tissues.
+function _f5SoleSourceCount(group) {
+  const seen = new Set();
+  for (const r of _f5AttrSummaryRows(group)) {
+    if (Number(r.motif_peers_detected) === 1 && r.cell_type) seen.add(r.cell_type);
+  }
+  return seen.size;
+}
+
+function _f5SoleSourceBadge(group) {
+  const n = _f5SoleSourceCount(group);
+  if (!n) return '<span class="muted" title="Not the sole plausible source in any cell type">–</span>';
+  return `<span class="badge vhi" title="Sole plausible source in ${n} cell type${n === 1 ? "" : "s"} — no motif twin transcribed there. Transcript evidence only; presence is not evidence of activity.">${n}</span>`;
+}
+
 function _f5NativeBadge(group) {
   const row = _f5BestAttr(group);
   if (!row) return '<span class="muted">—</span>';
@@ -564,11 +583,10 @@ function _f5FilteredRows() {
   const col = _F5State.sortCol;
   const asc = _F5State.sortAsc;
   out.sort((a, b) => {
-    // Cell-type-populated rows always rank above rows whose Cell type renders
-    // "—" (_f5CellTypesCell → no scoped attribution at tier ≥ moderate),
-    // regardless of sort column/direction; the sort key orders within groups.
-    const ha = _f5CellTypeCount(a) > 0, hb = _f5CellTypeCount(b) > 0;
-    if (ha !== hb) return ha ? -1 : 1;
+    // The clicked column is the only ordering. There is no pre-partition on
+    // whether the Cell types cell is populated: grouping ahead of the sort key
+    // produced two independent descending runs in every numeric column, which
+    // reads as an unsorted table.
     let va, vb;
     if (col === "profile" || col === "peakAbsNes") {
       return numCmp(a.peakNes, b.peakNes, asc ? -1 : 1);
@@ -589,6 +607,9 @@ function _f5FilteredRows() {
     } else if (col === "conf") {
       va = _f5BestAttr(a) ? _f5ConfRank(_f5BestAttr(a).confidence_tier) : 0;
       vb = _f5BestAttr(b) ? _f5ConfRank(_f5BestAttr(b).confidence_tier) : 0;
+    } else if (col === "sole_source") {
+      va = _f5SoleSourceCount(a);
+      vb = _f5SoleSourceCount(b);
     } else {
       va = a[col]; vb = b[col];
     }
@@ -705,8 +726,8 @@ function _f5SyncControls() {
 }
 
 function exportFiveXFADCsv() {
-  const headers = ["Kinase","Gene","Family","Tissue","Residue","n_sig","trend","MouseC2_snrna","WMB_tier","Conf"];
-  const keys    = ["kinase","gene_symbol","family","tissue","residue_type","sigCount","trend","_exportF5Snrna","_exportWmbTier","_exportConf"];
+  const headers = ["Kinase","Gene","Family","Tissue","Residue","n_sig","trend","MouseC2_snrna","WMB_tier","Conf","SoleSource_celltypes"];
+  const keys    = ["kinase","gene_symbol","family","tissue","residue_type","sigCount","trend","_exportF5Snrna","_exportWmbTier","_exportConf","_exportSoleSource"];
   csvDownload(csvSerialize(headers, keys, _f5Visible), exportFilename(COHORT_LABELS.fivexfad, "kinase"));
 }
 
@@ -808,6 +829,7 @@ function renderFiveXFADKinase() {
     r._exportF5Snrna = bestAttr ? _f5Num(bestAttr.fivexfad_concentration) : null;
     r._exportWmbTier = Math.max(0, ..._f5ScopedAttrRows(r).map(_f5WmbTier));
     r._exportConf = bestAttr ? (bestAttr.confidence_tier || null) : null;
+    r._exportSoleSource = _f5SoleSourceCount(r);
   }
   _f5Visible = rows.slice();
   const selectedKey = _f5SelectedKey();
@@ -842,9 +864,10 @@ function renderFiveXFADKinase() {
       <td>${_f5CellTypesCell(r)}</td>
       <td style="text-align:center;">${_f5NativeBadge(r)}</td>
       <td style="text-align:center;">${_f5WmbBadge(r)}</td>
+      <td style="text-align:center;">${_f5SoleSourceBadge(r)}</td>
     </tr>`;
   }).join("");
-  tbody.innerHTML = html || `<tr><td colspan="12" class="muted">No ${COHORT_LABELS.fivexfad} rows match the active filters.</td></tr>`;
+  tbody.innerHTML = html || `<tr><td colspan="13" class="muted">No ${COHORT_LABELS.fivexfad} rows match the active filters.</td></tr>`;
   _f5SyncSortIndicators();
   renderFiveXFADKinaseDetail();
 }

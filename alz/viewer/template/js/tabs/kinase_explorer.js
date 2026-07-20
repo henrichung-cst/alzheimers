@@ -60,6 +60,35 @@ function _wmbTierBadge(t) {
          '× uniform (' + (t * _WMB_UNIFORM).toFixed(3) + ')">' + _wmbTierLabel(t) + '</span>';
 }
 
+// kid -> number of distinct cell types where the kinase is the sole plausible
+// source of the MEA signal (motif survivors k = 1). Detection is invariant
+// across contrasts, so attribution rows are deduped on (kinase, cell type).
+// Cohort-scoped: the active payload's motif columns carry that cohort's N.
+let _keSoleSourceCounts = null;
+function _keSoleSourceCount(kid) {
+  if (_keSoleSourceCounts === null) {
+    const AI = PAYLOAD.attribution_index || {};
+    const m = new Map();
+    if (AI.kinase_id && AI.motif_peers_detected) {
+      const seen = new Set();
+      for (let j = 0; j < AI.kinase_id.length; j++) {
+        if (Number(AI.motif_peers_detected[j]) !== 1) continue;
+        const key = `${AI.kinase_id[j]}|${AI.cell_type[j]}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        m.set(AI.kinase_id[j], (m.get(AI.kinase_id[j]) || 0) + 1);
+      }
+    }
+    _keSoleSourceCounts = m;
+  }
+  return _keSoleSourceCounts.get(kid) || 0;
+}
+
+function _keSoleSourceBadge(n) {
+  if (!n) return '<span class="muted" title="Not the sole plausible source in any cell type">–</span>';
+  return `<span class="badge vhi" title="Sole plausible source in ${n} cell type${n === 1 ? "" : "s"} — no motif twin transcribed there. Transcript evidence only; presence is not evidence of activity.">${n}</span>`;
+}
+
 // Song detection evidence. Shown as the precomputed concentration tier
 // (≥2×/5×/10× the even 1/N share of total expression across all cell types) at
 // the kinase's dominant cluster. The tier is read straight from
@@ -326,6 +355,7 @@ function resetKinaseContextCaches() {
   _keRows = null;
   _kinaseIdxById = null;
   _evidenceByKinase = null;
+  _keSoleSourceCounts = null;
   _decompByKey = null;
   _decompByKinCtx = null;
   _agreementByKey = null;
@@ -531,21 +561,11 @@ function _makeKeCompare(scopedCtxIds) {
   const col = kf.sortCol || "nes_profile";
   const asc = !!kf.sortAsc;
   const fdr = kf.fdr || Store.state.filters.fdr || 0.25;
-  // Cell-type-populated rows always rank above rows whose Cell type renders "—"
-  // (no scoped attribution, or tier none/low, or no label — see
-  // _renderCellTypesCell), regardless of the active sort column/direction. This
-  // keeps blank cell-type kinases from leading the table; the chosen sort key
-  // orders within each group.
-  const _hasCellType = (r) => {
-    const rows = getScopedAttribution(r.id, kf);
-    if (!rows.length) return false;
-    const k = rows[0];
-    const label = k.specificity_unit_label || k.specificity_celltype;
-    return !(k.confidence_tier === "none" || k.confidence_tier === "low" || !label);
-  };
+  // The clicked column is the only ordering. There is no pre-partition on
+  // whether the Cell type cell is populated: grouping ahead of the sort key
+  // produced two independent descending runs in every numeric column, which
+  // reads as an unsorted table.
   return function(a, b) {
-    const ha = _hasCellType(a), hb = _hasCellType(b);
-    if (ha !== hb) return ha ? -1 : 1;
     let va, vb;
     if (col === "nes_profile") {
       return numCmp(_kineSignedPeakNesScoped(a, scopedCtxIds),
@@ -597,6 +617,10 @@ function _makeKeCompare(scopedCtxIds) {
     else if (col === "wmb_max_tier") {
       va = _kineMaxWmbTierScoped(a.id, kf);
       vb = _kineMaxWmbTierScoped(b.id, kf);
+    }
+    else if (col === "sole_source") {
+      va = _keSoleSourceCount(a.id);
+      vb = _keSoleSourceCount(b.id);
     }
     else if (col === "agreement_profile") {
       va = _kineDisagreeCountScoped(a, scopedCtxIds);
@@ -908,6 +932,7 @@ function renderKinaseExplorer() {
     r._exportScopedSig = scopedSig;
     r._exportSongTopCelltype = r.song ? r.song.topCelltype : null;
     r._exportWmbMaxTier = _kineMaxWmbTierScoped(r.id, colFilter);
+    r._exportSoleSource = _keSoleSourceCount(r.id);
     r._exportConf = hit ? hit.tier : "low";
     r._exportTrendApp  = TrendFilter.classify(_keGenotypeNesVec(r, "App"))  || "";
     r._exportTrendTau  = TrendFilter.classify(_keGenotypeNesVec(r, "Tau"))  || "";
@@ -933,6 +958,7 @@ function renderKinaseExplorer() {
       `<td>${_renderCellTypesCell(r, colFilter)}</td>` +
       `<td style="text-align:center;">${_keSongBadge(r.song)}</td>` +
       `<td style="text-align:center;">${_wmbTierBadge(r._exportWmbMaxTier)}</td>` +
+      `<td style="text-align:center;">${_keSoleSourceBadge(r._exportSoleSource)}</td>` +
       `</tr>`
     );
   }
@@ -943,8 +969,8 @@ function renderKinaseExplorer() {
 }
 
 function exportKinaseCsv() {
-  const headers = ["Kinase","Gene","Family","Residue","n_sig","trend_App","trend_Tau","trend_ApTt","MouseC1_topCelltype","wmb_max_tier","conf"];
-  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportTrendApp","_exportTrendTau","_exportTrendApTt","_exportSongTopCelltype","_exportWmbMaxTier","_exportConf"];
+  const headers = ["Kinase","Gene","Family","Residue","n_sig","trend_App","trend_Tau","trend_ApTt","MouseC1_topCelltype","wmb_max_tier","conf","SoleSource_celltypes"];
+  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportTrendApp","_exportTrendTau","_exportTrendApTt","_exportSongTopCelltype","_exportWmbMaxTier","_exportConf","_exportSoleSource"];
   csvDownload(csvSerialize(headers, keys, _keVisible), exportFilename(COHORT_LABELS.song, "kinase"));
 }
 

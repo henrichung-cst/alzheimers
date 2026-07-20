@@ -39,6 +39,7 @@ let _KX_CTRL_DONORS = [];
 let _KX_INITIALIZED = false;
 let _KX_F5_ATTR_READY = false;     // 5xFAD attribution-summary sidecar (P2) loaded + indexed
 let _kxVisible = [];
+let _KX_SOLE_SOURCE_COUNTS = null; // memoized kid -> how many cell types the kinase is sole plausible source in
 
 function _kxState() {
   if (!Store.state.view.crosstable) {
@@ -51,6 +52,7 @@ function _kxState() {
       mSpecMin: 0,            // minimum Song concentration tier (0=any, 2/5/10 × detected uniform)
       hSpecMin: 0,            // minimum human SEA-AD expr tier (0=any,1,2,5,10 ×)
       allSamples: false,      // median + agreement over ALL measured units, not just sig
+      soleSourceOnly: false,  // keep only kinases that are sole plausible source (k=1) in ≥1 cell type
       agreeCat: "",           // agreement category to show ("" = any), via the toolbar dropdown
       compareScope: "three_way",
       compareState: "",
@@ -1227,6 +1229,7 @@ function _kxBuildHeader(s) {
   cells.push(TH("m_spec", COHORT_LABELS.song, `${COHORT_LABELS.song} location evidence — concentration tier (×2/5/10 the even 1/N share of total expression across all cell types) at the kinase's top cell type. ★ = the pinned cluster IS that cell type.`, "kx-spec"));
   cells.push(TH("wmb", "WMB", `WMB atlas cross-check: concentration tier (×2/5/10 the even 1/N share of total expression across all WMB classes) ${specScope}. Detection gate: ≥10% of cells expressing.`, "kx-spec"));
   cells.push(TH("h_spec", "SEA-AD expr", `Human SEA-AD MTG expression location tier ${specScope}. This is expression enrichment, not SEA-AD LFC.`, "kx-spec"));
+  cells.push(TH("sole_ct", "Sole source", "Number of cell types where this kinase is the sole plausible source (motif survivors k=1) — no motif twin is transcribed there, so the MEA signal cannot belong to one. Presence is not evidence of kinase activity. Click to sort.", "kx-spec"));
   return `<thead><tr>${cells.join("")}</tr></thead>`;
 }
 
@@ -1251,6 +1254,11 @@ function _kxResolveSpec(r, cluster) {
   };
 }
 
+function _kxSoleSourceCell(n) {
+  if (!n) return `<td class="muted" title="Not the sole plausible source in any cell type">–</td>`;
+  return `<td><span class="badge vhi" title="Sole plausible source in ${n} cell type${n === 1 ? "" : "s"} — no motif twin transcribed there. Presence is not evidence of kinase activity.">${n}</span></td>`;
+}
+
 function _kxBuildRow(r, s, fdrGate) {
   const sp = _kxResolveSpec(r, s.cluster);
   const key = `${r.name}|${r.residue}`;
@@ -1273,6 +1281,7 @@ function _kxBuildRow(r, s, fdrGate) {
   tds.push(r._humanOnly ? `<td class="muted">–</td>` : _kxSongTierBadge(sp.song, s.cluster));
   tds.push(r._humanOnly ? `<td class="muted">–</td>` : _kxWmbTierBadge(sp.wmb, sp.wmbAt));
   tds.push(_kxLog2TierBadge(sp.seaad, sp.seaadAt));
+  tds.push(_kxSoleSourceCell(r._exportSoleCt));
   const sel = s.selectedKey === key ? " selected" : "";
   return `<tr class="kx-data-row${sel}" data-key="${_escapeHtml(key)}">${tds.join("")}</tr>`;
 }
@@ -1332,6 +1341,9 @@ function _kxSortRows(rows, s) {
       av = a._hNes; bv = b._hNes;
     } else if (s.sortKey === "f5_med") {
       av = a._f5Nes; bv = b._f5Nes;
+    } else if (s.sortKey === "sole_ct") {
+      const counts = _kxSoleSourceCounts();
+      av = counts.get(a.kid) || 0; bv = counts.get(b.kid) || 0;
     } else {
       // Default fallback: strongest MouseC1 median NES across the 3 genotypes.
       const _absMax = r => {
@@ -1348,13 +1360,33 @@ function _kxSortRows(rows, s) {
 
 // ---------- master render ----------
 
+// kid -> number of cell types where the kinase is the sole plausible source
+// (motif survivors k=1). Evidence is static payload, so this is computed once.
+// Human-only rows carry no Song motif-peer data and are absent from the map.
+function _kxSoleSourceCounts() {
+  if (_KX_SOLE_SOURCE_COUNTS) return _KX_SOLE_SOURCE_COUNTS;
+  const counts = new Map();
+  if (typeof _ensureKinaseIndexes === "function") _ensureKinaseIndexes();
+  const EV = PAYLOAD.kinase_celltype_evidence;
+  if (EV && EV.motif_peers_detected && typeof _evidenceByKinase !== "undefined" && _evidenceByKinase) {
+    for (const [kid, idxs] of _evidenceByKinase) {
+      const n = idxs.reduce((acc, k) => acc + (Number(EV.motif_peers_detected[k]) === 1 ? 1 : 0), 0);
+      if (n > 0) counts.set(kid, n);
+    }
+  }
+  _KX_SOLE_SOURCE_COUNTS = counts;
+  return counts;
+}
+
 function _kxFilteredRows(s) {
   const searchQ = (s.search || "").toLowerCase().trim();
   const trackQ = (s.residueTrack || "").trim();
   const mMin = +(s.mSpecMin || 0);
   const hMin = +(s.hSpecMin || 0);
   const hLog2Min = hMin > 0 ? Math.log2(hMin) : 0;  // SEA-AD tiers are log2-based
+  const soleCounts = s.soleSourceOnly ? _kxSoleSourceCounts() : null;
   return _KX_ROWS.filter(r => {
+    if (soleCounts && !soleCounts.has(r.kid)) return false;
     if (trackQ && r.residue !== trackQ) return false;
     if (searchQ) {
       const hay = (r.name + " " + r.gene).toLowerCase();
@@ -1396,11 +1428,13 @@ function _kxRenderTable() {
   const shown = rows.filter(r => _kxStatePassesComparison(r, s.compareScope || "three_way", s.compareState || ""));
   _kxSortRows(shown, s);
   // Stamp resolved spec onto each row for export, then store the visible set.
+  const soleCounts = _kxSoleSourceCounts();
   for (const r of shown) {
     const sp = _kxResolveSpec(r, s.cluster);
     r._exportSongTier = (sp.song && sp.song.topTier != null) ? sp.song.topTier : null;
     r._exportWmb = sp.wmb;
     r._exportSeaad = sp.seaad;
+    r._exportSoleCt = soleCounts.get(r.kid) || 0;
   }
   _kxVisible = shown.slice();
   const bodyParts = shown.map(r => _kxBuildRow(r, s, fdrGate));
@@ -1596,6 +1630,8 @@ function _kxSyncControls() {
   if (hSel) hSel.value = String(s.hSpecMin || 0);
   const aChk = document.getElementById("kx-allsamples");
   if (aChk) aChk.checked = !!s.allSamples;
+  const ssChk = document.getElementById("kx-solesource");
+  if (ssChk) ssChk.checked = !!s.soleSourceOnly;
   const agSel = document.getElementById("kx-agree");
   if (agSel) agSel.value = s.agreeCat || "";
   const scopeSel = document.getElementById("kx-compare-scope");
@@ -1638,6 +1674,8 @@ function wireKinaseCrosstable() {
   if (hSel) hSel.addEventListener("change", () => { _kxState().hSpecMin = +hSel.value; _kxRenderTable(); });
   const aChk = document.getElementById("kx-allsamples");
   if (aChk) aChk.addEventListener("change", () => { _kxState().allSamples = aChk.checked; _kxRenderTable(); });
+  const ssChk = document.getElementById("kx-solesource");
+  if (ssChk) ssChk.addEventListener("change", () => { _kxState().soleSourceOnly = ssChk.checked; _kxRenderTable(); });
   const agSel = document.getElementById("kx-agree");
   if (agSel) agSel.addEventListener("change", () => { _kxState().agreeCat = agSel.value; _kxRenderTable(); });
   const scopeSel = document.getElementById("kx-compare-scope");
@@ -1663,7 +1701,7 @@ function wireKinaseCrosstable() {
     const s = _kxState();
     s.cluster = "";   // Any cell type
     s.residueTrack = ""; s.search = "";
-    s.mSpecMin = 0; s.hSpecMin = 0; s.allSamples = false;
+    s.mSpecMin = 0; s.hSpecMin = 0; s.allSamples = false; s.soleSourceOnly = false;
     s.sortKey = "agree_score"; s.sortDir = -1;
     s.agreeCat = ""; s.compareScope = "three_way"; s.compareState = "";
     s.f5Celltype = ""; s.f5Confidence = ""; s.f5SnrnaMin = 0; s.f5WmbMin = 0;
@@ -1677,8 +1715,8 @@ function wireKinaseCrosstable() {
 }
 
 function exportCrosstableCsv() {
-  const headers = ["Kinase","Gene","Residue","Family","MouseC1_App_med_NES","MouseC1_Tau_med_NES","MouseC1_ApTt_med_NES","HumanC1_med_NES","MouseC2_med_NES","Crossplay","MouseC1_tier","WMB_tier","SEAAD_log2"];
-  const keys    = ["name","gene","residue","family","_mNes_App","_mNes_Tau","_mNes_ApTt","_hNes","_f5Nes","_agreeCategory","_exportSongTier","_exportWmb","_exportSeaad"];
+  const headers = ["Kinase","Gene","Residue","Family","MouseC1_App_med_NES","MouseC1_Tau_med_NES","MouseC1_ApTt_med_NES","HumanC1_med_NES","MouseC2_med_NES","Crossplay","MouseC1_tier","WMB_tier","SEAAD_log2","SoleSource_celltypes"];
+  const keys    = ["name","gene","residue","family","_mNes_App","_mNes_Tau","_mNes_ApTt","_hNes","_f5Nes","_agreeCategory","_exportSongTier","_exportWmb","_exportSeaad","_exportSoleCt"];
   csvDownload(csvSerialize(headers, keys, _kxVisible), exportFilename(null, "crosstable"));
 }
 

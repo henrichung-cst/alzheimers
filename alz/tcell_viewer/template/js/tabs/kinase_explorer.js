@@ -56,6 +56,36 @@ function _tcellEnrichBadge(fold, state) {
   return `<span class="badge ${cls}" title="${lbl} the kinase's baseline (mean-state) expression — enriched in this state vs a typical T-cell state">${lbl}</span>${statePill}`;
 }
 
+// kid -> number of distinct T-cell states where the kinase is the sole plausible
+// source of the MEA signal (motif survivors k = 1). Detection is invariant across
+// day contrasts, so attribution rows are deduped on (kinase, state). T-cell peer
+// sets are thin — a high count here reflects shallow detection as much as
+// discrimination (see docs/plans/motif_peer_narrowing.md).
+let _keSoleSourceCounts = null;
+function _keSoleSourceCount(kid) {
+  if (_keSoleSourceCounts === null) {
+    const AI = PAYLOAD.attribution_index || {};
+    const m = new Map();
+    if (AI.kinase_id && AI.motif_peers_detected) {
+      const seen = new Set();
+      for (let j = 0; j < AI.kinase_id.length; j++) {
+        if (Number(AI.motif_peers_detected[j]) !== 1) continue;
+        const key = `${AI.kinase_id[j]}|${AI.cell_type[j]}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        m.set(AI.kinase_id[j], (m.get(AI.kinase_id[j]) || 0) + 1);
+      }
+    }
+    _keSoleSourceCounts = m;
+  }
+  return _keSoleSourceCounts.get(kid) || 0;
+}
+
+function _keSoleSourceBadge(n) {
+  if (!n) return '<span class="muted" title="Not the sole plausible source in any T-cell state">–</span>';
+  return `<span class="badge vhi" title="Sole plausible source in ${n} T-cell state${n === 1 ? "" : "s"} — no motif twin transcribed there. Transcript evidence only; presence is not evidence of activity.">${n}</span>`;
+}
+
 function getScopedAttribution(kinaseId, filter) {
   // Returns filtered within-cohort attribution rows from
   // PAYLOAD.attribution_index for one kinase. The T-cell attribution carries the
@@ -200,6 +230,7 @@ function resetKinaseContextCaches() {
   _keRows = null;
   _keVisible = [];
   _kinaseIdxById = null;
+  _keSoleSourceCounts = null;
   _decompByKey = null;
   _decompByKinCtx = null;
   _agreementByKey = null;
@@ -419,6 +450,10 @@ function _makeKeCompare(scopedCtxIds) {
     else if (col === "incytr_backbones") {
       va = a.incytr_backbone_count;
       vb = b.incytr_backbone_count;
+    }
+    else if (col === "sole_source") {
+      va = _keSoleSourceCount(a.id);
+      vb = _keSoleSourceCount(b.id);
     }
     else { va = a[col]; vb = b[col]; }
     if (typeof va === "string" || typeof vb === "string") {
@@ -789,6 +824,7 @@ function renderKinaseExplorer() {
     r._exportScopedSig = scopedSig;
     r._exportTrend = TrendFilter.classify(r._nes) || "";
     r._exportTopCelltype = r.tcell_celltype || r.top_celltype_1 || "";
+    r._exportSoleSource = _keSoleSourceCount(r.id);
     const drvCls = (drvSet && drvSet.has(r.id)) ? " driver" : "";
 
     // Within-cohort cell-type badge + state-enrichment badge + cell-states pill +
@@ -820,6 +856,7 @@ function renderKinaseExplorer() {
       `<td>${nsclcSpecCell}</td>` +
       `<td>${incytrPathCell}</td>` +
       `<td>${incytrBackboneCell}</td>` +
+      `<td style="text-align:center;">${_keSoleSourceBadge(r._exportSoleSource)}</td>` +
       `</tr>`
     );
   }
@@ -831,8 +868,8 @@ function renderKinaseExplorer() {
 
 function exportKinaseCsv() {
   const donor = (ViewerPayload.activeContext && ViewerPayload.activeContext()) || "donor1";
-  const headers = ["Kinase","Gene","Family","Residue","n_sig","trend","tcell_top_celltype","incytr_pathway_count","incytr_backbone_count","incytr_pathway_total"];
-  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportTrend","_exportTopCelltype","incytr_pathway_count","incytr_backbone_count","incytr_pathway_total"];
+  const headers = ["Kinase","Gene","Family","Residue","n_sig","trend","tcell_top_celltype","incytr_pathway_count","incytr_backbone_count","incytr_pathway_total","SoleSource_states"];
+  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportTrend","_exportTopCelltype","incytr_pathway_count","incytr_backbone_count","incytr_pathway_total","_exportSoleSource"];
   csvDownload(csvSerialize(headers, keys, _keVisible), exportFilename(donor, "kinase"));
 }
 

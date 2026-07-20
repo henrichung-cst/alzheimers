@@ -91,6 +91,7 @@
               <th data-col="n_attributed_celltypes" data-metric="nAttributed" title="The cell type this kinase is exclusively expressed in (from the recalculated confidence). Over-split MouseC1 clusters of one cell type are collapsed into an expandable parent; distinct cell types stay separate. Blank when broadly expressed. Click to sort by exclusivity.">Cell type</th>
               <th data-col="song_spec" data-metric="songTau" title="MouseC1 location evidence, shown as fold over the even-split baseline (1/31 ≈ 0.032): ≥10× / ≥5× / ≥2× / ≥1×. The fold is the kinase's peak cell-type share; the concentration index τ and the cell type are in the tooltip. Click to sort.">MouseC1</th>
               <th data-col="wmb_max_tier" data-metric="wmbMaxTier" title="WMB cross-check — maximum WMB location tier reached by any attribution row in scope, as a multiple of the retained-class uniform (1/9 ≈ 0.111). Independent atlas check on the MouseC1 call. Click to sort by max tier.">WMB</th>
+              <th data-col="sole_source" data-metric="soleSource" title="Sole source — number of cell types where this kinase is the only transcriptionally plausible source of the MEA signal (motif survivors k = 1): every motif-confusable peer detected in this cohort is absent from that cell type. – = none. Transcript evidence only; presence is not evidence of activity. Click to sort.">Sole source</th>
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -471,6 +472,9 @@
           <label class="ke-filter-label" title="Compute M med, H med, and the direction category over ALL measured contrasts/donors, not just those significant at the header FDR. A dataset counts as present if it has any measurement; direction is the all-sample median.">
             <input type="checkbox" id="kx-allsamples"/> All samples
           </label>
+          <label class="ke-filter-label" title="Keep only kinases that are the sole plausible source (motif survivors k=1) in at least one cell type — the MEA signal cannot belong to a motif twin there.">
+            <input type="checkbox" id="kx-solesource"/> Sole plausible source
+          </label>
           <label class="ke-filter-label" title="Which dataset comparison drives the Crossplay category. HumanC1 CTRL donors remain visual reference only.">Compare
             <select id="kx-compare-scope" aria-label="Crossplay comparison scope">
               <option value="three_way">3-way</option>
@@ -632,6 +636,7 @@
               <th data-col="n_attributed_celltypes" title="Cell types attributed at high or moderate confidence.">Cell types</th>
               <th data-col="fivexfad_spec" title="MouseC2 snRNA location evidence, shown as fold over the even-split baseline.">MouseC2 snRNA</th>
               <th data-col="wmb_max_tier" title="WMB location cross-check tier.">WMB</th>
+              <th data-col="sole_source" title="Sole source — number of cell types where this kinase is the only transcriptionally plausible source of the MEA signal (motif survivors k = 1): every motif-confusable peer detected in this tissue is absent from that cell type. – = none. N is per-tissue, so counts are not comparable across tissues. Transcript evidence only; presence is not evidence of activity. Click to sort.">Sole source</th>
             </tr></thead>
             <tbody></tbody>
           </table>
