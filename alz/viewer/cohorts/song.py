@@ -18,6 +18,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from alz.shared import config
+from alz.cross_reference.motif_peer_narrowing import (
+    evidence_lookup,
+    load_payload,
+    narrowing_sections,
+)
 from alz.viewer.paths import (
     DECOMP_OLS_PARQUET,
     EDGE_SLICES_DECOMP_OLS_DIR,
@@ -1534,6 +1539,7 @@ def _build_kinase_celltype_evidence(data: "UnifiedData", kid: dict) -> dict:
         data.celltype_evidence["kinase"].isin(kid)
     ].copy()
     ev["kinase_id"] = ev["kinase"].map(kid).astype("uint16")
+    narrowing = evidence_lookup(load_payload(), "song")
     for _col, _default in [
         ("song_detected", False),
         ("song_concentration", float("nan")),
@@ -1556,9 +1562,12 @@ def _build_kinase_celltype_evidence(data: "UnifiedData", kid: dict) -> dict:
         ("human_location_score", float("nan")),
         ("decomp_nes", float("nan")),
         ("decomp_fdr", float("nan")),
+        ("motif_peers_detected", None),
+        ("motif_peers_informative", None),
     ]:
         if _col not in ev.columns:
             ev[_col] = _default
+    narrowing_rows = [narrowing.get((str(k), str(c))) for k, c in zip(ev["kinase"], ev["cell_type"])]
     return {
         "kinase_id":  ev["kinase_id"].tolist(),
         "cell_type":  ev["cell_type"].tolist(),
@@ -1586,6 +1595,19 @@ def _build_kinase_celltype_evidence(data: "UnifiedData", kid: dict) -> dict:
         "decomp_nes": ev["decomp_nes"].astype(float).round(3).tolist(),
         "decomp_fdr": ev["decomp_fdr"].astype(float).round(3).tolist(),
         "concordance_direction": ev["concordance_direction"].fillna("").astype(str).tolist(),
+        "motif_peers_detected": [
+            int(row["motif_peers_detected"]) if row is not None else None
+            for row in narrowing_rows
+        ],
+        "motif_peers_informative": [
+            int(row["motif_peers_informative"]) if row is not None else None
+            for row in narrowing_rows
+        ],
+        "motif_peer_key": [
+            str(row["kinase"]) if row is not None else None
+            for row in narrowing_rows
+        ],
+        "motif_peer_cohort": ["song"] * len(narrowing_rows),
     }
 
 
@@ -1595,6 +1617,7 @@ def _build_attribution_index(data: "UnifiedData", kid: dict, contrast_to_id: dic
         else data.unified_attribution
     ua = ua_src[ua_src["kinase"].isin(kid)
                 & ua_src["contrast"].isin(contrast_to_id)].copy()
+    narrowing = evidence_lookup(load_payload(), "song")
     # Ensure expected columns exist if building from the attributed subset.
     for _col, _default in [
         ("confidence_tier", "none"),
@@ -1635,9 +1658,12 @@ def _build_attribution_index(data: "UnifiedData", kid: dict, contrast_to_id: dic
         ("concordance_source", ""),
         ("NES", float("nan")),
         ("FDR", float("nan")),
+        ("motif_peers_detected", None),
+        ("motif_peers_informative", None),
     ]:
         if _col not in ua.columns:
             ua[_col] = _default
+    narrowing_rows = [narrowing.get((str(k), str(c))) for k, c in zip(ua["kinase"], ua["cell_type"])]
     attribution_index = {
         "kinase_id":   ua["kinase"].map(kid).astype("uint16").tolist(),
         "contrast_id": ua["contrast"].map(contrast_to_id).astype("uint8").tolist(),
@@ -1680,6 +1706,19 @@ def _build_attribution_index(data: "UnifiedData", kid: dict, contrast_to_id: dic
         "concordance_source": ua["concordance_source"].fillna("").astype(str).tolist(),
         "nes": ua["NES"].astype(float).round(4).tolist(),
         "fdr": ua["FDR"].astype(float).round(4).tolist(),
+        "motif_peers_detected": [
+            int(row["motif_peers_detected"]) if row is not None else None
+            for row in narrowing_rows
+        ],
+        "motif_peers_informative": [
+            int(row["motif_peers_informative"]) if row is not None else None
+            for row in narrowing_rows
+        ],
+        "motif_peer_key": [
+            str(row["kinase"]) if row is not None else None
+            for row in narrowing_rows
+        ],
+        "motif_peer_cohort": ["song"] * len(narrowing_rows),
     }
     print(f"  attribution_index: {len(ua):,} rows "
           f"({ua['confidence_tier'].value_counts().to_dict()})",
@@ -1807,6 +1846,11 @@ def build_song_viewer_slice(data: "UnifiedData") -> SongBuild:
     )
 
     kinase_celltype_evidence = _build_kinase_celltype_evidence(data, kid)
+    # The unified viewer resolves song_ad and both 5xFAD contexts; the T-cell
+    # cohort's rows would be inlined into this HTML unread.
+    motif_peer_narrowing = narrowing_sections(
+        load_payload(), ("song", "fivexfad_cortex", "fivexfad_hippocampus")
+    )
     attribution_index = _build_attribution_index(data, kid, contrast_to_id)
     mechanism_attribution = _build_mechanism_attribution_index()
     decomposition_index = _build_decomposition_index(data, kid, contrast_to_id)
@@ -1825,6 +1869,7 @@ def build_song_viewer_slice(data: "UnifiedData") -> SongBuild:
             "kinases": _as_single_context_block(kinases_slice, context_id),
             "celltypes": _as_single_context_block(celltypes_slice, context_id),
             "kinase_celltype_evidence": kinase_celltype_evidence,
+            "motif_peer_narrowing": motif_peer_narrowing,
             "attribution_index": attribution_index,
             "specificity_units": _build_specificity_units(),
             "decomposition_index": decomposition_index,

@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from alz.shared import config  # noqa: E402
+from alz.cross_reference.motif_peer_narrowing import evidence_lookup, load_payload  # noqa: E402
 from alz.cohorts.tcells import state_lineage  # noqa: E402
 from alz.tcell_viewer.paths import (  # noqa: E402
     KINASE_ATTRIBUTION_TCELLS_DIR,
@@ -444,6 +445,7 @@ def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list,
     the tier (see TCELL_ATTRIBUTION_CAVEAT: OR≈1 for kinases).
     """
     c_idx = {c: i for i, c in enumerate(short_contrasts)}
+    narrowing = evidence_lookup(load_payload(), "tcell")
     # Normalize the kinase→gene map to upper-case once; the loop below is over the
     # full kinase × state × contrast grid.
     gene_upper_map = _upper_gene_map(gene_map)
@@ -542,6 +544,10 @@ def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list,
         "tcell_lfc", "tcell_concordance", "tcell_concordant",
         "tcell_consistency", "nes", "fdr",
         "confidence_tier", "confidence_basis")}
+    cols["motif_peers_detected"] = []
+    cols["motif_peers_informative"] = []
+    cols["motif_peer_key"] = []
+    cols["motif_peer_cohort"] = []
 
     def _f(v):  # NaN/None → null (the full grid carries NaN for genes absent in scRNA)
         return float(v) if pd.notna(v) else None
@@ -578,6 +584,17 @@ def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list,
         cols["fdr"].append(_f(r.FDR))
         cols["confidence_tier"].append(conf_tier)
         cols["confidence_basis"].append(conf_basis)
+        narrowing_row = narrowing.get((_kn, str(r.cell_type)))
+        cols["motif_peers_detected"].append(
+            int(narrowing_row["motif_peers_detected"]) if narrowing_row else None
+        )
+        cols["motif_peers_informative"].append(
+            int(narrowing_row["motif_peers_informative"]) if narrowing_row else None
+        )
+        cols["motif_peer_key"].append(
+            str(narrowing_row["kinase"]) if narrowing_row else None
+        )
+        cols["motif_peer_cohort"].append("tcell")
     return cols
 
 

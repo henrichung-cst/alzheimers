@@ -494,6 +494,9 @@ function _kxRenderSpecAligned(hostEl, row) {
       o.songTier = EV.song_concentration_tier ? Number(EV.song_concentration_tier[k]) || 0 : 0;
       o.songDetected = EV.song_detected ? Boolean(EV.song_detected[k]) : false;
       o.wmbTier = EV.wmb_concentration_tier ? Number(EV.wmb_concentration_tier[k]) || 0 : 0;
+      o.motifPeersDetected = EV.motif_peers_detected ? EV.motif_peers_detected[k] : null;
+      o.motifPeersInformative = EV.motif_peers_informative ? EV.motif_peers_informative[k] : null;
+      o.motifPeerKey = EV.motif_peer_key ? EV.motif_peer_key[k] : null;
     }
   }
   const spec = _KX_HUMAN_SPEC_BY_NAME.get(row.name);
@@ -543,7 +546,17 @@ function _kxRenderSpecAligned(hostEl, row) {
     const hbcaTip = o.hbca != null ? `HBCA ${Math.pow(2, o.hbca).toFixed(1)}× brain mean (log2 ${o.hbca.toFixed(2)})` : "No HBCA cross-check at this cluster";
     const songCell = kid == null ? `<td class="muted" title="Not measured in mouse (${COHORT_LABELS.song})">–</td>` : _kxRefPill(t.song, songTip);
     const wmbCell = kid == null ? `<td class="muted" title="Not measured in mouse (WMB)">–</td>` : _kxRefPill(t.wmb, wmbTip);
-    return `<tr><td>${_escapeHtml(o.cluster)}</td>${songCell}${wmbCell}${_kxRefPill(t.seaad, seaTip)}${_kxRefPill(t.hbca, hbcaTip)}</tr>`;
+    const peerK = Number(o.motifPeersDetected);
+    const peerN = Number(o.motifPeersInformative);
+    const peerSole = peerK === 1;
+    const peerTip = peerSole
+      ? `Sole plausible source in ${o.cluster} among ${peerN} motif-confusable candidate(s). Presence is not evidence of kinase activity.`
+      : `${peerK} of ${peerN} motif-confusable candidates transcribed in ${o.cluster}; not uniquely resolved.`;
+    const peerCell = Number.isFinite(peerK) && Number.isFinite(peerN)
+      ? `<details class="motif-peer-details"><summary><span class="badge ${peerSole ? "vhi" : "lo"}" title="${_escapeHtml(peerTip)}">${peerK}/${peerN}</span></summary>`
+        + `<ul class="motif-peer-roster">${((ViewerPayload.motifPeerRoster("song", o.motifPeerKey, o.cluster) || {}).peers || []).map(p => `<li>${_escapeHtml(String(p.kinase || ""))} (${(Number(p.detection_fraction || 0) * 100).toFixed(0)}%)</li>`).join("") || "<li>No motif twins</li>"}</ul></details>`
+      : "";
+    return `<tr><td>${_escapeHtml(o.cluster)} ${peerCell}</td>${songCell}${wmbCell}${_kxRefPill(t.seaad, seaTip)}${_kxRefPill(t.hbca, hbcaTip)}</tr>`;
   }).join("");
 
   const head = `<thead><tr>` +

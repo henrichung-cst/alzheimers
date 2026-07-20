@@ -38,6 +38,10 @@ if _REPO_ROOT not in sys.path:
 sys.path.insert(0, HERE)
 
 from alz.shared import config  # noqa: E402
+from alz.cross_reference.motif_peer_narrowing import (  # noqa: E402
+    load_payload,
+    narrowing_sections,
+)
 from alz.viewer.shared.payload_helpers import _sanitize, _build_kinase_motifs  # noqa: E402
 
 from tcell_viewer.paths import (  # noqa: E402
@@ -402,6 +406,7 @@ def build_tcell_payload() -> dict:
     payload = {
         "kinases": kinases_slice,
         "kinase_motifs": kinase_motifs,
+        "motif_peer_narrowing": narrowing_sections(load_payload(), ("tcell",)),
         "celltypes": celltypes_slice,
         "audit_tables": audit_tables,
         "edge_slice_ref": {

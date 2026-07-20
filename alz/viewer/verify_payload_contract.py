@@ -371,6 +371,81 @@ def _check_tcell_contract(payload: dict[str, Any], errors: list[str]) -> None:
         )
 
 
+def _check_motif_peer_contract(payload: dict[str, Any], errors: list[str]) -> None:
+    """Check motif-peer counts/rosters without treating them as activity scores."""
+    evidence = payload.get("kinase_celltype_evidence")
+    if isinstance(evidence, dict):
+        ids = evidence.get("kinase_id", [])
+        if not isinstance(ids, list):
+            errors.append("kinase_celltype_evidence.kinase_id must be a list")
+        else:
+            n_rows = len(ids)
+            for field in (
+                "motif_peers_detected",
+                "motif_peers_informative",
+                "motif_peer_key",
+            ):
+                values = evidence.get(field)
+                if not isinstance(values, list) or len(values) != n_rows:
+                    errors.append(
+                        f"kinase_celltype_evidence.{field} must match kinase_id length"
+                    )
+            detected = evidence.get("motif_peers_detected", [])
+            informative = evidence.get("motif_peers_informative", [])
+            if isinstance(detected, list) and isinstance(informative, list):
+                for index, (k_value, n_value) in enumerate(zip(detected, informative)):
+                    if k_value is None or n_value is None:
+                        if k_value is not None or n_value is not None:
+                            errors.append(
+                                f"motif-peer evidence row {index} has a partial count pair"
+                            )
+                        continue
+                    if not isinstance(k_value, int) or not isinstance(n_value, int):
+                        errors.append(f"motif-peer evidence row {index} counts must be integers")
+                    elif k_value < 1 or k_value > n_value:
+                        errors.append(f"motif-peer evidence row {index} has invalid k/N counts")
+
+    motif_payload = payload.get("motif_peer_narrowing")
+    if motif_payload is None:
+        return
+    if not isinstance(motif_payload, dict):
+        errors.append("motif_peer_narrowing must be an object")
+        return
+    if motif_payload.get("schema_version") != 1:
+        errors.append("motif_peer_narrowing.schema_version must be 1")
+    cohorts = motif_payload.get("cohorts")
+    if not isinstance(cohorts, dict):
+        errors.append("motif_peer_narrowing.cohorts must be an object")
+        return
+    for cohort, block in cohorts.items():
+        if not isinstance(block, dict) or not isinstance(block.get("rows", []), list):
+            errors.append(f"motif_peer_narrowing cohort {cohort!r} rows must be a list")
+            continue
+        peer_names = block.get("peer_names")
+        if not isinstance(peer_names, dict):
+            errors.append(f"motif_peer_narrowing cohort {cohort!r} lacks a peer_names table")
+            continue
+        for index, row in enumerate(block["rows"]):
+            if not isinstance(row, dict):
+                errors.append(f"motif_peer_narrowing {cohort} row {index} must be an object")
+                continue
+            if not {"kinase", "cell_type", "motif_peers_detected",
+                    "motif_peers_informative", "motif_peer_fractions"}.issubset(row):
+                errors.append(f"motif_peer_narrowing {cohort} row {index} lacks required fields")
+                continue
+            names = peer_names.get(str(row["kinase"]))
+            if names is None:
+                errors.append(
+                    f"motif_peer_narrowing {cohort} row {index} kinase "
+                    f"{row['kinase']!r} has no peer_names entry"
+                )
+            elif len(names) != len(row["motif_peer_fractions"]):
+                errors.append(
+                    f"motif_peer_narrowing {cohort} row {index} has "
+                    f"{len(row['motif_peer_fractions'])} fractions for {len(names)} peers"
+                )
+
+
 def validate(path: Path) -> tuple[bool, list[str], dict[str, Any]]:
     payload = _load_payload(path)
     errors: list[str] = []
@@ -381,6 +456,7 @@ def validate(path: Path) -> tuple[bool, list[str], dict[str, Any]]:
         _check_incytr_sidechains(payload, context_ids, path, errors)
         _check_capabilities(payload, context_ids, errors)
         _check_tcell_contract(payload, errors)
+        _check_motif_peer_contract(payload, errors)
     summary = {
         "path": str(path),
         "contexts": context_ids,

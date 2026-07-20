@@ -261,6 +261,10 @@ main#app-main { padding:14px; }
 .attr-num { text-align:right; font-family:var(--font-mono); color:#0f172a; }
 .attr-num-lfc { font-weight:600; color:#0f172a; }
 .attr-celltype { font-weight:500; }
+details.motif-peer-details { display:inline-block; margin-left:4px; vertical-align:middle; }
+details.motif-peer-details > summary { list-style:none; cursor:pointer; display:inline-block; }
+details.motif-peer-details > summary::-webkit-details-marker { display:none; }
+ul.motif-peer-roster { margin:4px 0 0; padding:4px 8px 4px 20px; background:#f8fafc; border:1px solid #e2e8f0; font-size:10px; font-weight:400; white-space:nowrap; }
 /* Categorical state color (CD4 oranges / CD8 blues) — see TCELL_STATE_COLOR. */
 .tcell-state-dot { display:inline-block; width:9px; height:9px; border-radius:2px;
   margin-right:5px; vertical-align:baseline; border:1px solid rgba(0,0,0,0.15); }

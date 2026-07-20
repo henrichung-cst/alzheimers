@@ -22,7 +22,7 @@ const SONG_MANIFEST = (() => {
         const _sbk = ctx && ctx.kinase_id != null ? ((PAYLOAD.subclass_breakdown || {})[String(ctx.kinase_id)] || {}) : {};
         const _sbTip = _sbk[r.cell_type] || "";
         const _sbAttr = _sbTip ? ` title="WMB subclass breakdown: ${_escapeHtml(_sbTip)}"` : "";
-        return `<td class="attr-celltype"${_sbAttr}><span class="attr-chevron" aria-hidden="true">▸</span> ${_escapeHtml(r.cell_type)}${_sbTip ? ' <span class="attr-subclass-marker" aria-hidden="true">ⓘ</span>' : ''} ${_attrVerdictConfCell(r)} ${expBadge}</td>`;
+        return `<td class="attr-celltype"${_sbAttr}><span class="attr-chevron" aria-hidden="true">▸</span> ${_escapeHtml(r.cell_type)}${_sbTip ? ' <span class="attr-subclass-marker" aria-hidden="true">ⓘ</span>' : ''} ${_attrVerdictConfCell(r)} ${_motifPeerCell(r)} ${expBadge}</td>`;
       },
     },
     {

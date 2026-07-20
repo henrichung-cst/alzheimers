@@ -77,6 +77,7 @@ KINASE_ABBREV_OVERRIDES = Path("data/derived/caches/kinase_to_gene_overrides.csv
 
 BRIDGE_ROOT = REPORTS / "kinase_incytr_bridge"
 OUT_ROOT = REPORTS / "kinase_kinase_edges"
+SONG_CELLTYPE_EVIDENCE = REPORTS / "attribution_recovery" / "celltype_evidence_table.csv"
 
 # cohort -> bridge output dirs (one per tissue; per donor for t-cells).
 # t-cells are donor1-only: donor2 has no within-cohort attribution, so the bridge
@@ -156,8 +157,8 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
     (pathway-node) gene is already cohort-native (mouse for song/5xFAD).
 
     Contract schema (also produced by subplan 02 for t-cells):
-      kinase_gene, target_gene, role, contrast, best_abs_pds, best_abs_nes, signed_nes,
-      best_fdr, n_sites, celltype_match
+      kinase, kinase_gene, target_gene, role, contrast, owning_cluster,
+      best_abs_pds, best_abs_nes, signed_nes, best_fdr, n_sites, celltype_match
     """
     parquet = BRIDGE_ROOT / bridge_dir / "kinase_node_hits.parquet"
     if not parquet.exists():
@@ -179,7 +180,7 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
             -- remain aligned even when tracks tie on |NES|.
             SELECT *,
                    ROW_NUMBER() OVER (
-                       PARTITION BY kinase, gene_symbol, role, contrast
+                       PARTITION BY kinase, gene_symbol, role, contrast, owning_cluster
                        ORDER BY ABS(NES) DESC, FDR ASC, channel ASC
                    ) AS nes_rank
             FROM read_parquet('{safe}')
@@ -188,6 +189,7 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
                gene_symbol AS target_gene,
                role,
                contrast,
+               owning_cluster,
                MAX(best_abs_pds) AS best_abs_pds,
                MAX(ABS(NES)) AS best_abs_nes,
                MAX(CASE WHEN nes_rank = 1 THEN NES END) AS signed_nes,
@@ -195,7 +197,7 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
                MIN(FDR) AS best_fdr,
                BOOL_OR(celltype_match) AS celltype_match
         FROM ranked_hits
-        GROUP BY kinase, gene_symbol, role, contrast
+        GROUP BY kinase, gene_symbol, role, contrast, owning_cluster
         """
     ).to_arrow_table().to_pandas()
     con.close()
@@ -212,10 +214,28 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
 
     return agg[
         [
-            "kinase_gene", "target_gene", "role", "contrast", "best_abs_pds",
+            "kinase", "kinase_gene", "target_gene", "role", "contrast", "owning_cluster", "best_abs_pds",
             "best_abs_nes", "signed_nes", "best_fdr", "n_sites", "celltype_match",
         ]
     ].reset_index(drop=True)
+
+
+def assert_song_celltype_join(motif_edges: pd.DataFrame) -> None:
+    """Fail the bridge build if Song Incytr cell types lack transcript evidence."""
+    if not SONG_CELLTYPE_EVIDENCE.exists():
+        raise FileNotFoundError(f"missing Song cell-type evidence: {SONG_CELLTYPE_EVIDENCE}")
+    expected = set(
+        pd.read_csv(SONG_CELLTYPE_EVIDENCE, usecols=["cell_type"])["cell_type"]
+        .dropna()
+        .astype(str)
+    )
+    observed = set(motif_edges["owning_cluster"].dropna().astype(str))
+    unmatched = sorted(observed - expected)
+    if unmatched:
+        raise AssertionError(
+            f"Song Incytr owning_cluster values lack transcript evidence: {unmatched}"
+        )
+    log.info("song: Incytr cell-type join unmatched=0 (%d observed labels)", len(observed))
 
 
 def _homology_map(df: pd.DataFrame, gene_cols: list[str]) -> pd.DataFrame:
@@ -307,10 +327,12 @@ def build_terminal_map(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd
     the same kinase→target pair; otherwise the row stays ``motif``. Pure-literature
     kinase→kinase edges with no motif support live in the interactome, not here.
 
-    Returns: source_gene, target_gene, role, contrast, celltype_match, provenance,
+    Returns: kinase, source_gene, target_gene, role, contrast, owning_cluster,
+             celltype_match, provenance,
              weight, weight_lit, weight_motif, best_abs_pds, best_abs_nes, signed_nes,
              best_fdr, n_sites
     """
+    motif_edges = motif_edges.copy()
     lit_ceiling = float(np.log1p(psp_edges["in_vivo_refs"]).max()) if not psp_edges.empty else 0.0
     motif_ceiling = float(motif_edges["best_abs_nes"].max()) if not motif_edges.empty else 0.0
 
@@ -327,7 +349,8 @@ def build_terminal_map(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd
     df["weight"] = df["weight_lit"] + df["weight_motif"]
 
     cols = [
-        "source_gene", "target_gene", "role", "contrast", "celltype_match", "provenance",
+        "kinase", "source_gene", "target_gene", "role", "contrast", "owning_cluster",
+        "celltype_match", "provenance",
         "weight", "weight_lit", "weight_motif", "best_abs_pds", "best_abs_nes", "signed_nes",
         "best_fdr", "n_sites",
     ]
@@ -394,6 +417,8 @@ def run_cohort_dir(bridge_dir: str, is_mouse: bool) -> None:
     log.info(f"{bridge_dir}: loading motif-edge frame (bridge kinase_node_hits)")
     motif = load_motif_edges(bridge_dir, is_mouse)
     log.info(f"{bridge_dir}: {len(motif)} motif edges (distinct kinase×node×role×contrast)")
+    if bridge_dir == "song":
+        assert_song_celltype_join(motif)
 
     interactome = build_interactome(motif, psp)
     terminal = build_terminal_map(motif, psp)

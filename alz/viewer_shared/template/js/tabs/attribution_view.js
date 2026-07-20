@@ -84,6 +84,35 @@ function _attrVerdictConfCell(r) {
   return `<span class="${_attrConfidenceClass(r.confidence_tier)}" title="${tip}">${_escapeHtml((r.confidence_tier || "").replace("_", " "))}</span>`;
 }
 
+// Motif-peer resolution: of the kinases MEA cannot tell apart (this one + its
+// motif twins), how many are transcribed in this cell type? survivors = 1 means
+// this kinase is the sole plausible source here — the strong, specific result —
+// and gets the emphasized badge. The disclosure lists the twins still present
+// with their within-cell-type detection fractions.
+function _motifPeerCell(r) {
+  const k = Number(r && r.motif_peers_detected);
+  const n = Number(r && r.motif_peers_informative);
+  if (!Number.isFinite(k) || !Number.isFinite(n)) return "";
+  const resolved = ViewerPayload.motifPeerRoster(
+    r.motif_peer_cohort, r.motif_peer_key, r.cell_type);
+  const peers = resolved ? resolved.peers : [];
+  const items = peers.map(peer => {
+    const name = _escapeHtml(String(peer.kinase || ""));
+    const fraction = Number(peer.detection_fraction);
+    const pct = Number.isFinite(fraction) ? ` (${(fraction * 100).toFixed(0)}%)` : "";
+    return `<li>${name}${pct}</li>`;
+  }).join("");
+  const sole = k === 1;
+  const title = sole
+    ? `Sole plausible source here: of ${n} motif-confusable candidate(s), only this kinase is transcribed in this cell type. Presence is not evidence of activity.`
+    : `${k} of ${n} motif-confusable candidates are transcribed here; not uniquely resolved. Presence is not evidence of activity.`;
+  const rosterTitle = sole
+    ? "Motif twins — none transcribed in this cell type"
+    : "Motif twins transcribed here (detection fraction)";
+  return `<details class="motif-peer-details"><summary><span class="badge ${sole ? "vhi" : "lo"}" title="${_escapeHtml(title)}">${k}/${n}</span></summary>` +
+    `<ul class="motif-peer-roster" title="${rosterTitle}">${items || "<li>No motif twins</li>"}</ul></details>`;
+}
+
 // Sort comparator for a single column.
 function _attrVerdictCmp(a, b, key, type, asc) {
   const dir = asc ? -1 : 1;

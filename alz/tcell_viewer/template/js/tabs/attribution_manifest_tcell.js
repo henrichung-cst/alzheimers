@@ -48,7 +48,7 @@ const TCELL_MANIFEST = (() => {
     {
       key: "cell_type", label: "Cell state", type: "str", group: "id", title: "",
       render(r, _numFmt, _ctx) {
-        return `<td class="attr-celltype"><span class="attr-chevron" aria-hidden="true">▸</span> ${tcellStateSwatch(r.cell_type)}${_escapeHtml(r.cell_type)} ${_attrVerdictConfCell(r)}</td>`;
+        return `<td class="attr-celltype"><span class="attr-chevron" aria-hidden="true">▸</span> ${tcellStateSwatch(r.cell_type)}${_escapeHtml(r.cell_type)} ${_attrVerdictConfCell(r)} ${_motifPeerCell(r)}</td>`;
       },
     },
     {

@@ -37,6 +37,7 @@ TOP_LEVEL_ORDER: tuple[str, ...] = (
     "kinase_motifs",
     "celltypes",
     "kinase_celltype_evidence",
+    "motif_peer_narrowing",
     "attribution_index",
     "specificity_units",
     "mechanism_attribution",

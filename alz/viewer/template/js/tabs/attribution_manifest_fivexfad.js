@@ -39,7 +39,7 @@ const FIVEXFAD_MANIFEST = (() => {
         const chip = isHome
           ? `<span class="${_attrConfidenceClass(conf)}" title="${tip}">${_escapeHtml(conf.replace("_", " "))}</span>`
           : `<span class="muted" title="Location confidence is a kinase/tissue-level property, shown on this kinase's dominant ${COHORT_LABELS.fivexfad} cell type${r.fivexfad_top_celltype ? ': ' + _escapeHtml(r.fivexfad_top_celltype) : ''}.">·</span>`;
-        return `<td class="attr-celltype"><span class="attr-chevron" aria-hidden="true">▸</span> ${_escapeHtml(r.cell_type || "")} ${chip}</td>`;
+        return `<td class="attr-celltype"><span class="attr-chevron" aria-hidden="true">▸</span> ${_escapeHtml(r.cell_type || "")} ${chip} ${_motifPeerCell(r)}</td>`;
       },
     },
     {

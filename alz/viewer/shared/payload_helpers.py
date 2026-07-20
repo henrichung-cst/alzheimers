@@ -24,7 +24,7 @@ _INCYTR_SIDECHAIN_INTERACTOME_COLUMNS = (
     "motif_contrasts",
 )
 _INCYTR_SIDECHAIN_TERMINAL_COLUMNS = (
-    "source_gene", "target_gene", "role", "contrast", "celltype_match",
+    "kinase", "source_gene", "target_gene", "role", "contrast", "owning_cluster", "celltype_match",
     "provenance", "weight", "weight_lit", "weight_motif", "best_abs_pds",
     "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
 )

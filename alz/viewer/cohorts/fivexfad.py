@@ -21,6 +21,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from alz.bulk_mea.confidence import DECOMP_FDR_AGREEMENT
+from alz.cross_reference.motif_peer_narrowing import evidence_lookup, load_payload
 from alz.bulk_mea.exclusivity_tier import (
     BROAD_EFF_MAX as _F5_BROAD_EFF_MAX,
     exclusivity_tier as _f5_exclusivity_tier,
@@ -284,6 +285,11 @@ def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None)
     if not kinases:
         return []
     ev = pd.read_csv(path)
+    narrowing_payload = load_payload()
+    narrowing_by_cohort = {
+        cohort: evidence_lookup(narrowing_payload, cohort)
+        for cohort in ("fivexfad_cortex", "fivexfad_hippocampus")
+    }
     ev = ev[ev["kinase"].astype(str).isin(kinases)].copy()
     if "cell_type" in ev.columns:
         ev = ev[~ev["cell_type"].astype(str).str.match(r"^cluster-\d+$", na=False)].copy()
@@ -345,9 +351,23 @@ def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None)
         ("seaad_location_score", float("nan")),
         ("hbca_location_score", float("nan")),
         ("human_location_score", float("nan")),
+        ("motif_peers_detected", None),
+        ("motif_peers_informative", None),
+        ("motif_peer_key", None),
+        ("motif_peer_cohort", ""),
     ]:
         if col not in ev.columns:
             ev[col] = default
+    for idx, record in ev.iterrows():
+        cohort = f"fivexfad_{record['tissue']}"
+        narrowing = narrowing_by_cohort.get(cohort, {}).get(
+            (str(record["kinase"]), str(record["cell_type"]))
+        )
+        if narrowing is not None:
+            ev.at[idx, "motif_peers_detected"] = narrowing["motif_peers_detected"]
+            ev.at[idx, "motif_peers_informative"] = narrowing["motif_peers_informative"]
+            ev.at[idx, "motif_peer_key"] = narrowing["kinase"]
+            ev.at[idx, "motif_peer_cohort"] = cohort
     ev["_rank"] = ev["confidence_tier"].map(_F5_CONF_RANK).fillna(0)
     ev["_f5"] = pd.to_numeric(ev["fivexfad_concentration"], errors="coerce").fillna(-1.0)
     ev["_wmb"] = pd.to_numeric(ev["wmb_concentration"], errors="coerce").fillna(-1.0)
@@ -367,6 +387,7 @@ def _build_fivexfad_attribution_rows(rows: list[dict], data: UnifiedData | None)
         "n_snrna_samples_tg", "n_cells_wt", "n_cells_tg", "cluster_source",
         "sea_ad_lfc", "seaad_location_score", "hbca_location_score",
         "human_location_score",
+        "motif_peers_detected", "motif_peers_informative", "motif_peer_key", "motif_peer_cohort",
     ]
     return _f5_records(ev, cols)
 
@@ -404,6 +425,10 @@ def _build_fivexfad_attribution_summary_index(attribution_rows: list[dict]) -> l
                 "fivexfad_concentration_tier": r.get("fivexfad_concentration_tier"),
                 "fivexfad_effective_n": r.get("fivexfad_effective_n"),
                 "fivexfad_top_celltype": r.get("fivexfad_top_celltype"),
+                "motif_peers_detected": r.get("motif_peers_detected"),
+                "motif_peers_informative": r.get("motif_peers_informative"),
+                "motif_peer_key": r.get("motif_peer_key"),
+                "motif_peer_cohort": r.get("motif_peer_cohort"),
                 "fivexfad_lfc": r.get("fivexfad_lfc"),
                 "wmb_detected": r.get("wmb_detected"),
                 "wmb_concentration": r.get("wmb_concentration"),

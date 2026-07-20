@@ -226,6 +226,12 @@ function _isNumeric(value) {
   return isFinite(number) ? number : 0;
 }
 
+function _isMotifPeerForEdge(edge) {
+  if (typeof ViewerPayload === "undefined") return null;
+  return ViewerPayload.motifPeerRoster(
+    ViewerPayload.motifPeerCohortFor(), edge.kinase, edge.owning_cluster);
+}
+
 // Convex remap of a raw strength to [0,1], anchored at [lo, hi]. gamma > 1 makes
 // it accelerate: low values collapse toward 0, strong values stay high. Nothing is
 // thresholded — the weakest still returns a small positive emphasis, floored to a
@@ -313,6 +319,7 @@ function _isNodeRelationTable(node, cy) {
           direction: _isNesDirection(signedNes),
           evidence: String(edge.data("provenance") || "motif"),
           weight: null,
+          motifPeer: edge.data("motif_peer") || null,
         });
       } else if (nodeKind === "kinase-node" && sourceId === nodeId) {
         terminalRows.push({
@@ -323,6 +330,7 @@ function _isNodeRelationTable(node, cy) {
           evidence: String(edge.data("provenance") || "motif"),
           weight: null,
           target: targetId,
+          motifPeer: edge.data("motif_peer") || null,
         });
       }
       return;
@@ -400,7 +408,17 @@ function _isNodeRelationTable(node, cy) {
     ];
     values.forEach((value, index) => {
       const cell = document.createElement("td");
-      cell.textContent = value;
+      if (index === 0 && row.motifPeer) {
+        const sole = Number(row.motifPeer.motif_peers_detected) === 1;
+        const tip = sole
+          ? "Sole plausible source here among motif-confusable candidates"
+          : `${row.motifPeer.motif_peers_detected} of ${row.motifPeer.motif_peers_informative} motif-confusable candidates transcribed here`;
+        cell.innerHTML = _escapeHtml(String(value))
+          + ` <details class="motif-peer-details"><summary><span class="badge ${sole ? "vhi" : "lo"}" title="${_escapeHtml(tip)}">${row.motifPeer.motif_peers_detected}/${row.motifPeer.motif_peers_informative}</span></summary>`
+          + `<ul class="motif-peer-roster">${(row.motifPeer.peers || []).map(peer => `<li>${_escapeHtml(String(peer.kinase || ""))} (${(Number(peer.detection_fraction || 0) * 100).toFixed(0)}%)</li>`).join("") || "<li>No motif twins</li>"}</ul></details>`;
+      } else {
+        cell.textContent = value;
+      }
       cell.style.cssText = "padding:2px 5px;border-top:1px solid #e2e8f0;"
         + (index === 0 ? "white-space:nowrap;" : "");
       if (index === 3 && row.direction && _IS_COLORS[row.direction]) {
@@ -419,16 +437,30 @@ function _isGraphForRow(shard, row) {
   const interactome = _isSafeRows(shard.interactome, [
     "source_gene", "target_gene", "provenance", "weight",
   ]).filter(edge => edge.source_gene && edge.target_gene);
-  const terminal = _isSafeRows(shard.terminal_edges, [
+  const terminalFields = [
     "source_gene", "target_gene", "role", "contrast", "provenance", "weight",
     "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
-  ]).filter(edge => edge.source_gene && edge.target_gene);
+  ];
+  // Pre-peer shards remain viewable; regenerated shards additionally carry the
+  // kinase/owning-cluster join keys used for the motif-peer chip.
+  if (shard.terminal_edges && Array.isArray(shard.terminal_edges.kinase)
+      && Array.isArray(shard.terminal_edges.owning_cluster)) {
+    terminalFields.unshift("kinase");
+    terminalFields.splice(5, 0, "owning_cluster");
+  }
+  const terminal = _isSafeRows(shard.terminal_edges, terminalFields)
+    .filter(edge => edge.source_gene && edge.target_gene);
   const spine = _isSpineNodes(row);
   const spineByRole = new Map(spine.map(node => [node.role, node]));
   const contrastMatchedTerminal = terminal.filter(edge => {
     const node = spineByRole.get(String(edge.role || ""));
+    const owning = String(edge.owning_cluster || "");
+    const expectedOwning = String(edge.role || "") === "Ligand"
+      ? String(row._sender || row.sender || "")
+      : String(row._receiver || row.receiver || "");
     return !!node && String(edge.target_gene).toUpperCase() === node.gene.toUpperCase()
-      && String(edge.contrast || "") === String(row.contrast || "");
+      && String(edge.contrast || "") === String(row.contrast || "")
+      && (!owning || owning === expectedOwning);
   });
   // No cutoff: every contrast-matched kinase→node edge is drawn. Weak ones are
   // suppressed by the |NES| emphasis at render time, not filtered out here.
@@ -587,6 +619,9 @@ function _isPositionedElements(graph, width, height) {
       signed_nes: _isNumeric(edge.signed_nes), nes_direction: _isNesDirection(edge.signed_nes),
       best_abs_nes: _isNumeric(edge.best_abs_nes), best_fdr: _isNumeric(edge.best_fdr),
       n_sites: sites,
+      kinase: String(edge.kinase || ""),
+      owning_cluster: String(edge.owning_cluster || ""),
+      motif_peer: _isMotifPeerForEdge(edge),
     } });
   });
   return elements;

@@ -243,6 +243,10 @@ main#app-main { padding:14px; }
 /* Collapsed specificity unit: expandable parent over its child Song clusters. */
 details.spec-unit > summary { list-style:none; cursor:pointer; }
 details.spec-unit > summary::-webkit-details-marker { display:none; }
+details.motif-peer-details { display:inline-block; margin-left:4px; vertical-align:middle; }
+details.motif-peer-details > summary { list-style:none; cursor:pointer; display:inline-block; }
+details.motif-peer-details > summary::-webkit-details-marker { display:none; }
+ul.motif-peer-roster { margin:4px 0 0; padding:4px 8px 4px 20px; background:#f8fafc; border:1px solid #e2e8f0; font-size:10px; font-weight:400; white-space:nowrap; }
 .spec-unit-n { font-size:9px; color:#64748b; margin-left:3px; white-space:nowrap; }
 ul.spec-unit-children { margin:3px 0 0; padding-left:14px; font-size:10px; color:#475569; list-style:disc; }
 ul.spec-unit-children li.muted { color:#9aa5b1; }
