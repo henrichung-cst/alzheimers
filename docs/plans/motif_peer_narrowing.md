@@ -115,8 +115,9 @@ the word. Columns are the two plain counts: `motif_peers_detected` (k),
   alongside `kinase_motifs`.
 - **The 15.6M-row `kinase_node_hits.parquet` is never read whole or rewritten.** The
   (k, N) lookup is ~11.7k rows and joins client-side. Any parquet inspection is DuckDB-streamed.
-- Cell-type vocabularies differ per cohort (Song 31, 5xFAD 29 with `cluster-*` dropped).
-  Per-cohort throughout.
+- Cell-type vocabularies differ per cohort. Song and 5xFAD carry 31 labels each
+  (5xFAD after `cluster-*` is dropped), but the label sets are distinct — the
+  matching count is coincidence, not a shared vocabulary. Per-cohort throughout.
 - 5xFAD has real per-cell-type MEA (`fivexfad_celltype_mea.parquet`); Song and T-cell do
   not. The measurement means less where a cell-type-resolved score already exists — state
   this, do not flatten it.
