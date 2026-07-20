@@ -187,8 +187,8 @@ const METRIC_DEFS = {
   topCelltype:   { label: "Top cell type", short: "Top attributed receiver cell type from the attribution evidence table." },
   highConfAttr:  { label: "Location confidence", short: "Whether the kinase has high-confidence cell-type attribution." },
   nBackbones:    { label: "#Backbones",    short: "Number of distinct pathway backbones with significant support from this kinase, across all contrasts." },
-  incytrPathways:{ label: "Incytr pathways", short: "Participation in distinct predicted pathways (Ligand/Receptor/EM/Target): count and % whose node set includes ≥1 gene from this kinase's MEA leading-edge substrate set. Denominator is the donor's distinct-pathway universe. n/a = no MEA leading-edge substrate set for this kinase." },
-  incytrBackbones:{ label: "Incytr backbones", short: "Participation in distinct predicted backbones (Ligand/Receptor/EM; Target excluded): count and % whose node set includes ≥1 gene from this kinase's MEA leading-edge substrate set. Denominator is the donor's distinct-backbone universe. n/a = no MEA leading-edge substrate set for this kinase." },
+  incytrPathways:{ label: "Incytr pathways", short: "Substrate-based pathway participation: count and % of all predicted pathways whose Ligand/Receptor/EM/Target node includes ≥1 gene this kinase phosphorylates (its MEA substrate set). Denominator is the donor's full predicted-pathway universe. n/a = no MEA substrate set for this kinase." },
+  incytrBackbones:{ label: "Incytr backbones", short: "Substrate-based backbone participation: count and % of all predicted pathways whose Ligand/Receptor/EM node (Target excluded) includes ≥1 gene this kinase phosphorylates (its MEA substrate set). Denominator is the donor's full predicted-pathway universe. n/a = no MEA substrate set for this kinase." },
 
   // Pathway browser columns
   receiverCol:     { label: "Receiver",         short: "Receiver cell type for the backbone." },
