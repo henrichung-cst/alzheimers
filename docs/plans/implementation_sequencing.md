@@ -15,14 +15,17 @@ Plan shorthand used below:
 **T1 — kinase→kinase network.** The kinase→kinase edge model ships in
 `alz/cross_reference/kinase_kinase_edges.py` (PSP `Kinase_Substrate_Dataset` ∪ cohort motif
 co-enrichment → weighted, provenance-tagged interactome; spec in
-`foundation/kinase_sidechain_incytr_graph.md`). `E1` — a reference regulation hierarchy (A↑⇒B↓) with
-an observed disease-direction overlay — is the one remaining consumer. It **reuses that backend rather
-than building a parallel network**: the Johnson Kinase Library is a motif-scoring atlas and cannot emit
-kinase→kinase edges, so PSP is the forced source, not a preference (D2).
+`foundation/kinase_sidechain_incytr_graph.md`). `E1` — a concordance overlay on those chain edges — is
+the one remaining consumer. It **reuses that backend rather than building a parallel network**: the
+Johnson Kinase Library is a motif-scoring atlas and cannot emit kinase→kinase edges, so PSP is the
+forced source, not a preference (D2).
 
-**T2 — cell-type specificity engine.** `E2` consumes the existing per-kinase cell-type specificity
-basis to split same-family kinases — the only open consumer. The review-time cross-species breadth
-constraint lives in `foundation/specificity_confidence.md` §3a.
+**T2 — cell-type specificity engine.** `E2` is the only open consumer. It does not read the engine
+directly: the bridge already resolves per-kinase attribution per cohort (song via
+`kinase_hypothesis_table`, 5xFAD via `celltype_mea`) and writes `owning_cluster` /
+`celltype_match_rank` into `kinase_node_hits.parquet`. E2's work is carrying that label past
+`load_motif_edges`, which currently collapses it to `BOOL_OR(celltype_match)`. The review-time
+cross-species breadth constraint lives in `foundation/specificity_confidence.md` §3a.
 
 **T3 — Incytr recompute + viewer rebuild.** `geneuse` (un-pin → AD re-run), `B2`, `C3`, and `E1/E2`
 tabs all end in a viewer payload rebuild. Recomputes are
@@ -42,13 +45,21 @@ open against this standard, and no plan below is gated on it.
 
 ## 2. Adjudications required (blocking — resolve before the dependent wave)
 
-**D2 — E1 scope. RESOLVED: shared backend.** E1's reference hierarchy (A→B regulation) is sourced from
-PSP's `Kinase_Substrate_Dataset`, which `kinase_kinase_edges.py` already loads. The Johnson Kinase
-Library is a motif-scoring atlas and cannot emit kinase→kinase edges, so it is not a viable alternate
-source; the data source is forced, not a preference. E1 reuses `kinase_kinase_edges.py` and renders as
-a directional/disease-direction **overlay layer** on the existing sidechain interactome. The host
-surface now exists — the sidechain view is a sub-tab of the Incytr pathways detail panel — so E1 adds
-an overlay mode within it and splits to its own tab only if the UX is cramped.
+**D2 — E1 scope. RESOLVED: concordance overlay only.** E1 reuses `kinase_kinase_edges.py` and renders
+as an overlay within the existing sidechain sub-tab. Two constraints found when scoping against the
+shipped stack:
+
+- **No signed reference is available.** `Kinase_Substrate_Dataset` records that A phosphorylates B
+  with reference counts, but carries no activating/inhibiting sign — phosphorylation does either
+  depending on the residue. PSP's `Regulatory_sites` file is not shipped in `kinase_library`. So E1
+  flags observed **concordance**, and cannot claim an observation contradicts an expectation. The
+  Johnson Kinase Library is a motif-scoring atlas and cannot supply the sign either.
+- **Direction source is `signed_nes`, not `disease_lfc`.** Chain edges are signaling edges, so the
+  propagated quantity is activity, not abundance; and NES already drives every other sidechain
+  encoding. Rationale in `kinase-regulation-network.md`.
+
+E1 is gated on a motif-similarity confound check (Gate 0): similar-motif kinases co-enrich by
+construction, so concordance may measure substrate overlap rather than regulation.
 
 **D3 — geneuse un-pin. RESOLVED: un-pin.** AD switches to the derived `DEG∪prG` recipe (same path as
 t-cells); single cross-cohort recipe, wider enumeration (downstream SigProb/|PDS| filter still applies).
@@ -69,8 +80,8 @@ plans.
 ```
 D3 ──► geneuse re-run ──► AD viewer rebuild ─────────────────────┐
                                                                  ├─► serialized
-D2 ──► E1 (on kinase_kinase_edges.py) ──► E2 ────────────────────┤   viewer
-T2 specificity ──► E2                                            │   integration
+E1 concordance overlay (viewer-side, Gate 0) ────────────────────┤   viewer
+E2 celltype discrimination (owning_cluster + re-run) ────────────┤   integration
 B2 (sankey), C3 (early-change) ──────────────────────────────────┘
 
 G1 (diagrams), apriori (docs), deploy-C/D ── ungated leaves, deprioritized to last
@@ -100,13 +111,19 @@ result on our own data.
 - `geneuse` un-pin (D3) → AD re-run → AD viewer rebuild. Production-output-changing, and the re-run
   window invalidates any AD payload built during it — so it leads, and the Wave 3 tabs merge after it.
 
-**Wave 2 — kinase backends + specificity thread (parallel with Wave 1's re-run).**
-- `E1` on the shared `kinase_kinase_edges.py` backend (D2), then `E2` (needs T2 specificity).
-  Authoring touches no AD payload, so it runs concurrently with the re-run.
+**Wave 2 — kinase overlays on the shipped sidechain (parallel with Wave 1's re-run).**
+- `E1` concordance overlay — viewer-side, no backend, gated on the Gate 0 motif-similarity check.
+- `E2` cell-type discrimination — needs `owning_cluster` carried past `load_motif_edges`, plus a
+  `kinase_kinase_edges` re-run (bridge unaffected).
+
+**Independent of each other** — `E2` does not depend on `E1`; the earlier dependency was spurious.
+Both author against the sidechain view and touch no AD payload, so both run concurrently with the
+Wave 1 re-run.
 
 **Wave 3 — viewer tabs (serialize the payload/integration step).**
-- `B2` sankey, `C3` early-change tab, `E1/E2` tab(s). Author in parallel; merge and rebuild one at a
-  time, after the AD rebuild lands.
+- `B2` sankey, `C3` early-change tab. Author in parallel; merge and rebuild one at a time, after the
+  AD rebuild lands. `E1`/`E2` are overlays inside the shipped sidechain sub-tab, not new tabs — they
+  land in Wave 2 and only their payload rebuild serializes here.
 
 **Isolated — `I2`** frozen-layer namespace moves, dedicated window (D5).
 

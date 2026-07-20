@@ -24,8 +24,8 @@ Candidate work, one file per item. Delete a file when it ships — git holds the
 | [`tcell_apriori_expectations.md`](tcell_apriori_expectations.md) | T-cell | blind literature-grounded exhaustion prediction set → `docs/reference/tcell_apriori_expectations.md` (unbuilt) |
 | [`incytr-sankey-diagram.md`](incytr-sankey-diagram.md) | Incytr | add sankey view + collapse excitatory clusters (chord already ships) |
 | [`disease-direction-site-level-early-change.md`](disease-direction-site-level-early-change.md) | Cross-cohort | Disease Direction Stage 4 — site-level early-change phosphosites |
-| [`kinase-regulation-network.md`](kinase-regulation-network.md) | Kinase hierarchy | PhosphoSite-based regulation network + observed disease overlay (precedes family discrimination) |
-| [`kinase-family-discrimination.md`](kinase-family-discrimination.md) | Kinase hierarchy | separate same-family kinases by cell-type specificity (needs the network first) |
+| [`kinase-regulation-network.md`](kinase-regulation-network.md) | Kinase hierarchy | concordance overlay on sidechain chain edges (signed NES); gated on a motif-similarity confound check |
+| [`kinase-family-discrimination.md`](kinase-family-discrimination.md) | Kinase hierarchy | separate same-family kinases by cell-type attribution; carry `owning_cluster` past the edge model |
 | [`methods-workflow-diagrams.md`](methods-workflow-diagrams.md) | Docs | workflow flowcharts for AD + T-cell pipelines |
 | [`cohort-namespace-frozen-layer-moves.md`](cohort-namespace-frozen-layer-moves.md) | Refactor carryover | migrate held-back frozen Incytr/decomposition paths into `alz/cohorts/*` |
 
