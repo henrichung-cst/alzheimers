@@ -208,6 +208,8 @@ function _buildKinaseRowModel() {
         ? K.incytr_backbone_count[i] : null,
       incytr_pathway_total: (K.incytr_pathway_total && K.incytr_pathway_total[i] != null)
         ? K.incytr_pathway_total[i] : null,
+      incytr_backbone_total: (K.incytr_backbone_total && K.incytr_backbone_total[i] != null)
+        ? K.incytr_backbone_total[i] : null,
       _fdr: CONTRASTS.map(c => K["FDR_" + c][i]),
       _nes: CONTRASTS.map(c => K["NES_" + c][i]),
     });
@@ -624,30 +626,31 @@ function _renderNSCLCSpecificityCountCell(r) {
   return `<span title="${_escapeHtml(tip)}"><strong>${cnt}</strong><span class="muted" style="font-size:10px;"> / ${total}</span>${badge}${memberInline}</span>`;
 }
 
-// Substrate-based Incytr participation: N (and % of all predicted pathways)
-// whose node set includes ≥1 gene this kinase phosphorylates (its MEA substrate
-// set). Precomputed in Python. Two scopes share the denominator:
-//   pathway  — Ligand/Receptor/EM/Target
-//   backbone — Ligand/Receptor/EM (Target excluded)
+// Substrate-based Incytr participation: N (and % of distinct predicted
+// pathways/backbones) whose node set includes ≥1 gene this kinase phosphorylates
+// (MEA's leading-edge substrate set). Precomputed in Python. Each scope has its
+// own denominator:
+//   pathway  — distinct Ligand/Receptor/EM/Target entities
+//   backbone — distinct Ligand/Receptor/EM entities (Target excluded)
 // Direct node membership is NOT used — a kinase is a pathway node in <0.1% of
-// rows. n/a = no MEA substrate set for this kinase on its track.
-function _renderSubstrateCoverageCell(n, total, nodeScope) {
+// rows. n/a = no MEA leading-edge substrate set for this kinase on its track.
+function _renderSubstrateCoverageCell(n, total, nodeScope, entityLabel) {
   if (n == null || !total) {
-    return `<span class="muted" title="No MEA substrate set for this kinase — it cannot be linked to pathways by substrate.">n/a</span>`;
+    return `<span class="muted" title="No MEA leading-edge substrate set for this kinase — it cannot be linked to Incytr ${entityLabel} by substrate.">n/a</span>`;
   }
   const pct = 100 * n / total;
   const pctStr = pct >= 10 ? pct.toFixed(0) : pct.toFixed(1);
   const cls = pct >= 50 ? "hi" : (pct >= 20 ? "mid" : "lo");
-  const tip = `${n.toLocaleString()} of ${total.toLocaleString()} predicted pathways `
-    + `(${pctStr}%) have a ${nodeScope} node containing a gene this kinase phosphorylates (its MEA substrate set).`;
+  const tip = `${n.toLocaleString()} of ${total.toLocaleString()} distinct predicted ${entityLabel} `
+    + `(${pctStr}%) have a ${nodeScope} node containing a gene this kinase phosphorylates (MEA's leading-edge substrate set).`;
   return `<span title="${_escapeHtml(tip)}"><strong>${n.toLocaleString()}</strong>`
     + `<span class="badge ${cls}" style="margin-left:4px;">${pctStr}%</span></span>`;
 }
 function _renderIncytrPathwayCell(r) {
-  return _renderSubstrateCoverageCell(r.incytr_pathway_count, r.incytr_pathway_total, "Ligand/Receptor/EM/Target");
+  return _renderSubstrateCoverageCell(r.incytr_pathway_count, r.incytr_pathway_total, "Ligand/Receptor/EM/Target", "pathways");
 }
 function _renderIncytrBackboneCell(r) {
-  return _renderSubstrateCoverageCell(r.incytr_backbone_count, r.incytr_pathway_total, "Ligand/Receptor/EM");
+  return _renderSubstrateCoverageCell(r.incytr_backbone_count, r.incytr_backbone_total, "Ligand/Receptor/EM", "backbones");
 }
 
 function _renderKinaseWhitelistBanner(wl) {
@@ -868,8 +871,8 @@ function renderKinaseExplorer() {
 
 function exportKinaseCsv() {
   const donor = (ViewerPayload.activeContext && ViewerPayload.activeContext()) || "donor1";
-  const headers = ["Kinase","Gene","Family","Residue","n_sig","trend","tcell_top_celltype","incytr_pathway_count","incytr_backbone_count","incytr_pathway_total","SoleSource_states"];
-  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportTrend","_exportTopCelltype","incytr_pathway_count","incytr_backbone_count","incytr_pathway_total","_exportSoleSource"];
+  const headers = ["Kinase","Gene","Family","Residue","n_sig","trend","tcell_top_celltype","incytr_pathway_count","incytr_backbone_count","incytr_pathway_total","incytr_backbone_total","SoleSource_states"];
+  const keys    = ["name","gene_symbol","family","residue_type","_exportScopedSig","_exportTrend","_exportTopCelltype","incytr_pathway_count","incytr_backbone_count","incytr_pathway_total","incytr_backbone_total","_exportSoleSource"];
   csvDownload(csvSerialize(headers, keys, _keVisible), exportFilename(donor, "kinase"));
 }
 

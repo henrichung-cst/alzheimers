@@ -602,26 +602,57 @@ def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list,
 # Incytr pathway participation (substrate-based)
 # ---------------------------------------------------------------------------
 
-def _substrate_genes_by_kinase(donor: str, substrate_file: str,
-                               phospho_file: str) -> dict[str, set[str]]:
+def _tcell_contrast_pair(value: object) -> tuple[str, str] | None:
+    """Normalize MEA and Incytr day-vs-baseline contrast spellings."""
+    match = re.fullmatch(
+        r"(?:D\d+_)?(d\d+)(?:_vs_|_)(d\d+)", str(value).strip(), re.IGNORECASE
+    )
+    if match is None:
+        return None
+    return match.group(1).lower(), match.group(2).lower()
+
+
+def _substrate_genes_by_kinase(
+    donor: str,
+    mea_file: str,
+    phospho_file: str,
+    contrasts: list[str],
+) -> dict[str, set[str]]:
     """Kinase NAME → set of substrate gene symbols (upper-case) for one track.
 
-    The MEA substrate set lists the kinase's positive phosphosite motifs; the
-    motif → gene map comes from the same donor's normalized phospho table (join
-    is 100% after upper-casing the lower-cased phospho-residue in the motif).
+    The MEA timecourse's leading-edge motifs are the substrate evidence. They
+    are unioned only over contrasts represented by the donor's Incytr index;
+    the motif → gene map comes from the same donor's normalized phospho table.
     """
     base = os.path.join(KINASE_ATTRIBUTION_TCELLS_DIR, donor)
-    sub_path = os.path.join(base, "mea", substrate_file)
+    sub_path = os.path.join(base, "mea", mea_file)
     ph_path = os.path.join(base, phospho_file)
     if not (os.path.exists(sub_path) and os.path.exists(ph_path)):
         return {}
     ph = pd.read_csv(ph_path, usecols=["motif", "gene_symbol"])
     motif2gene = {
         str(m).upper(): str(g).upper()
-        for m, g in zip(ph["motif"], ph["gene_symbol"]) if pd.notna(g)
+        for m, g in zip(ph["motif"], ph["gene_symbol"])
+        if pd.notna(m) and pd.notna(g)
     }
-    ss = pd.read_csv(sub_path, usecols=["kinase", "motif"])
-    ss["gene"] = ss["motif"].str.upper().map(motif2gene)
+    kept_contrasts = {
+        pair for contrast in contrasts
+        if (pair := _tcell_contrast_pair(contrast)) is not None
+    }
+    if not kept_contrasts:
+        return {}
+    ss = pd.read_csv(
+        sub_path,
+        usecols=["kinase", "contrast", "Leading substrates"],
+    )
+    ss["contrast_pair"] = ss["contrast"].map(_tcell_contrast_pair)
+    ss = ss[ss["contrast_pair"].isin(kept_contrasts)]
+    if ss.empty:
+        return {}
+    ss["motif"] = ss["Leading substrates"].fillna("").astype(str).str.split(";")
+    ss = ss.explode("motif")
+    ss["motif"] = ss["motif"].str.strip().str.upper()
+    ss["gene"] = ss["motif"].map(motif2gene)
     ss = ss.dropna(subset=["gene"])
     return {str(k): set(v) for k, v in ss.groupby("kinase")["gene"]}
 
@@ -629,7 +660,7 @@ def _substrate_genes_by_kinase(donor: str, substrate_file: str,
 def _incytr_pathway_participation(
     donor: str, incytr_block: dict,
     name_residue_rows: list[tuple[str, str]],
-) -> tuple[list, list, int] | None:
+) -> tuple[list, list, int, int] | None:
     """Substrate-based Incytr pathway participation for the donor's kinases.
 
     For each (kinase, residue) slice row, count the distinct predicted-pathway
@@ -637,13 +668,13 @@ def _incytr_pathway_participation(
     the matching track: ST→ST file, Y→pY file), across two node scopes:
       pathway  — Ligand/Receptor/EM/Target (the full pathway)
       backbone — Ligand/Receptor/EM (Target excluded)
-    Denominator is the donor's full predicted-pathway universe (global_index
-    nrows) for both. Direct node membership is deliberately not used — a kinase
-    is a pathway node in ≤0.07% of rows, degenerate as a percentage.
+    The substrate set is MEA's leading edge, unioned over the Incytr index's
+    contrasts. Direct node membership is deliberately not used — a kinase is a
+    pathway node in ≤0.07% of rows, degenerate as a percentage.
 
-    Returns (pathway_counts, backbone_counts, total) aligned to
-    name_residue_rows (None per row when the kinase has no substrate set on its
-    track), or None when the donor has no Incytr global index.
+    Returns (pathway_counts, backbone_counts, pathway_total, backbone_total)
+    aligned to name_residue_rows (None per row when the kinase has no substrate
+    set on its track), or None when the donor has no Incytr global index.
     """
     gi = (incytr_block or {}).get("global_index")
     if not gi:
@@ -669,13 +700,38 @@ def _incytr_pathway_participation(
     lig, rec, em, tgt = (node["ligandId"], node["receptorId"],
                          node["emId"], node["targetId"])
 
+    # The packed index is one row per contrast × sender × receiver × path.
+    # Collapse that instance universe to the two entity universes shown by the
+    # explorer before applying kinase substrate masks.
+    id_base = np.uint64(max(len(gi["gene_vocab"]), 1))
+
+    def _entity_indices(arrays: tuple[np.ndarray, ...]) -> np.ndarray:
+        composite = np.zeros(len(arrays[0]), dtype=np.uint64)
+        for arr in arrays:
+            composite = composite * id_base + arr.astype(np.uint64)
+        return np.unique(composite, return_index=True)[1]
+
+    pathway_indices = _entity_indices((lig, rec, em, tgt))
+    backbone_indices = _entity_indices((lig, rec, em))
+    pathway_lig, pathway_rec, pathway_em, pathway_tgt = (
+        arr[pathway_indices] for arr in (lig, rec, em, tgt)
+    )
+    backbone_lig, backbone_rec, backbone_em = (
+        arr[backbone_indices] for arr in (lig, rec, em)
+    )
+    pathway_total = len(pathway_indices)
+    backbone_total = len(backbone_indices)
+
     vocab = gi["gene_vocab"]
     vocab_up = {str(g).upper(): i for i, g in enumerate(vocab)}
+    incytr_contrasts = gi.get("contrast_vocab", [])
     sub_by_track = {
         "ST": _substrate_genes_by_kinase(
-            donor, "mea_substrate_sets.csv", "raw_phospho_normalized.csv"),
+            donor, "mea_timecourse.csv", "raw_phospho_normalized.csv",
+            incytr_contrasts),
         "Y": _substrate_genes_by_kinase(
-            donor, "mea_substrate_sets_pY.csv", "raw_phospho_normalized_pY.csv"),
+            donor, "mea_timecourse_pY.csv", "raw_phospho_normalized_pY.csv",
+            incytr_contrasts),
     }
 
     pathway_counts: list = []
@@ -694,11 +750,14 @@ def _incytr_pathway_participation(
             continue
         mask[:] = False
         mask[ids] = True
-        backbone = mask[lig] | mask[rec] | mask[em]
-        pathway = backbone | mask[tgt]
+        backbone = mask[backbone_lig] | mask[backbone_rec] | mask[backbone_em]
+        pathway = (
+            mask[pathway_lig] | mask[pathway_rec]
+            | mask[pathway_em] | mask[pathway_tgt]
+        )
         pathway_counts.append(int(pathway.sum()))
         backbone_counts.append(int(backbone.sum()))
-    return pathway_counts, backbone_counts, n
+    return pathway_counts, backbone_counts, pathway_total, backbone_total
 
 
 def _build_donor_kinases_slice(donor: str) -> dict | None:
@@ -771,14 +830,14 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
         "nsclc_groups_total": [None] * len(rows),
         "nsclc_expressing_groups": [None] * len(rows),
         "nsclc_top_group": [""] * len(rows),
-        # Substrate-based Incytr pathway participation (filled in the assembler,
-        # once the pair-mode global index exists). count = distinct pathways with
-        # ≥1 node gene this kinase phosphorylates; pathway scope = L/R/EM/Target,
-        # backbone scope = L/R/EM (Target excluded); total = the donor's full
-        # predicted-pathway universe (shared denominator).
+        # MEA leading-edge substrate-based Incytr participation (filled in the
+        # assembler once the pair-mode global index exists). Counts are distinct
+        # pathways/backbones with ≥1 matching node gene; each denominator matches
+        # its scope: pathway = L/R/EM/Target, backbone = L/R/EM.
         "incytr_pathway_count": [None] * len(rows),
         "incytr_backbone_count": [None] * len(rows),
         "incytr_pathway_total": [None] * len(rows),
+        "incytr_backbone_total": [None] * len(rows),
     }
     for sc in short_contrasts:
         cols[f"NES_{sc}"] = []

@@ -243,13 +243,15 @@ def build_tcell_payload() -> dict:
         result = _incytr_pathway_participation(donor, ip_block, rows)
         if result is None:
             continue
-        pathway_counts, backbone_counts, total = result
+        pathway_counts, backbone_counts, pathway_total, backbone_total = result
         kslice["incytr_pathway_count"] = pathway_counts
         kslice["incytr_backbone_count"] = backbone_counts
-        kslice["incytr_pathway_total"] = [total] * len(pathway_counts)
+        kslice["incytr_pathway_total"] = [pathway_total] * len(pathway_counts)
+        kslice["incytr_backbone_total"] = [backbone_total] * len(backbone_counts)
         n_hit = sum(1 for c in pathway_counts if c)
         print(f"  {donor}: incytr pathway participation for {n_hit}/{len(pathway_counts)} "
-              f"kinases (of {total:,} pathways)", flush=True)
+              f"kinases (of {pathway_total:,} pathways; "
+              f"{backbone_total:,} backbones)", flush=True)
 
     print("[build_tcell_payload] transcript_trace shards:", flush=True)
     transcript_trace_meta = _write_tcell_transcript_trace()
