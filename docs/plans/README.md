@@ -12,9 +12,8 @@ Status legend: **active** = in-flight / approved-pending · **deferred** = parke
 
 | Doc | Status | What |
 |---|---|---|
-| [`ad_geneuse_unpin_from_sce4.md`](ad_geneuse_unpin_from_sce4.md) | active | un-pin AD Incytr `gene.use` from sce4's frozen node sets to derived DEG∪prG — decided (un-pin); needs AD re-run + viewer rebuild |
-| [`tcell-matt-report-restoration.md`](tcell-matt-report-restoration.md) | active | per-cell marker assignment is the labeling standard (by-cluster rejected as day-confounded; ProjecTILs corroboration-only). Labels verified current 2026-07-16 — no longer gates the t-cell Incytr re-run |
-| [`deployment/todo9_viewer_aws_deployment.md`](deployment/todo9_viewer_aws_deployment.md) | partial | viewer AWS deployment scaling — Option A (`deploy_viewer.sh` s3 sync) shipped; B/C/D open |
+| [`ad_geneuse_unpin_from_sce4.md`](ad_geneuse_unpin_from_sce4.md) | active | un-pin AD Incytr `gene.use` from sce4's frozen node sets to derived DEG∪prG — decided (un-pin), nothing implemented yet: the pin is live end-to-end and AD `wide/` is still pre-decision (2026-06-30). Needs the branch removal, AD re-run, viewer rebuild |
+| [`deployment/todo9_viewer_aws_deployment.md`](deployment/todo9_viewer_aws_deployment.md) | partial | viewer AWS deployment scaling — A (`deploy_viewer.sh` 3-pass s3 sync) and B (`viewer/shared/build_cache.py` content-hash shard cache) shipped; C (parquet consolidation + HTTP Range) and D (DuckDB-Wasm) open |
 
 ## Backlog
 
@@ -31,7 +30,7 @@ Candidate work, one file per item. Delete a file when it ships — git holds the
 | [`tmt-paper-imac-replication.md`](tmt-paper-imac-replication.md) | External | fetch TMT-paper IMAC data, compare kinase enrichment (exploratory) |
 | [`cohort-namespace-frozen-layer-moves.md`](cohort-namespace-frozen-layer-moves.md) | Refactor carryover | migrate held-back frozen Incytr/decomposition paths into `alz/cohorts/*` |
 
-Sequencing, cross-cutting threads, and blocking adjudications: [`implementation_sequencing.md`](implementation_sequencing.md). The T-cell labeling direction is resolved — canonical = per-cell marker assignment, ProjecTILs corroboration-only.
+Sequencing, cross-cutting threads, and blocking adjudications: [`implementation_sequencing.md`](implementation_sequencing.md).
 
 ---
 
@@ -48,6 +47,15 @@ Sequencing, cross-cutting threads, and blocking adjudications: [`implementation_
   [`../foundation/kinase_sidechain_incytr_graph.md`](../foundation/kinase_sidechain_incytr_graph.md);
   the subplan set is archived under
   [`../../archive/archived_plans/kinase_sidechain_incytr_graph/`](../../archive/archived_plans/kinase_sidechain_incytr_graph/).
+- **T-cell labeling standard** (`tcell-matt-report-restoration.md`) — shipped; archived under
+  [`../../archive/archived_plans/standalone_done/`](../../archive/archived_plans/standalone_done/).
+  Canonical labeling is **per-cell marker assignment** (`alz/analysis/tcell_state_labels.py`, via
+  `pixi run tcells-label`) into the 12-state CD4/CD8 vocabulary; by-cluster annotation was rejected
+  as day-confounded and ProjecTILs is corroboration-only. Enforced in code, not by convention: one
+  producer and one shared validator (`alz/ingest/tcells_state_labels.R`) that hard-fails on
+  barcode/day/cluster drift. The Incytr re-run landed on the consolidated production root
+  `outputs/reports/incytr_pair_mode_tcells`, which `build_tcell_viewer.py` asserts as the resolver
+  default. Thread detail in `implementation_sequencing.md` §T4.
 - **`standard_attribution_metric.md`** — the implemented cross-cohort metric spec (cited by path
   in 5 source files); moved to [`../foundation/standard_attribution_metric.md`](../foundation/standard_attribution_metric.md).
 - **Completed standalone plans** — moved to

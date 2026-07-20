@@ -4,8 +4,7 @@ Goal: implement every plan in `docs/plans/`. This maps the cross-cutting threads
 decisions, the conflicts, and a parallel execution order.
 
 Plan shorthand used below:
-`sidechain` = `kinase_sidechain_incytr_graph/` (01–04) · `geneuse` = `ad_geneuse_unpin_from_sce4`
-`labels` = `tcell-matt-report-restoration` (per-cell labeling standard)
+`geneuse` = `ad_geneuse_unpin_from_sce4`
 `apriori` = `tcell_apriori_expectations` (blind exhaustion prediction set → `docs/reference/`, unbuilt)
 `deploy` = `deployment/todo9_viewer_aws_deployment` · B2/C3/E1/E2/G1/H1/I2 = backlog files.
 
@@ -13,21 +12,20 @@ Plan shorthand used below:
 
 ## 1. Cross-cutting threads (shared substrates)
 
-**T1 — kinase→kinase network.** `sidechain-01` and `E1` both build a kinase→kinase graph from
-PhosphoSite-family data with a viewer tab. `sidechain-01` = PSP `Kinase_Substrate_Dataset` unified with
-MEA motif evidence → weighted interactome + per-pathway cytoscape sidechains. `E1` = a reference
-regulation hierarchy (A↑⇒B↓) with an observed disease-direction overlay + click-kinase-neighbors tab.
-**Resolved (D2): shared `kinase_kinase_edges.py` backend — E1's A→B hierarchy comes from PSP's
-`Kinase_Substrate_Dataset`, the same file sidechain-01 loads (the Johnson Kinase Library is a motif
-atlas and cannot emit kinase→kinase edges). E1 is a directional/disease-overlay layer on the sidechain
-interactome, not a parallel network.**
+**T1 — kinase→kinase network.** The kinase→kinase edge model ships in
+`alz/cross_reference/kinase_kinase_edges.py` (PSP `Kinase_Substrate_Dataset` ∪ cohort motif
+co-enrichment → weighted, provenance-tagged interactome; spec in
+`foundation/kinase_sidechain_incytr_graph.md`). `E1` — a reference regulation hierarchy (A↑⇒B↓) with
+an observed disease-direction overlay — is the one remaining consumer. It **reuses that backend rather
+than building a parallel network**: the Johnson Kinase Library is a motif-scoring atlas and cannot emit
+kinase→kinase edges, so PSP is the forced source, not a preference (D2).
 
 **T2 — cell-type specificity engine.** `E2` consumes the existing per-kinase cell-type specificity
 basis to split same-family kinases — the only open consumer. The review-time cross-species breadth
 constraint lives in `foundation/specificity_confidence.md` §3a.
 
-**T3 — Incytr recompute + viewer rebuild.** `geneuse` (un-pin → AD re-run), `sidechain` (consumes
-Incytr `wide/` output), `B2`, `C3`, and `E1/E2` tabs all end in a viewer payload rebuild. Recomputes are
+**T3 — Incytr recompute + viewer rebuild.** `geneuse` (un-pin → AD re-run), `B2`, `C3`, and `E1/E2`
+tabs all end in a viewer payload rebuild. Recomputes are
 **not DB-blocked**: the six IncytrDB objects are version-pinned (2026-03-09, MD5s in the audit manifest
 at `~/Projects/work/incytr/inst/extdata/incytrdb_audit/`) and species selection is per-dataset correct;
 a first-principles DB rebuild is blocked on source artifacts that no longer exist, which the no-contact
@@ -49,19 +47,19 @@ everything downstream, so a deliberate future re-labeling is a supported operati
 
 The whole t-cell chain is built on this standard and consistent with it: Incytr `wide/` (donor1 ×3,
 donor2 ×4), the viewer (`build_tcell_viewer.py` asserts `incytr_pair_mode_tcells` is the
-resolver default), and the report suite. `sidechain-02` is the only open t-cell item.
+resolver default), and the report suite. No t-cell item is open against this standard.
 
 ---
 
 ## 2. Adjudications required (blocking — resolve before the dependent wave)
 
-**D2 — E1 vs sidechain scope. RESOLVED: shared backend.** E1's reference hierarchy (A→B regulation)
-is sourced from PSP's `Kinase_Substrate_Dataset` — the same file `sidechain-01` already loads. The
-Johnson Kinase Library is a motif-scoring atlas and cannot emit kinase→kinase edges, so it is not a
-viable alternate source; the data source is forced, not a preference. E1 reuses `kinase_kinase_edges.py`
-and renders as a directional/disease-direction **overlay layer** on the sidechain interactome. Tab
-structure (single tab with a regulation-overlay mode vs. a separate tab) is deferred to subplan-04 build
-time — build the sidechain tab, add the overlay mode within it, split only if the UX is cramped.
+**D2 — E1 scope. RESOLVED: shared backend.** E1's reference hierarchy (A→B regulation) is sourced from
+PSP's `Kinase_Substrate_Dataset`, which `kinase_kinase_edges.py` already loads. The Johnson Kinase
+Library is a motif-scoring atlas and cannot emit kinase→kinase edges, so it is not a viable alternate
+source; the data source is forced, not a preference. E1 reuses `kinase_kinase_edges.py` and renders as
+a directional/disease-direction **overlay layer** on the existing sidechain interactome. The host
+surface now exists — the sidechain view is a sub-tab of the Incytr pathways detail panel — so E1 adds
+an overlay mode within it and splits to its own tab only if the UX is cramped.
 
 **D3 — geneuse un-pin. RESOLVED: un-pin.** AD switches to the derived `DEG∪prG` recipe (same path as
 t-cells); single cross-cohort recipe, wider enumeration (downstream SigProb/|PDS| filter still applies).
@@ -69,10 +67,11 @@ Removes the `use_frozen_geneuse` branch + `extract_sce4_geneuse.R` (anti-shim). 
 changing — requires a full AD re-run + viewer rebuild (Wave 3). Touch points in
 `ad_geneuse_unpin_from_sce4.md`.
 
-**D5 — I2 timing.** `sidechain-01/02` import the exact frozen-layer modules `I2` relocates
-(`*_decompose.py`, `song.py`, R extractors). Running `I2` mid-stream breaks those imports.
-Recommendation: **do `I2` last, in an isolated window**, updating all importers in the same pass; or
-skip until the sidechain work lands. Never interleave it with other file-touching plans.
+**D5 — I2 timing. UNBLOCKED.** The kinase-sidechain work that imported the frozen-layer modules `I2`
+relocates (`*_decompose.py`, `song.py`, R extractors) has landed, so the gate that held `I2` back is
+gone. It remains an **isolated-window** job: relocating those modules breaks every importer at once, so
+run it alone, updating all importers in the same pass, and never interleave it with other file-touching
+plans.
 
 ---
 
@@ -81,28 +80,23 @@ skip until the sidechain work lands. Never interleave it with other file-touchin
 ```
 D3 ──► geneuse re-run ──► AD viewer rebuild ─────────────────────┐
                                                                  ├─► serialized
-sidechain-01 (PSP backend) ──┬─► sidechain-03 ──► sidechain-04 ──┤   viewer
-sidechain-02 ────────────────┘                                   │   integration
-                                                                 │
-D2 ──► E1 (reuse sidechain-01 backend) ──► E2 ───────────────────┤
-T2 specificity ──► E2                                            │
-B2 (sankey), C3 (early-change) ─────────────────────────────────┘
+D2 ──► E1 (on kinase_kinase_edges.py) ──► E2 ────────────────────┤   viewer
+T2 specificity ──► E2                                            │   integration
+B2 (sankey), C3 (early-change) ──────────────────────────────────┘
 
 tmt (H1), G1 (diagrams), apriori (docs), deploy-B ── independent leaves, no gate
-I2 ── isolated window, last (D5)
+I2 ── isolated window (D5)
 ```
 
 ---
 
 ## 4. Conflicts
 
-- **E1 ↔ sidechain** — feature/backend overlap (T1). Hard conflict until D2 resolves; do not build E1
-  before sidechain-01's edge model exists and the shared-backend decision is made.
-- **I2 ↔ everything file-touching** — relocates modules that sidechain and the R pipeline import (D5).
-  Isolate.
-- **Viewer payload write contention** — sidechain-03/04, B2, C3, E1/E2, geneuse rebuild all write the
-  payload builders. Not a logic conflict; serialize the *integration/rebuild* step (or use worktree
-  isolation for authoring, single-threaded merge).
+- **I2 ↔ everything file-touching** — relocates frozen-layer modules the R pipeline and the
+  cross-reference layer import (D5). Isolate.
+- **Viewer payload write contention** — B2, C3, E1/E2, and the geneuse rebuild all write the payload
+  builders. Not a logic conflict; serialize the *integration/rebuild* step (or use worktree isolation
+  for authoring, single-threaded merge).
 - **geneuse re-run ↔ AD-inclusive payloads** — the AD Incytr outputs change; any payload built during
   the re-run window is stale. Sequence the AD rebuild after the re-run completes.
 
@@ -119,16 +113,15 @@ I2 ── isolated window, last (D5)
   Incytr report suite is already built, so ground the predictions in literature only, not those outputs.
 
 **Wave 2 — kinase backends + specificity thread.**
-- `sidechain-01` (PSP interactome) ∥ `sidechain-02` (t-cell motif — ungated).
 - `E1` on the shared `kinase_kinase_edges.py` backend (D2), then `E2` (needs T2 specificity).
 
 **Wave 3 — Incytr recompute.**
 - `geneuse` un-pin (D3) → AD re-run → AD viewer rebuild.
 
 **Wave 4 — viewer tabs (serialize the payload/integration step).**
-- `sidechain-03 → 04`, `B2` sankey, `C3` early-change tab, `E1/E2` tab(s). Author in parallel; merge
-  and rebuild one at a time.
+- `B2` sankey, `C3` early-change tab, `E1/E2` tab(s). Author in parallel; merge and rebuild one at a
+  time.
 
-**Isolated — `I2`** frozen-layer namespace moves, dedicated window, last (D5).
+**Isolated — `I2`** frozen-layer namespace moves, dedicated window (D5).
 
 Nothing is blocked on an open decision: D2, D3, and D5 are settled and direct the waves above.

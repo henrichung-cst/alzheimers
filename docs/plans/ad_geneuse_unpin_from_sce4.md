@@ -17,7 +17,8 @@ the t-cell runner leaves it unset and derives). Artifacts are built by
 `alz/incytr_pair/extract_sce4_geneuse.R` from sce4's pre-cap pairwise RDS.
 
 The driver branch is `use_frozen_geneuse` in `alz/incytr_pair/incytr_commandline.R`
-(~L343). When unset, the same driver derives `gene.use = DEG ∪ prG` per contrast
+(guard at L279; consumed at L285/342/431/490/674/755). When unset, the same driver
+derives `gene.use = DEG ∪ prG` per contrast
 (DEG at `avg_log2FC > 1 & p_val < 1e-4`, prG = `proteomics_gene(style="aFC", cutoff=1, strict=TRUE)`),
 which is exactly the t-cell path.
 
@@ -48,9 +49,15 @@ better selection on independent merits — which is not the case here.
 
 - `alz/incytr_pair/run_pair_mode.sh` — stop exporting `SCE4_GENEUSE_DIR`; drop the
   extract-artifacts block (L51–63).
-- `alz/incytr_pair/incytr_commandline.R` — the `use_frozen_geneuse` branch (~L343)
-  becomes dead; remove it (anti-shim: no flag left behind).
-- `alz/incytr_pair/extract_sce4_geneuse.R` — becomes orphaned; delete.
+- `alz/incytr_pair/incytr_commandline.R` — the `use_frozen_geneuse` branch becomes
+  dead; remove it (anti-shim: no flag left behind). **Six consumer sites**, not one:
+  L285, L342, L431, L490, L674, L755, plus the set-but-missing `stop()` guard at
+  L279. L755 gates a column-set assertion, so removing it changes an output-schema
+  check — verify that assertion still holds on derived `gene.use` before deleting.
+- `alz/incytr_pair/extract_sce4_geneuse.R` — becomes orphaned; delete. Also
+  referenced by `alz/incytr_pair/audit_incytr_input_provenance.py:83`.
 - `data/incytr_frozen/sce4_geneuse/` — frozen inputs may stay on disk as record.
 - CLAUDE.md — the "gene.use selection is cohort-dependent" invariant collapses to
   one recipe; update.
+- `docs/reference/incytr_sce4_reproduction.md:8` — carries the same invariant;
+  update in the same pass.

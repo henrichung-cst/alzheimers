@@ -58,7 +58,7 @@ to the measured marker programs.
 - Native UMAP comparison:
   `outputs/reports/tcell_labeling/umap/umap_percell_label_comparison.png`
 - Preserved Matt report:
-  `outputs/reports/tcell_labeling/tcell_state_labeling_evidence_matt.html`
+  `outputs/reports/tcell_labeling/tcell_state_labeling_evidence_original.html`
 - Pending compatible Incytr root:
   `outputs/reports/incytr_pair_mode_tcells`
 

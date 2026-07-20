@@ -23,6 +23,6 @@ The original report remains preserved historical context at
 `tcell_state_labeling_evidence_original.html`, but its reference-label audit is not part
 of the current labeling runner.
 
-The matching downstream Incytr root is
-`outputs/reports/incytr_pair_mode_tcells_percell_posneg`. The viewer must remain on
-the last complete run until this root finishes.
+The matching downstream Incytr root is `outputs/reports/incytr_pair_mode_tcells`.
+`build_tcell_viewer.py` asserts this is the resolver default and fails the build
+otherwise, so the viewer cannot drift off it.

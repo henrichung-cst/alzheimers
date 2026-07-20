@@ -1,7 +1,20 @@
 # Viewer AWS Deployment Pipeline — Scaling Plan
 
 **Date:** 2026-06-24
-**Status:** Proposed — options A and B ready to implement; C/D exploratory
+**Status:** Partial — A and B shipped; C/D exploratory and open
+
+- **A — s3 sync deploy.** Shipped as `alz/runners/supporting/deploy_viewer.sh`
+  (pixi tasks `deploy-viewer` / `deploy-tcell-viewer` / `deploy-all-viewers`). Three cache passes:
+  shards at `max-age=86400 --delete`, payload sidecar at `max-age=300`, HTML `no-cache`.
+  Two deliberate deviations from the sketch below: **no `--content-encoding gzip`** (the viewer
+  gunzips client-side via `DecompressionStream`; setting the header makes the browser
+  pre-decompress and the manual gunzip fails), and `*.bin.gz` rides the short payload cache
+  because the binary indexes are byte-coupled to the payload manifest. No CloudFront exists, so
+  no invalidation step is needed.
+- **B — builder shard cache.** Shipped as `alz/viewer/shared/build_cache.py`: SHA-256 content
+  hashing with an mtime+size fast path, output-existence validation, and a schema version to
+  invalidate stale manifests. Wired across the `decomp_ols`, `song_concordance`,
+  `incytr_pathways`, `human_perdonor`, and `fivexfad_*` shard families.
 
 ---
 
@@ -170,8 +183,6 @@ typical build drops to the handful of consolidated files that changed.
 abstraction needs a new backend. Test coverage must verify byte-range correctness.
 
 ---
-
-\\  
 
 ## Option D — DuckDB-Wasm (exploratory, weeks)
 
