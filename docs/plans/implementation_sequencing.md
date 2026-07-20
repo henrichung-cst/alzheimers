@@ -73,7 +73,7 @@ D2 ──► E1 (on kinase_kinase_edges.py) ──► E2 ───────�
 T2 specificity ──► E2                                            │   integration
 B2 (sankey), C3 (early-change) ──────────────────────────────────┘
 
-tmt (H1), G1 (diagrams), apriori (docs), deploy-B ── independent leaves, no gate
+G1 (diagrams), apriori (docs), deploy-C/D ── independent leaves, no gate
 I2 ── isolated window (D5)
 ```
 
@@ -94,9 +94,8 @@ I2 ── isolated window (D5)
 ## 5. Parallel execution waves
 
 **Wave 1 — independent builds (parallel, disjoint outputs, no gate).**
-- `H1` TMT paper IMAC fetch + enrichment.
 - `G1` workflow diagrams (docs).
-- `deploy` Option B (shard-hash manifest) — infra layer, separate from analysis.
+- `deploy` Options C (parquet + HTTP Range) and D (DuckDB-Wasm) — infra layer, separate from analysis.
 - `apriori` blind exhaustion prediction set (docs) — literature-grounded, authored before final
   outputs; feeds the `/check-controls` plausibility skill. Blindness caveat: the t-cell
   Incytr report suite is already built, so ground the predictions in literature only, not those outputs.
