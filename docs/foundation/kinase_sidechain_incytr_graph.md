@@ -154,9 +154,27 @@ into its own outward angular wedge (concentric arcs, strong kinases inner / weak
 outer), so adjacent nodes' fans tile instead of competing for one axis.
 
 **Interaction** — tap a node to isolate its closed neighborhood (∪ spine) and
-zoom; tap any edge for a detail popup (terminal: signed NES, direction, FDR,
-|NES|, sites; chain: provenance, weight); tap background to clear. A static legend
-built from the style constants explains every encoding.
+zoom, *and* fill the relationship table (below); tap any edge for a detail popup
+(terminal: signed NES, direction, FDR, |NES|, sites; chain: provenance, weight);
+tap background to clear. A static legend built from the style constants explains
+every encoding.
+
+**Node relationship table** (`_isNodeRelationTable`) — a node tap also renders a
+ranked table of that node's relationships into the pinned bottom-left info panel,
+so the isolated neighborhood is readable as rows rather than only as geometry.
+Direction-aware:
+
+- **Spine node** → rows are the kinases hitting it. Summary: `N kinases affecting
+  · E enriched · D depleted`.
+- **Kinase node** → rows are what it points at — pathway nodes via terminal edges
+  (with role and signed NES), then other kinases via chain edges (provenance,
+  weight). Summary: `targets N nodes · M kinases`.
+
+Terminal rows sort by |signed NES| desc and always precede chain rows, which sort
+by weight desc. The table reads the loaded graph regardless of the `showChains`
+graph filter — it is a text read-out, not a second view of the canvas. Purely
+viewer-side: every field already rides the Cytoscape edge data, so no backend,
+payload, or schema-guard column participates.
 
 ---
 
