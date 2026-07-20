@@ -47,15 +47,10 @@ Sequencing, cross-cutting threads, and blocking adjudications: [`implementation_
   [`../foundation/kinase_sidechain_incytr_graph.md`](../foundation/kinase_sidechain_incytr_graph.md);
   the subplan set is archived under
   [`../../archive/archived_plans/kinase_sidechain_incytr_graph/`](../../archive/archived_plans/kinase_sidechain_incytr_graph/).
-- **T-cell labeling standard** (`tcell-matt-report-restoration.md`) — shipped; archived under
+- **T-cell labeling standard** (`tcell-matt-report-restoration.md`) — shipped. The standard was
+  promoted to [`../foundation/tcell_labeling_standard.md`](../foundation/tcell_labeling_standard.md);
+  the plan is archived under
   [`../../archive/archived_plans/standalone_done/`](../../archive/archived_plans/standalone_done/).
-  Canonical labeling is **per-cell marker assignment** (`alz/analysis/tcell_state_labels.py`, via
-  `pixi run tcells-label`) into the 12-state CD4/CD8 vocabulary; by-cluster annotation was rejected
-  as day-confounded and ProjecTILs is corroboration-only. Enforced in code, not by convention: one
-  producer and one shared validator (`alz/ingest/tcells_state_labels.R`) that hard-fails on
-  barcode/day/cluster drift. The Incytr re-run landed on the consolidated production root
-  `outputs/reports/incytr_pair_mode_tcells`, which `build_tcell_viewer.py` asserts as the resolver
-  default. Thread detail in `implementation_sequencing.md` §T4.
 - **`standard_attribution_metric.md`** — the implemented cross-cohort metric spec (cited by path
   in 5 source files); moved to [`../foundation/standard_attribution_metric.md`](../foundation/standard_attribution_metric.md).
 - **Completed standalone plans** — moved to

@@ -32,22 +32,11 @@ a first-principles DB rebuild is blocked on source artifacts that no longer exis
 rule forbids requesting. Payload writers (`build_unified_viewer.py`, `build_tcell_viewer.py`,
 cohort `*.py`, `slices_incytr.py`) cannot be written concurrently — serialize integration, not authoring.
 
-**T4 — T-cell labeling standard (SETTLED, nothing outstanding).** Canonical = **per-cell marker
-assignment** (`alz/analysis/tcell_state_labels.py`, via `pixi run tcells-label`) → the 12-state CD4/CD8
-vocabulary in `outputs/reports/tcell_labeling/cells/{donor}_state_labels.csv`. By-cluster annotation was
-**rejected**: native Seurat clusters are day-confounded (it called 59.6% of donor1 day-2 and 69.2% of
-donor2 day-2 cells "activated" purely by cluster occupancy). ProjecTILs is **corroboration-only** — it
-lands in the `projectils_*` evidence columns and never sets a label.
-
-The standard is enforced in code, not by convention: one producer, and one shared validator
-(`alz/ingest/tcells_state_labels.R`) that every consumer routes through and that hard-fails on
-barcode/day/cluster drift or any type outside the 12-value vocabulary. There is no competing live
-labeling path. This is the current **default, not a lock** — re-running `tcells-label` re-derives
-everything downstream, so a deliberate future re-labeling is a supported operation.
-
-The whole t-cell chain is built on this standard and consistent with it: Incytr `wide/` (donor1 ×3,
-donor2 ×4), the viewer (`build_tcell_viewer.py` asserts `incytr_pair_mode_tcells` is the
-resolver default), and the report suite. No t-cell item is open against this standard.
+**T4 — T-cell labeling standard (SETTLED, nothing outstanding).** Canonical = per-cell marker
+assignment; spec in `foundation/tcell_labeling_standard.md`. The whole t-cell chain is built on it
+and consistent with it: Incytr `wide/` (donor1 ×3, donor2 ×4), the viewer (`build_tcell_viewer.py`
+asserts `incytr_pair_mode_tcells` is the resolver default), and the report suite. No t-cell item is
+open against this standard, and no plan below is gated on it.
 
 ---
 

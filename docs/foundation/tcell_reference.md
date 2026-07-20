@@ -1,5 +1,11 @@
 # Human T-Cell Nomenclature Reference
 
+Glossary for the **ProjecTILs reference** nomenclature. These names appear only in
+the `projectils_*` evidence columns — ProjecTILs is corroboration-only and never
+sets a label. The vocabulary the pipeline actually assigns is the 12-value `type`
+set in [`tcell_labeling_standard.md`](tcell_labeling_standard.md); the two are
+different and must not be conflated.
+
 ## CD8+ T-Cells
 
 * **NaiveLike**: T cells with naive-like phenotype

@@ -27,7 +27,9 @@ Read by analytical role, not creation order.
 | [`foundation/mechanism_attribution_contract.md`](./foundation/mechanism_attribution_contract.md) | Mechanism-annotation contract: how mechanism labels merge into `unified_attribution.csv` |
 | [`foundation/projected_state_mea_contract.md`](./foundation/projected_state_mea_contract.md) | Projected-state MEA contract: per-cluster decomposition → MEA substrate contract |
 | [`foundation/mukesh_ingest_policies.yml`](./foundation/mukesh_ingest_policies.yml) | Mukesh / NBB human ingest edge-case policies (consumed by `alz/cohorts/mukesh/ingest.py`) |
-| [`foundation/tcell_reference.md`](./foundation/tcell_reference.md) | T-cell NSCLC reference cohort constants (per-kinase cell-type detection basis) |
+| [`foundation/tcell_labeling_standard.md`](./foundation/tcell_labeling_standard.md) | How T-cells get their state: per-cell marker assignment, the 12-value `type` vocabulary, and the producer/validator enforcement contract |
+| [`foundation/tcell_reference.md`](./foundation/tcell_reference.md) | Glossary of the ProjecTILs reference nomenclature (corroboration-only evidence columns; not the assigned label set) |
+| [`foundation/kinase_sidechain_incytr_graph.md`](./foundation/kinase_sidechain_incytr_graph.md) | Kinase-sidechain graph architecture: the two edge classes, the absolute-NES × substrate-multiplicity weighting model, viewer encodings |
 | [`foundation/pipeline_conventions.md`](./foundation/pipeline_conventions.md) | Cross-pipeline invariants: LFC/NES/sclog2FC/PDS sign convention, mechanism-after-attribute ordering, direct levy_t5 mapping |
 | [`foundation/standard_attribution_metric.md`](./foundation/standard_attribution_metric.md) | The one cross-cohort attribution metric definition (`specificity.compute`); cited by path in 5 source files |
 | [`foundation/backbone_incytr_track.md`](./foundation/backbone_incytr_track.md) | Authoritative backbone-grain spec — read before touching backbone / Incytr-viewer code |

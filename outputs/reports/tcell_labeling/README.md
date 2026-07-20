@@ -1,5 +1,8 @@
 # T-cell per-cell labeling workspace
 
+Output workspace for the labeling standard specified in
+`docs/foundation/tcell_labeling_standard.md`.
+
 The current analysis is [the per-cell labeling report](tcell_state_labeling_evidence_percell.html).
 Each cell is labeled from non-cycle RNA marker modules and raw CD4/CD8 CITE-seq
 counts. Native clusters provide lineage fallback and UMAP context, not state.
