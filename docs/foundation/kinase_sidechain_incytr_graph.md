@@ -37,7 +37,7 @@ kinase_incytr_bridge.py                 →  kinase_kinase_edges.py            �
 kinase_node_hits.parquet  ──────────────▶  interactome.csv                  ──▶  interactome / terminal_edges ──▶  spine + fans
   (kinase, gene, role,                      terminal_edges.csv                    tuple-guarded shard
    contrast, NES, FDR,
-   n_sites, …)
+   n_sites, sites, …)
 ```
 
 1. **Bridge** (`alz/cross_reference/kinase_incytr_bridge.py`) — per cohort, joins
@@ -74,7 +74,10 @@ cohort. PhosphoSitePlus (PSP) literature only *corroborates* an existing edge
 (bumps provenance to `both`, adds `weight_lit`); it never creates one.
 
 Per-edge fields carried to the viewer: `signed_nes`, `best_abs_nes`, `best_fdr`,
-`n_sites`, `weight_motif`, `provenance`, `role`, `contrast`.
+`n_sites`, `sites`, `weight_motif`, `provenance`, `role`, `contrast`. `sites` is
+JSON-encoded floor-99 raw evidence (`motif`, `residue_type`,
+`kl_percentile`) attached at `(kinase, contrast, gene_symbol)` and selected from
+the same max-|NES| bridge row as `n_sites`.
 
 ### Interactome edges (kinase → kinase)
 
@@ -154,13 +157,15 @@ into its own outward angular wedge (concentric arcs, strong kinases inner / weak
 outer), so adjacent nodes' fans tile instead of competing for one axis.
 
 **Interaction** — tap a node to isolate its closed neighborhood (∪ spine) and
-zoom, *and* fill the relationship table (below); tap any edge for a detail popup
-(terminal: signed NES, direction, FDR, |NES|, sites; chain: provenance, weight);
-tap background to clear. A static legend built from the style constants explains
-every encoding.
+zoom, *and* fill the relationship table (below); tap any edge for a detail panel
+(terminal: signed NES, direction, FDR, |NES|, site count, and the sorted floor-99
+motif table; chain: provenance, weight); tap background to clear. The graph and
+the dedicated right-side evidence panel remain side-by-side, including in browser
+full-screen mode. A static legend built from the style constants explains every
+encoding.
 
 **Node relationship table** (`_isNodeRelationTable`) — a node tap also renders a
-ranked table of that node's relationships into the pinned bottom-left info panel,
+ranked table of that node's relationships into the dedicated side evidence panel,
 so the isolated neighborhood is readable as rows rather than only as geometry.
 Direction-aware:
 
@@ -196,6 +201,7 @@ pixi run python -m alz.cross_reference.kinase_incytr_bridge --cohort <song|fivex
 pixi run python -m alz.cross_reference.kinase_kinase_edges  --cohort <song|fivexfad|tcells>
 pixi run python -m alz.build_tcell_viewer --html    # t-cell shard + viewer
 pixi run viewer                                     # AD/Song unified viewer
+bash alz/runners/main/run_kinase_sidechain_floor99_reconciliation.sh  # all four cohorts + contract check
 ```
 
 The bridge must run first when the hit-table schema changes (`n_sites` originates
@@ -215,6 +221,9 @@ viewer emphasis/layout math, Node-executed against the real JS source).
 - **`abs(signed_nes) == best_abs_nes`** for every terminal edge (same-row pick).
 - **Terminal edges are motif-created, PSP-corroborated.** Interactome edges can be
   literature-only. Do not let PSP create terminal edges.
+- **Terminal site evidence reconciles.** For every regenerated terminal edge,
+  `len(sites) == n_sites`; each site carries its motif, residue type, and raw
+  `kl_percentile >= 99`. A mismatch fails the reducer/viewer contract check.
 - **Schema tuple guard is the change-detector.** Any new backend column must be
   appended to the payload column tuples in the same pass, or the shard build
   raises.

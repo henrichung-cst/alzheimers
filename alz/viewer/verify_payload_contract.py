@@ -21,6 +21,7 @@ from alz.viewer.shared.payload_helpers import (
     _INCYTR_SIDECHAIN_INTERACTOME_COLUMNS,
     _INCYTR_SIDECHAIN_TERMINAL_COLUMNS,
 )
+from alz.shared import config
 
 
 REQUIRED_CONTEXT_FIELDS = {
@@ -249,6 +250,34 @@ def _check_incytr_sidechains(
                 errors.append(
                     f"Incytr sidechain shard {context_id!r} {table} count mismatch"
                 )
+            if table == "terminal_edges" and "sites" in columns:
+                for index, (raw_sites, n_sites) in enumerate(
+                    zip(columns["sites"], columns["n_sites"])
+                ):
+                    try:
+                        sites = json.loads(raw_sites) if raw_sites else None
+                    except (TypeError, json.JSONDecodeError):
+                        sites = None
+                    if not isinstance(sites, list) or len(sites) != n_sites:
+                        errors.append(
+                            f"Incytr sidechain shard {context_id!r} terminal edge "
+                            f"{index} site-list/count mismatch"
+                        )
+                        continue
+                    for site in sites:
+                        if not isinstance(site, dict) or not {
+                            "motif", "residue_type", "kl_percentile"
+                        }.issubset(site):
+                            errors.append(
+                                f"Incytr sidechain shard {context_id!r} terminal edge "
+                                f"{index} has malformed site evidence"
+                            )
+                            continue
+                        if float(site["kl_percentile"]) < config.INCYTR_ATTRIBUTION_KL_PCT:
+                            errors.append(
+                                f"Incytr sidechain shard {context_id!r} terminal edge "
+                                f"{index} has a below-floor site"
+                            )
         interactome = shard.get("interactome", {})
         if isinstance(interactome, dict):
             nodes = set(interactome.get("source_gene", []))

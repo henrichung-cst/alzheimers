@@ -171,6 +171,8 @@ const _IS_STYLE = {
   graphCornerRadiusPx: 4,
   captionTopMarginPx: 6,
   relationMaxHeightPx: 180,
+  infoPanelWidthPx: 340,
+  siteMaxHeightPx: 360,
   kinaseNodeDiameterPx: 34,
   kinaseNodeBorderWidthPx: 1,
   spineNodeBorderWidthPx: 2,
@@ -441,6 +443,12 @@ function _isGraphForRow(shard, row) {
     "source_gene", "target_gene", "role", "contrast", "provenance", "weight",
     "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
   ];
+  // Regenerated shards carry the inline floor-99 site list. Keep older shards
+  // readable while they are being replaced; their edge caption remains the
+  // only available evidence detail.
+  if (shard.terminal_edges && Array.isArray(shard.terminal_edges.sites)) {
+    terminalFields.push("sites");
+  }
   // Pre-peer shards remain viewable; regenerated shards additionally carry the
   // kinase/owning-cluster join keys used for the motif-peer chip.
   if (shard.terminal_edges && Array.isArray(shard.terminal_edges.kinase)
@@ -485,6 +493,22 @@ function _isGraphForRow(shard, row) {
     spine, terminalEdges, chainEdges, kinaseGenes, directKinaseGenes,
     nesMax, sitesMax, chainMax,
   };
+}
+
+function _isTerminalSiteRows(edge) {
+  if (!edge || !edge.sites) return null;
+  let sites;
+  try {
+    sites = JSON.parse(String(edge.sites));
+  } catch (err) {
+    return { error: "Phosphosite detail is malformed in this shard." };
+  }
+  if (!Array.isArray(sites) || sites.length !== _isNumeric(edge.n_sites)) {
+    return { error: "Phosphosite detail does not reconcile with the edge site count." };
+  }
+  return sites.slice().sort((a, b) =>
+    _isNumeric(b.kl_percentile) - _isNumeric(a.kl_percentile)
+      || String(a.motif || "").localeCompare(String(b.motif || "")));
 }
 
 function _isPositionedElements(graph, width, height) {
@@ -619,6 +643,7 @@ function _isPositionedElements(graph, width, height) {
       signed_nes: _isNumeric(edge.signed_nes), nes_direction: _isNesDirection(edge.signed_nes),
       best_abs_nes: _isNumeric(edge.best_abs_nes), best_fdr: _isNumeric(edge.best_fdr),
       n_sites: sites,
+      sites: edge.sites || null,
       kinase: String(edge.kinase || ""),
       owning_cluster: String(edge.owning_cluster || ""),
       motif_peer: _isMotifPeerForEdge(edge),
@@ -635,9 +660,10 @@ function _isRenderCytoscape(host, graph) {
   if (host._incytrSidechainCleanup) host._incytrSidechainCleanup();
   if (host._incytrSidechainCy) host._incytrSidechainCy.destroy();
   const panel = document.createElement("div");
-  panel.style.cssText = "position:relative;background:#fff;";
+  panel.style.cssText = "position:relative;display:flex;gap:12px;align-items:stretch;"
+    + "background:#fff;box-sizing:border-box;min-width:0;";
   const graphHost = document.createElement("div");
-  graphHost.style.cssText = `width:100%;height:${_IS_LAYOUT.graphHeightPx}px;`
+  graphHost.style.cssText = `flex:1 1 0;min-width:0;height:${_IS_LAYOUT.graphHeightPx}px;`
     + `border:${_IS_STYLE.graphBorderWidthPx}px solid #ddd;`
     + `border-radius:${_IS_STYLE.graphCornerRadiusPx}px;background:#fff;`;
   const fullscreenButton = document.createElement("button");
@@ -679,6 +705,11 @@ function _isRenderCytoscape(host, graph) {
     + `max-height:${_IS_STYLE.relationMaxHeightPx}px;overflow:auto;`
     + `font-size:${_IS_STYLE.smallTextPx}px;color:#334155;`;
   nodeRelationDetail.textContent = "Tap a node for its relationships.";
+  const siteDetail = document.createElement("div");
+  siteDetail.style.cssText = `margin-top:${_IS_STYLE.captionTopMarginPx}px;`
+    + `max-height:${_IS_STYLE.siteMaxHeightPx}px;overflow:auto;`
+    + `font-size:${_IS_STYLE.smallTextPx}px;color:#334155;`;
+  siteDetail.textContent = "Tap a terminal edge for phosphosite evidence.";
   const filterControls = document.createElement("div");
   filterControls.style.cssText = `display:grid;gap:4px;`
     + `margin-bottom:${_IS_STYLE.captionTopMarginPx}px;font-size:${_IS_STYLE.smallTextPx}px;`
@@ -695,15 +726,15 @@ function _isRenderCytoscape(host, graph) {
   showChains.setAttribute("aria-label", "Show kinase to kinase chains");
   chainFilter.append(showChains, document.createTextNode("Show kinase→kinase chains"));
   filterControls.append(chainFilter);
-  // Kept inside the graph panel so the legend and selected-edge NES evidence
-  // remain available when this panel enters browser full-screen mode.
-  const infoPanel = document.createElement("div");
-  infoPanel.style.cssText = "position:absolute;left:10px;bottom:10px;z-index:2;"
-    + "max-width:min(520px,calc(100% - 20px));padding:8px 10px;"
-    + "border:1px solid #cbd5e1;border-radius:5px;background:#fffffff0;"
-    + "box-shadow:0 2px 8px #0002;";
-  infoPanel.append(filterControls, legend, edgeDetail, nodeRelationDetail);
-  panel.append(graphHost, fullscreenButton, infoPanel);
+  // Dedicated side panel: it remains inside the fullscreen container while
+  // giving Cytoscape its own unobstructed width.
+  const infoPanel = document.createElement("aside");
+  infoPanel.style.cssText = `flex:0 0 ${_IS_STYLE.infoPanelWidthPx}px;box-sizing:border-box;`
+    + "padding:8px 10px;border:1px solid #cbd5e1;border-radius:5px;"
+    + "background:#fffffff0;overflow:auto;";
+  infoPanel.setAttribute("aria-label", "Sidechain edge evidence");
+  infoPanel.append(filterControls, legend, edgeDetail, nodeRelationDetail, siteDetail);
+  panel.append(graphHost, infoPanel, fullscreenButton);
   host.replaceChildren(panel, caption);
   const cy = window.cytoscape({
     container: graphHost,
@@ -797,6 +828,8 @@ function _isRenderCytoscape(host, graph) {
     graphHost.style.height = isFullscreen
       ? `${Math.max(_IS_LAYOUT.graphHeightPx, window.innerHeight - 180)}px`
       : `${_IS_LAYOUT.graphHeightPx}px`;
+    panel.style.padding = isFullscreen ? "44px 12px 12px" : "0";
+    panel.style.minHeight = isFullscreen ? "100vh" : "0";
     fullscreenButton.textContent = isFullscreen ? "⛶ Exit full screen" : "⛶ Full screen";
     fullscreenButton.setAttribute("aria-label", isFullscreen
       ? "Exit sidechain graph full screen" : "View sidechain graph full screen");
@@ -852,6 +885,7 @@ function _isRenderCytoscape(host, graph) {
     cy.fit(visibleElements(cy.elements()), _IS_LAYOUT.fitPaddingPx);
     edgeDetail.textContent = "Tap an edge for its evidence.";
     nodeRelationDetail.textContent = "Tap a node for its relationships.";
+    siteDetail.textContent = "Tap a terminal edge for phosphosite evidence.";
     updateCaption();
   };
   showChains.addEventListener("change", applyFilters);
@@ -863,6 +897,59 @@ function _isRenderCytoscape(host, graph) {
     keep.edges().addClass("is-focus-edge");
     cy.fit(visibleElements(keep), _IS_LAYOUT.fitPaddingPx);
     if (detail) edgeDetail.textContent = detail;
+  };
+  const renderTerminalSites = (edge, substrate, contrast) => {
+    const sites = _isTerminalSiteRows({
+      sites: edge.data("sites"), n_sites: edge.data("n_sites"),
+    });
+    if (sites === null) {
+      siteDetail.textContent = "This shard has no inline phosphosite detail.";
+      return;
+    }
+    if (!Array.isArray(sites)) {
+      siteDetail.textContent = sites.error;
+      return;
+    }
+    const wrapper = document.createElement("div");
+    const heading = document.createElement("div");
+    heading.style.cssText = "font-weight:700;color:#1e3a5f;padding-bottom:4px;";
+    heading.textContent = `${substrate} phosphosites · ${contrast}`;
+    wrapper.appendChild(heading);
+    const summary = document.createElement("div");
+    summary.style.cssText = "padding-bottom:5px;";
+    summary.textContent = `NES ${_isNumeric(edge.data("signed_nes")).toFixed(3)} · `
+      + `FDR ${_isNumeric(edge.data("best_fdr")).toPrecision(3)} · `
+      + `|NES| ${_isNumeric(edge.data("best_abs_nes")).toFixed(3)}`;
+    wrapper.appendChild(summary);
+    const table = document.createElement("table");
+    table.setAttribute("aria-label", `${substrate} floor-99 phosphosites`);
+    table.style.cssText = "border-collapse:collapse;width:100%;font-size:11px;";
+    const head = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    ["Motif", "Residue", "KL percentile"].forEach(label => {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = label;
+      cell.style.cssText = "padding:2px 5px;text-align:left;white-space:nowrap;";
+      headerRow.appendChild(cell);
+    });
+    head.appendChild(headerRow);
+    table.appendChild(head);
+    const body = document.createElement("tbody");
+    sites.forEach(site => {
+      const row = document.createElement("tr");
+      [String(site.motif || ""), String(site.residue_type || ""),
+        _isNumeric(site.kl_percentile).toFixed(2)].forEach(value => {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        cell.style.cssText = "padding:2px 5px;border-top:1px solid #e2e8f0;";
+        row.appendChild(cell);
+      });
+      body.appendChild(row);
+    });
+    table.appendChild(body);
+    wrapper.appendChild(table);
+    siteDetail.replaceChildren(wrapper);
   };
   cy.on("tap", "edge", evt => {
     const edge = evt.target;
@@ -876,11 +963,13 @@ function _isRenderCytoscape(host, graph) {
         + `|NES| ${_isNumeric(edge.data("best_abs_nes")).toFixed(3)}, `
         + `sites ${_isNumeric(edge.data("n_sites"))}.`;
       focus(edge.closedNeighborhood().union(spine), detail);
+      renderTerminalSites(edge, target, String(edge.data("contrast") || ""));
       return;
     }
     const detail = `${source} → ${target}: ${String(edge.data("provenance"))} `
       + `evidence, weight ${_isNumeric(edge.data("weight")).toFixed(3)}.`;
     focus(edge.closedNeighborhood().union(spine), detail);
+    siteDetail.textContent = "Tap a terminal edge for phosphosite evidence.";
   });
   cy.on("mouseover", "node[kind = 'kinase-node']", evt => evt.target.addClass("is-hover"));
   cy.on("mouseout", "node[kind = 'kinase-node']", evt => evt.target.removeClass("is-hover"));
@@ -888,6 +977,7 @@ function _isRenderCytoscape(host, graph) {
     // Tap any node → keep only its neighborhood + the pathway spine; hard-hide the
     // rest so no faint edges remain, then zoom to what's left.
     nodeRelationDetail.replaceChildren(_isNodeRelationTable(evt.target, cy));
+    siteDetail.textContent = "Tap a terminal edge for phosphosite evidence.";
     focus(evt.target.closedNeighborhood().union(spine));
   });
   cy.on("tap", evt => {
@@ -896,6 +986,7 @@ function _isRenderCytoscape(host, graph) {
       cy.fit(visibleElements(cy.elements()), _IS_LAYOUT.fitPaddingPx);
       edgeDetail.textContent = "Tap an edge for its evidence.";
       nodeRelationDetail.textContent = "Tap a node for its relationships.";
+      siteDetail.textContent = "Tap a terminal edge for phosphosite evidence.";
     }
   });
   host._incytrSidechainCy = cy;

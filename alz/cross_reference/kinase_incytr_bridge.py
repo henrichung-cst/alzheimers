@@ -140,6 +140,7 @@ def load_gene_node_index(path: Path) -> pd.DataFrame:
 
 SUBSTRATE_BRIDGE_COLS = [
     "kinase", "contrast", "channel", "NES", "FDR", "gene_symbol", "n_sites",
+    "sites",
 ]
 
 
@@ -154,15 +155,19 @@ def load_floor_substrate_sets(
     The bridge applies the floor again at its public seam so callers cannot
     accidentally bypass the attribution rule with an unfiltered DataFrame.
     """
-    columns = ["kinase", "contrast", "motif", "kl_percentile"]
+    columns = ["kinase", "contrast", "motif", "residue_type", "kl_percentile"]
     if not path.exists():
         return pd.DataFrame(columns=columns)
     safe_path = str(path).replace("'", "''")
     con = duckdb.connect()
     try:
+        available = set(con.execute(
+            f"DESCRIBE SELECT * FROM read_csv_auto('{safe_path}', header = true)"
+        ).fetchdf()["column_name"])
+        residue_expr = '"residue_type"' if "residue_type" in available else "NULL::VARCHAR"
         return con.execute(
             f"""
-            SELECT kinase, contrast, motif,
+            SELECT kinase, contrast, motif, {residue_expr} AS residue_type,
                    TRY_CAST(kl_percentile AS DOUBLE) AS kl_percentile
             FROM read_csv_auto('{safe_path}', header = true)
             WHERE TRY_CAST(kl_percentile AS DOUBLE) >= $kl_floor
@@ -193,16 +198,22 @@ def build_substrate_bridge(
     edges.
 
     ``n_sites`` is the number of distinct floor-qualified motifs for a
-    (kinase, contrast) row that map to a gene.  It is counted before the
-    node-index join, so every role/sender/receiver fan-out retains the same
-    raw evidence.
+    (kinase, contrast) row that map to a gene.  ``sites`` is the compact JSON
+    encoding of those same motifs, retaining the raw motif, residue type, and
+    kinase-library percentile. Both are computed before the node-index join,
+    so every role/sender/receiver fan-out retains the same raw evidence.
 
-    Returns columns: kinase, contrast, channel, NES, FDR, gene_symbol, n_sites
+    Returns columns: kinase, contrast, channel, NES, FDR, gene_symbol, n_sites, sites
     """
     if substrate_sets.empty or mea_stoich.empty or stoich_matrix.empty:
         return pd.DataFrame(columns=SUBSTRATE_BRIDGE_COLS)
 
-    substrate = substrate_sets[["kinase", "contrast", "motif", "kl_percentile"]].copy()
+    substrate_columns = ["kinase", "contrast", "motif", "kl_percentile"]
+    if "residue_type" in substrate_sets.columns:
+        substrate_columns.insert(3, "residue_type")
+    substrate = substrate_sets[substrate_columns].copy()
+    if "residue_type" not in substrate.columns:
+        substrate["residue_type"] = None
     substrate["kl_percentile"] = pd.to_numeric(
         substrate["kl_percentile"], errors="coerce"
     )
@@ -211,7 +222,10 @@ def build_substrate_bridge(
         return pd.DataFrame(columns=SUBSTRATE_BRIDGE_COLS)
     substrate["motif_key"] = substrate["motif"].map(_motif_key)
     substrate = substrate[substrate["motif_key"].ne("")]
-    substrate = substrate.drop_duplicates(["kinase", "contrast", "motif_key"])
+    substrate = substrate.sort_values(
+        ["kinase", "contrast", "motif_key", "kl_percentile"],
+        ascending=[True, True, True, False],
+    ).drop_duplicates(["kinase", "contrast", "motif_key"])
 
     motif_map = stoich_matrix[["motif", "gene_symbol"]].copy()
     motif_map["motif_key"] = motif_map["motif"].map(_motif_key)
@@ -239,11 +253,44 @@ def build_substrate_bridge(
     if mapped.empty:
         return pd.DataFrame(columns=SUBSTRATE_BRIDGE_COLS)
     mapped = mapped.drop_duplicates(["kinase", "contrast", "motif_key", "gene_symbol"])
+
+    def encode_sites(group: pd.DataFrame) -> str:
+        ordered = group.sort_values(
+            ["kl_percentile", "motif_key"], ascending=[False, True]
+        )
+        records = []
+        for row in ordered.itertuples(index=False):
+            residue_type = row.residue_type
+            records.append({
+                "motif": str(row.motif),
+                "residue_type": None if pd.isna(residue_type) else str(residue_type),
+                "kl_percentile": float(row.kl_percentile),
+            })
+        return json.dumps(records, ensure_ascii=False, separators=(",", ":"))
+
+    site_rows = []
+    for keys, group in mapped.groupby(
+        ["kinase", "contrast", "gene_symbol"], sort=False
+    ):
+        site_rows.append({
+            "kinase": keys[0],
+            "contrast": keys[1],
+            "gene_symbol": keys[2],
+            "sites": encode_sites(group),
+        })
+    site_lists = pd.DataFrame(site_rows)
     counts = (
         mapped.groupby(["kinase", "contrast", "gene_symbol"], as_index=False)
         .size()
         .rename(columns={"size": "n_sites"})
     )
+    counts = counts.merge(site_lists, on=["kinase", "contrast", "gene_symbol"], how="left")
+    for row in counts.itertuples(index=False):
+        if len(json.loads(row.sites)) != int(row.n_sites):
+            raise ValueError(
+                "Substrate bridge site-list/count mismatch for "
+                f"{row.kinase}/{row.contrast}/{row.gene_symbol}"
+            )
 
     annotations = mea_stoich[["kinase", "contrast", "NES", "FDR"]].copy()
     annotations["channel"] = mea_stoich.get("track", "st")
@@ -268,7 +315,7 @@ def gene_node_hits(
       Receptor / EM / Target -> receiver cluster owns the node
 
     Returns flat hit table with columns:
-      kinase, contrast, channel, NES, FDR, gene_symbol, n_sites, role, sender, receiver,
+      kinase, contrast, channel, NES, FDR, gene_symbol, n_sites, sites, role, sender, receiver,
       owning_cluster (the cluster that "owns" this node per position rule)
     """
     if substrate_df.empty:
@@ -1152,7 +1199,7 @@ def write_fivexfad_streamed(tissue: str, out_dir: Path, wide_glob: str) -> bool:
 
         final_sql = f"""
             WITH hits AS (
-                SELECT s.kinase, s.contrast, s.channel, s.NES, s.FDR, s.n_sites,
+                SELECT s.kinase, s.contrast, s.channel, s.NES, s.FDR, s.n_sites, s.sites,
                        s.gene_symbol, n.role, n.sender, n.receiver,
                        CASE WHEN n.role = 'Ligand' THEN n.sender ELSE n.receiver END AS owning_cluster,
                        n.n_rows, n.best_abs_pds
@@ -1162,7 +1209,7 @@ def write_fivexfad_streamed(tissue: str, out_dir: Path, wide_glob: str) -> bool:
             annotated AS (
                 SELECT 'fivexfad' AS cohort,
                        $tissue AS tissue,
-                       h.kinase, h.contrast, h.channel, h.NES, h.FDR, h.n_sites,
+                       h.kinase, h.contrast, h.channel, h.NES, h.FDR, h.n_sites, h.sites,
                        h.gene_symbol, h.role, h.sender, h.receiver,
                        h.owning_cluster,
                        r.celltype_match_rank IS NOT NULL AS celltype_match,
@@ -1249,7 +1296,7 @@ def write_fivexfad_streamed(tissue: str, out_dir: Path, wide_glob: str) -> bool:
 # ---------------------------------------------------------------------------
 
 FINAL_COLS = [
-    "cohort", "tissue", "kinase", "contrast", "channel", "NES", "FDR", "n_sites",
+    "cohort", "tissue", "kinase", "contrast", "channel", "NES", "FDR", "n_sites", "sites",
     "gene_symbol", "role", "sender", "receiver", "owning_cluster",
     "celltype_match", "celltype_match_rank",
     "n_rows", "best_abs_pds",
@@ -1436,7 +1483,7 @@ def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
         log.info("T-cell %s: writing kinase_node_hits", donor)
         final_sql = f"""
             WITH hits AS (
-                SELECT s.kinase, s.contrast, s.channel, s.NES, s.FDR, s.n_sites,
+                SELECT s.kinase, s.contrast, s.channel, s.NES, s.FDR, s.n_sites, s.sites,
                        s.gene_symbol, n.role, n.sender, n.receiver,
                        CASE WHEN n.role = 'Ligand' THEN n.sender ELSE n.receiver END AS owning_cluster,
                        n.n_rows, n.best_abs_pds
@@ -1446,7 +1493,7 @@ def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
             annotated AS (
                 SELECT 'tcells' AS cohort,
                        $donor AS tissue,
-                       h.kinase, h.contrast, h.channel, h.NES, h.FDR, h.n_sites,
+                       h.kinase, h.contrast, h.channel, h.NES, h.FDR, h.n_sites, h.sites,
                        h.gene_symbol, h.role, h.sender, h.receiver,
                        h.owning_cluster,
                        a.owning_cluster IS NOT NULL AS celltype_match,

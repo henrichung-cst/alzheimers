@@ -27,6 +27,7 @@ _INCYTR_SIDECHAIN_TERMINAL_COLUMNS = (
     "kinase", "source_gene", "target_gene", "role", "contrast", "owning_cluster", "celltype_match",
     "provenance", "weight", "weight_lit", "weight_motif", "best_abs_pds",
     "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
+    "sites",
 )
 _INCYTR_SIDECHAIN_INDEX_FILENAME = "sidechains_index.json"
 

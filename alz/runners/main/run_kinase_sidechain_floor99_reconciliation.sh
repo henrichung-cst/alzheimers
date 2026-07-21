@@ -34,4 +34,9 @@ pixi run viewer
 echo "=== Rebuilding T-cell viewer slices ==="
 pixi run tcell-viewer
 
+echo "=== Verifying rebuilt sidechain payload contracts ==="
+pixi run python -m alz.viewer.verify_payload_contract \
+  outputs/reports/unified_viewer/unified_viewer.payload.json \
+  outputs/reports/tcell_viewer/tcell_viewer.payload.json
+
 echo "=== Floor-99 sidechain reconciliation complete ==="

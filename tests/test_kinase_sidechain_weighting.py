@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import textwrap
 import unittest
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -47,10 +48,17 @@ class KinaseSidechainBackendTests(unittest.TestCase):
 
         result = bridge.build_substrate_bridge(mea, stoich, substrate_sets).set_index("gene_symbol")
 
-        self.assertEqual(list(result.columns), ["kinase", "contrast", "channel", "NES", "FDR", "n_sites"])
+        self.assertEqual(
+            list(result.columns),
+            ["kinase", "contrast", "channel", "NES", "FDR", "n_sites", "sites"],
+        )
         self.assertEqual(result.loc["GENE_A", "n_sites"], 2)
         self.assertEqual(result.loc["GENE_B", "n_sites"], 1)
         self.assertEqual(result.loc["GENE_A", "FDR"], 0.9)
+        sites = json.loads(result.loc["GENE_A", "sites"])
+        self.assertEqual([site["motif"] for site in sites], ["MOTIFB", "MOTIFA"])
+        self.assertEqual([site["residue_type"] for site in sites], [None, None])
+        self.assertEqual([site["kl_percentile"] for site in sites], [100.0, 99.0])
 
     def test_substrate_bridge_keeps_track_specific_pY_gene_mapping(self) -> None:
         mea = pd.DataFrame(
@@ -109,6 +117,7 @@ class KinaseSidechainBackendTests(unittest.TestCase):
                 "kinase", "source_gene", "target_gene", "role", "contrast", "owning_cluster",
                 "celltype_match", "provenance", "weight", "weight_lit", "weight_motif",
                 "best_abs_pds", "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
+                "sites",
             ],
         )
         self.assertEqual(by_kinase.loc["LOW", "best_abs_pds"], 100.0)
@@ -138,6 +147,11 @@ class KinaseSidechainBackendTests(unittest.TestCase):
                 "NES": [-2.5, 1.5, 2.5],
                 "FDR": [0.02, 0.01, 0.03],
                 "n_sites": [4, 1, 9],
+                "sites": [
+                    json.dumps([{"motif": f"M{i}", "residue_type": "ST", "kl_percentile": 99 + i} for i in range(4)]),
+                    json.dumps([{"motif": "M4", "residue_type": "ST", "kl_percentile": 99}]),
+                    json.dumps([{"motif": f"M{i}", "residue_type": "Y", "kl_percentile": 99 + i} for i in range(9)]),
+                ],
                 "celltype_match": [False, True, True],
             }
         ).to_parquet(source, index=False)
@@ -157,6 +171,7 @@ class KinaseSidechainBackendTests(unittest.TestCase):
             [
                 "kinase", "kinase_gene", "target_gene", "role", "contrast", "owning_cluster",
                 "best_abs_pds", "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
+                "sites",
                 "celltype_match",
             ],
         )
@@ -166,6 +181,7 @@ class KinaseSidechainBackendTests(unittest.TestCase):
         self.assertEqual(row["signed_nes"], -2.5)
         self.assertEqual(abs(row["signed_nes"]), row["best_abs_nes"])
         self.assertEqual(row["n_sites"], 4)
+        self.assertEqual(len(json.loads(row["sites"])), row["n_sites"])
         self.assertEqual(row["best_fdr"], 0.01)
         self.assertTrue(row["celltype_match"])
 
@@ -189,10 +205,11 @@ class KinaseSidechainViewerTests(unittest.TestCase):
             if (!src.includes("requestFullscreen") || !src.includes("fullscreenchange")
                 || !src.includes("cy.resize()"))
               throw new Error("fullscreen control does not refit Cytoscape after resizing");
-            if (!src.includes("infoPanel.append(filterControls, legend, edgeDetail, nodeRelationDetail)")
+            if (!src.includes("infoPanel.append(filterControls, legend, edgeDetail, nodeRelationDetail, siteDetail)")
                 || !src.includes("nodeRelationDetail.replaceChildren(_isNodeRelationTable(evt.target, cy))")
                 || !src.includes('nodeRelationDetail.textContent = "Tap a node for its relationships.";')
-                || !src.includes("panel.append(graphHost, fullscreenButton, infoPanel)"))
+                || !src.includes("panel.append(graphHost, infoPanel, fullscreenButton)")
+                || !src.includes("display:flex"))
               throw new Error("fullscreen panel does not retain legend and edge evidence");
             if (!src.includes('selector: "edge.is-focus-edge"')
                 || !src.includes('keep.edges().addClass("is-focus-edge")'))
@@ -206,6 +223,9 @@ class KinaseSidechainViewerTests(unittest.TestCase):
               throw new Error("first-order filter does not constrain kinase-chain nodes");
             if (!src.includes("_isLegendSample") || src.includes("Bold ${{_IS_COLORS"))
               throw new Error("legend does not use visual color samples");
+            if (!src.includes("_isTerminalSiteRows") || !src.includes("KL percentile")
+                || !src.includes("renderTerminalSites(edge, target"))
+              throw new Error("terminal edge site table is not wired");
 
             const terminalFields = [
               "source_gene", "target_gene", "role", "contrast", "provenance", "weight",
@@ -256,6 +276,17 @@ class KinaseSidechainViewerTests(unittest.TestCase):
             // first-order UI filter hides its chain edges and chain-only nodes.
             if (graph.chainEdges.length !== 3)
               throw new Error("full view did not retain the one-hop kinase chains");
+            const siteRows = ctx._isTerminalSiteRows({{
+              n_sites: 2,
+              sites: JSON.stringify([
+                {{motif: "LOW", residue_type: "ST", kl_percentile: 99.1}},
+                {{motif: "HIGH", residue_type: "ST", kl_percentile: 100}},
+              ]),
+            }});
+            if (siteRows.length !== 2 || siteRows[0].motif !== "HIGH")
+              throw new Error("terminal site rows were not sorted by KL percentile");
+            if (!ctx._isTerminalSiteRows({{n_sites: 2, sites: "[]"}}).error)
+              throw new Error("site/count mismatch was not surfaced");
 
             // Emphasis: convex, anchored at the null; monotone in |NES|.
             const near = 1e-9;

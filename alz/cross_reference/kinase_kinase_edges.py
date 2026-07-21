@@ -43,6 +43,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 from pathlib import Path
@@ -53,6 +54,7 @@ import pandas as pd
 
 # Read-only import (do NOT edit that module).
 from alz.integration.build_yuyu_kldata import map_human_to_mouse
+from alz.shared import config
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -158,7 +160,7 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
 
     Contract schema (also produced by subplan 02 for t-cells):
       kinase, kinase_gene, target_gene, role, contrast, owning_cluster,
-      best_abs_pds, best_abs_nes, signed_nes, best_fdr, n_sites, celltype_match
+      best_abs_pds, best_abs_nes, signed_nes, best_fdr, n_sites, sites, celltype_match
     """
     parquet = BRIDGE_ROOT / bridge_dir / "kinase_node_hits.parquet"
     if not parquet.exists():
@@ -173,6 +175,10 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
     con.execute("PRAGMA threads=2")
     con.execute(f"SET temp_directory='{spill}'")
     safe = str(parquet).replace("'", "''")
+    parquet_columns = set(con.execute(
+        f"DESCRIBE SELECT * FROM read_parquet('{safe}')"
+    ).fetchdf()["column_name"])
+    sites_select = "sites" if "sites" in parquet_columns else "NULL::VARCHAR"
     agg = con.execute(
         f"""
         WITH ranked_hits AS (
@@ -194,6 +200,7 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
                MAX(ABS(NES)) AS best_abs_nes,
                MAX(CASE WHEN nes_rank = 1 THEN NES END) AS signed_nes,
                MAX(CASE WHEN nes_rank = 1 THEN n_sites END) AS n_sites,
+               MAX(CASE WHEN nes_rank = 1 THEN {sites_select} END) AS sites,
                MIN(FDR) AS best_fdr,
                BOOL_OR(celltype_match) AS celltype_match
         FROM ranked_hits
@@ -201,6 +208,35 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
         """
     ).to_arrow_table().to_pandas()
     con.close()
+
+    for row in agg.itertuples(index=False):
+        if pd.isna(row.sites):
+            continue
+        try:
+            sites = json.loads(row.sites)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"{bridge_dir}: invalid terminal site list for "
+                f"{row.kinase}/{row.target_gene}/{row.contrast}"
+            ) from exc
+        if not isinstance(sites, list) or len(sites) != int(row.n_sites):
+            raise ValueError(
+                f"{bridge_dir}: site-list/count mismatch for "
+                f"{row.kinase}/{row.target_gene}/{row.contrast}"
+            )
+        for site in sites:
+            if not isinstance(site, dict) or not {
+                "motif", "residue_type", "kl_percentile"
+            }.issubset(site):
+                raise ValueError(
+                    f"{bridge_dir}: malformed terminal site evidence for "
+                    f"{row.kinase}/{row.target_gene}/{row.contrast}"
+                )
+            if float(site["kl_percentile"]) < config.INCYTR_ATTRIBUTION_KL_PCT:
+                raise ValueError(
+                    f"{bridge_dir}: terminal site below floor for "
+                    f"{row.kinase}/{row.target_gene}/{row.contrast}"
+                )
 
     abbrev = load_kinase_abbrev_map()
     agg["kinase_gene"] = agg["kinase"].map(abbrev)
@@ -215,7 +251,7 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
     return agg[
         [
             "kinase", "kinase_gene", "target_gene", "role", "contrast", "owning_cluster", "best_abs_pds",
-            "best_abs_nes", "signed_nes", "best_fdr", "n_sites", "celltype_match",
+            "best_abs_nes", "signed_nes", "best_fdr", "n_sites", "sites", "celltype_match",
         ]
     ].reset_index(drop=True)
 
@@ -330,9 +366,11 @@ def build_terminal_map(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd
     Returns: kinase, source_gene, target_gene, role, contrast, owning_cluster,
              celltype_match, provenance,
              weight, weight_lit, weight_motif, best_abs_pds, best_abs_nes, signed_nes,
-             best_fdr, n_sites
+             best_fdr, n_sites, sites
     """
     motif_edges = motif_edges.copy()
+    if "sites" not in motif_edges.columns:
+        motif_edges["sites"] = None
     lit_ceiling = float(np.log1p(psp_edges["in_vivo_refs"]).max()) if not psp_edges.empty else 0.0
     motif_ceiling = float(motif_edges["best_abs_nes"].max()) if not motif_edges.empty else 0.0
 
@@ -352,7 +390,7 @@ def build_terminal_map(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd
         "kinase", "source_gene", "target_gene", "role", "contrast", "owning_cluster",
         "celltype_match", "provenance",
         "weight", "weight_lit", "weight_motif", "best_abs_pds", "best_abs_nes", "signed_nes",
-        "best_fdr", "n_sites",
+        "best_fdr", "n_sites", "sites",
     ]
     return df[cols].sort_values("weight", ascending=False).reset_index(drop=True)
 
