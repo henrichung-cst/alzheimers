@@ -19,39 +19,76 @@ SIDECHAINS_JS = (
 
 
 class KinaseSidechainBackendTests(unittest.TestCase):
-    def test_substrate_bridge_counts_distinct_leading_motifs_per_gene(self) -> None:
+    def test_substrate_bridge_uses_floor99_motifs_without_fdr_gate(self) -> None:
         mea = pd.DataFrame(
             {
                 "kinase": ["K1"],
                 "contrast": ["d13_d2"],
                 "track": ["st"],
                 "NES": [2.5],
-                "FDR": [0.01],
-                # Repeating MOTIFA must not inflate the count; both distinct
-                # motifs map to GENE_A, while only one maps to GENE_B.
-                "Leading substrates": ["_MOTIFA_;_MOTIFB_;_MOTIFA_"],
+                # A poor MEA FDR must not remove an otherwise eligible floor-99 row.
+                "FDR": [0.9],
             }
         )
         stoich = pd.DataFrame(
             {
-                "motif": ["MOTIFA", "MOTIFA", "MOTIFB", "MOTIFB"],
-                "gene_symbol": ["GENE_A", "GENE_A", "GENE_A", "GENE_B"],
+                "motif": ["MOTIFA", "MOTIFB", "MOTIFC"],
+                "gene_symbol": ["GENE_A", "GENE_A", "GENE_B"],
+            }
+        )
+        substrate_sets = pd.DataFrame(
+            {
+                "kinase": ["K1", "K1", "K1", "K1"],
+                "contrast": ["d13_d2"] * 4,
+                "motif": ["MOTIFA", "MOTIFB", "MOTIFA", "MOTIFC"],
+                "kl_percentile": [99.0, 100.0, 98.0, 99.5],
             }
         )
 
-        result = bridge.build_substrate_bridge(mea, stoich).set_index("gene_symbol")
+        result = bridge.build_substrate_bridge(mea, stoich, substrate_sets).set_index("gene_symbol")
 
         self.assertEqual(list(result.columns), ["kinase", "contrast", "channel", "NES", "FDR", "n_sites"])
         self.assertEqual(result.loc["GENE_A", "n_sites"], 2)
         self.assertEqual(result.loc["GENE_B", "n_sites"], 1)
+        self.assertEqual(result.loc["GENE_A", "FDR"], 0.9)
+
+    def test_substrate_bridge_keeps_track_specific_pY_gene_mapping(self) -> None:
+        mea = pd.DataFrame(
+            {
+                "kinase": ["KPY"],
+                "contrast": ["d13_d2"],
+                "track": ["py"],
+                "NES": [-1.75],
+                "FDR": [0.8],
+            }
+        )
+        py_stoich = pd.DataFrame(
+            {"motif": ["PYMOTIF"], "gene_symbol": ["TYR_NODE"]}
+        )
+        substrate_sets = pd.DataFrame(
+            {
+                "kinase": ["KPY"],
+                "contrast": ["d13_d2"],
+                "motif": ["PYMOTIF"],
+                "kl_percentile": [99.25],
+            }
+        )
+
+        result = bridge.build_substrate_bridge(mea, py_stoich, substrate_sets)
+
+        self.assertEqual(result.loc[0, "gene_symbol"], "TYR_NODE")
+        self.assertEqual(result.loc[0, "channel"], "py")
+        self.assertEqual(result.loc[0, "NES"], -1.75)
 
     def test_terminal_and_interactome_motif_weights_use_abs_nes(self) -> None:
         motif = pd.DataFrame(
             {
+                "kinase": ["LOW", "HIGH", "LOW", "HIGH"],
                 "kinase_gene": ["LOW", "HIGH", "LOW", "HIGH"],
                 "target_gene": ["NODE", "NODE", "HIGH", "HIGH"],
                 "role": ["Receptor", "Receptor", "Receptor", "Receptor"],
                 "contrast": ["d13_d2"] * 4,
+                "owning_cluster": ["c1"] * 4,
                 "best_abs_pds": [100.0, 1.0, 100.0, 1.0],
                 "best_abs_nes": [1.0, 4.0, 1.0, 4.0],
                 "signed_nes": [-1.0, 4.0, -1.0, 4.0],
@@ -69,9 +106,9 @@ class KinaseSidechainBackendTests(unittest.TestCase):
         self.assertEqual(
             list(terminal.columns),
             [
-                "source_gene", "target_gene", "role", "contrast", "celltype_match",
-                "provenance", "weight", "weight_lit", "weight_motif", "best_abs_pds",
-                "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
+                "kinase", "source_gene", "target_gene", "role", "contrast", "owning_cluster",
+                "celltype_match", "provenance", "weight", "weight_lit", "weight_motif",
+                "best_abs_pds", "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
             ],
         )
         self.assertEqual(by_kinase.loc["LOW", "best_abs_pds"], 100.0)
@@ -95,6 +132,7 @@ class KinaseSidechainBackendTests(unittest.TestCase):
                 "gene_symbol": ["GENE", "GENE", "GENE"],
                 "role": ["Receptor", "Receptor", "Receptor"],
                 "contrast": ["d13_d2", "d13_d2", "d13_d2"],
+                "owning_cluster": ["clusterA", "clusterA", "clusterA"],
                 "channel": ["st", "st", "py"],
                 "best_abs_pds": [2.0, 3.0, 1.0],
                 "NES": [-2.5, 1.5, 2.5],
@@ -117,8 +155,9 @@ class KinaseSidechainBackendTests(unittest.TestCase):
         self.assertEqual(
             list(result.columns),
             [
-                "kinase_gene", "target_gene", "role", "contrast", "best_abs_pds",
-                "best_abs_nes", "signed_nes", "best_fdr", "n_sites", "celltype_match",
+                "kinase", "kinase_gene", "target_gene", "role", "contrast", "owning_cluster",
+                "best_abs_pds", "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
+                "celltype_match",
             ],
         )
         row = result.iloc[0]

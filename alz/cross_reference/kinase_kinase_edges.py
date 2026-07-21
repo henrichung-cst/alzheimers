@@ -6,7 +6,7 @@ the viewer walks to draw a single pathway's kinase sidechains:
   - literature (PhosphoSitePlus ``Kinase_Substrate_Dataset``): kinase→kinase edges
     where the substrate gene is itself a kinase; weight = log1p(IN_VIVO_REF_COUNT).
   - motif (the existing MEA/kldata bridge, ``kinase_incytr_bridge.py``): a kinase's
-    leading-substrate genes mapped onto pathway nodes; corroboration strength = |NES|.
+    floor-99 substrate genes mapped onto pathway nodes; corroboration strength = |NES|.
 
 Two artifacts per cohort:
 
@@ -441,7 +441,7 @@ def run_cohort_dir(bridge_dir: str, is_mouse: bool) -> None:
         f"- edges: {len(terminal)}\n"
         f"- provenance: motif={tprov.get('motif',0)} both={tprov.get('both',0)}\n"
         f"- signed_nes: direction on terminal edges (+ enriched, − depleted); |NES| drives weight.\n"
-        f"- n_sites: distinct leading-substrate motifs per terminal edge; combines with |NES| for edge emphasis.\n\n"
+        f"- n_sites: distinct floor-99 substrate motifs per terminal edge; combines with |NES| for edge emphasis.\n\n"
         f"## Weight\n"
         f"- normalized-additive: norm(log1p(in_vivo_refs)) + norm(|NES|), range [0,2].\n"
         f"- weight_lit / weight_motif kept separately. Rank on weight or |NES|, never p_value.\n"

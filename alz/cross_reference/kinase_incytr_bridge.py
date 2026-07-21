@@ -1,7 +1,7 @@
 """Kinase → Incytr pathway integration bridge (B4).
 
-For each active kinase (MEA FDR ≤ 0.25), maps its leading-edge substrate
-genes to pathway nodes (Ligand / Receptor / EM / Target) in the pair-mode
+For each MEA kinase/contrast/track row, maps floor-99 substrate genes to
+pathway nodes (Ligand / Receptor / EM / Target) in the pair-mode
 wide/*.parquet shards, annotates cell-type match, expression, and disease
 context, and emits a flat backend artifact, a Receptor-EM fan
 characterization, and a per-kinase ``#Backbones`` participation count.
@@ -53,6 +53,8 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
+from alz.shared import config
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
@@ -72,8 +74,11 @@ FIVEXFAD_INDEX_TMPL = UNIFIED_VIEWER_DIR / "incytr_pathways_fivexfad_{tissue}" /
 TCELL_INDEX_TMPL = TCELL_VIEWER_DIR / "incytr_pathways" / "{donor}__gene_node_index.json.gz"
 
 SONG_STOICH_MATRIX = SONG_MEA_DIR / "stoichiometry_matrix.csv"
+SONG_STOICH_MATRIX_PY = SONG_MEA_DIR / "stoichiometry_matrix_pY.csv"
 SONG_MEA_STOICH = SONG_MEA_DIR / "mea_stoichiometry.csv"
 SONG_MEA_PY = SONG_MEA_DIR / "mea_stoichiometry_pY.csv"
+SONG_SUBSTRATE_SETS = SONG_MEA_DIR / "mea_substrate_sets.csv"
+SONG_SUBSTRATE_SETS_PY = SONG_MEA_DIR / "mea_substrate_sets_pY.csv"
 SONG_KINASE_HYP = REPORTS / "attribution_recovery" / "kinase_hypothesis_table.csv"
 
 FIVEXFAD_EXPR_SPEC = FIVEXFAD_MEA_DIR / "fivexfad_expression_specificity.csv"
@@ -86,8 +91,6 @@ OUT_ROOT = REPORTS / "kinase_incytr_bridge"
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-MEA_FDR_THRESH = 0.25
-
 # Canonical pair-mode significance floor (identical to filter_significant_paths.py):
 # a chain "passes" when either side's SigProb clears 0.1 AND |PDS| >= 0.2.
 # #Backbones counts passing chains, so this floor is applied when enumerating
@@ -132,64 +135,122 @@ def load_gene_node_index(path: Path) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Step 2: substrate bridge (Leading substrates → stoichiometry_matrix → gene)
+# Step 2: substrate bridge (floor-99 substrate sets → stoichiometry_matrix → gene)
 # ---------------------------------------------------------------------------
 
-def build_substrate_bridge(mea_stoich: pd.DataFrame, stoich_matrix: pd.DataFrame) -> pd.DataFrame:
-    """Parse leading substrates into per-gene, per-enrichment motif multiplicities.
+SUBSTRATE_BRIDGE_COLS = [
+    "kinase", "contrast", "channel", "NES", "FDR", "gene_symbol", "n_sites",
+]
 
-    'Leading substrates' motifs are 15-char _;-delimited strings like _QSTPSStPHASPK_.
-    stoich_matrix.motif is 13-char uppercase (strip _ and uppercase to match).
 
-    ``n_sites`` is the number of distinct leading-substrate motifs for the MEA
-    row that map to a gene. It is deliberately counted before the node-index
-    join, so every role/sender/receiver fan-out retains the same raw evidence.
+def load_floor_substrate_sets(
+    path: Path,
+    kl_floor: float = config.INCYTR_ATTRIBUTION_KL_PCT,
+) -> pd.DataFrame:
+    """Load only attribution-eligible rows from a substrate-set CSV.
+
+    DuckDB performs the projection and KL-floor filter while scanning the CSV,
+    which keeps the large 5xFAD cortex ST receipt out of pandas memory in full.
+    The bridge applies the floor again at its public seam so callers cannot
+    accidentally bypass the attribution rule with an unfiltered DataFrame.
+    """
+    columns = ["kinase", "contrast", "motif", "kl_percentile"]
+    if not path.exists():
+        return pd.DataFrame(columns=columns)
+    safe_path = str(path).replace("'", "''")
+    con = duckdb.connect()
+    try:
+        return con.execute(
+            f"""
+            SELECT kinase, contrast, motif,
+                   TRY_CAST(kl_percentile AS DOUBLE) AS kl_percentile
+            FROM read_csv_auto('{safe_path}', header = true)
+            WHERE TRY_CAST(kl_percentile AS DOUBLE) >= $kl_floor
+            """,
+            {"kl_floor": kl_floor},
+        ).df()
+    finally:
+        con.close()
+
+
+def _motif_key(value: object) -> str:
+    """Normalize substrate-set and stoichiometry motifs to a join key."""
+    return str(value).strip().upper().strip("_")
+
+
+def build_substrate_bridge(
+    mea_stoich: pd.DataFrame,
+    stoich_matrix: pd.DataFrame,
+    substrate_sets: pd.DataFrame,
+    kl_floor: float = config.INCYTR_ATTRIBUTION_KL_PCT,
+) -> pd.DataFrame:
+    """Map floor-99 substrate motifs to per-gene evidence rows.
+
+    Substrate membership is the absolute kinase-library floor
+    ``kl_percentile >= kl_floor`` from ``mea_substrate_sets.csv``; it is not
+    gated by MEA FDR.  MEA ``NES`` and ``FDR`` are retained as annotations for
+    the matching (kinase, contrast, track) row and are not used to select
+    edges.
+
+    ``n_sites`` is the number of distinct floor-qualified motifs for a
+    (kinase, contrast) row that map to a gene.  It is counted before the
+    node-index join, so every role/sender/receiver fan-out retains the same
+    raw evidence.
 
     Returns columns: kinase, contrast, channel, NES, FDR, gene_symbol, n_sites
     """
-    rows: list[dict] = []
-    motif_to_genes: dict[str, list[str]] = {}
-    # Build motif -> gene_symbol map from stoich_matrix
-    for _, r in stoich_matrix.iterrows():
-        key = str(r["motif"]).upper()
-        motif_to_genes.setdefault(key, []).append(str(r["gene_symbol"]))
+    if substrate_sets.empty or mea_stoich.empty or stoich_matrix.empty:
+        return pd.DataFrame(columns=SUBSTRATE_BRIDGE_COLS)
 
-    for _, row in mea_stoich.iterrows():
-        if float(row["FDR"]) > MEA_FDR_THRESH:
-            continue
-        ls = str(row.get("Leading substrates", "") or "")
-        if not ls:
-            continue
-        kinase = str(row["kinase"])
-        contrast = str(row["contrast"])
-        channel = str(row.get("track", "st"))
-        nes = float(row["NES"]) if row["NES"] == row["NES"] else float("nan")
-        fdr = float(row["FDR"])
-        gene_site_counts: dict[str, int] = {}
-        seen_motifs: set[str] = set()
-        for motif_raw in ls.split(";"):
-            motif_raw = motif_raw.strip()
-            if not motif_raw:
-                continue
-            key = motif_raw.upper().strip("_")
-            if key in seen_motifs:
-                continue
-            seen_motifs.add(key)
-            for g in set(motif_to_genes.get(key, [])):
-                gene_site_counts[g] = gene_site_counts.get(g, 0) + 1
-        for g, n_sites in gene_site_counts.items():
-            rows.append({
-                "kinase": kinase,
-                "contrast": contrast,
-                "channel": channel,
-                "NES": nes,
-                "FDR": fdr,
-                "gene_symbol": g,
-                "n_sites": n_sites,
-            })
-    return pd.DataFrame(rows) if rows else pd.DataFrame(
-        columns=["kinase", "contrast", "channel", "NES", "FDR", "gene_symbol", "n_sites"]
+    substrate = substrate_sets[["kinase", "contrast", "motif", "kl_percentile"]].copy()
+    substrate["kl_percentile"] = pd.to_numeric(
+        substrate["kl_percentile"], errors="coerce"
     )
+    substrate = substrate[substrate["kl_percentile"] >= kl_floor].copy()
+    if substrate.empty:
+        return pd.DataFrame(columns=SUBSTRATE_BRIDGE_COLS)
+    substrate["motif_key"] = substrate["motif"].map(_motif_key)
+    substrate = substrate[substrate["motif_key"].ne("")]
+    substrate = substrate.drop_duplicates(["kinase", "contrast", "motif_key"])
+
+    motif_map = stoich_matrix[["motif", "gene_symbol"]].copy()
+    motif_map["motif_key"] = motif_map["motif"].map(_motif_key)
+    motif_map["gene_symbol"] = motif_map["gene_symbol"].astype("string")
+    motif_map = motif_map.dropna(subset=["gene_symbol"])
+    motif_map = motif_map[motif_map["motif_key"].ne("")].drop_duplicates(
+        ["motif_key", "gene_symbol"]
+    )
+
+    mapped = substrate.merge(motif_map[["motif_key", "gene_symbol"]], on="motif_key", how="left")
+    unmapped = mapped["gene_symbol"].isna()
+    if unmapped.any():
+        log.warning(
+            "Substrate bridge: %s/%s floor-qualified kinase/contrast/motif rows "
+            "did not map to a stoichiometry gene",
+            int(unmapped.sum()),
+            len(mapped),
+        )
+    log.info(
+        "Substrate bridge: %s/%s floor-qualified rows mapped to a gene",
+        int((~unmapped).sum()),
+        len(mapped),
+    )
+    mapped = mapped.dropna(subset=["gene_symbol"])
+    if mapped.empty:
+        return pd.DataFrame(columns=SUBSTRATE_BRIDGE_COLS)
+    mapped = mapped.drop_duplicates(["kinase", "contrast", "motif_key", "gene_symbol"])
+    counts = (
+        mapped.groupby(["kinase", "contrast", "gene_symbol"], as_index=False)
+        .size()
+        .rename(columns={"size": "n_sites"})
+    )
+
+    annotations = mea_stoich[["kinase", "contrast", "NES", "FDR"]].copy()
+    annotations["channel"] = mea_stoich.get("track", "st")
+    annotations = annotations.drop_duplicates(["kinase", "contrast", "channel"])
+    result = annotations.merge(counts, on=["kinase", "contrast"], how="inner")
+    result = result[SUBSTRATE_BRIDGE_COLS]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -669,7 +730,7 @@ def compute_participation_counts(
     """Per-kinase pathway participation, at two grains, over the gated wide/ shards.
 
     A kinase *participates* in a gated path (canonical SigProb/PDS floor, pooled
-    distinct across contrasts) when one of its leading-substrate genes appears at
+    distinct across contrasts) when one of its floor-99 substrate genes appears at
     ANY node (L/R/EM/T) of that path in the matching sender×receiver pair.  Two
     counts capture different questions:
 
@@ -890,14 +951,17 @@ def run_song(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     mea_py = pd.read_csv(SONG_MEA_PY) if SONG_MEA_PY.exists() else pd.DataFrame()
 
     log.info("Song: loading stoichiometry matrix")
-    stoich = pd.read_csv(SONG_STOICH_MATRIX, usecols=["site_id", "gene_symbol", "motif"])
+    stoich_st = pd.read_csv(SONG_STOICH_MATRIX, usecols=["site_id", "gene_symbol", "motif"])
+    stoich_py = pd.read_csv(SONG_STOICH_MATRIX_PY, usecols=["site_id", "gene_symbol", "motif"])
+    substrate_st = load_floor_substrate_sets(SONG_SUBSTRATE_SETS)
+    substrate_py = load_floor_substrate_sets(SONG_SUBSTRATE_SETS_PY)
 
     log.info("Song: building substrate bridge (ST)")
-    sub_st = build_substrate_bridge(mea_st, stoich)
+    sub_st = build_substrate_bridge(mea_st, stoich_st, substrate_st)
     all_subs = [sub_st]
     if not mea_py.empty:
         log.info("Song: building substrate bridge (pY)")
-        sub_py = build_substrate_bridge(mea_py, stoich)
+        sub_py = build_substrate_bridge(mea_py, stoich_py, substrate_py)
         all_subs.append(sub_py)
     subs = pd.concat(all_subs, ignore_index=True).drop_duplicates()
     log.info(f"Song: {len(subs)} (kinase,contrast,gene) substrate rows")
@@ -935,16 +999,26 @@ def run_fivexfad(tissue: str) -> pd.DataFrame:
     mea_st_path = FIVEXFAD_MEA_DIR / f"{tissue}_st_mea_stoichiometry.csv"
     mea_py_path = FIVEXFAD_MEA_DIR / f"{tissue}_py_mea_stoichiometry.csv"
     stoich_path = FIVEXFAD_MEA_DIR / f"{tissue}_st_stoichiometry_matrix.csv"
+    stoich_py_path = FIVEXFAD_MEA_DIR / f"{tissue}_py_stoichiometry_matrix.csv"
+    substrate_st_path = FIVEXFAD_MEA_DIR / f"{tissue}_st_mea_substrate_sets.csv"
+    substrate_py_path = FIVEXFAD_MEA_DIR / f"{tissue}_py_mea_substrate_sets.csv"
 
     mea_st = pd.read_csv(mea_st_path)
     mea_py = pd.read_csv(mea_py_path) if mea_py_path.exists() else pd.DataFrame()
-    stoich = pd.read_csv(stoich_path, usecols=["site_id", "gene_symbol", "motif"])
+    stoich_st = pd.read_csv(stoich_path, usecols=["site_id", "gene_symbol", "motif"])
+    stoich_py = (
+        pd.read_csv(stoich_py_path, usecols=["site_id", "gene_symbol", "motif"])
+        if stoich_py_path.exists()
+        else pd.DataFrame()
+    )
+    substrate_st = load_floor_substrate_sets(substrate_st_path)
+    substrate_py = load_floor_substrate_sets(substrate_py_path)
 
     log.info(f"5xFAD {tissue}: building substrate bridge")
-    sub_st = build_substrate_bridge(mea_st, stoich)
+    sub_st = build_substrate_bridge(mea_st, stoich_st, substrate_st)
     all_subs = [sub_st]
     if not mea_py.empty:
-        sub_py = build_substrate_bridge(mea_py, stoich)
+        sub_py = build_substrate_bridge(mea_py, stoich_py, substrate_py)
         all_subs.append(sub_py)
     subs = pd.concat(all_subs, ignore_index=True).drop_duplicates()
     log.info(f"5xFAD {tissue}: {len(subs)} substrate rows")
@@ -983,15 +1057,25 @@ def write_fivexfad_streamed(tissue: str, out_dir: Path, wide_glob: str) -> bool:
     mea_st_path = FIVEXFAD_MEA_DIR / f"{tissue}_st_mea_stoichiometry.csv"
     mea_py_path = FIVEXFAD_MEA_DIR / f"{tissue}_py_mea_stoichiometry.csv"
     stoich_path = FIVEXFAD_MEA_DIR / f"{tissue}_st_stoichiometry_matrix.csv"
+    stoich_py_path = FIVEXFAD_MEA_DIR / f"{tissue}_py_stoichiometry_matrix.csv"
+    substrate_st_path = FIVEXFAD_MEA_DIR / f"{tissue}_st_mea_substrate_sets.csv"
+    substrate_py_path = FIVEXFAD_MEA_DIR / f"{tissue}_py_mea_substrate_sets.csv"
 
     mea_st = pd.read_csv(mea_st_path)
     mea_py = pd.read_csv(mea_py_path) if mea_py_path.exists() else pd.DataFrame()
-    stoich = pd.read_csv(stoich_path, usecols=["site_id", "gene_symbol", "motif"])
+    stoich_st = pd.read_csv(stoich_path, usecols=["site_id", "gene_symbol", "motif"])
+    stoich_py = (
+        pd.read_csv(stoich_py_path, usecols=["site_id", "gene_symbol", "motif"])
+        if stoich_py_path.exists()
+        else pd.DataFrame()
+    )
+    substrate_st = load_floor_substrate_sets(substrate_st_path)
+    substrate_py = load_floor_substrate_sets(substrate_py_path)
 
     log.info(f"5xFAD {tissue}: building substrate bridge")
-    all_subs = [build_substrate_bridge(mea_st, stoich)]
+    all_subs = [build_substrate_bridge(mea_st, stoich_st, substrate_st)]
     if not mea_py.empty:
-        all_subs.append(build_substrate_bridge(mea_py, stoich))
+        all_subs.append(build_substrate_bridge(mea_py, stoich_py, substrate_py))
     subs = pd.concat(all_subs, ignore_index=True).drop_duplicates()
     log.info(f"5xFAD {tissue}: {len(subs)} substrate rows")
     if subs.empty:
@@ -1136,7 +1220,8 @@ def write_fivexfad_streamed(tissue: str, out_dir: Path, wide_glob: str) -> bool:
     Generated by alz/cross_reference/kinase_incytr_bridge.py (B4)
 
     ## Parameters
-    - MEA_FDR_THRESH: {MEA_FDR_THRESH}
+    - Attribution substrate floor: kl_percentile >= {config.INCYTR_ATTRIBUTION_KL_PCT}
+      (no MEA-FDR gate; NES/FDR are retained as edge annotations)
     - Backbone floor: SigProb > {SIGPROB_CUTOFF} (either side) AND |PDS| >= {ABS_PDS_CUTOFF}
 
     ## Counts
@@ -1222,7 +1307,8 @@ def write_outputs(hits_all: pd.DataFrame, out_dir: Path, cohort_label: str,
     Generated by alz/cross_reference/kinase_incytr_bridge.py (B4)
 
     ## Parameters
-    - MEA_FDR_THRESH: {MEA_FDR_THRESH}
+    - Attribution substrate floor: kl_percentile >= {config.INCYTR_ATTRIBUTION_KL_PCT}
+      (no MEA-FDR gate; NES/FDR are retained as edge annotations)
     - Backbone floor: SigProb > {SIGPROB_CUTOFF} (either side) AND |PDS| >= {ABS_PDS_CUTOFF}
 
     ## Counts
@@ -1279,23 +1365,39 @@ def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
         )
         return False
 
-    mea_path = TCELL_ATTRIBUTION_DIR / donor / "mea" / "mea_timecourse.csv"
+    mea_dir = TCELL_ATTRIBUTION_DIR / donor / "mea"
+    mea_path = mea_dir / "mea_timecourse.csv"
+    mea_py_path = mea_dir / "mea_timecourse_pY.csv"
+    substrate_path = mea_dir / "mea_substrate_sets.csv"
+    substrate_py_path = mea_dir / "mea_substrate_sets_pY.csv"
     stoich_path = TCELL_ATTRIBUTION_DIR / donor / "stoichiometry_matrix.csv"
+    stoich_py_path = TCELL_ATTRIBUTION_DIR / donor / "stoichiometry_matrix_pY.csv"
     index_path = Path(str(TCELL_INDEX_TMPL).replace("{donor}", donor))
-    required = (mea_path, stoich_path, index_path)
+    required = (mea_path, substrate_path, stoich_path, index_path)
     missing = [str(path) for path in required if not path.exists()]
     if missing:
         raise FileNotFoundError(
             f"T-cell {donor}: required bridge input missing: {', '.join(missing)}"
         )
 
-    log.info("T-cell %s: loading MEA and stoichiometry matrix", donor)
+    log.info("T-cell %s: loading MEA, floor-99 substrate sets, and stoichiometry matrix", donor)
     mea = pd.read_csv(mea_path)
-    stoich = pd.read_csv(stoich_path, usecols=["site_id", "gene_symbol", "motif"])
-    subs = build_substrate_bridge(mea, stoich).drop_duplicates()
+    mea_py = pd.read_csv(mea_py_path) if mea_py_path.exists() else pd.DataFrame()
+    stoich_st = pd.read_csv(stoich_path, usecols=["site_id", "gene_symbol", "motif"])
+    stoich_py = (
+        pd.read_csv(stoich_py_path, usecols=["site_id", "gene_symbol", "motif"])
+        if stoich_py_path.exists()
+        else pd.DataFrame()
+    )
+    substrate = load_floor_substrate_sets(substrate_path)
+    substrate_py = load_floor_substrate_sets(substrate_py_path)
+    all_subs = [build_substrate_bridge(mea, stoich_st, substrate)]
+    if not mea_py.empty:
+        all_subs.append(build_substrate_bridge(mea_py, stoich_py, substrate_py))
+    subs = pd.concat(all_subs, ignore_index=True).drop_duplicates()
     log.info("T-cell %s: %s (kinase,contrast,gene) substrate rows", donor, len(subs))
     if subs.empty:
-        log.warning("T-cell %s: no active leading-substrate rows", donor)
+        log.warning("T-cell %s: no floor-99 substrate rows", donor)
         return False
 
     log.info("T-cell %s: loading gene_node_index", donor)
@@ -1395,7 +1497,8 @@ def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
     Generated by alz/cross_reference/kinase_incytr_bridge.py (B4)
 
     ## Parameters
-    - MEA_FDR_THRESH: {MEA_FDR_THRESH}
+    - Attribution substrate floor: kl_percentile >= {config.INCYTR_ATTRIBUTION_KL_PCT}
+      (no MEA-FDR gate; NES/FDR are retained as edge annotations)
     - Backbone floor: SigProb > {SIGPROB_CUTOFF} (either side) AND |PDS| >= {ABS_PDS_CUTOFF}
 
     ## Counts
