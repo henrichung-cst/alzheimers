@@ -18,6 +18,10 @@ from alz.tcell_viewer.paths import (  # noqa: E402
     UNIFIED_VIEWER_DIR,
 )
 from alz.tcell_viewer.common import DONORS  # noqa: E402
+from alz.tcell_viewer.slices_incytr import (  # noqa: E402
+    _read_terminal_edges,
+    _terminal_contrast_to_row,
+)
 from alz.tcell_viewer.state_contract import load_donor_states  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -599,51 +603,24 @@ def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list,
 
 
 # ---------------------------------------------------------------------------
-# Incytr pathway participation (substrate-based)
+# Incytr pathway participation (terminal-edge based)
 # ---------------------------------------------------------------------------
-
-def _substrate_genes_by_kinase(donor: str, substrate_file: str,
-                               phospho_file: str) -> dict[str, set[str]]:
-    """Kinase NAME → set of substrate gene symbols (upper-case) for one track.
-
-    The MEA substrate set lists the kinase's positive phosphosite motifs; the
-    motif → gene map comes from the same donor's normalized phospho table (join
-    is 100% after upper-casing the lower-cased phospho-residue in the motif).
-    """
-    base = os.path.join(KINASE_ATTRIBUTION_TCELLS_DIR, donor)
-    sub_path = os.path.join(base, "mea", substrate_file)
-    ph_path = os.path.join(base, phospho_file)
-    if not (os.path.exists(sub_path) and os.path.exists(ph_path)):
-        return {}
-    ph = pd.read_csv(ph_path, usecols=["motif", "gene_symbol"])
-    motif2gene = {
-        str(m).upper(): str(g).upper()
-        for m, g in zip(ph["motif"], ph["gene_symbol"]) if pd.notna(g)
-    }
-    ss = pd.read_csv(sub_path, usecols=["kinase", "motif"])
-    ss["gene"] = ss["motif"].str.upper().map(motif2gene)
-    ss = ss.dropna(subset=["gene"])
-    return {str(k): set(v) for k, v in ss.groupby("kinase")["gene"]}
-
 
 def _incytr_pathway_participation(
     donor: str, incytr_block: dict,
     name_residue_rows: list[tuple[str, str]],
 ) -> tuple[list, list, int] | None:
-    """Substrate-based Incytr pathway participation for the donor's kinases.
+    """Count terminal-edge participation over the donor's global index.
 
-    For each (kinase, residue) slice row, count the distinct predicted-pathway
-    rows with ≥1 node gene the kinase phosphorylates (its MEA substrate set on
-    the matching track: ST→ST file, Y→pY file), across two node scopes:
-      pathway  — Ligand/Receptor/EM/Target (the full pathway)
-      backbone — Ligand/Receptor/EM (Target excluded)
-    Denominator is the donor's full predicted-pathway universe (global_index
-    nrows) for both. Direct node membership is deliberately not used — a kinase
-    is a pathway node in ≤0.07% of rows, degenerate as a percentage.
+    A row matches a kinase when its receiver, contrast, and role-node gene
+    match one of that kinase's observed terminal edges. Pathway scope includes
+    Receptor/EM/Target; backbone scope includes Receptor/EM. The denominator
+    remains the full predicted-pathway universe in ``global_index["nrows"]``.
 
     Returns (pathway_counts, backbone_counts, total) aligned to
-    name_residue_rows (None per row when the kinase has no substrate set on its
-    track), or None when the donor has no Incytr global index.
+    ``name_residue_rows``. Counts are keyed by kinase name, so every visible
+    kinase row receives an integer, including zero when it has no matching
+    observed edge.
     """
     gi = (incytr_block or {}).get("global_index")
     if not gi:
@@ -656,7 +633,10 @@ def _incytr_pathway_participation(
     with gzip.open(bin_path, "rb") as f:
         raw = f.read()
     dt_map = {"f4": "<f4", "u2": "<u2", "u1": "<u1"}
-    want = {"ligandId", "receptorId", "emId", "targetId"}
+    want = {
+        "ligandId", "receptorId", "emId", "targetId",
+        "receiverId", "contrastId",
+    }
     node: dict[str, np.ndarray] = {}
     off = 0
     for c in gi["columns"]:
@@ -666,38 +646,76 @@ def _incytr_pathway_participation(
         off += int(c["bytes"])
     if len(node) != len(want):
         return None
-    lig, rec, em, tgt = (node["ligandId"], node["receptorId"],
-                         node["emId"], node["targetId"])
+    rec = node["receptorId"].astype(np.int64, copy=False)
+    em = node["emId"].astype(np.int64, copy=False)
+    tgt = node["targetId"].astype(np.int64, copy=False)
+    receiver = node["receiverId"].astype(np.int64, copy=False)
+    contrast = node["contrastId"].astype(np.int64, copy=False)
 
-    vocab = gi["gene_vocab"]
-    vocab_up = {str(g).upper(): i for i, g in enumerate(vocab)}
-    sub_by_track = {
-        "ST": _substrate_genes_by_kinase(
-            donor, "mea_substrate_sets.csv", "raw_phospho_normalized.csv"),
-        "Y": _substrate_genes_by_kinase(
-            donor, "mea_substrate_sets_pY.csv", "raw_phospho_normalized_pY.csv"),
-    }
+    n_contrast = len(gi["contrast_vocab"])
+    n_gene = len(gi["gene_vocab"])
+    if not n_contrast or not n_gene:
+        return [0] * len(name_residue_rows), [0] * len(name_residue_rows), n
 
-    pathway_counts: list = []
-    backbone_counts: list = []
-    mask = np.zeros(len(vocab), dtype=bool)
-    for name, residue in name_residue_rows:
-        subs = sub_by_track.get(residue, {}).get(name)
-        if subs is None:                 # no substrate set on this track → n/a
-            pathway_counts.append(None)
-            backbone_counts.append(None)
-            continue
-        ids = [vocab_up[g] for g in subs if g in vocab_up]
-        if not ids:                      # substrate set exists but hits no node
-            pathway_counts.append(0)
-            backbone_counts.append(0)
-            continue
-        mask[:] = False
-        mask[ids] = True
-        backbone = mask[lig] | mask[rec] | mask[em]
-        pathway = backbone | mask[tgt]
-        pathway_counts.append(int(pathway.sum()))
-        backbone_counts.append(int(backbone.sum()))
+    def _composite_key(gene_id: np.ndarray) -> np.ndarray:
+        return (receiver * n_contrast + contrast) * n_gene + gene_id
+
+    key_receptor = _composite_key(rec)
+    key_em = _composite_key(em)
+    key_target = _composite_key(tgt)
+
+    terminal_edges = _read_terminal_edges(donor)
+    allowed_by_kinase: dict[str, dict[str, set[int]]] = {}
+    if not terminal_edges.empty:
+        terminal_edges = terminal_edges.copy()
+        terminal_edges["contrast_row"] = terminal_edges["contrast"].map(
+            _terminal_contrast_to_row
+        )
+        terminal_edges = terminal_edges.drop_duplicates(
+            ["kinase", "owning_cluster", "contrast_row", "role", "target_gene"]
+        )
+        receiver_ids = {
+            str(value): i for i, value in enumerate(gi["receiver_vocab"])
+        }
+        contrast_ids = {
+            str(value): i for i, value in enumerate(gi["contrast_vocab"])
+        }
+        gene_ids = {
+            str(value): i for i, value in enumerate(gi["gene_vocab"])
+        }
+        terminal_edges["receiver_id"] = terminal_edges["owning_cluster"].map(
+            receiver_ids
+        )
+        terminal_edges["contrast_id"] = terminal_edges["contrast_row"].map(
+            contrast_ids
+        )
+        terminal_edges["gene_id"] = terminal_edges["target_gene"].map(gene_ids)
+        terminal_edges = terminal_edges.dropna(
+            subset=["kinase", "receiver_id", "contrast_id", "gene_id"]
+        )
+        for edge in terminal_edges.itertuples(index=False):
+            role = str(edge.role)
+            if role not in {"Receptor", "EM", "Target"}:
+                continue
+            composite = (
+                (int(edge.receiver_id) * n_contrast + int(edge.contrast_id))
+                * n_gene + int(edge.gene_id)
+            )
+            allowed_by_kinase.setdefault(str(edge.kinase), {}).setdefault(
+                role, set()
+            ).add(composite)
+
+    pathway_counts: list[int] = []
+    backbone_counts: list[int] = []
+    for name, _residue in name_residue_rows:
+        allowed = allowed_by_kinase.get(str(name), {})
+        hit_backbone = np.isin(key_receptor, tuple(allowed.get("Receptor", ())))
+        hit_backbone |= np.isin(key_em, tuple(allowed.get("EM", ())))
+        hit_pathway = hit_backbone | np.isin(
+            key_target, tuple(allowed.get("Target", ()))
+        )
+        backbone_counts.append(int(hit_backbone.sum()))
+        pathway_counts.append(int(hit_pathway.sum()))
     return pathway_counts, backbone_counts, n
 
 
