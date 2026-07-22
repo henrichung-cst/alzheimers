@@ -624,30 +624,27 @@ function _renderNSCLCSpecificityCountCell(r) {
   return `<span title="${_escapeHtml(tip)}"><strong>${cnt}</strong><span class="muted" style="font-size:10px;"> / ${total}</span>${badge}${memberInline}</span>`;
 }
 
-// Substrate-based Incytr participation: N (and % of all predicted pathways)
-// whose node set includes ≥1 gene this kinase phosphorylates (its MEA substrate
-// set). Precomputed in Python. Two scopes share the denominator:
-//   pathway  — Ligand/Receptor/EM/Target
-//   backbone — Ligand/Receptor/EM (Target excluded)
-// Direct node membership is NOT used — a kinase is a pathway node in <0.1% of
-// rows. n/a = no MEA substrate set for this kinase on its track.
-function _renderSubstrateCoverageCell(n, total, nodeScope) {
-  if (n == null || !total) {
-    return `<span class="muted" title="No MEA substrate set for this kinase — it cannot be linked to pathways by substrate.">n/a</span>`;
-  }
+// Observed-edge Incytr participation: N (and % of all predicted pathways)
+// with a contrast- and receiver-matched terminal kinase→node edge. Precomputed
+// in Python. Two scopes share the denominator:
+//   pathway  — Receptor/EM/Target
+//   backbone — Receptor/EM (Target excluded)
+function _renderIncytrCoverageCell(n, total, nodeScope) {
   const pct = 100 * n / total;
   const pctStr = pct >= 10 ? pct.toFixed(0) : pct.toFixed(1);
   const cls = pct >= 50 ? "hi" : (pct >= 20 ? "mid" : "lo");
   const tip = `${n.toLocaleString()} of ${total.toLocaleString()} predicted pathways `
-    + `(${pctStr}%) have a ${nodeScope} node containing a gene this kinase phosphorylates (its MEA substrate set).`;
+    + `(${pctStr}%) have a contrast- and receiver-matched observed phospho-change `
+    + `kinase→node edge landing on ${nodeScope} (mirrors the sidechain graph; no cutoff). `
+    + `Terminal edges carry no Ligand role, so Ligand does not contribute.`;
   return `<span title="${_escapeHtml(tip)}"><strong>${n.toLocaleString()}</strong>`
     + `<span class="badge ${cls}" style="margin-left:4px;">${pctStr}%</span></span>`;
 }
 function _renderIncytrPathwayCell(r) {
-  return _renderSubstrateCoverageCell(r.incytr_pathway_count, r.incytr_pathway_total, "Ligand/Receptor/EM/Target");
+  return _renderIncytrCoverageCell(r.incytr_pathway_count, r.incytr_pathway_total, "Receptor/EM/Target");
 }
 function _renderIncytrBackboneCell(r) {
-  return _renderSubstrateCoverageCell(r.incytr_backbone_count, r.incytr_pathway_total, "Ligand/Receptor/EM");
+  return _renderIncytrCoverageCell(r.incytr_backbone_count, r.incytr_pathway_total, "Receptor/EM");
 }
 
 function _renderKinaseWhitelistBanner(wl) {
