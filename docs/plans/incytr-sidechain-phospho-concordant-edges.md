@@ -8,10 +8,10 @@
 
 The current terminal edge `kinase → pathway-node` exists whenever the kinase's
 motif matches a **detected** phosphosite on the node's gene
-(`kinase_incytr_bridge.build_substrate_bridge`, floored at
-`kl_percentile >= 99`). `kl_percentile` is PSSM match quality, **not** phospho
-change. Verified on `tcells_donor1`: a kinase's floor-99 site set is ~85% stable
-across the 5 contrasts, so edge existence and `n_sites` are contrast-independent
+(`kinase_incytr_bridge.build_substrate_bridge`, over the kinase's motif-matched
+substrate-set members). `kl_percentile` is PSSM match quality, **not** phospho
+change. Verified on `tcells_donor1`: a kinase's motif-matched site set is ~85%
+stable across the 5 contrasts, so edge existence and `n_sites` are contrast-independent
 motif bookkeeping. The only place the measured phospho change enters is the flat,
 kinase-level `NES` (GSEA over the fold-change ranking). Per edge, we currently
 draw *could-phosphorylate*, not *did-change*.

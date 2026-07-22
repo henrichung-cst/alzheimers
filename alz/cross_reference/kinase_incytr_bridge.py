@@ -1,6 +1,6 @@
 """Kinase → Incytr pathway integration bridge (B4).
 
-For each MEA kinase/contrast/track row, maps floor-99 substrate genes to
+For each MEA kinase/contrast/track row, maps MEA substrate-set genes to
 pathway nodes (Ligand / Receptor / EM / Target) in the pair-mode
 wide/*.parquet shards, annotates cell-type match, expression, and disease
 context, and emits a flat backend artifact, a Receptor-EM fan
@@ -145,7 +145,7 @@ def load_gene_node_index(path: Path) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Step 2: substrate bridge (floor-99 substrate sets → stoichiometry_matrix → gene)
+# Step 2: substrate bridge (MEA substrate sets → stoichiometry_matrix → gene)
 # ---------------------------------------------------------------------------
 
 SUBSTRATE_BRIDGE_COLS = [
@@ -170,16 +170,12 @@ def _load_site_matrix(path: Path, abundance_columns: list[str] | None = None) ->
     return pd.read_csv(path, usecols=columns)
 
 
-def load_floor_substrate_sets(
-    path: Path,
-    kl_floor: float = config.INCYTR_ATTRIBUTION_KL_PCT,
-) -> pd.DataFrame:
-    """Load only attribution-eligible rows from a substrate-set CSV.
+def load_substrate_sets(path: Path) -> pd.DataFrame:
+    """Load the complete MEA substrate-set membership receipt.
 
-    DuckDB performs the projection and KL-floor filter while scanning the CSV,
-    which keeps the large 5xFAD cortex ST receipt out of pandas memory in full.
-    The bridge applies the floor again at its public seam so callers cannot
-    accidentally bypass the attribution rule with an unfiltered DataFrame.
+    ``mea_substrate_sets.csv`` already contains the MEA ``kl_thresh`` membership
+    decision.  ``kl_percentile`` is retained as site-level evidence, not used
+    as a second attribution gate.
     """
     columns = ["kinase", "contrast", "motif", "residue_type", "kl_percentile"]
     if not path.exists():
@@ -196,9 +192,7 @@ def load_floor_substrate_sets(
             SELECT kinase, contrast, motif, {residue_expr} AS residue_type,
                    TRY_CAST(kl_percentile AS DOUBLE) AS kl_percentile
             FROM read_csv_auto('{safe_path}', header = true)
-            WHERE TRY_CAST(kl_percentile AS DOUBLE) >= $kl_floor
-            """,
-            {"kl_floor": kl_floor},
+            """
         ).df()
     finally:
         con.close()
@@ -213,16 +207,15 @@ def build_substrate_bridge(
     mea_stoich: pd.DataFrame,
     stoich_matrix: pd.DataFrame,
     substrate_sets: pd.DataFrame,
-    kl_floor: float = config.INCYTR_ATTRIBUTION_KL_PCT,
 ) -> pd.DataFrame:
-    """Map floor-99 substrate motifs to per-gene evidence rows.
+    """Map MEA substrate-set motifs to per-gene evidence rows.
 
-    Substrate membership is the absolute kinase-library floor
-    ``kl_percentile >= kl_floor`` from ``mea_substrate_sets.csv``.  MEA ``NES``
-    and ``FDR`` are retained as annotations; the T-cell direct-change seam
-    applies the MEA gate after this motif-to-site mapping.
+    Substrate membership is the exact MEA substrate-set membership from
+    ``mea_substrate_sets.csv`` (the ``kl_thresh`` 15 ST / 7 pY basis).  MEA
+    ``NES`` and ``FDR`` are retained as annotations; the T-cell direct-change
+    seam applies the MEA gate after this motif-to-site mapping.
 
-    ``n_sites`` is the number of distinct floor-qualified physical sites for a
+    ``n_sites`` is the number of distinct MEA-member physical sites for a
     (kinase, contrast) row that map to a gene.  ``sites`` is the compact JSON
     encoding of those same sites, retaining the site ID/position, raw motif,
     residue type, and kinase-library percentile. Both are computed before the
@@ -243,7 +236,6 @@ def build_substrate_bridge(
     substrate["kl_percentile"] = pd.to_numeric(
         substrate["kl_percentile"], errors="coerce"
     )
-    substrate = substrate[substrate["kl_percentile"] >= kl_floor].copy()
     if substrate.empty:
         return pd.DataFrame(columns=SUBSTRATE_BRIDGE_COLS)
     substrate["motif_key"] = substrate["motif"].map(_motif_key)
@@ -282,13 +274,13 @@ def build_substrate_bridge(
     unmapped = mapped["gene_symbol"].isna()
     if unmapped.any():
         log.warning(
-            "Substrate bridge: %s/%s floor-qualified kinase/contrast/motif rows "
+            "Substrate bridge: %s/%s MEA-member kinase/contrast/motif rows "
             "did not map to a stoichiometry gene",
             int(unmapped.sum()),
             len(mapped),
         )
     log.info(
-        "Substrate bridge: %s/%s floor-qualified rows mapped to a gene",
+        "Substrate bridge: %s/%s MEA-member rows mapped to a gene",
         int((~unmapped).sum()),
         len(mapped),
     )
@@ -300,7 +292,7 @@ def build_substrate_bridge(
     )
 
     # Sort once at site grain, then aggregate prebuilt records.  The prior
-    # group-by/sort-per-gene implementation spent minutes on the donor1 floor-99
+    # group-by/sort-per-gene implementation spent minutes on the donor1 receipt
     # receipt because most groups contain only one physical site.
     ordered = mapped.sort_values(
         ["kinase", "contrast", "gene_symbol", "kl_percentile", "motif_key"],
@@ -463,7 +455,7 @@ def annotate_tcell_direct_site_changes(
 ) -> pd.DataFrame:
     """Attach direct site evidence and retain only MEA-eligible bridge rows.
 
-    Every retained row keeps all floor-99 physical sites, each stamped with its
+    Every retained row keeps all MEA-member physical sites, each stamped with its
     measured ``delta``, ``site_significance``, ``concordant``, ``changed``
     (BH-significant) flags, and ``timecourse_consistency``.  The edge-level count
     (``n_significant_concordant``) records how many sites are both BH-significant
@@ -1031,7 +1023,7 @@ def compute_participation_counts(
     """Per-kinase pathway participation, at two grains, over the gated wide/ shards.
 
     A kinase *participates* in a gated path (canonical SigProb/PDS floor, pooled
-    distinct across contrasts) when one of its floor-99 substrate genes appears at
+    distinct across contrasts) when one of its MEA substrate genes appears at
     ANY node (L/R/EM/T) of that path in the matching sender×receiver pair.  Two
     counts capture different questions:
 
@@ -1254,8 +1246,8 @@ def run_song(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     log.info("Song: loading stoichiometry matrix")
     stoich_st = _load_site_matrix(SONG_STOICH_MATRIX)
     stoich_py = _load_site_matrix(SONG_STOICH_MATRIX_PY)
-    substrate_st = load_floor_substrate_sets(SONG_SUBSTRATE_SETS)
-    substrate_py = load_floor_substrate_sets(SONG_SUBSTRATE_SETS_PY)
+    substrate_st = load_substrate_sets(SONG_SUBSTRATE_SETS)
+    substrate_py = load_substrate_sets(SONG_SUBSTRATE_SETS_PY)
 
     log.info("Song: building substrate bridge (ST)")
     sub_st = build_substrate_bridge(mea_st, stoich_st, substrate_st)
@@ -1312,8 +1304,8 @@ def run_fivexfad(tissue: str) -> pd.DataFrame:
         if stoich_py_path.exists()
         else pd.DataFrame()
     )
-    substrate_st = load_floor_substrate_sets(substrate_st_path)
-    substrate_py = load_floor_substrate_sets(substrate_py_path)
+    substrate_st = load_substrate_sets(substrate_st_path)
+    substrate_py = load_substrate_sets(substrate_py_path)
 
     log.info(f"5xFAD {tissue}: building substrate bridge")
     sub_st = build_substrate_bridge(mea_st, stoich_st, substrate_st)
@@ -1370,8 +1362,8 @@ def write_fivexfad_streamed(tissue: str, out_dir: Path, wide_glob: str) -> bool:
         if stoich_py_path.exists()
         else pd.DataFrame()
     )
-    substrate_st = load_floor_substrate_sets(substrate_st_path)
-    substrate_py = load_floor_substrate_sets(substrate_py_path)
+    substrate_st = load_substrate_sets(substrate_st_path)
+    substrate_py = load_substrate_sets(substrate_py_path)
 
     log.info(f"5xFAD {tissue}: building substrate bridge")
     all_subs = [build_substrate_bridge(mea_st, stoich_st, substrate_st)]
@@ -1523,8 +1515,8 @@ def write_fivexfad_streamed(tissue: str, out_dir: Path, wide_glob: str) -> bool:
     Generated by alz/cross_reference/kinase_incytr_bridge.py (B4)
 
     ## Parameters
-    - Attribution substrate floor: kl_percentile >= {config.INCYTR_ATTRIBUTION_KL_PCT}
-      (no MEA-FDR gate; NES/FDR are retained as edge annotations)
+    - Attribution substrate basis: complete MEA substrate-set membership
+      (no secondary percentile gate; NES/FDR are retained as edge annotations)
     - Backbone floor: SigProb > {SIGPROB_CUTOFF} (either side) AND |PDS| >= {ABS_PDS_CUTOFF}
 
     ## Counts
@@ -1611,8 +1603,8 @@ def write_outputs(hits_all: pd.DataFrame, out_dir: Path, cohort_label: str,
     Generated by alz/cross_reference/kinase_incytr_bridge.py (B4)
 
     ## Parameters
-    - Attribution substrate floor: kl_percentile >= {config.INCYTR_ATTRIBUTION_KL_PCT}
-      (no MEA-FDR gate; NES/FDR are retained as edge annotations)
+    - Attribution substrate basis: complete MEA substrate-set membership
+      (no secondary percentile gate; NES/FDR are retained as edge annotations)
     - Backbone floor: SigProb > {SIGPROB_CUTOFF} (either side) AND |PDS| >= {ABS_PDS_CUTOFF}
 
     ## Counts
@@ -1684,7 +1676,7 @@ def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
             f"T-cell {donor}: required bridge input missing: {', '.join(missing)}"
         )
 
-    log.info("T-cell %s: loading MEA, floor-99 substrate sets, and stoichiometry matrix", donor)
+    log.info("T-cell %s: loading MEA substrate membership and stoichiometry matrix", donor)
     mea = pd.read_csv(mea_path)
     mea_py = pd.read_csv(mea_py_path) if mea_py_path.exists() else pd.DataFrame()
     tcell_abundance_columns = ["D1_d2", "D1_d13", "D1_d15", "D1_d17", "D1_d19", "D1_d20"]
@@ -1694,8 +1686,8 @@ def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
         if stoich_py_path.exists()
         else pd.DataFrame()
     )
-    substrate = load_floor_substrate_sets(substrate_path)
-    substrate_py = load_floor_substrate_sets(substrate_py_path)
+    substrate = load_substrate_sets(substrate_path)
+    substrate_py = load_substrate_sets(substrate_py_path)
     all_subs = [build_substrate_bridge(mea, stoich_st, substrate)]
     if not mea_py.empty:
         all_subs.append(build_substrate_bridge(mea_py, stoich_py, substrate_py))
@@ -1713,7 +1705,7 @@ def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
         len(subs),
     )
     if subs.empty:
-        log.warning("T-cell %s: no floor-99 substrate rows", donor)
+        log.warning("T-cell %s: no MEA substrate-member rows", donor)
         return False
 
     log.info("T-cell %s: loading gene_node_index", donor)
@@ -1815,7 +1807,7 @@ def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
     Generated by alz/cross_reference/kinase_incytr_bridge.py (B4)
 
     ## Parameters
-    - Attribution substrate floor: kl_percentile >= {config.INCYTR_ATTRIBUTION_KL_PCT}
+    - Attribution substrate basis: complete MEA substrate-set membership
     - Terminal eligibility: MEA FDR < {config.MEA_FDR_THRESH} and at least one
       Significance-B, direction-concordant measured site per node edge
     - Backbone floor: SigProb > {SIGPROB_CUTOFF} (either side) AND |PDS| >= {ABS_PDS_CUTOFF}

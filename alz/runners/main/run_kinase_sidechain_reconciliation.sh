@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Regenerate the floor-99 kinase sidechain artifacts and both viewer slices.
+# Regenerate the MEA-membership kinase sidechain artifacts and both viewer slices.
 # This is intentionally explicit: the bridge must finish before edge reduction,
 # and both edge reductions must finish before either viewer packages its slices.
 
@@ -39,4 +39,4 @@ pixi run python -m alz.viewer.verify_payload_contract \
   outputs/reports/unified_viewer/unified_viewer.payload.json \
   outputs/reports/tcell_viewer/tcell_viewer.payload.json
 
-echo "=== Floor-99 sidechain reconciliation complete ==="
+echo "=== Kinase sidechain reconciliation complete ==="

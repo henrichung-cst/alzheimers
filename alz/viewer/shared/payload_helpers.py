@@ -27,6 +27,7 @@ _INCYTR_SIDECHAIN_TERMINAL_COLUMNS = (
     "provenance", "best_abs_pds",
     "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
     "sites", "n_significant_concordant", "edge_delta",
+    "motif_peers_detected", "motif_peers_informative", "motif_peer_roster",
 )
 _INCYTR_SIDECHAIN_INDEX_FILENAME = "sidechains_index.json"
 

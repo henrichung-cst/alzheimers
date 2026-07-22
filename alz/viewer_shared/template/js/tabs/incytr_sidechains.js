@@ -234,6 +234,20 @@ function _isNumeric(value) {
 }
 
 function _isMotifPeerForEdge(edge) {
+  const edgeInformative = edge && edge.motif_peers_informative;
+  if (edgeInformative !== undefined && edgeInformative !== null
+      && edgeInformative !== "") {
+    let roster = edge.motif_peer_roster;
+    if (typeof roster === "string") {
+      try { roster = JSON.parse(roster); } catch (_) { roster = []; }
+    }
+    return {
+      edge_specific: true,
+      motif_peers_detected: Number(edge.motif_peers_detected) || 0,
+      motif_peers_informative: Number(edgeInformative) || 0,
+      peers: Array.isArray(roster) ? roster : [],
+    };
+  }
   if (typeof ViewerPayload === "undefined") return null;
   return ViewerPayload.motifPeerRoster(
     ViewerPayload.motifPeerCohortFor(), edge.kinase, edge.owning_cluster);
@@ -469,13 +483,22 @@ function _isRelationshipTable(rows, selectionLabel, selection) {
       const cell = document.createElement("td");
       if (index === 0 && row.motifPeer) {
         const sole = Number(row.motifPeer.motif_peers_detected) === 1;
-        const tip = sole
-          ? "Sole plausible source here among motif-confusable candidates"
-          : `${row.motifPeer.motif_peers_detected} of ${row.motifPeer.motif_peers_informative} motif-confusable candidates transcribed here`;
+        const tip = row.motifPeer.edge_specific
+          ? `${row.motifPeer.motif_peers_detected} of ${row.motifPeer.motif_peers_informative} MEA-active kinases with a concordant motif claim on the sites that changed here.`
+          : (sole
+            ? "Sole plausible source here among motif-confusable candidates"
+            : `${row.motifPeer.motif_peers_detected} of ${row.motifPeer.motif_peers_informative} motif-confusable candidates transcribed here`);
         const selfKinase = _escapeHtml(String(row.edge.source().data("label") || row.edge.source().id()));
-        const selfPct = (Number(row.motifPeer.detection_fraction || 0) * 100).toFixed(0);
-        const selfItem = `<li><strong>${selfKinase} (${selfPct}%) — this kinase</strong></li>`;
-        const peerItems = (row.motifPeer.peers || []).map(peer => `<li>${_escapeHtml(String(peer.kinase || ""))} (${(Number(peer.detection_fraction || 0) * 100).toFixed(0)}%)</li>`).join("");
+        const selfPct = row.motifPeer.detection_fraction == null
+          ? "—" : `${(Number(row.motifPeer.detection_fraction) * 100).toFixed(0)}%`;
+        const selfItem = row.motifPeer.edge_specific
+          ? ""
+          : `<li><strong>${selfKinase} (${selfPct}) — this kinase</strong></li>`;
+        const peerItems = (row.motifPeer.peers || []).map(peer => {
+          const fraction = peer.detection_fraction == null
+            ? "—" : `${(Number(peer.detection_fraction) * 100).toFixed(0)}%`;
+          return `<li>${_escapeHtml(String(peer.kinase || ""))} (${fraction})</li>`;
+        }).join("");
         cell.innerHTML = _escapeHtml(String(value))
           + ` <details class="motif-peer-details"><summary><span class="badge ${sole ? "vhi" : "lo"}" title="${_escapeHtml(tip)}">${row.motifPeer.motif_peers_detected}/${row.motifPeer.motif_peers_informative}</span></summary>`
           + `<ul class="motif-peer-roster">${selfItem}${peerItems || "<li>No motif twins</li>"}</ul></details>`;
@@ -512,7 +535,7 @@ function _isGraphForRow(shard, row) {
   ];
   // Terminal edges require the direct-change schema (n_significant_concordant,
   // edge_delta) above — a shard lacking it yields no terminal rows by design.
-  // `sites` is an optional column: include the inline floor-99 site list when
+  // `sites` is an optional column: include the inline MEA site list when
   // the shard carries it so the per-site evidence table can render.
   if (shard.terminal_edges && Array.isArray(shard.terminal_edges.sites)) {
     terminalFields.push("sites");
@@ -523,6 +546,12 @@ function _isGraphForRow(shard, row) {
       && Array.isArray(shard.terminal_edges.owning_cluster)) {
     terminalFields.unshift("kinase");
     terminalFields.splice(5, 0, "owning_cluster");
+  }
+  if (shard.terminal_edges && Array.isArray(shard.terminal_edges.motif_peers_detected)
+      && Array.isArray(shard.terminal_edges.motif_peers_informative)
+      && Array.isArray(shard.terminal_edges.motif_peer_roster)) {
+    terminalFields.push(
+      "motif_peers_detected", "motif_peers_informative", "motif_peer_roster");
   }
   const terminal = _isSafeRows(shard.terminal_edges, terminalFields)
     .filter(edge => edge.source_gene && edge.target_gene);
@@ -822,6 +851,9 @@ function _isPositionedElements(graph, width, height) {
       sites: edge.sites || null,
       kinase: String(edge.kinase || ""),
       owning_cluster: String(edge.owning_cluster || ""),
+      motif_peers_detected: edge.motif_peers_detected,
+      motif_peers_informative: edge.motif_peers_informative,
+      motif_peer_roster: edge.motif_peer_roster || null,
       motif_peer: _isMotifPeerForEdge(edge),
     } });
   });

@@ -21,7 +21,6 @@ from alz.viewer.shared.payload_helpers import (
     _INCYTR_SIDECHAIN_INTERACTOME_COLUMNS,
     _INCYTR_SIDECHAIN_TERMINAL_COLUMNS,
 )
-from alz.shared import config
 
 
 REQUIRED_CONTEXT_FIELDS = {
@@ -307,11 +306,6 @@ def _check_incytr_sidechains(
                                 f"{index} has malformed site evidence"
                             )
                             continue
-                        if float(site["kl_percentile"]) < config.INCYTR_ATTRIBUTION_KL_PCT:
-                            errors.append(
-                                f"Incytr sidechain shard {context_id!r} terminal edge "
-                                f"{index} has a below-floor site"
-                            )
         interactome = shard.get("interactome", {})
         if isinstance(interactome, dict):
             nodes = set(interactome.get("source_gene", []))

@@ -5,6 +5,7 @@ import textwrap
 import unittest
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -21,14 +22,28 @@ SIDECHAINS_JS = (
 
 
 class KinaseSidechainBackendTests(unittest.TestCase):
-    def test_substrate_bridge_uses_floor99_motifs_without_fdr_gate(self) -> None:
+    def setUp(self) -> None:
+        # build_terminal_map reads per-cohort detection tables from disk
+        # (outputs/reports/…). Default to an empty table so the suite stays
+        # hermetic on a clean checkout; pill-specific tests patch their own
+        # detection fixture within the test body, which overrides this.
+        empty = pd.DataFrame(
+            columns=["kinase", "cell_type", "detection_fraction", "detection_call"]
+        )
+        patcher = patch.object(
+            edges, "load_detection_tables", return_value={"tcell": empty}
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_substrate_bridge_uses_complete_mea_membership_without_fdr_gate(self) -> None:
         mea = pd.DataFrame(
             {
                 "kinase": ["K1"],
                 "contrast": ["d13_d2"],
                 "track": ["st"],
                 "NES": [2.5],
-                # A poor MEA FDR must not remove an otherwise eligible floor-99 row.
+                # A poor MEA FDR must not remove an otherwise eligible MEA member.
                 "FDR": [0.9],
             }
         )
@@ -44,7 +59,7 @@ class KinaseSidechainBackendTests(unittest.TestCase):
                 "kinase": ["K1", "K1", "K1", "K1"],
                 "contrast": ["d13_d2"] * 4,
                 "motif": ["MOTIFA", "MOTIFB", "MOTIFA", "MOTIFC"],
-                "kl_percentile": [99.0, 100.0, 98.0, 99.5],
+                "kl_percentile": [12.0, 100.0, 11.0, 1.0],
             }
         )
 
@@ -62,7 +77,7 @@ class KinaseSidechainBackendTests(unittest.TestCase):
         self.assertEqual([site["site_position"] for site in sites], [None, None])
         self.assertEqual([site["motif"] for site in sites], ["MOTIFB", "MOTIFA"])
         self.assertEqual([site["residue_type"] for site in sites], [None, None])
-        self.assertEqual([site["kl_percentile"] for site in sites], [100.0, 99.0])
+        self.assertEqual([site["kl_percentile"] for site in sites], [100.0, 12.0])
 
     def test_substrate_bridge_keeps_track_specific_pY_gene_mapping(self) -> None:
         mea = pd.DataFrame(
@@ -82,7 +97,7 @@ class KinaseSidechainBackendTests(unittest.TestCase):
                 "kinase": ["KPY"],
                 "contrast": ["d13_d2"],
                 "motif": ["PYMOTIF"],
-                "kl_percentile": [99.25],
+                "kl_percentile": [1.0],
             }
         )
 
@@ -129,6 +144,7 @@ class KinaseSidechainBackendTests(unittest.TestCase):
                 "celltype_match", "provenance", "best_abs_pds", "best_abs_nes", "signed_nes",
                 "best_fdr", "n_sites", "sites",
                 "n_significant_concordant", "edge_delta",
+                "motif_peers_detected", "motif_peers_informative", "motif_peer_roster",
             ],
         )
         # No PSP literature → every terminal edge stays motif-only; no fused weight.
@@ -144,17 +160,63 @@ class KinaseSidechainBackendTests(unittest.TestCase):
         self.assertEqual(by_kinase.loc["HIGH", "n_sites"], 3)
         self.assertEqual(by_kinase.loc["HIGH", "edge_delta"], 2.0)
 
-        interactome = edges.build_interactome(motif.iloc[2:], psp)
-        self.assertEqual(
-            list(interactome.columns),
-            [
-                "source_gene", "target_gene", "provenance",
-                "in_vivo_refs", "in_vitro_refs", "n_motif_contrasts", "motif_contrasts",
+    def test_terminal_motif_peer_candidates_are_site_specific_and_detection_filtered(self) -> None:
+        changed = lambda site_id, concordant=True: json.dumps([{
+            "site_id": site_id,
+            "delta": 2.0 if concordant else -2.0,
+            "site_significance": 0.01,
+            "concordant": concordant,
+            "changed": True,
+        }])
+        motif = pd.DataFrame({
+            "kinase": ["K1", "K2", "K3", "K4", "K5", "K7", "K8"],
+            "kinase_gene": ["K1", "K2", "K3", "K4", "K5", "K7", "K8"],
+            "target_gene": ["NODE"] * 7,
+            "role": ["Receptor"] * 7,
+            "contrast": ["d13_d2"] * 7,
+            "owning_cluster": ["c1"] * 7,
+            "channel": ["st", "st", "st", "st", "py", "st", "st"],
+            "best_abs_pds": [1.0] * 7,
+            "best_abs_nes": [2.0, 1.5, 1.0, 0.5, 0.4, 0.3, 0.2],
+            "signed_nes": [2.0, 1.5, -1.0, 0.5, 0.4, 0.3, 0.2],
+            "best_fdr": [0.01] * 7,
+            "n_sites": [1] * 7,
+            "n_significant_concordant": [1] * 7,
+            "sites": [
+                changed("S1"),
+                changed("S1"),
+                changed("S1", concordant=False),
+                changed("S2"),
+                changed("S1"),
+                changed("S3"),
+                changed("S1"),
             ],
+            "celltype_match": [True] * 7,
+        })
+        detections = pd.DataFrame({
+            "kinase": ["K1", "K2", "K2", "K3", "K5", "K7"],
+            "cell_type": ["c1", "c1", "c2", "c1", "c1", "c1"],
+            "detection_fraction": [0.8, 0.05, 0.2, 0.9, 0.8, 0.8],
+            "detection_call": [True] * 6,
+        })
+        psp = pd.DataFrame(columns=["source_gene", "target_gene", "in_vivo_refs", "in_vitro_refs"])
+
+        with patch.object(edges, "load_detection_tables", return_value={"tcell": detections}):
+            terminal = edges.build_terminal_map(motif, psp).set_index("source_gene")
+
+        # K2 shares the moved site and is detected elsewhere, so it remains in
+        # the denominator but not the owning-cluster numerator. K3 is discordant,
+        # K4 claims a different site, K5 is a different channel, and K8 is absent
+        # from detection evidence; none of those changes K1's 1/2 call.
+        self.assertEqual(terminal.loc["K1", "motif_peers_detected"], 1)
+        self.assertEqual(terminal.loc["K1", "motif_peers_informative"], 2)
+        roster = json.loads(terminal.loc["K1", "motif_peer_roster"])
+        self.assertEqual(
+            [(row["kinase"], row["detection_fraction"]) for row in roster],
+            [("K1", 0.8), ("K2", 0.05), ("K8", None)],
         )
-        self.assertTrue((interactome["provenance"] == "motif").all())
-        self.assertNotIn("weight", interactome.columns)
-        self.assertEqual(interactome.iloc[0]["source_gene"], "HIGH")
+        self.assertEqual(terminal.loc["K7", "motif_peers_detected"], 1)
+        self.assertEqual(terminal.loc["K7", "motif_peers_informative"], 1)
 
     def test_significance_b_is_two_sided_and_bh_corrected_with_robust_bins(self) -> None:
         rng = np.random.default_rng(20260721)
@@ -293,9 +355,9 @@ class KinaseSidechainBackendTests(unittest.TestCase):
                 "n_sites": [4, 1, 9],
                 "n_significant_concordant": [1, 1, 1],
                 "sites": [
-                    json.dumps([{"site_id": f"S{i}", "site_position": f"S{i}", "motif": f"M{i}", "residue_type": "ST", "kl_percentile": 99 + i, "delta": 1, "site_significance": 0.01, "concordant": True, "timecourse_consistency": 1} for i in range(4)]),
-                    json.dumps([{"site_id": "S4", "site_position": "S4", "motif": "M4", "residue_type": "ST", "kl_percentile": 99, "delta": 1, "site_significance": 0.01, "concordant": True, "timecourse_consistency": 1}]),
-                    json.dumps([{"site_id": f"Y{i}", "site_position": f"Y{i}", "motif": f"M{i}", "residue_type": "Y", "kl_percentile": 99 + i, "delta": 1, "site_significance": 0.01, "concordant": True, "timecourse_consistency": 1} for i in range(9)]),
+                    json.dumps([{"site_id": f"S{i}", "site_position": f"S{i}", "motif": f"M{i}", "residue_type": "ST", "kl_percentile": 99 + i, "delta": 1, "site_significance": 0.01, "concordant": True, "changed": True, "timecourse_consistency": 1} for i in range(4)]),
+                    json.dumps([{"site_id": "S4", "site_position": "S4", "motif": "M4", "residue_type": "ST", "kl_percentile": 99, "delta": 1, "site_significance": 0.01, "concordant": True, "changed": True, "timecourse_consistency": 1}]),
+                    json.dumps([{"site_id": f"Y{i}", "site_position": f"Y{i}", "motif": f"M{i}", "residue_type": "Y", "kl_percentile": 99 + i, "delta": 1, "site_significance": 0.01, "concordant": True, "changed": True, "timecourse_consistency": 1} for i in range(9)]),
                 ],
                 "celltype_match": [False, True, True],
             }
@@ -306,10 +368,16 @@ class KinaseSidechainBackendTests(unittest.TestCase):
         try:
             edges.BRIDGE_ROOT = bridge_root
             edges.load_kinase_abbrev_map = lambda: {"K1": "KIN1"}
-            result = edges.load_motif_edges("cohort", is_mouse=False)
+            result, candidate_map = edges.load_motif_edges("cohort", is_mouse=False)
         finally:
             edges.BRIDGE_ROOT = original_root
             edges.load_kinase_abbrev_map = original_map
+
+        # candidate_map is returned explicitly (raw kinase id, pre abbrev-map),
+        # keyed by edge identity and built from the full hit table.
+        self.assertEqual(
+            candidate_map[("K1", "GENE", "Receptor", "d13_d2", "clusterA")], ["K1"]
+        )
 
         self.assertEqual(
             list(result.columns),

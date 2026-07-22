@@ -17,7 +17,7 @@ The Incytr pathways view ranks Ligand→Receptor→EM→Target signaling pathway
 answers *which pathway*, not *which kinases drive it*. The sidechain view takes one
 selected pathway and overlays:
 
-- **Terminal edges** — kinase → pathway-node, where a floor-99 motif attributes
+- **Terminal edges** — kinase → pathway-node, where MEA substrate-set membership
   at least one physical phosphosite whose measured change is Significance-B
   significant and direction-concordant with an MEA-eligible kinase call. "Which
   kinase-attributed sites changed on this node's protein."
@@ -71,19 +71,30 @@ kinase_node_hits.parquet  ──────────────▶  interac
 
 **Source: measured phospho change, motif-attributed and MEA-gated.** In the
 t-cell pilot, a terminal edge exists only when the kinase has MEA `FDR < 0.25`
-for that contrast and channel and at least one floor-99 motif-matched physical
-site on the node gene is a Significance-B significant outlier whose Δ sign
+for that contrast and channel and at least one MEA-member physical site on the
+node gene is a Significance-B significant outlier whose Δ sign
 matches signed NES. PSP literature only *corroborates* an existing edge (bumps
 provenance to `both`); it never creates one.
 
-Per-edge fields carried to the viewer: `signed_nes`, `best_abs_nes`, `best_fdr`,
-`n_sites`, `n_significant_concordant`, `edge_delta`, `sites`, `provenance`,
-`role`, `contrast`. `sites` is per-physical-site JSON evidence
+The substrate basis is the exact MEA `kl_thresh` membership receipt (15 ST / 7
+pY), for Song, 5xFAD, and t-cells alike. `kl_percentile` remains a per-site
+annotation and is not a second gate. Per-edge fields carried to the viewer are
+`signed_nes`, `best_abs_nes`, `best_fdr`, `n_sites`,
+`n_significant_concordant`, `edge_delta`, `sites`, `provenance`, `role`, and
+`contrast`. `sites` is per-physical-site JSON evidence
 (`site_id`, `site_position`, `motif`, `residue_type`, `kl_percentile`, measured
 `delta`, corrected `site_significance`, `changed` (the BH-significant flag),
 `concordant`, and `timecourse_consistency`). `edge_delta` averages `delta` over
 sites where `changed and concordant` — reusing the bridge's stored flag, so the
 significance cutoff has one owner and is never re-thresholded downstream.
+
+For t-cell direct-change edges, the sidechain pill is site-specific and
+per-edge. `motif_peers_informative` is the number of candidates with a
+concordant MEA claim on the edge's changed sites that are detected somewhere in
+the cohort; `motif_peers_detected` is the subset detected in the edge's owning
+cluster, and `motif_peer_roster` carries those candidates' owning-cluster
+detection fractions. AD/Song and 5xFAD could-phosphorylate edges have no
+per-edge direct-change fields and retain the global-cosine roster fallback.
 Non-significant and discordant matched sites remain inside a surviving edge's
 `sites` evidence; only the edge is gated.
 
@@ -225,7 +236,7 @@ pixi run python -m alz.cross_reference.kinase_incytr_bridge --cohort <song|fivex
 pixi run python -m alz.cross_reference.kinase_kinase_edges  --cohort <song|fivexfad|tcells>
 pixi run python -m alz.build_tcell_viewer --html    # t-cell shard + viewer
 pixi run viewer                                     # AD/Song unified viewer
-bash alz/runners/main/run_kinase_sidechain_floor99_reconciliation.sh  # all four cohorts + contract check
+bash alz/runners/main/run_kinase_sidechain_reconciliation.sh  # all four cohorts + contract check
 ```
 
 The bridge must run first when the hit-table schema changes (`n_sites` originates
@@ -248,7 +259,7 @@ viewer emphasis/layout math, Node-executed against the real JS source).
   create terminal edges.
 - **Terminal site evidence reconciles.** For every regenerated terminal edge,
   `len(sites) == n_sites`; each site carries its physical ID and position, motif,
-  residue type, raw `kl_percentile >= 99`, and direct-change evidence. A mismatch
+  residue type, raw `kl_percentile`, and direct-change evidence. A mismatch
   fails the reducer/viewer contract check.
 - **Schema tuple guard is the change-detector.** Any new backend column must be
   appended to the payload column tuples in the same pass, or the shard build

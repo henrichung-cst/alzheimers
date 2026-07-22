@@ -6,7 +6,7 @@ walks to draw a single pathway's kinase sidechains:
   - literature (PhosphoSitePlus ``Kinase_Substrate_Dataset``): kinase→kinase edges
     where the substrate gene is itself a kinase (tags an edge ``psp`` / ``both``).
   - motif (the existing MEA/kldata bridge, ``kinase_incytr_bridge.py``): a kinase's
-    floor-99 substrate sites mapped onto pathway nodes; terminal strength is the
+    MEA substrate-set sites mapped onto pathway nodes; terminal strength is the
     measured edge delta.
 
 Two artifacts per cohort:
@@ -54,7 +54,8 @@ import pandas as pd
 
 # Read-only import (do NOT edit that module).
 from alz.integration.build_yuyu_kldata import map_human_to_mouse
-from alz.shared import config
+from alz.cross_reference.motif_peer_narrowing import load_detection_tables
+from alz.cross_reference.specificity import DETECTION_FRAC_MIN
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -149,7 +150,7 @@ def load_psp_kinase_edges() -> pd.DataFrame:
 # motif-edge frame (bridge kinase_node_hits → cohort-native kinase→node edges)
 # ---------------------------------------------------------------------------
 
-def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
+def load_motif_edges(bridge_dir: str, is_mouse: bool) -> tuple[pd.DataFrame, dict[tuple, list[str]]]:
     """Load the motif-edge frame for one bridge cohort dir, in cohort-native space.
 
     The bridge's kinase_node_hits.parquet is multi-GB decompressed (9-23M rows), so
@@ -214,6 +215,7 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
                MAX(CASE WHEN nes_rank = 1 THEN NES END) AS signed_nes,
                MAX(CASE WHEN nes_rank = 1 THEN n_sites END) AS n_sites,
                MAX(CASE WHEN nes_rank = 1 THEN {sites_select} END) AS sites,
+               MAX(CASE WHEN nes_rank = 1 THEN channel END) AS selected_channel,
                MAX(CASE WHEN nes_rank = 1 THEN {n_sig_select} END) AS n_significant_concordant,
                MIN(FDR) AS best_fdr,
                BOOL_OR(celltype_match) AS celltype_match
@@ -221,6 +223,32 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
         GROUP BY kinase, gene_symbol, role, contrast, owning_cluster
         """
     ).to_arrow_table().to_pandas()
+
+    candidate_map = {}
+    if has_direct_change_contract:
+        did_change_rows = con.execute(
+            f"""
+            SELECT kinase, contrast, channel, gene_symbol AS target_gene, sites
+            FROM read_parquet('{safe}')
+            WHERE n_significant_concordant >= 1 AND sites IS NOT NULL
+            """
+        ).to_arrow_table().to_pandas()
+        site_candidates = {}
+        for hit in did_change_rows.itertuples(index=False):
+            for site_id in _changed_concordant_site_ids(hit.sites):
+                key = (str(hit.contrast), str(hit.channel).lower(),
+                       str(hit.target_gene), str(site_id))
+                site_candidates.setdefault(key, set()).add(str(hit.kinase))
+        for row in agg.itertuples(index=False):
+            candidates = set()
+            for site_id in _changed_concordant_site_ids(row.sites):
+                candidates.update(site_candidates.get(
+                    (str(row.contrast), str(row.selected_channel).lower(),
+                     str(row.target_gene), str(site_id)),
+                    set(),
+                ))
+            candidate_map[(str(row.kinase), str(row.target_gene), str(row.role),
+                          str(row.contrast), str(row.owning_cluster))] = sorted(candidates)
     con.close()
 
     for row in agg.itertuples(index=False):
@@ -250,11 +278,6 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
                     f"{bridge_dir}: malformed terminal site evidence for "
                     f"{row.kinase}/{row.target_gene}/{row.contrast}"
                 )
-            if float(site["kl_percentile"]) < config.INCYTR_ATTRIBUTION_KL_PCT:
-                raise ValueError(
-                    f"{bridge_dir}: terminal site below floor for "
-                    f"{row.kinase}/{row.target_gene}/{row.contrast}"
-                )
 
     abbrev = load_kinase_abbrev_map()
     agg["kinase_gene"] = agg["kinase"].map(abbrev)
@@ -272,7 +295,11 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
     ]
     if has_direct_change_contract:
         columns.insert(-1, "n_significant_concordant")
-    return agg[columns].reset_index(drop=True)
+    # candidate_map is returned explicitly (not stashed on ``DataFrame.attrs``,
+    # which pandas ops silently drop). It is built from the full hit table above,
+    # before max-NES aggregation collapses competing kinases — the aggregated
+    # frame alone cannot reconstruct it, so the handoff must be explicit.
+    return agg[columns].reset_index(drop=True), candidate_map
 
 
 def assert_song_celltype_join(motif_edges: pd.DataFrame) -> None:
@@ -360,7 +387,131 @@ def build_interactome(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd.
         ["source_gene", "target_gene"]).reset_index(drop=True)
 
 
-def build_terminal_map(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd.DataFrame:
+def _changed_concordant_site_ids(sites: object) -> set[str]:
+    """Return the site IDs that back a direct-change edge statistic."""
+    if sites is None or (isinstance(sites, float) and pd.isna(sites)):
+        return set()
+    try:
+        records = json.loads(sites) if isinstance(sites, str) else sites
+    except (TypeError, json.JSONDecodeError):
+        return set()
+    return {
+        str(site["site_id"])
+        for site in records or []
+        if isinstance(site, dict)
+        and site.get("site_id") is not None
+        and site.get("changed") is True
+        and site.get("concordant") is True
+    }
+
+
+def _candidate_map_from_edge_frame(motif_edges: pd.DataFrame) -> dict[tuple, set[str]]:
+    """Invert direct-change evidence in a test-sized motif-edge frame.
+
+    Production resolves candidates from the full hit table and passes the result
+    into ``build_terminal_map`` explicitly (see ``load_motif_edges``). This
+    fallback keeps the public builder seam useful for small synthetic frames,
+    which already carry every direct-change row, and documents the inversion grain.
+    """
+    inversion: dict[tuple, set[str]] = {}
+    for row in motif_edges.itertuples(index=False):
+        row_dict = row._asdict()
+        channel = str(row_dict.get("channel", "")).lower()
+        for site_id in _changed_concordant_site_ids(row_dict.get("sites")):
+            key = (str(row_dict.get("contrast")), channel,
+                   str(row_dict.get("target_gene", row_dict.get("gene_symbol"))), site_id)
+            inversion.setdefault(key, set()).add(str(row_dict.get("kinase")))
+    return inversion
+
+
+def _edge_candidate_kinases(
+    row: pd.Series,
+    candidate_map: dict[tuple, list[str]] | None,
+    fallback_inversion: dict[tuple, set[str]],
+) -> set[str]:
+    """Find all direct-change kinases sharing this edge's moved sites.
+
+    Production passes the pre-resolved ``candidate_map`` (built from the full hit
+    table before max-NES aggregation). The site-level ``fallback_inversion`` only
+    serves synthetic frames, which already carry every direct-change row.
+    """
+    identity = (
+        str(row["kinase"]), str(row["target_gene"]), str(row["role"]),
+        str(row["contrast"]), str(row["owning_cluster"]),
+    )
+    if candidate_map is not None:
+        return set(candidate_map.get(identity, set()))
+
+    channel = str(row.get("channel", "")).lower()
+    candidates: set[str] = set()
+    for site_id in _changed_concordant_site_ids(row.get("sites")):
+        candidates.update(fallback_inversion.get(
+            (str(row["contrast"]), channel, str(row["target_gene"]), site_id),
+            set(),
+        ))
+    return candidates
+
+
+def _site_specific_motif_peer_fields(
+    motif_edges: pd.DataFrame,
+    terminal: pd.DataFrame,
+    candidate_map: dict[tuple, list[str]] | None = None,
+) -> pd.DataFrame:
+    """Attach detection-filtered candidate counts and roster per direct-change edge."""
+    fallback_inversion = (
+        {} if candidate_map is not None else _candidate_map_from_edge_frame(motif_edges)
+    )
+    detections = load_detection_tables()["tcell"]
+    detection = {
+        (str(row.kinase), str(row.cell_type)): (
+            float(row.detection_fraction), bool(row.detection_call)
+        )
+        for row in detections.itertuples(index=False)
+    }
+    detected_anywhere = {
+        kinase for (kinase, _cell_type), (fraction, detected) in detection.items()
+        if detected and fraction >= DETECTION_FRAC_MIN
+    }
+
+    detected_counts: list[int | None] = []
+    informative_counts: list[int | None] = []
+    rosters: list[str | None] = []
+    for _, row in terminal.iterrows():
+        candidates = _edge_candidate_kinases(row, candidate_map, fallback_inversion)
+        informative = sorted(candidates & detected_anywhere)
+        roster = [
+            {
+                "kinase": kinase,
+                "detection_fraction": (
+                    detection[(kinase, str(row["owning_cluster"]))][0]
+                    if (kinase, str(row["owning_cluster"])) in detection
+                    else None
+                ),
+            }
+            for kinase in sorted(candidates)
+        ]
+        detected = sum(
+            detection.get((kinase, str(row["owning_cluster"])), (0.0, False))[1]
+            and detection.get((kinase, str(row["owning_cluster"])), (0.0, False))[0]
+            >= DETECTION_FRAC_MIN
+            for kinase in informative
+        )
+        detected_counts.append(int(detected))
+        informative_counts.append(int(len(informative)))
+        rosters.append(json.dumps(roster, ensure_ascii=False, separators=(",", ":")))
+
+    terminal = terminal.copy()
+    terminal["motif_peers_detected"] = detected_counts
+    terminal["motif_peers_informative"] = informative_counts
+    terminal["motif_peer_roster"] = rosters
+    return terminal
+
+
+def build_terminal_map(
+    motif_edges: pd.DataFrame,
+    psp_edges: pd.DataFrame,
+    candidate_map: dict[tuple, list[str]] | None = None,
+) -> pd.DataFrame:
     """Fuse motif kinase→pathway-node edges with PSP literature corroboration.
 
     A T-cell row is emitted only when its direct-change bridge count is at least
@@ -372,7 +523,8 @@ def build_terminal_map(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd
 
     Returns: kinase, source_gene, target_gene, role, contrast, owning_cluster,
              celltype_match, provenance, best_abs_pds, best_abs_nes, signed_nes,
-             best_fdr, n_sites, sites, n_significant_concordant, edge_delta
+             best_fdr, n_sites, sites, n_significant_concordant, edge_delta,
+             motif_peers_detected, motif_peers_informative, motif_peer_roster
     """
     motif_edges = motif_edges.copy()
     if "sites" not in motif_edges.columns:
@@ -418,11 +570,18 @@ def build_terminal_map(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd
     )
     df["provenance"] = np.where(df["_has_lit"].notna(), "both", "motif")
     df["edge_delta"] = df["sites"].map(edge_delta)
+    if has_direct_change_calls:
+        df = _site_specific_motif_peer_fields(motif_edges, df, candidate_map)
+    else:
+        df["motif_peers_detected"] = None
+        df["motif_peers_informative"] = None
+        df["motif_peer_roster"] = None
 
     cols = [
         "kinase", "source_gene", "target_gene", "role", "contrast", "owning_cluster",
         "celltype_match", "provenance", "best_abs_pds", "best_abs_nes", "signed_nes",
         "best_fdr", "n_sites", "sites", "n_significant_concordant", "edge_delta",
+        "motif_peers_detected", "motif_peers_informative", "motif_peer_roster",
     ]
     return df[cols].sort_values("best_abs_nes", ascending=False).reset_index(drop=True)
 
@@ -485,13 +644,13 @@ def run_cohort_dir(bridge_dir: str, is_mouse: bool) -> None:
     log.info(f"{bridge_dir}: {len(psp)} PSP kinase→kinase edges")
 
     log.info(f"{bridge_dir}: loading motif-edge frame (bridge kinase_node_hits)")
-    motif = load_motif_edges(bridge_dir, is_mouse)
+    motif, candidate_map = load_motif_edges(bridge_dir, is_mouse)
     log.info(f"{bridge_dir}: {len(motif)} motif edges (distinct kinase×node×role×contrast)")
     if bridge_dir == "song":
         assert_song_celltype_join(motif)
 
     interactome = build_interactome(motif, psp)
-    terminal = build_terminal_map(motif, psp)
+    terminal = build_terminal_map(motif, psp, candidate_map)
 
     out_dir = OUT_ROOT / bridge_dir
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -511,7 +670,7 @@ def run_cohort_dir(bridge_dir: str, is_mouse: bool) -> None:
         f"- edges: {len(terminal)}\n"
         f"- provenance: motif={tprov.get('motif',0)} both={tprov.get('both',0)}\n"
         f"- signed_nes: direction on terminal edges (+ enriched, − depleted); |NES| remains kinase evidence.\n"
-        f"- n_sites: distinct physical floor-99 sites per terminal edge; edge_delta is mean Δ over significant-concordant sites.\n"
+        f"- n_sites: distinct MEA substrate-member physical sites per terminal edge; edge_delta is mean Δ over significant-concordant sites.\n"
         f"- provenance (motif/psp/both) tags evidence source; rank on |NES|, never p_value.\n"
     )
     (out_dir / "MANIFEST.md").write_text(manifest)
