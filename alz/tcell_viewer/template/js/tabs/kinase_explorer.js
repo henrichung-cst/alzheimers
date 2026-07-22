@@ -630,6 +630,12 @@ function _renderNSCLCSpecificityCountCell(r) {
 //   pathway  — Receptor/EM/Target
 //   backbone — Receptor/EM (Target excluded)
 function _renderIncytrCoverageCell(n, total, nodeScope) {
+  if (!total) {
+    const tip0 = `No predicted-pathway universe for this donor, so no `
+      + `contrast- and receiver-matched observed phospho-change kinase→node `
+      + `edge count is available for ${nodeScope}.`;
+    return `<span title="${_escapeHtml(tip0)}"><strong>${n.toLocaleString()}</strong></span>`;
+  }
   const pct = 100 * n / total;
   const pctStr = pct >= 10 ? pct.toFixed(0) : pct.toFixed(1);
   const cls = pct >= 50 ? "hi" : (pct >= 20 ? "mid" : "lo");

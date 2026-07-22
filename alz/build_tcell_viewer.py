@@ -230,9 +230,11 @@ def build_tcell_payload() -> dict:
     incytr_pathways_block = _write_tcell_pair_pathways()
     _write_tcell_sidechain_slices()
 
-    # Substrate-based Incytr pathway participation — needs both the kinases slice
-    # and the pair-mode global index, so it is filled here rather than in the
-    # per-donor slice builder.
+    # Observed-edge Incytr pathway participation (terminal phospho-change
+    # edges, mirrors the sidechain graph) — needs both the kinases slice and
+    # the pair-mode global index, so it is filled here rather than in the
+    # per-donor slice builder. Counts default to 0 (see slices_kinase.py) and
+    # stay 0 when the index/edges are unavailable for a donor.
     for donor, kslice in kinases_by_context.items():
         rows = list(zip(kslice.get("name", []), kslice.get("residue_type", [])))
         if not rows:

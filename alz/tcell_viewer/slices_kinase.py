@@ -794,9 +794,9 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
         # reached by contrast- and receiver-matched terminal edges; pathway
         # scope = Receptor/EM/Target, backbone scope = Receptor/EM (Target
         # excluded); total = the donor's full predicted-pathway universe.
-        "incytr_pathway_count": [None] * len(rows),
-        "incytr_backbone_count": [None] * len(rows),
-        "incytr_pathway_total": [None] * len(rows),
+        "incytr_pathway_count": [0] * len(rows),
+        "incytr_backbone_count": [0] * len(rows),
+        "incytr_pathway_total": [0] * len(rows),
     }
     for sc in short_contrasts:
         cols[f"NES_{sc}"] = []
