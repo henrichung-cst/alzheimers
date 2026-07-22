@@ -65,6 +65,9 @@ _INCYTR_INDEX_FILENAME = "incytr_index.bin.gz"
 
 _PAIR_FILE_RE = re.compile(r"(d\d+_d\d+)_incytr_output\.parquet$")
 _BACKBONE_FILE_RE = re.compile(r"(d\d+_d\d+)_backbone_output\.parquet$")
+_TERMINAL_EDGE_COLUMNS = (
+    "kinase", "target_gene", "role", "contrast", "owning_cluster",
+)
 _KINASE_SIDECHAIN_EDGE_DIR = os.path.join(
     config.REPO_ROOT, "outputs", "reports", "kinase_kinase_edges"
 )
@@ -860,6 +863,16 @@ def _terminal_contrast_to_row(contrast: str) -> str:
     return f"{m.group(1)}_{m.group(2)}" if m else str(contrast)
 
 
+def _read_terminal_edges(donor: str) -> pd.DataFrame:
+    """Read the donor's terminal kinase→node edges used by the sidechain graph."""
+    te_path = os.path.join(
+        _KINASE_SIDECHAIN_EDGE_DIR, f"tcells_{donor}", "terminal_edges.csv"
+    )
+    if not os.path.exists(te_path):
+        return pd.DataFrame(columns=_TERMINAL_EDGE_COLUMNS)
+    return pd.read_csv(te_path, usecols=list(_TERMINAL_EDGE_COLUMNS))
+
+
 def _build_terminal_kinase_lookup(
     donor: str,
 ) -> dict[str, dict[tuple[str, str, str], int]]:
@@ -872,22 +885,26 @@ def _build_terminal_kinase_lookup(
     Kinases attach only at Target/EM/Receptor, so owning_cluster is the
     receiver. Empty for donors with no within-cohort kinase attribution.
     """
-    import duckdb
-
-    te_path = os.path.join(
-        _KINASE_SIDECHAIN_EDGE_DIR, f"tcells_{donor}", "terminal_edges.csv"
-    )
-    if not os.path.exists(te_path):
+    terminal_edges = _read_terminal_edges(donor)
+    if terminal_edges.empty:
         return {}
-    rows = duckdb.sql(f"""
-        SELECT owning_cluster, contrast, role, target_gene,
-               COUNT(DISTINCT kinase) AS n_kin
-        FROM read_csv_auto('{te_path}')
-        GROUP BY owning_cluster, contrast, role, target_gene
-    """).fetchall()
+
+    terminal_edges = terminal_edges.copy()
+    terminal_edges["contrast_row"] = terminal_edges["contrast"].map(
+        _terminal_contrast_to_row
+    )
+    grouped = (
+        terminal_edges.drop_duplicates(
+            ["kinase", "owning_cluster", "contrast_row", "role", "target_gene"]
+        )
+        .groupby(
+            ["owning_cluster", "contrast_row", "role", "target_gene"],
+            sort=False,
+        )["kinase"]
+        .nunique()
+    )
     lut: dict[str, dict[tuple[str, str, str], int]] = {}
-    for owning_cluster, contrast, role, gene, n_kin in rows:
-        crow = _terminal_contrast_to_row(str(contrast))
+    for (owning_cluster, crow, role, gene), n_kin in grouped.items():
         lut.setdefault(str(owning_cluster), {})[
             (crow, str(role), str(gene))
         ] = int(n_kin)
