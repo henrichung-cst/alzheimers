@@ -368,6 +368,8 @@ window.IncytrGlobalIndex = (function() {
     if (key === "PDS") return i => cols.PDS[i];
     // J-3: pvalue absent for backbone grains → treat as NaN (falls to end).
     if (key === "pvalue") return cols.pvalue ? (i => cols.pvalue[i]) : (() => NaN);
+    // kinase_edges absent outside the t-cell Full grain → treat as NaN (last).
+    if (key === "kinase_edges") return cols.kinaseEdges ? (i => cols.kinaseEdges[i]) : (() => NaN);
     if (cols[key] && d.gi.score_columns.indexOf(key) >= 0) {
       const col = cols[key]; return i => _f16(col[i]);
     }
@@ -484,6 +486,9 @@ window.IncytrGlobalIndex = (function() {
       traj_labels: _decodeTraj(trj),
     };
     for (const sc of gi.score_columns) row[sc] = _f16(cols[sc][i]);
+    // T-cell Full grain carries kinase_edges (distinct kinase→node sidechain
+    // edges drawn for this pathway); other cohorts/grains omit the column.
+    if (cols.kinaseEdges) row.kinase_edges = cols.kinaseEdges[i];
     // Backbone grains carry n_paths (distinct Full pathways collapsed into the
     // backbone row); Full grain has no such column.
     if (cols.n_paths) row.n_paths = cols.n_paths[i];

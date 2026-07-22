@@ -365,6 +365,16 @@ function _ipBlock() {
   return _ipActiveBlock();
 }
 
+// True when the active grain carries per-pathway kinase-edge counts. Only the
+// t-cell Full grain's builder emits them (shard column + packed index column);
+// other cohorts/grains omit the column rather than render an all-"—" column.
+function _ipHasKinaseEdges() {
+  const block = _ipBlock();
+  const gi = block && block.global_index;
+  return !!(gi && Array.isArray(gi.columns)
+    && gi.columns.some(c => c && c.name === "kinaseEdges"));
+}
+
 // True when the active grain is a backbone grain (not Full).
 function _ipIsBackboneGrain() {
   const block = _ipBlock();
@@ -950,6 +960,8 @@ function _ipRenderTopTable() {
     ...(hasPvalue ? [{ key: "pvalue", label: "pvalue", numeric: true, digits: "sci" }] : []),
     { key: "PDS", label: "PDS", numeric: true, digits: 3 },
     ...scoreCols,
+    ...(_ipHasKinaseEdges() ? [{ key: "kinase_edges", label: "Kinase edges", numeric: true, digits: 0,
+      tip: "Distinct kinase→node edges drawn in this pathway's sidechain graph (Target/EM/Receptor, contrast-matched, receiver-owned)." }] : []),
     ...(_ipHasTraj() ? [{ key: "_trajectory", label: "trajectory", isTraj: true }] : []),
   ];
   const thead = `<th style="width:24px;" title="Toggle evidence detail panel."></th>` + cols.map(c => {
@@ -1438,7 +1450,7 @@ function _ipFilterRows() {
   const key = f.sortKey === "rank" ? "PDS" : f.sortKey;
   const dir = f.sortKey === "rank" ? -1 : f.sortDir;
   const numericKeys = new Set([
-    "pvalue", "PDS", ..._ipScoreCols(),
+    "pvalue", "PDS", "kinase_edges", ..._ipScoreCols(),
   ]);
   const isNumeric = numericKeys.has(key);
   const cmp = isNumeric
@@ -1603,6 +1615,8 @@ function _ipRenderTable() {
     { key: "PDS",           label: "PDS",    numeric: true, digits: 3,
       tip: "Pathway Disturbance Score — composite per-path effect-size (multimodel)." },
     ...scoreCols,
+    ...(_ipHasKinaseEdges() ? [{ key: "kinase_edges", label: "Kinase edges", numeric: true, digits: 0,
+      tip: "Distinct kinase→node edges drawn in this pathway's sidechain graph (Target/EM/Receptor, contrast-matched, receiver-owned)." }] : []),
     // CR-04: trajectory column — rendered only when the payload carries trajectory_index.
     ...(hasTrajIdx ? [{
       key: "_trajectory", label: "trajectory",

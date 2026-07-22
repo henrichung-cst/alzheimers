@@ -535,6 +535,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
            ("emId", "u2"), ("targetId", "u2")]
         + [("senderId", "u1"), ("receiverId", "u1"), ("contrastId", "u1"),
            ("labelBits", "u1"), ("trajBits", "u1")]
+        + [("kinaseEdges", "u2")]
     )
     idx_gene_to_id: dict[str, int] = {}
     idx_gene_vocab: list[str] = []
@@ -564,6 +565,7 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
             "trajBits": _idx_traj_bits(frame["traj_labels"]),
             "PDS": frame["PDS"].to_numpy(dtype="<f4"),
             "pvalue": frame["pvalue"].to_numpy(dtype="<f4"),
+            "kinaseEdges": frame["kinase_edges"].to_numpy(dtype="<u2"),
         }
         for sc in effective_score_cols:
             chunk[sc] = (
@@ -622,6 +624,11 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
                     + list(dir_flag_cols) + list(extra_path_cols))
     float_cols = float32_cols + float16_cols
 
+    # Per-receiver distinct-kinase counts keyed by (contrast, role, node gene) —
+    # the exact edges the sidechain graph draws for a pathway row. Empty for
+    # donors without a within-cohort kinase attribution artifact (e.g. donor2).
+    kin_lut = _build_terminal_kinase_lookup(donor)
+
     present_pairs: list[list[str]] = []
     pair_row_counts: dict[str, int] = {}
     total_rows = 0
@@ -644,6 +651,22 @@ def _write_donor_pair_pathways(donor: str) -> dict | None:
         )
         sub["traj_labels"] = sub["traj_labels"].fillna("")
         sub["sign_vec"] = sub["sign_vec"].fillna("")
+        # Kinase-edge count per pathway row: distinct kinase→node edges the
+        # sidechain graph draws (Target/EM/Receptor, contrast-matched,
+        # owning_cluster == this receiver). Kinases never attach at Ligand.
+        recv_lut = kin_lut.get(r, {})
+        n_rows = len(sub)
+        kinase_edges = np.zeros(n_rows, dtype=np.int64)
+        if recv_lut:
+            contrasts = sub["contrast"].astype(str).to_numpy()
+            for role in ("Target", "EM", "Receptor"):
+                genes = sub[role].astype(str).to_numpy()
+                kinase_edges += np.fromiter(
+                    (recv_lut.get((contrasts[i], role, genes[i]), 0)
+                     for i in range(n_rows)),
+                    dtype=np.int64, count=n_rows,
+                )
+        sub["kinase_edges"] = kinase_edges.astype(np.int32)
         _accumulate_index(s, r, sub)
         sub = sub.drop(columns=["sender", "receiver"])
         for col in float32_cols:
@@ -835,6 +858,40 @@ def _terminal_contrast_to_row(contrast: str) -> str:
     """
     m = _TERMINAL_CONTRAST_RE.match(str(contrast))
     return f"{m.group(1)}_{m.group(2)}" if m else str(contrast)
+
+
+def _build_terminal_kinase_lookup(
+    donor: str,
+) -> dict[str, dict[tuple[str, str, str], int]]:
+    """Distinct-kinase count per (contrast, role, node gene) for each receiver.
+
+    Keyed ``lut[owning_cluster][(contrast_row, role, gene)] -> n_distinct_kinase``,
+    counting terminal edges exactly as the sidechain graph draws them
+    (`incytr_sidechains.js`): one edge per (kinase, node) when the edge's
+    contrast, role-node gene, and owning_cluster all match the pathway row.
+    Kinases attach only at Target/EM/Receptor, so owning_cluster is the
+    receiver. Empty for donors with no within-cohort kinase attribution.
+    """
+    import duckdb
+
+    te_path = os.path.join(
+        _KINASE_SIDECHAIN_EDGE_DIR, f"tcells_{donor}", "terminal_edges.csv"
+    )
+    if not os.path.exists(te_path):
+        return {}
+    rows = duckdb.sql(f"""
+        SELECT owning_cluster, contrast, role, target_gene,
+               COUNT(DISTINCT kinase) AS n_kin
+        FROM read_csv_auto('{te_path}')
+        GROUP BY owning_cluster, contrast, role, target_gene
+    """).fetchall()
+    lut: dict[str, dict[tuple[str, str, str], int]] = {}
+    for owning_cluster, contrast, role, gene, n_kin in rows:
+        crow = _terminal_contrast_to_row(str(contrast))
+        lut.setdefault(str(owning_cluster), {})[
+            (crow, str(role), str(gene))
+        ] = int(n_kin)
+    return lut
 
 
 def _write_tcell_sidechain_slices() -> None:
