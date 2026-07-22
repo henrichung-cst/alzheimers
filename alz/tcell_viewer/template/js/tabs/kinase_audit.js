@@ -33,6 +33,26 @@ const KINASE_AUDIT_TABS = [
   {id:"attribution", label:"Attribution"},
 ];
 
+// Pathways tab is gated on payload.kinase_incytr_participation (donor1-only —
+// absent for donor2, and also absent on donor1 if the participation scan
+// couldn't run, e.g. no pair-mode global index). PAYLOAD is still null when
+// this script's top-level code runs (boot() awaits _loadPayload() before any
+// render happens), so the array can't be decided at declaration time.
+// kinase_detail.js (viewer_shared) reads
+// KINASE_AUDIT_TABS as a bare array to build the tab-bar buttons, so the
+// entry must already be present the first time that happens — which is the
+// first "kinase selected" Store dispatch. Subscribing here, at module load
+// (before boot.js registers its own listener inside boot()), guarantees this
+// callback runs first on every dispatch, so the array is patched before
+// kinase_detail.js's tab-bar render sees it, including on the very first
+// selection.
+Store.subscribe(() => {
+  if (KINASE_AUDIT_TABS.some(t => t.id === "pathways")) return;
+  if (PAYLOAD && PAYLOAD.kinase_incytr_participation) {
+    KINASE_AUDIT_TABS.push({id:"pathways", label:"Pathways"});
+  }
+});
+
 function _activeKinaseAuditTab() {
   const id = Store.state.view.kinaseAuditTab || KINASE_AUDIT_TABS[0].id;
   return KINASE_AUDIT_TABS.some(t => t.id === id) ? id : KINASE_AUDIT_TABS[0].id;
@@ -654,6 +674,135 @@ function _renderNSCLCCellTypeStrip(hostId, ctx) {
 }
 
 
+// ---- Pathways subtab helpers --------------------------------------------
+// Renders payload.kinase_incytr_participation[<kinase>] (always-available
+// summary) plus a lazy HTTP-only edge table sliced from the
+// kinase_incytr_edges audit sidecar.
+
+function _pathwaysBreakdownDl(entries) {
+  if (!entries.length) return `<div class="muted">none</div>`;
+  return `<dl class="audit-kv">` + entries.map(([k, v]) =>
+    `<dt>${_escapeHtml(k)}</dt><dd>${Number(v).toLocaleString()}</dd>`
+  ).join("") + `</dl>`;
+}
+
+// Cross-nav: hand off one participating edge to the Incytr Pathways tab
+// (table pane). Reuses the exact IncytrFilter field set as the heatmap
+// click-through (_ihSeedPathwayFilters, incytr_heatmap.js) — receiverIn +
+// searchText (exact any-role gene match) always apply. contrast is row form
+// (e.g. "d13_d2"); the T-cell Incytr disease/timepoint multiselects are
+// populated from the same split (slices_incytr.py: block.diseases ==
+// block.timepoints == the ordered follow-up days; _ipFilterRows splits
+// r.contrast on its first "_" the same way), so splitting here mechanically
+// reproduces that axis rather than inventing a new filter lever.
+function _kinaseAuditOpenPathwayEdge(targetGene, receiver, contrast) {
+  if (typeof IncytrFilter === "undefined") return;
+  const patch = {
+    pair: null,
+    ipMode: "top",
+    senderIn: [],
+    receiverIn: receiver ? [receiver] : [],
+    searchText: targetGene || "",
+  };
+  const c = String(contrast || "");
+  const ui = c.indexOf("_");
+  if (ui > 0) {
+    patch.disease = [c.slice(0, ui)];
+    patch.timepoint = [c.slice(ui + 1)];
+  }
+  IncytrFilter.set(patch);
+  Store.dispatch({type:"SET_VIEW", key:"activeTab", value:"incytr"});
+  if (typeof _setIncytrPane === "function") _setIncytrPane("table");
+}
+
+const _PATHWAYS_EDGE_COLUMNS = [
+  "target_gene", "role", "contrast", "receiver", "pathways", "signed_nes",
+  "best_fdr", "n_sites", "edge_delta", "n_significant_concordant",
+  "motif_peers_detected", "motif_peers_informative",
+];
+
+// Delegated click on the (persistent) host div — survives AuditTable's own
+// re-renders on sort/search/page, so it's wired once per expand rather than
+// per render. Reads the raw (unformatted) value AuditTable stamps into each
+// <td title="…">, keyed by the fixed column order above, rather than
+// re-parsing the displayed/rounded text.
+function _wirePathwaysEdgeCrossNav(hostEl) {
+  if (hostEl.__pathwaysNavWired) return;
+  hostEl.__pathwaysNavWired = true;
+  hostEl.addEventListener("click", (ev) => {
+    const tr = ev.target.closest("tbody tr");
+    if (!tr || !hostEl.contains(tr)) return;
+    const cell = (i) => (tr.children[i] ? tr.children[i].title : "");
+    _kinaseAuditOpenPathwayEdge(
+      cell(_PATHWAYS_EDGE_COLUMNS.indexOf("target_gene")),
+      cell(_PATHWAYS_EDGE_COLUMNS.indexOf("receiver")),
+      cell(_PATHWAYS_EDGE_COLUMNS.indexOf("contrast")),
+    );
+  });
+}
+
+function _renderPathwaysTab(body, ctx, seq) {
+  const block = (PAYLOAD.kinase_incytr_participation || {})[ctx.name] || null;
+  const counts = (block && block.counts) || {pathways:0, backbones:0, total:0};
+  const pct = counts.total ? (100 * counts.pathways / counts.total) : 0;
+  const byRole = Object.entries((block && block.by_role) || {}).sort((a, b) => b[1] - a[1]);
+  const byContrast = Object.entries((block && block.by_contrast) || {}).sort((a, b) => b[1] - a[1]);
+  const byReceiver = Object.entries((block && block.by_receiver) || {}).sort((a, b) => b[1] - a[1]);
+  const empty = counts.pathways === 0;
+
+  body.innerHTML =
+    `<section class="audit-panel audit-wide"><h4>Observed-edge pathway participation <span class="muted">for ${_escapeHtml(ctx.name)}</span></h4>` +
+    `<p class="kinase-stage-note">Mirrors the kinase sidechain graph: a predicted pathway "participates" when it has at least one contrast- and receiver-matched observed phospho-change kinase&rarr;node edge from this kinase landing on Receptor, EM, or Target (terminal edges carry no Ligand role). Denominator is the donor's full predicted-pathway universe.</p>` +
+    (empty
+      ? `<div class="muted">No observed pathway edges for this kinase.</div>`
+      : `<div class="mea-scorecard" style="display:flex;gap:2.5em;">` +
+        `<div><div class="mea-score-value">${counts.pathways.toLocaleString()}</div><div class="mea-score-label">pathways <span class="muted">(${pct.toFixed(2)}% of ${counts.total.toLocaleString()})</span></div></div>` +
+        `<div><div class="mea-score-value">${counts.backbones.toLocaleString()}</div><div class="mea-score-label">backbones <span class="muted">(Receptor&cup;EM; Target excluded)</span></div></div>` +
+        `</div>`) +
+    `</section>` +
+    `<section class="audit-panel"><h4>By role</h4><p class="kinase-stage-note muted">Role-membership, not a partition — a pathway reached at &gt;1 role is counted under each, so these can sum to more than #pathways.</p>${_pathwaysBreakdownDl(byRole)}</section>` +
+    `<section class="audit-panel"><h4>By contrast</h4><p class="kinase-stage-note muted">Partitions #pathways — values sum to the pathways count above.</p>${_pathwaysBreakdownDl(byContrast)}</section>` +
+    `<section class="audit-panel"><h4>By receiver</h4><p class="kinase-stage-note muted">Partitions #pathways — values sum to the pathways count above.</p>${_pathwaysBreakdownDl(byReceiver)}</section>` +
+    (empty ? "" :
+      `<section class="audit-panel audit-wide"><h4>Participating edges <span class="muted">(kinase_incytr_edges.csv)</span></h4>` +
+      `<p class="kinase-stage-note">One row per observed terminal edge from this kinase with &ge;1 matching pathway. Click a row to open it in the Incytr Pathways table (receiver + gene, and contrast when it maps onto the day axis).</p>` +
+      `<details id="pathways-edge-details"><summary>Show edge table</summary><div id="pathways-edge-body" style="margin-top:.6em;"></div></details></section>`);
+
+  if (empty) return;
+  const details = document.getElementById("pathways-edge-details");
+  if (!details) return;
+  let loaded = false;
+  details.addEventListener("toggle", async () => {
+    if (!details.open || loaded) return;
+    loaded = true;
+    const hostEl = document.getElementById("pathways-edge-body");
+    if (!hostEl) return;
+    if (AuditDataStore.fileMode) {
+      hostEl.innerHTML = `<div class="muted">Serve the viewer directory over HTTP to view the participating-edge table (file:// ships only the inlined summary above).</div>`;
+      return;
+    }
+    hostEl.innerHTML = `<div class="muted">Loading edge table...</div>`;
+    try {
+      const allEdges = await AuditDataStore.load("kinase_incytr_edges");
+      if (seq !== _kinaseAuditSeq) return;
+      const rows = allEdges.filter(r => r.kinase === ctx.name);
+      rows.sort((a, b) => {
+        const pa = Number(a.pathways) || 0, pb = Number(b.pathways) || 0;
+        if (pb !== pa) return pb - pa;
+        return Math.abs(Number(b.signed_nes) || 0) - Math.abs(Number(a.signed_nes) || 0);
+      });
+      const t = new AuditTable("pathways-edge-body", {
+        tableKey: "kinase_incytr_edges", rows, columns: _PATHWAYS_EDGE_COLUMNS,
+        fullSourceKey: "kinase_incytr_edges",
+      });
+      t.render();
+      _wirePathwaysEdgeCrossNav(hostEl);
+    } catch (e) {
+      hostEl.innerHTML = `<div class="muted">Edge table load failed: ${_escapeHtml(String(e && e.message || e))}</div>`;
+    }
+  });
+}
+
 function _setAuditSelectors(ctx) {
   const siteSelect = document.getElementById("audit-site-select");
   if (siteSelect) {
@@ -961,6 +1110,8 @@ async function renderActiveKinaseAuditTab(kinase_id) {
       _renderAuditTable("audit-attribution", "unified_attribution", ctx.attrRows,
         ["kinase","gene_symbol","contrast","cell_type","tcell_detected","tcell_fraction_expressing","tcell_state_n_cells","tcell_state_enrichment","tcell_lfc","tcell_concordance","tcell_consistency","NES","FDR"],
         "unified_attribution");
+    } else if (tab === "pathways") {
+      _renderPathwaysTab(body, ctx, seq);
     }
   } catch (e) {
     if (seq !== _kinaseAuditSeq) return;

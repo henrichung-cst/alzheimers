@@ -161,6 +161,24 @@ def _audit_csv_meta(dest_path: str, label: str, key: str,
     }
 
 
+def _register_kinase_incytr_edges(edge_rows: pd.DataFrame) -> dict:
+    """Write the pathways-tab edge sidecar and build its manifest entry.
+
+    One row per participating terminal edge (``pathways >= 1``). ``preview`` is
+    forced empty so the drawer falls through to its note; the tab loads the full
+    CSV via ``AuditDataStore.load``. Shape otherwise matches every other audit
+    table (built by ``_audit_csv_meta``).
+    """
+    os.makedirs(AUDIT_SOURCES_DIR, exist_ok=True)
+    key = "kinase_incytr_edges"
+    label = "Kinase Incytr participating edges (donor1)"
+    dest = os.path.join(AUDIT_SOURCES_DIR, f"{key}.csv")
+    edge_rows.to_csv(dest, index=False)
+    meta = _audit_csv_meta(dest, label, key)
+    meta["preview"] = []
+    return meta
+
+
 def _rewrite_contrast_csv(src: str, dest_name: str, label: str,
                           key: str, drop_cols: tuple[str, ...] = ()
                           ) -> dict | None:

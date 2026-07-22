@@ -67,6 +67,7 @@ from alz.tcell_viewer.common import (  # noqa: E402
 from alz.tcell_viewer.slices_incytr import (  # noqa: E402
     _write_tcell_pair_pathways,
     _write_tcell_sidechain_slices,
+    _build_kinase_incytr_edge_rows,
     _timepoint_label,
 )
 from alz.viewer.shared.payload_helpers import _INCYTR_SIDECHAIN_INDEX_FILENAME  # noqa: E402
@@ -83,6 +84,7 @@ from alz.tcell_viewer.slices_traces import (  # noqa: E402
 )
 from alz.tcell_viewer.slices_audit import (  # noqa: E402
     build_tcell_audit_manifest,
+    _register_kinase_incytr_edges,
     AUDIT_TABLE_SPECS,
 )
 from alz.tcell_viewer.state_contract import load_donor_states  # noqa: E402
@@ -235,6 +237,8 @@ def build_tcell_payload() -> dict:
     # the pair-mode global index, so it is filled here rather than in the
     # per-donor slice builder. Counts default to 0 (see slices_kinase.py) and
     # stay 0 when the index/edges are unavailable for a donor.
+    kinase_incytr_participation: dict | None = None
+    kinase_incytr_edge_rows = None
     for donor, kslice in kinases_by_context.items():
         rows = list(zip(kslice.get("name", []), kslice.get("residue_type", [])))
         if not rows:
@@ -245,13 +249,20 @@ def build_tcell_payload() -> dict:
         result = _incytr_pathway_participation(donor, ip_block, rows)
         if result is None:
             continue
-        pathway_counts, backbone_counts, total = result
+        (pathway_counts, backbone_counts, total,
+         participation_block, per_edge_counts) = result
         kslice["incytr_pathway_count"] = pathway_counts
         kslice["incytr_backbone_count"] = backbone_counts
         kslice["incytr_pathway_total"] = [total] * len(pathway_counts)
         n_hit = sum(1 for c in pathway_counts if c)
         print(f"  {donor}: incytr pathway participation for {n_hit}/{len(pathway_counts)} "
               f"kinases (of {total:,} pathways)", flush=True)
+        # Inlined per-kinase breakdown block + edge sidecar are donor1-only
+        # (mea_kinase_donor); donor2 has no within-cohort kinase attribution.
+        if donor in DONOR_WITH_MEA:
+            kinase_incytr_participation = participation_block
+            kinase_incytr_edge_rows = _build_kinase_incytr_edge_rows(
+                donor, per_edge_counts)
 
     print("[build_tcell_payload] transcript_trace shards:", flush=True)
     transcript_trace_meta = _write_tcell_transcript_trace()
@@ -301,6 +312,9 @@ def build_tcell_payload() -> dict:
 
     kinase_motifs = _build_kinase_motifs(union_kinases)
     audit_tables = build_tcell_audit_manifest()
+    if kinase_incytr_edge_rows is not None and not kinase_incytr_edge_rows.empty:
+        audit_tables["tables"]["kinase_incytr_edges"] = (
+            _register_kinase_incytr_edges(kinase_incytr_edge_rows))
 
     # Timepoints actually seen across both donors → palette subset.
     timepoint_set: set[str] = set()
@@ -423,6 +437,8 @@ def build_tcell_payload() -> dict:
         "incytr_pathways": incytr_pathways_block,
         "meta": meta,
     }
+    if kinase_incytr_participation:
+        payload["kinase_incytr_participation"] = kinase_incytr_participation
     if attribution_index is not None:
         payload["attribution_index"] = attribution_index
     if projected_state_mea is not None:

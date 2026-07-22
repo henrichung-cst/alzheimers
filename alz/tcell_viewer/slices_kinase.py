@@ -19,6 +19,7 @@ from alz.tcell_viewer.paths import (  # noqa: E402
 )
 from alz.tcell_viewer.common import DONORS  # noqa: E402
 from alz.tcell_viewer.slices_incytr import (  # noqa: E402
+    _edge_participation_key,
     _read_terminal_edges,
     _terminal_contrast_to_row,
 )
@@ -609,7 +610,7 @@ def _build_tcell_attribution_index(attr_df, kid: dict, short_contrasts: list,
 def _incytr_pathway_participation(
     donor: str, incytr_block: dict,
     name_residue_rows: list[tuple[str, str]],
-) -> tuple[list, list, int] | None:
+) -> tuple[list, list, int, dict, dict] | None:
     """Count terminal-edge participation over the donor's global index.
 
     A row matches a kinase when its receiver, contrast, and role-node gene
@@ -617,10 +618,27 @@ def _incytr_pathway_participation(
     Receptor/EM/Target; backbone scope includes Receptor/EM. The denominator
     remains the full predicted-pathway universe in ``global_index["nrows"]``.
 
-    Returns (pathway_counts, backbone_counts, total) aligned to
-    ``name_residue_rows``. Counts are keyed by kinase name, so every visible
-    kinase row receives an integer, including zero when it has no matching
-    observed edge.
+    One scan produces everything:
+
+    - ``pathway_counts`` / ``backbone_counts``: lists aligned to
+      ``name_residue_rows`` (feed the Explorer's columnar arrays verbatim).
+      Counts are keyed by kinase name, so every visible kinase row receives an
+      integer, including zero when it has no matching observed edge.
+    - ``total``: the full predicted-pathway universe (``global_index["nrows"]``),
+      the %-denominator.
+    - ``participation_block``: per distinct kinase name, the pinned
+      ``{counts, by_role, by_contrast, by_receiver}`` breakdown. ``pathways`` =
+      |union of the three role masks|; ``backbones`` = |Receptor∪EM|; ``by_role``
+      is role-membership (a row reached at >1 role counts under each role — NOT a
+      partition); ``by_contrast`` / ``by_receiver`` partition the union mask
+      (each sums to ``pathways``), keyed by the index's own contrast/receiver
+      vocab (contrast vocab is already row form).
+    - ``per_edge_counts``: per observed terminal edge, the count of index rows
+      that edge matches, keyed ``(role, owning_cluster, contrast_row,
+      target_gene)`` (kinase-independent). Feeds the edge sidecar's ``pathways``.
+
+    Returns ``(pathway_counts, backbone_counts, total, participation_block,
+    per_edge_counts)``.
     """
     gi = (incytr_block or {}).get("global_index")
     if not gi:
@@ -652,10 +670,14 @@ def _incytr_pathway_participation(
     receiver = node["receiverId"].astype(np.int64, copy=False)
     contrast = node["contrastId"].astype(np.int64, copy=False)
 
-    n_contrast = len(gi["contrast_vocab"])
+    contrast_vocab = [str(v) for v in gi["contrast_vocab"]]
+    receiver_vocab = [str(v) for v in gi["receiver_vocab"]]
+    n_contrast = len(contrast_vocab)
     n_gene = len(gi["gene_vocab"])
+    n_receiver = len(receiver_vocab)
+    n_rows = len(name_residue_rows)
     if not n_contrast or not n_gene:
-        return [0] * len(name_residue_rows), [0] * len(name_residue_rows), n
+        return [0] * n_rows, [0] * n_rows, n, {}, {}
 
     def _composite_key(gene_id: np.ndarray) -> np.ndarray:
         return (receiver * n_contrast + contrast) * n_gene + gene_id
@@ -663,9 +685,11 @@ def _incytr_pathway_participation(
     key_receptor = _composite_key(rec)
     key_em = _composite_key(em)
     key_target = _composite_key(tgt)
+    key_by_role = {"Receptor": key_receptor, "EM": key_em, "Target": key_target}
 
     terminal_edges = _read_terminal_edges(donor)
     allowed_by_kinase: dict[str, dict[str, set[int]]] = {}
+    per_edge_counts: dict[tuple[str, str, str, str], int] = {}
     if not terminal_edges.empty:
         terminal_edges = terminal_edges.copy()
         terminal_edges["contrast_row"] = terminal_edges["contrast"].map(
@@ -674,49 +698,86 @@ def _incytr_pathway_participation(
         terminal_edges = terminal_edges.drop_duplicates(
             ["kinase", "owning_cluster", "contrast_row", "role", "target_gene"]
         )
-        receiver_ids = {
-            str(value): i for i, value in enumerate(gi["receiver_vocab"])
-        }
-        contrast_ids = {
-            str(value): i for i, value in enumerate(gi["contrast_vocab"])
-        }
-        gene_ids = {
-            str(value): i for i, value in enumerate(gi["gene_vocab"])
-        }
-        terminal_edges["receiver_id"] = terminal_edges["owning_cluster"].map(
-            receiver_ids
+        receiver_ids = {value: i for i, value in enumerate(receiver_vocab)}
+        contrast_ids = {value: i for i, value in enumerate(contrast_vocab)}
+        gene_ids = {str(value): i for i, value in enumerate(gi["gene_vocab"])}
+        terminal_edges["receiver_id"] = (
+            terminal_edges["owning_cluster"].astype(str).map(receiver_ids)
         )
         terminal_edges["contrast_id"] = terminal_edges["contrast_row"].map(
             contrast_ids
         )
-        terminal_edges["gene_id"] = terminal_edges["target_gene"].map(gene_ids)
+        terminal_edges["gene_id"] = (
+            terminal_edges["target_gene"].astype(str).map(gene_ids)
+        )
         terminal_edges = terminal_edges.dropna(
             subset=["kinase", "receiver_id", "contrast_id", "gene_id"]
         )
+        terminal_edges = terminal_edges[
+            terminal_edges["role"].isin(("Receptor", "EM", "Target"))
+        ]
+        terminal_edges["composite"] = (
+            (terminal_edges["receiver_id"].astype("int64") * n_contrast
+             + terminal_edges["contrast_id"].astype("int64")) * n_gene
+            + terminal_edges["gene_id"].astype("int64")
+        )
         for edge in terminal_edges.itertuples(index=False):
-            role = str(edge.role)
-            if role not in {"Receptor", "EM", "Target"}:
-                continue
-            composite = (
-                (int(edge.receiver_id) * n_contrast + int(edge.contrast_id))
-                * n_gene + int(edge.gene_id)
-            )
             allowed_by_kinase.setdefault(str(edge.kinase), {}).setdefault(
-                role, set()
-            ).add(composite)
+                str(edge.role), set()
+            ).add(int(edge.composite))
+        # Per-edge index-row counts: for each role, how many global-index rows
+        # carry each edge's composite key in that role's node column. Vectorized
+        # via one np.unique + searchsorted per role over the ~1.87M-row key
+        # arrays already in memory (no second full-index materialization).
+        for role, sub in terminal_edges.groupby("role", sort=False):
+            uvals, ucounts = np.unique(key_by_role[str(role)], return_counts=True)
+            comps = sub["composite"].to_numpy(dtype=np.int64)
+            idx = np.clip(np.searchsorted(uvals, comps), 0, len(uvals) - 1)
+            counts_arr = np.where(uvals[idx] == comps, ucounts[idx], 0)
+            for edge, cnt in zip(sub.itertuples(index=False), counts_arr):
+                per_edge_counts[_edge_participation_key(
+                    role, edge.owning_cluster,
+                    edge.contrast_row, edge.target_gene,
+                )] = int(cnt)
 
     pathway_counts: list[int] = []
     backbone_counts: list[int] = []
+    participation_block: dict[str, dict] = {}
+    cache: dict[str, tuple[int, int]] = {}
     for name, _residue in name_residue_rows:
-        allowed = allowed_by_kinase.get(str(name), {})
-        hit_backbone = np.isin(key_receptor, tuple(allowed.get("Receptor", ())))
-        hit_backbone |= np.isin(key_em, tuple(allowed.get("EM", ())))
-        hit_pathway = hit_backbone | np.isin(
-            key_target, tuple(allowed.get("Target", ()))
-        )
-        backbone_counts.append(int(hit_backbone.sum()))
-        pathway_counts.append(int(hit_pathway.sum()))
-    return pathway_counts, backbone_counts, n
+        key = str(name)
+        if key not in cache:
+            allowed = allowed_by_kinase.get(key, {})
+            hit_receptor = np.isin(key_receptor, tuple(allowed.get("Receptor", ())))
+            hit_em = np.isin(key_em, tuple(allowed.get("EM", ())))
+            hit_target = np.isin(key_target, tuple(allowed.get("Target", ())))
+            hit_backbone = hit_receptor | hit_em
+            hit_pathway = hit_backbone | hit_target
+            pc = int(hit_pathway.sum())
+            bc = int(hit_backbone.sum())
+            cache[key] = (pc, bc)
+            con_bins = np.bincount(contrast[hit_pathway], minlength=n_contrast)
+            rec_bins = np.bincount(receiver[hit_pathway], minlength=n_receiver)
+            participation_block[key] = {
+                "counts": {"pathways": pc, "backbones": bc, "total": n},
+                "by_role": {
+                    "Receptor": int(hit_receptor.sum()),
+                    "EM": int(hit_em.sum()),
+                    "Target": int(hit_target.sum()),
+                },
+                "by_contrast": {
+                    contrast_vocab[i]: int(v)
+                    for i, v in enumerate(con_bins) if v
+                },
+                "by_receiver": {
+                    receiver_vocab[i]: int(v)
+                    for i, v in enumerate(rec_bins) if v
+                },
+            }
+        pc, bc = cache[key]
+        pathway_counts.append(pc)
+        backbone_counts.append(bc)
+    return pathway_counts, backbone_counts, n, participation_block, per_edge_counts
 
 
 def _build_donor_kinases_slice(donor: str) -> dict | None:

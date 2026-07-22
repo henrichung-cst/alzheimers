@@ -67,7 +67,28 @@ _PAIR_FILE_RE = re.compile(r"(d\d+_d\d+)_incytr_output\.parquet$")
 _BACKBONE_FILE_RE = re.compile(r"(d\d+_d\d+)_backbone_output\.parquet$")
 _TERMINAL_EDGE_COLUMNS = (
     "kinase", "target_gene", "role", "contrast", "owning_cluster",
+    "signed_nes", "best_fdr", "n_sites", "edge_delta",
+    "n_significant_concordant", "motif_peers_detected", "motif_peers_informative",
 )
+# Pathways-tab edge sidecar — one row per participating terminal edge, heavy
+# `sites` / `motif_peer_roster` JSON excluded. Column order is pinned; the tab
+# consumes it via AuditDataStore.load("kinase_incytr_edges").
+_KINASE_INCYTR_EDGES_COLUMNS = (
+    "kinase", "target_gene", "role", "contrast", "receiver", "pathways",
+    "signed_nes", "best_fdr", "n_sites", "edge_delta",
+    "n_significant_concordant", "motif_peers_detected", "motif_peers_informative",
+)
+
+
+def _edge_participation_key(
+    role, owning_cluster, contrast_row, target_gene,
+) -> tuple[str, str, str, str]:
+    """Composite key for per-edge index-row counts.
+
+    Built identically where the counts are produced and where the sidecar reads
+    them back; one definition so the two sides cannot drift out of key order.
+    """
+    return (str(role), str(owning_cluster), str(contrast_row), str(target_gene))
 _KINASE_SIDECHAIN_EDGE_DIR = os.path.join(
     config.REPO_ROOT, "outputs", "reports", "kinase_kinase_edges"
 )
@@ -871,6 +892,51 @@ def _read_terminal_edges(donor: str) -> pd.DataFrame:
     if not os.path.exists(te_path):
         return pd.DataFrame(columns=_TERMINAL_EDGE_COLUMNS)
     return pd.read_csv(te_path, usecols=list(_TERMINAL_EDGE_COLUMNS))
+
+
+def _build_kinase_incytr_edge_rows(
+    donor: str, per_edge_counts: dict[tuple[str, str, str, str], int],
+) -> pd.DataFrame:
+    """Compact participating-edge rows for the pathways-tab sidecar.
+
+    One row per observed terminal edge with ``pathways >= 1`` (count-0 edges
+    dropped). ``contrast`` is row form (``_terminal_contrast_to_row``);
+    ``receiver`` is ``owning_cluster``; ``pathways`` is the per-edge index-row
+    count from the single participation scan (``per_edge_counts`` keyed
+    ``(role, owning_cluster, contrast_row, target_gene)``). Heavy ``sites`` /
+    ``motif_peer_roster`` JSON is excluded (never read). Columns/order match the
+    pinned contract ``_KINASE_INCYTR_EDGES_COLUMNS``.
+    """
+    edges = _read_terminal_edges(donor)
+    if edges.empty:
+        return pd.DataFrame(columns=_KINASE_INCYTR_EDGES_COLUMNS)
+    edges = edges.copy()
+    edges["contrast_row"] = edges["contrast"].map(_terminal_contrast_to_row)
+    edges["pathways"] = [
+        per_edge_counts.get(
+            _edge_participation_key(
+                r.role, r.owning_cluster, r.contrast_row, r.target_gene),
+            0,
+        )
+        for r in edges.itertuples(index=False)
+    ]
+    edges = edges[edges["pathways"] >= 1]
+    out = pd.DataFrame({
+        "kinase": edges["kinase"].astype(str),
+        "target_gene": edges["target_gene"].astype(str),
+        "role": edges["role"].astype(str),
+        "contrast": edges["contrast_row"].astype(str),
+        "receiver": edges["owning_cluster"].astype(str),
+        "pathways": edges["pathways"].astype(int),
+        "signed_nes": edges["signed_nes"],
+        "best_fdr": edges["best_fdr"],
+        "n_sites": edges["n_sites"],
+        "edge_delta": edges["edge_delta"],
+        "n_significant_concordant": edges["n_significant_concordant"],
+        "motif_peers_detected": edges["motif_peers_detected"],
+        "motif_peers_informative": edges["motif_peers_informative"],
+    })
+    return out[list(_KINASE_INCYTR_EDGES_COLUMNS)]
 
 
 def _build_terminal_kinase_lookup(
