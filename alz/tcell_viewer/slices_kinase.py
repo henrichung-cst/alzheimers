@@ -789,11 +789,11 @@ def _build_donor_kinases_slice(donor: str) -> dict | None:
         "nsclc_groups_total": [None] * len(rows),
         "nsclc_expressing_groups": [None] * len(rows),
         "nsclc_top_group": [""] * len(rows),
-        # Substrate-based Incytr pathway participation (filled in the assembler,
-        # once the pair-mode global index exists). count = distinct pathways with
-        # ≥1 node gene this kinase phosphorylates; pathway scope = L/R/EM/Target,
-        # backbone scope = L/R/EM (Target excluded); total = the donor's full
-        # predicted-pathway universe (shared denominator).
+        # Observed-edge Incytr pathway participation (filled in the assembler,
+        # once the pair-mode global index exists). Count = distinct pathways
+        # reached by contrast- and receiver-matched terminal edges; pathway
+        # scope = Receptor/EM/Target, backbone scope = Receptor/EM (Target
+        # excluded); total = the donor's full predicted-pathway universe.
         "incytr_pathway_count": [None] * len(rows),
         "incytr_backbone_count": [None] * len(rows),
         "incytr_pathway_total": [None] * len(rows),
