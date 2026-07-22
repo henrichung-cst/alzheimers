@@ -147,17 +147,19 @@ const _IS_FOCUS = {
   labelEmphasisMin: 0.15,
   focusBorderColor: "#dc2626",
   focusBorderWidthPx: 2,
+  focusEdgeMinWidthPx: 2.5,
 };
 // Edges are never cut. Strength is encoded as width + opacity through a convex
 // (gamma) remap that strongly diminishes low signal while preserving strong.
-// Terminal (kinase→node) strength is |NES| anchored at 1.0 — the biological null
-// (no motif enrichment), an absolute floor, not this pathway's observed minimum —
-// so "no enrichment → no ink". Chain (kinase→kinase) strength is the combined
-// interactome weight anchored at 0.
+// Terminal (kinase→node) width is |measured phospho Δ|. The zero anchor is no
+// measured movement; the 4.0 anchor is the approximate empirical 95th percentile
+// of absolute t-cell site Δ across the pilot's ST and pY contrasts. Chain
+// (kinase→kinase) edges are uniform width,
+// colored by provenance (motif / PSP / both); they carry no strength weight.
 const _IS_EMPHASIS = {
   nesNull: 1.0,
-  // Presentation-only visibility floor; never exported as analytical evidence.
-  siteFloor: 0.4,
+  edgeDeltaNull: 0.0,
+  edgeDeltaAnchor: 4.0,
   gamma: 3.5,
   minWidthPx: 0.35,
   maxWidthPx: 7.0,
@@ -170,9 +172,10 @@ const _IS_STYLE = {
   graphBorderWidthPx: 1,
   graphCornerRadiusPx: 4,
   captionTopMarginPx: 6,
-  relationMaxHeightPx: 180,
-  infoPanelWidthPx: 340,
-  siteMaxHeightPx: 360,
+  infoPanelWidthPx: 480,
+  minPanelWidthPx: 320,
+  minGraphWidthPx: 360,
+  splitterWidthPx: 6,
   kinaseNodeDiameterPx: 34,
   kinaseNodeBorderWidthPx: 1,
   spineNodeBorderWidthPx: 2,
@@ -184,7 +187,9 @@ const _IS_STYLE = {
   normalArrowScale: 0.7,
   emphasizedArrowScale: 1,
   edgeOpacity: 0.9,
+  chainEdgeWidthPx: 1.5,
 };
+let _isPanelWidthPx = _IS_STYLE.infoPanelWidthPx;
 const _IS_COLORS = {
   corePath: "#1f4ea3",
   enriched: "#d73027",
@@ -296,16 +301,17 @@ function _isLegendLine(label, samples) {
   return line;
 }
 
-function _isNodeRelationTable(node, cy) {
-  const nodeId = String(node.id());
-  const nodeKind = String(node.data("kind") || "");
-  const nodeLabel = String(node.data("label") || nodeId);
+function _isRelationshipRows(scope, selection) {
+  const selectionId = selection && typeof selection.id === "function"
+    ? String(selection.id()) : "";
+  const selectionKind = selection && typeof selection.data === "function"
+    ? String(selection.data("kind") || "") : "";
   const terminalRows = [];
   const chainRows = [];
-  const connectedEdges = node.connectedEdges();
+  const edges = Array.isArray(scope) ? scope : Array.from(scope || []);
   const endpointLabel = endpoint => String(endpoint.data("label") || endpoint.id());
 
-  connectedEdges.forEach(edge => {
+  edges.forEach(edge => {
     const kind = String(edge.data("kind") || "");
     const source = edge.source();
     const target = edge.target();
@@ -313,43 +319,55 @@ function _isNodeRelationTable(node, cy) {
     const targetId = String(target.id());
     if (kind === "terminal-edge") {
       const signedNes = _isNumeric(edge.data("signed_nes"));
-      if (nodeKind === "spine-node" && targetId === nodeId) {
+      const isSelectedEdge = selectionKind === "terminal-edge";
+      if (isSelectedEdge || (selectionKind === "spine-node" && targetId === selectionId)) {
         terminalRows.push({
-          relationship: `${endpointLabel(source)} → ${nodeLabel}`,
-          role: String(edge.data("role") || node.data("role") || ""),
+          relationship: `${endpointLabel(source)} → ${endpointLabel(target)}`,
+          role: String(edge.data("role") || target.data("role") || ""),
           signedNes,
+          edgeDelta: _isNumeric(edge.data("edge_delta")),
+          nSignificantConcordant: _isNumeric(edge.data("n_significant_concordant")),
+          siteEvidence: _isSiteEvidenceSummary(edge),
           direction: _isNesDirection(signedNes),
           evidence: String(edge.data("provenance") || "motif"),
-          weight: null,
           motifPeer: edge.data("motif_peer") || null,
+          edge,
+          substrate: endpointLabel(target),
         });
-      } else if (nodeKind === "kinase-node" && sourceId === nodeId) {
+      } else if (selectionKind === "kinase-node" && sourceId === selectionId) {
         terminalRows.push({
-          relationship: `${nodeLabel} → ${endpointLabel(target)}`,
+          relationship: `${endpointLabel(source)} → ${endpointLabel(target)}`,
           role: String(edge.data("role") || ""),
           signedNes,
+          edgeDelta: _isNumeric(edge.data("edge_delta")),
+          nSignificantConcordant: _isNumeric(edge.data("n_significant_concordant")),
+          siteEvidence: _isSiteEvidenceSummary(edge),
           direction: _isNesDirection(signedNes),
           evidence: String(edge.data("provenance") || "motif"),
-          weight: null,
           target: targetId,
           motifPeer: edge.data("motif_peer") || null,
+          edge,
+          substrate: endpointLabel(target),
         });
       }
       return;
     }
-    if (kind === "chain-edge" && nodeKind === "kinase-node") {
-      const other = sourceId === nodeId ? target : source;
+    if (kind === "chain-edge"
+        && (selectionKind === "chain-edge"
+          || (selectionKind === "kinase-node"
+            && (sourceId === selectionId || targetId === selectionId)))) {
+      const other = sourceId === selectionId ? target : source;
       const otherId = String(other.id());
-      if (otherId === nodeId) return;
       chainRows.push({
-        relationship: `${sourceId === nodeId ? nodeLabel : endpointLabel(other)} → `
-          + `${sourceId === nodeId ? endpointLabel(other) : nodeLabel}`,
+        relationship: `${endpointLabel(source)} → ${endpointLabel(target)}`,
         role: "kinase chain",
         signedNes: null,
+        edgeDelta: null,
+        nSignificantConcordant: null,
         direction: null,
         evidence: String(edge.data("provenance") || "motif"),
-        weight: _isNumeric(edge.data("weight")),
         other: otherId,
+        edge,
       });
     }
   });
@@ -357,28 +375,60 @@ function _isNodeRelationTable(node, cy) {
   terminalRows.sort((a, b) =>
     Math.abs(b.signedNes) - Math.abs(a.signedNes)
       || a.relationship.localeCompare(b.relationship));
-  chainRows.sort((a, b) =>
-    b.weight - a.weight || a.relationship.localeCompare(b.relationship));
-  const rows = terminalRows.concat(chainRows);
+  chainRows.sort((a, b) => a.relationship.localeCompare(b.relationship));
+  return terminalRows.concat(chainRows);
+}
+
+function _isSiteEvidenceSummary(edge) {
+  const raw = edge && edge.data("sites");
+  if (!raw) return { significance: "—", concordance: "—", timecourse: "—" };
+  let sites;
+  try {
+    sites = JSON.parse(String(raw));
+  } catch (err) {
+    return { significance: "—", concordance: "—", timecourse: "—" };
+  }
+  if (!Array.isArray(sites) || !sites.length) {
+    return { significance: "—", concordance: "—", timecourse: "—" };
+  }
+  return {
+    significance: sites.map(site => site.site_significance === null
+      || site.site_significance === undefined
+      ? "—" : _isNumeric(site.site_significance).toPrecision(3)).join(", "),
+    concordance: sites.map(site => site.concordant === null
+      || site.concordant === undefined ? "—" : site.concordant ? "yes" : "no").join(", "),
+    timecourse: sites.map(site => site.timecourse_consistency === null
+      || site.timecourse_consistency === undefined
+      ? "—" : String(site.timecourse_consistency)).join(", "),
+  };
+}
+
+function _isRelationshipTable(rows, selectionLabel, selection) {
   if (!rows.length) {
     const empty = document.createElement("div");
     empty.textContent = "No relationships.";
     return empty;
   }
 
+  const terminalRows = rows.filter(row => row.edge.data("kind") === "terminal-edge");
   let summary;
-  if (nodeKind === "spine-node") {
+  const selectionKind = selection && typeof selection.data === "function"
+    ? String(selection.data("kind") || "") : "";
+  if (selectionKind === "spine-node"
+      || (selectionKind === "terminal-edge"
+        && rows.some(row => row.edge.target().data("kind") === "spine-node"))) {
     const enriched = terminalRows.filter(row => row.direction === "enriched").length;
     const depleted = terminalRows.filter(row => row.direction === "depleted").length;
     summary = `${terminalRows.length} kinases affecting · ${enriched} enriched · ${depleted} depleted`;
   } else {
     const targetCount = new Set(terminalRows.map(row => row.target)).size;
-    const kinaseCount = new Set(chainRows.map(row => row.other)).size;
+    const kinaseCount = new Set(rows.filter(row => row.edge.data("kind") === "chain-edge")
+      .map(row => row.other)).size;
     summary = `targets ${targetCount} nodes · ${kinaseCount} kinases`;
   }
 
   const table = document.createElement("table");
-  table.setAttribute("aria-label", `${nodeLabel} relationships`);
+  table.setAttribute("aria-label", `${selectionLabel} relationships`);
   table.style.cssText = "border-collapse:collapse;width:100%;font-size:11px;";
   const caption = document.createElement("caption");
   caption.textContent = summary;
@@ -387,7 +437,8 @@ function _isNodeRelationTable(node, cy) {
   table.appendChild(caption);
   const head = document.createElement("thead");
   const headerRow = document.createElement("tr");
-  ["Relationship", "Role", "Signed NES", "Direction", "Evidence", "Weight"]
+  ["Relationship", "Role", "Signed NES", "Measured Δ", "Sig/concordant",
+    "Site significance", "Concordance", "Timecourse", "Direction", "Evidence"]
     .forEach(label => {
       const cell = document.createElement("th");
       cell.scope = "col";
@@ -404,9 +455,15 @@ function _isNodeRelationTable(node, cy) {
       row.relationship,
       row.role,
       row.signedNes === null ? "—" : row.signedNes.toFixed(3),
+      row.edgeDelta === null ? "—" : row.edgeDelta.toFixed(3),
+      row.edge.data("kind") === "terminal-edge"
+        ? String(row.nSignificantConcordant)
+        : "—",
+      row.edge.data("kind") === "terminal-edge" ? row.siteEvidence.significance : "—",
+      row.edge.data("kind") === "terminal-edge" ? row.siteEvidence.concordance : "—",
+      row.edge.data("kind") === "terminal-edge" ? row.siteEvidence.timecourse : "—",
       row.direction || "—",
       row.evidence,
-      row.weight === null ? "—" : row.weight.toFixed(3),
     ];
     values.forEach((value, index) => {
       const cell = document.createElement("td");
@@ -415,9 +472,13 @@ function _isNodeRelationTable(node, cy) {
         const tip = sole
           ? "Sole plausible source here among motif-confusable candidates"
           : `${row.motifPeer.motif_peers_detected} of ${row.motifPeer.motif_peers_informative} motif-confusable candidates transcribed here`;
+        const selfKinase = _escapeHtml(String(row.edge.source().data("label") || row.edge.source().id()));
+        const selfPct = (Number(row.motifPeer.detection_fraction || 0) * 100).toFixed(0);
+        const selfItem = `<li><strong>${selfKinase} (${selfPct}%) — this kinase</strong></li>`;
+        const peerItems = (row.motifPeer.peers || []).map(peer => `<li>${_escapeHtml(String(peer.kinase || ""))} (${(Number(peer.detection_fraction || 0) * 100).toFixed(0)}%)</li>`).join("");
         cell.innerHTML = _escapeHtml(String(value))
           + ` <details class="motif-peer-details"><summary><span class="badge ${sole ? "vhi" : "lo"}" title="${_escapeHtml(tip)}">${row.motifPeer.motif_peers_detected}/${row.motifPeer.motif_peers_informative}</span></summary>`
-          + `<ul class="motif-peer-roster">${(row.motifPeer.peers || []).map(peer => `<li>${_escapeHtml(String(peer.kinase || ""))} (${(Number(peer.detection_fraction || 0) * 100).toFixed(0)}%)</li>`).join("") || "<li>No motif twins</li>"}</ul></details>`;
+          + `<ul class="motif-peer-roster">${selfItem}${peerItems || "<li>No motif twins</li>"}</ul></details>`;
       } else {
         cell.textContent = value;
       }
@@ -435,22 +496,29 @@ function _isNodeRelationTable(node, cy) {
   return table;
 }
 
+function _isNodeRelationTable(node) {
+  return _isRelationshipTable(_isRelationshipRows(node.connectedEdges(), node),
+    String(node.data("label") || node.id()), node);
+}
+
 function _isGraphForRow(shard, row) {
   const interactome = _isSafeRows(shard.interactome, [
-    "source_gene", "target_gene", "provenance", "weight",
+    "source_gene", "target_gene", "provenance",
   ]).filter(edge => edge.source_gene && edge.target_gene);
   const terminalFields = [
-    "source_gene", "target_gene", "role", "contrast", "provenance", "weight",
+    "source_gene", "target_gene", "role", "contrast", "provenance",
     "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
+    "n_significant_concordant", "edge_delta",
   ];
-  // Regenerated shards carry the inline floor-99 site list. Keep older shards
-  // readable while they are being replaced; their edge caption remains the
-  // only available evidence detail.
+  // Terminal edges require the direct-change schema (n_significant_concordant,
+  // edge_delta) above — a shard lacking it yields no terminal rows by design.
+  // `sites` is an optional column: include the inline floor-99 site list when
+  // the shard carries it so the per-site evidence table can render.
   if (shard.terminal_edges && Array.isArray(shard.terminal_edges.sites)) {
     terminalFields.push("sites");
   }
-  // Pre-peer shards remain viewable; regenerated shards additionally carry the
-  // kinase/owning-cluster join keys used for the motif-peer chip.
+  // Optional motif-peer join keys: include kinase/owning_cluster when the shard
+  // carries them (they drive the motif-peer chip).
   if (shard.terminal_edges && Array.isArray(shard.terminal_edges.kinase)
       && Array.isArray(shard.terminal_edges.owning_cluster)) {
     terminalFields.unshift("kinase");
@@ -485,13 +553,9 @@ function _isGraphForRow(shard, row) {
   });
   const nesMax = terminalEdges.reduce(
     (maximum, edge) => Math.max(maximum, _isNumeric(edge.best_abs_nes)), 0);
-  const sitesMax = terminalEdges.reduce(
-    (maximum, edge) => Math.max(maximum, _isNumeric(edge.n_sites)), 0);
-  const chainMax = chainEdges.reduce(
-    (maximum, edge) => Math.max(maximum, _isNumeric(edge.weight)), 0);
   return {
     spine, terminalEdges, chainEdges, kinaseGenes, directKinaseGenes,
-    nesMax, sitesMax, chainMax,
+    nesMax,
   };
 }
 
@@ -508,7 +572,122 @@ function _isTerminalSiteRows(edge) {
   }
   return sites.slice().sort((a, b) =>
     _isNumeric(b.kl_percentile) - _isNumeric(a.kl_percentile)
-      || String(a.motif || "").localeCompare(String(b.motif || "")));
+      || String(a.site_id || "").localeCompare(String(b.site_id || "")));
+}
+
+function _isTerminalSiteTable(edge, substrate, contrast) {
+  const sites = _isTerminalSiteRows({
+    sites: edge.data("sites"), n_sites: edge.data("n_sites"),
+  });
+  const wrapper = document.createElement("div");
+  wrapper.style.cssText = `margin-top:${_IS_STYLE.captionTopMarginPx}px;`;
+  const source = edge.source();
+  const kinase = String(source.data("label") || source.id());
+  const heading = document.createElement("div");
+  heading.style.cssText = "font-weight:700;color:#1e3a5f;padding-bottom:4px;";
+  heading.textContent = `${kinase} → ${substrate} · ${contrast} · `
+    + `NES ${_isNumeric(edge.data("signed_nes")).toFixed(3)} / `
+    + `FDR ${_isNumeric(edge.data("best_fdr")).toPrecision(3)} · `
+    + `Δ ${_isNumeric(edge.data("edge_delta")).toFixed(3)}`;
+  wrapper.appendChild(heading);
+  if (sites === null) {
+    const empty = document.createElement("div");
+    empty.textContent = "This shard has no inline phosphosite detail.";
+    wrapper.appendChild(empty);
+    return wrapper;
+  }
+  if (!Array.isArray(sites)) {
+    const error = document.createElement("div");
+    error.textContent = sites.error;
+    wrapper.appendChild(error);
+    return wrapper;
+  }
+  const summary = document.createElement("div");
+  summary.style.cssText = "padding-bottom:5px;";
+  summary.textContent = `|NES| ${_isNumeric(edge.data("best_abs_nes")).toFixed(3)} · `
+    + `sites ${_isNumeric(edge.data("n_sites"))} · `
+    + `significant/concordant ${_isNumeric(edge.data("n_significant_concordant"))}`;
+  wrapper.appendChild(summary);
+  const table = document.createElement("table");
+  table.setAttribute("aria-label", `${substrate} motif similarity sites`);
+  table.style.cssText = "border-collapse:collapse;width:100%;font-size:11px;";
+  const head = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  ["Site ID", "Position", "Motif", "Residue", "KL percentile", "Δ",
+    "Significance", "Concordant", "Timecourse"].forEach(label => {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = label;
+    cell.style.cssText = "padding:2px 5px;text-align:left;white-space:nowrap;";
+    headerRow.appendChild(cell);
+  });
+  head.appendChild(headerRow);
+  table.appendChild(head);
+  const body = document.createElement("tbody");
+  sites.forEach(site => {
+    const row = document.createElement("tr");
+    [String(site.site_id || ""), String(site.site_position || ""),
+      String(site.motif || ""), String(site.residue_type || ""),
+      _isNumeric(site.kl_percentile).toFixed(2),
+      site.delta === null || site.delta === undefined ? "—" : _isNumeric(site.delta).toFixed(3),
+      site.site_significance === null || site.site_significance === undefined
+        ? "—" : _isNumeric(site.site_significance).toPrecision(3),
+      site.concordant ? "yes" : "no",
+      site.timecourse_consistency === null || site.timecourse_consistency === undefined
+        ? "—" : String(site.timecourse_consistency)].forEach(value => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      cell.style.cssText = "padding:2px 5px;border-top:1px solid #e2e8f0;";
+      row.appendChild(cell);
+    });
+    body.appendChild(row);
+  });
+  table.appendChild(body);
+  wrapper.appendChild(table);
+  return wrapper;
+}
+
+function _isSelectionDetail(target) {
+  const kind = String(target.data("kind") || "");
+  const isEdge = kind === "terminal-edge" || kind === "chain-edge";
+  const label = isEdge
+    ? `${String(target.source().data("label") || target.source().id())} → `
+      + `${String(target.target().data("label") || target.target().id())}`
+    : String(target.data("label") || target.id());
+  const header = document.createElement("div");
+  header.style.cssText = "font-weight:700;color:#1e3a5f;padding-bottom:6px;";
+  if (isEdge) {
+    header.textContent = label;
+  } else {
+    const role = String(target.data("role") || "");
+    header.textContent = `${label} (${role || "—"} / ${kind})`;
+  }
+  const detail = document.createDocumentFragment();
+  detail.appendChild(header);
+  const scope = isEdge ? [target] : target.connectedEdges();
+  const rows = _isRelationshipRows(scope, target);
+  detail.appendChild(_isRelationshipTable(rows, label, target));
+  const evidence = document.createElement("div");
+  evidence.style.cssText = "color:#334155;";
+  let hasChainRow = false;
+  rows.forEach(row => {
+    if (row.edge.data("kind") === "terminal-edge") {
+      evidence.appendChild(_isTerminalSiteTable(row.edge, row.substrate,
+        String(row.edge.data("contrast") || "")));
+      return;
+    }
+    hasChainRow = true;
+  });
+  // Chain edges carry only provenance (already in the Evidence column above).
+  // Note the site-detail gap once rather than repeating a redundant line per edge.
+  if (hasChainRow) {
+    const note = document.createElement("div");
+    note.style.cssText = `margin-top:${_IS_STYLE.captionTopMarginPx}px;`;
+    note.textContent = "Per-site motif detail is available for kinase→pathway-gene edges only.";
+    evidence.appendChild(note);
+  }
+  detail.appendChild(evidence);
+  return detail;
 }
 
 function _isPositionedElements(graph, width, height) {
@@ -617,32 +796,29 @@ function _isPositionedElements(graph, width, height) {
     const key = `${source}|${target}|${edge.provenance || ""}`;
     if (seenEdges.has(key)) return;
     seenEdges.add(key);
-    const emphasis = _isEmphasis(edge.weight, 0, graph.chainMax);
     elements.push({ data: {
       id: `chain:${index}`, source, target, kind: "chain-edge",
       provenance: String(edge.provenance || "motif"),
-      weight: _isNumeric(edge.weight), width: _isEmphasisWidth(emphasis),
-      opacity: _isEmphasisOpacity(emphasis),
     } });
   });
   graph.terminalEdges.forEach((edge, index) => {
     const role = String(edge.role);
-    const nesEmphasis = _isEmphasis(edge.best_abs_nes, _IS_EMPHASIS.nesNull, graph.nesMax);
-    const sites = _isNumeric(edge.n_sites);
-    const siteFraction = graph.sitesMax > 0
-      ? Math.max(0, Math.min(1, Math.log1p(sites) / Math.log1p(graph.sitesMax)))
-      : 0;
-    const siteFactor = _IS_EMPHASIS.siteFloor
-      + (1 - _IS_EMPHASIS.siteFloor) * siteFraction;
-    const emphasis = nesEmphasis * siteFactor;
+    const emphasis = _isEmphasis(
+      Math.abs(_isNumeric(edge.edge_delta)),
+      _IS_EMPHASIS.edgeDeltaNull,
+      _IS_EMPHASIS.edgeDeltaAnchor,
+    );
     elements.push({ data: {
       id: `terminal:${index}`, source: `kinase:${String(edge.source_gene)}`,
       target: `path:${role}`, kind: "terminal-edge", role,
+      contrast: String(edge.contrast || ""),
       provenance: String(edge.provenance || "motif"),
       width: _isEmphasisWidth(emphasis), opacity: _isEmphasisOpacity(emphasis),
       signed_nes: _isNumeric(edge.signed_nes), nes_direction: _isNesDirection(edge.signed_nes),
       best_abs_nes: _isNumeric(edge.best_abs_nes), best_fdr: _isNumeric(edge.best_fdr),
-      n_sites: sites,
+      n_sites: _isNumeric(edge.n_sites),
+      n_significant_concordant: _isNumeric(edge.n_significant_concordant),
+      edge_delta: _isNumeric(edge.edge_delta),
       sites: edge.sites || null,
       kinase: String(edge.kinase || ""),
       owning_cluster: String(edge.owning_cluster || ""),
@@ -661,11 +837,19 @@ function _isRenderCytoscape(host, graph) {
   if (host._incytrSidechainCy) host._incytrSidechainCy.destroy();
   const panel = document.createElement("div");
   panel.style.cssText = "position:relative;display:flex;gap:12px;align-items:stretch;"
-    + "background:#fff;box-sizing:border-box;min-width:0;";
+    + "width:100%;background:#fff;box-sizing:border-box;min-width:0;";
   const graphHost = document.createElement("div");
-  graphHost.style.cssText = `flex:1 1 0;min-width:0;height:${_IS_LAYOUT.graphHeightPx}px;`
+  graphHost.style.cssText = `position:relative;flex:1 1 0;min-width:0;overflow:hidden;height:${_IS_LAYOUT.graphHeightPx}px;`
     + `border:${_IS_STYLE.graphBorderWidthPx}px solid #ddd;`
     + `border-radius:${_IS_STYLE.graphCornerRadiusPx}px;background:#fff;`;
+  // Cytoscape sizes its <canvas> layers to the container's clientWidth in
+  // explicit pixels. Mounting directly into an in-flow flex item lets that width
+  // couple back into the auto-layout table cell (and the window-resize handler
+  // re-applies it), which runs away horizontally. Absolutely positioning the
+  // mount removes the canvas from flow, so it can never drive layout width.
+  const graphMount = document.createElement("div");
+  graphMount.style.cssText = "position:absolute;inset:0;";
+  graphHost.appendChild(graphMount);
   const fullscreenButton = document.createElement("button");
   fullscreenButton.type = "button";
   fullscreenButton.textContent = "⛶ Full screen";
@@ -679,7 +863,7 @@ function _isRenderCytoscape(host, graph) {
   caption.textContent = `${graph.kinaseGenes.size.toLocaleString()} kinase regulators; `
     + `${graph.terminalEdges.length.toLocaleString()} kinase→node, `
     + `${graph.chainEdges.length.toLocaleString()} kinase→kinase links. `
-    + "Tap a node to isolate its neighborhood; hover a kinase for its label.";
+    + "Tap a node or edge for details; hover a kinase for its label.";
   const legend = document.createElement("div");
   legend.style.cssText = `font-size:${_IS_STYLE.smallTextPx}px;color:#334155;`;
   legend.append(
@@ -689,27 +873,18 @@ function _isRenderCytoscape(host, graph) {
       _isLegendSample(_IS_COLORS.depleted, "dotted"),
     ]),
     _isLegendLine("Node size: |NES| strength", []),
-    _isLegendLine("Width and opacity: |NES| × #substrates (edge strength)", []),
+    _isLegendLine("Width and opacity: |measured phospho Δ| (0–4 anchor)", []),
     _isLegendLine("Chain evidence: motif / PSP / both", [
       _isLegendSample(_IS_COLORS.motif),
       _isLegendSample(_IS_COLORS.psp, "dashed"),
       _isLegendSample(_IS_COLORS.both, "dotted"),
     ]),
   );
-  const edgeDetail = document.createElement("div");
-  edgeDetail.style.cssText = `margin-top:${_IS_STYLE.captionTopMarginPx}px;`
-    + `font-size:${_IS_STYLE.smallTextPx}px;color:#334155;min-height:1.3em;`;
-  edgeDetail.textContent = "Tap an edge for its evidence.";
-  const nodeRelationDetail = document.createElement("div");
-  nodeRelationDetail.style.cssText = `margin-top:${_IS_STYLE.captionTopMarginPx}px;`
-    + `max-height:${_IS_STYLE.relationMaxHeightPx}px;overflow:auto;`
+  const detail = document.createElement("div");
+  detail.style.cssText = `flex:1 1 0;min-height:0;overflow:auto;`
+    + `margin-top:${_IS_STYLE.captionTopMarginPx}px;`
     + `font-size:${_IS_STYLE.smallTextPx}px;color:#334155;`;
-  nodeRelationDetail.textContent = "Tap a node for its relationships.";
-  const siteDetail = document.createElement("div");
-  siteDetail.style.cssText = `margin-top:${_IS_STYLE.captionTopMarginPx}px;`
-    + `max-height:${_IS_STYLE.siteMaxHeightPx}px;overflow:auto;`
-    + `font-size:${_IS_STYLE.smallTextPx}px;color:#334155;`;
-  siteDetail.textContent = "Tap a terminal edge for phosphosite evidence.";
+  detail.textContent = "Tap a node or edge for details.";
   const filterControls = document.createElement("div");
   filterControls.style.cssText = `display:grid;gap:4px;`
     + `margin-bottom:${_IS_STYLE.captionTopMarginPx}px;font-size:${_IS_STYLE.smallTextPx}px;`
@@ -729,17 +904,25 @@ function _isRenderCytoscape(host, graph) {
   // Dedicated side panel: it remains inside the fullscreen container while
   // giving Cytoscape its own unobstructed width.
   const infoPanel = document.createElement("aside");
-  infoPanel.style.cssText = `flex:0 0 ${_IS_STYLE.infoPanelWidthPx}px;box-sizing:border-box;`
+  infoPanel.style.cssText = `display:flex;flex-direction:column;flex:0 0 ${_isPanelWidthPx}px;`
+    + `min-width:0;min-height:0;max-height:${_IS_LAYOUT.graphHeightPx}px;box-sizing:border-box;`
     + "padding:8px 10px;border:1px solid #cbd5e1;border-radius:5px;"
-    + "background:#fffffff0;overflow:auto;";
-  infoPanel.setAttribute("aria-label", "Sidechain edge evidence");
-  infoPanel.append(filterControls, legend, edgeDetail, nodeRelationDetail, siteDetail);
-  panel.append(graphHost, infoPanel, fullscreenButton);
+    + "background:#fffffff0;overflow:hidden;";
+  infoPanel.setAttribute("aria-label", "Sidechain selection details");
+  const splitter = document.createElement("div");
+  splitter.style.cssText = `flex:0 0 ${_IS_STYLE.splitterWidthPx}px;cursor:col-resize;`
+    + "background:transparent;touch-action:none;";
+  splitter.setAttribute("role", "separator");
+  splitter.setAttribute("aria-orientation", "vertical");
+  splitter.setAttribute("aria-label", "Resize sidechain details panel");
+  splitter.title = "Drag to resize";
+  infoPanel.append(filterControls, legend, detail);
+  panel.append(graphHost, splitter, infoPanel, fullscreenButton);
   host.replaceChildren(panel, caption);
   const cy = window.cytoscape({
-    container: graphHost,
-    elements: _isPositionedElements(graph, graphHost.clientWidth || _IS_LAYOUT.fallbackGraphWidthPx,
-      graphHost.clientHeight || _IS_LAYOUT.graphHeightPx),
+    container: graphMount,
+    elements: _isPositionedElements(graph, graphMount.clientWidth || _IS_LAYOUT.fallbackGraphWidthPx,
+      graphMount.clientHeight || _IS_LAYOUT.graphHeightPx),
     style: [
       { selector: "node", style: {
         "label": "data(label)", "font-size": _IS_STYLE.labelFontPx, "text-wrap": "wrap", "text-max-width": _IS_STYLE.labelMaxWidthPx,
@@ -779,16 +962,16 @@ function _isRenderCytoscape(host, graph) {
         "line-color": _IS_COLORS.depleted, "target-arrow-color": _IS_COLORS.depleted,
       } },
       { selector: "edge[kind = 'chain-edge'][provenance = 'motif']", style: {
-        "width": "data(width)", "opacity": "data(opacity)",
+        "width": _IS_STYLE.chainEdgeWidthPx, "opacity": _IS_STYLE.edgeOpacity,
         "line-color": _IS_COLORS.motif, "target-arrow-color": _IS_COLORS.motif,
       } },
       { selector: "edge[kind = 'chain-edge'][provenance = 'psp']", style: {
-        "width": "data(width)", "opacity": "data(opacity)",
+        "width": _IS_STYLE.chainEdgeWidthPx, "opacity": _IS_STYLE.edgeOpacity,
         "line-color": _IS_COLORS.psp, "target-arrow-color": _IS_COLORS.psp,
         "line-style": "dashed",
       } },
       { selector: "edge[kind = 'chain-edge'][provenance = 'both']", style: {
-        "width": "data(width)", "opacity": "data(opacity)",
+        "width": _IS_STYLE.chainEdgeWidthPx, "opacity": _IS_STYLE.edgeOpacity,
         "line-color": _IS_COLORS.both, "target-arrow-color": _IS_COLORS.both,
         "line-style": "dotted", "arrow-scale": _IS_STYLE.emphasizedArrowScale,
       } },
@@ -801,6 +984,12 @@ function _isRenderCytoscape(host, graph) {
       // A focus has only a handful of edges. Reset their opacity so the selected
       // relationship is readable instead of inheriting full-graph attenuation.
       { selector: "edge.is-focus-edge", style: { "opacity": 1 } },
+      // Opacity alone leaves a low-|NES| terminal edge at its ~0.35px full-graph
+      // width — invisible once the fit zooms to the spine arc. Floor the width of
+      // focused kinase→node / chain edges so the isolated relationship is drawn.
+      { selector: "edge.is-focus-edge[kind = 'terminal-edge'], edge.is-focus-edge[kind = 'chain-edge']", style: {
+        "width": edge => Math.max(_IS_FOCUS.focusEdgeMinWidthPx, _isNumeric(edge.data("width"))),
+      } },
       { selector: ".is-hidden, .is-chain-filtered, .is-node-filtered", style: {
         "display": "none",
       } },
@@ -825,9 +1014,13 @@ function _isRenderCytoscape(host, graph) {
   }
   const resetGraphSize = () => {
     const isFullscreen = document.fullscreenElement === panel;
-    graphHost.style.height = isFullscreen
-      ? `${Math.max(_IS_LAYOUT.graphHeightPx, window.innerHeight - 180)}px`
-      : `${_IS_LAYOUT.graphHeightPx}px`;
+    const graphHeightPx = isFullscreen
+      ? Math.max(_IS_LAYOUT.graphHeightPx, window.innerHeight - 180)
+      : _IS_LAYOUT.graphHeightPx;
+    graphHost.style.height = `${graphHeightPx}px`;
+    // Cap the side panel to the graph's height so its detail region scrolls
+    // internally rather than growing the row-detail cell vertically.
+    infoPanel.style.maxHeight = `${graphHeightPx}px`;
     panel.style.padding = isFullscreen ? "44px 12px 12px" : "0";
     panel.style.minHeight = isFullscreen ? "100vh" : "0";
     fullscreenButton.textContent = isFullscreen ? "⛶ Exit full screen" : "⛶ Full screen";
@@ -859,7 +1052,7 @@ function _isRenderCytoscape(host, graph) {
     caption.textContent = `${visibleKinaseCount.toLocaleString()} kinase regulators; `
       + `${visibleTerminalCount.toLocaleString()} kinase→node, `
       + `${visibleChainCount.toLocaleString()} kinase→kinase links. All motif / PSP evidence. ${chainState} `
-      + "Tap a node or edge to isolate its neighborhood; hover a kinase for its label.";
+      + "Tap a node or edge for details; hover a kinase for its label.";
   };
   const applyFilters = () => {
     const chains = cy.edges("edge[kind = 'chain-edge']");
@@ -883,114 +1076,88 @@ function _isRenderCytoscape(host, graph) {
     });
     cy.elements().removeClass("is-hidden is-focus is-focus-edge");
     cy.fit(visibleElements(cy.elements()), _IS_LAYOUT.fitPaddingPx);
-    edgeDetail.textContent = "Tap an edge for its evidence.";
-    nodeRelationDetail.textContent = "Tap a node for its relationships.";
-    siteDetail.textContent = "Tap a terminal edge for phosphosite evidence.";
+    detail.textContent = "Tap a node or edge for details.";
     updateCaption();
   };
   showChains.addEventListener("change", applyFilters);
   applyFilters();
-  const focus = (keep, detail) => {
+  const focus = keep => {
     cy.elements().addClass("is-hidden").removeClass("is-focus is-focus-edge");
     keep.removeClass("is-hidden");
     keep.nodes().addClass("is-focus");
     keep.edges().addClass("is-focus-edge");
     cy.fit(visibleElements(keep), _IS_LAYOUT.fitPaddingPx);
-    if (detail) edgeDetail.textContent = detail;
-  };
-  const renderTerminalSites = (edge, substrate, contrast) => {
-    const sites = _isTerminalSiteRows({
-      sites: edge.data("sites"), n_sites: edge.data("n_sites"),
-    });
-    if (sites === null) {
-      siteDetail.textContent = "This shard has no inline phosphosite detail.";
-      return;
-    }
-    if (!Array.isArray(sites)) {
-      siteDetail.textContent = sites.error;
-      return;
-    }
-    const wrapper = document.createElement("div");
-    const heading = document.createElement("div");
-    heading.style.cssText = "font-weight:700;color:#1e3a5f;padding-bottom:4px;";
-    heading.textContent = `${substrate} phosphosites · ${contrast}`;
-    wrapper.appendChild(heading);
-    const summary = document.createElement("div");
-    summary.style.cssText = "padding-bottom:5px;";
-    summary.textContent = `NES ${_isNumeric(edge.data("signed_nes")).toFixed(3)} · `
-      + `FDR ${_isNumeric(edge.data("best_fdr")).toPrecision(3)} · `
-      + `|NES| ${_isNumeric(edge.data("best_abs_nes")).toFixed(3)}`;
-    wrapper.appendChild(summary);
-    const table = document.createElement("table");
-    table.setAttribute("aria-label", `${substrate} floor-99 phosphosites`);
-    table.style.cssText = "border-collapse:collapse;width:100%;font-size:11px;";
-    const head = document.createElement("thead");
-    const headerRow = document.createElement("tr");
-    ["Motif", "Residue", "KL percentile"].forEach(label => {
-      const cell = document.createElement("th");
-      cell.scope = "col";
-      cell.textContent = label;
-      cell.style.cssText = "padding:2px 5px;text-align:left;white-space:nowrap;";
-      headerRow.appendChild(cell);
-    });
-    head.appendChild(headerRow);
-    table.appendChild(head);
-    const body = document.createElement("tbody");
-    sites.forEach(site => {
-      const row = document.createElement("tr");
-      [String(site.motif || ""), String(site.residue_type || ""),
-        _isNumeric(site.kl_percentile).toFixed(2)].forEach(value => {
-        const cell = document.createElement("td");
-        cell.textContent = value;
-        cell.style.cssText = "padding:2px 5px;border-top:1px solid #e2e8f0;";
-        row.appendChild(cell);
-      });
-      body.appendChild(row);
-    });
-    table.appendChild(body);
-    wrapper.appendChild(table);
-    siteDetail.replaceChildren(wrapper);
   };
   cy.on("tap", "edge", evt => {
     const edge = evt.target;
-    const source = String(edge.source().data("label") || edge.data("source"));
-    const target = String(edge.target().data("label") || edge.data("target"));
-    if (edge.data("kind") === "terminal-edge") {
-      const signedNes = _isNumeric(edge.data("signed_nes"));
-      const direction = String(edge.data("nes_direction"));
-      const detail = `${source} → ${target}: NES ${signedNes.toFixed(3)} `
-        + `(${direction}), FDR ${_isNumeric(edge.data("best_fdr")).toPrecision(3)}, `
-        + `|NES| ${_isNumeric(edge.data("best_abs_nes")).toFixed(3)}, `
-        + `sites ${_isNumeric(edge.data("n_sites"))}.`;
-      focus(edge.closedNeighborhood().union(spine), detail);
-      renderTerminalSites(edge, target, String(edge.data("contrast") || ""));
-      return;
-    }
-    const detail = `${source} → ${target}: ${String(edge.data("provenance"))} `
-      + `evidence, weight ${_isNumeric(edge.data("weight")).toFixed(3)}.`;
-    focus(edge.closedNeighborhood().union(spine), detail);
-    siteDetail.textContent = "Tap a terminal edge for phosphosite evidence.";
+    focus(edge.closedNeighborhood().union(spine));
+    detail.replaceChildren(_isSelectionDetail(edge));
   });
   cy.on("mouseover", "node[kind = 'kinase-node']", evt => evt.target.addClass("is-hover"));
   cy.on("mouseout", "node[kind = 'kinase-node']", evt => evt.target.removeClass("is-hover"));
   cy.on("tap", "node", evt => {
     // Tap any node → keep only its neighborhood + the pathway spine; hard-hide the
     // rest so no faint edges remain, then zoom to what's left.
-    nodeRelationDetail.replaceChildren(_isNodeRelationTable(evt.target, cy));
-    siteDetail.textContent = "Tap a terminal edge for phosphosite evidence.";
     focus(evt.target.closedNeighborhood().union(spine));
+    detail.replaceChildren(_isSelectionDetail(evt.target));
   });
   cy.on("tap", evt => {
     if (evt.target === cy) {
       cy.elements().removeClass("is-hidden is-focus is-focus-edge");
       cy.fit(visibleElements(cy.elements()), _IS_LAYOUT.fitPaddingPx);
-      edgeDetail.textContent = "Tap an edge for its evidence.";
-      nodeRelationDetail.textContent = "Tap a node for its relationships.";
-      siteDetail.textContent = "Tap a terminal edge for phosphosite evidence.";
+      detail.textContent = "Tap a node or edge for details.";
     }
   });
+  let panelDrag = null;
+  let panelResizeFrame = null;
+  let pendingPanelWidth = null;
+  const applyPanelWidth = width => {
+    const maxPanelWidthPx = panel.clientWidth - _IS_STYLE.minGraphWidthPx;
+    _isPanelWidthPx = Math.max(_IS_STYLE.minPanelWidthPx,
+      Math.min(maxPanelWidthPx, width));
+    infoPanel.style.flexBasis = `${_isPanelWidthPx}px`;
+    cy.resize();
+    cy.fit(visibleElements(cy.elements()), _IS_LAYOUT.fitPaddingPx);
+  };
+  const onPanelPointerMove = evt => {
+    if (!panelDrag || evt.pointerId !== panelDrag.pointerId) return;
+    pendingPanelWidth = panelDrag.startWidth + panelDrag.startX - evt.clientX;
+    if (panelResizeFrame !== null) return;
+    panelResizeFrame = requestAnimationFrame(() => {
+      panelResizeFrame = null;
+      if (pendingPanelWidth !== null) applyPanelWidth(pendingPanelWidth);
+    });
+  };
+  const stopPanelDrag = evt => {
+    if (panelDrag && evt && evt.pointerId !== panelDrag.pointerId) return;
+    panelDrag = null;
+    pendingPanelWidth = null;
+    if (panelResizeFrame !== null) {
+      cancelAnimationFrame(panelResizeFrame);
+      panelResizeFrame = null;
+    }
+    splitter.classList.remove("dragging");
+    window.removeEventListener("pointermove", onPanelPointerMove);
+    window.removeEventListener("pointerup", stopPanelDrag);
+    window.removeEventListener("pointercancel", stopPanelDrag);
+  };
+  const startPanelDrag = evt => {
+    panelDrag = {
+      pointerId: evt.pointerId,
+      startX: evt.clientX,
+      startWidth: _isPanelWidthPx,
+    };
+    splitter.classList.add("dragging");
+    window.addEventListener("pointermove", onPanelPointerMove);
+    window.addEventListener("pointerup", stopPanelDrag);
+    window.addEventListener("pointercancel", stopPanelDrag);
+    evt.preventDefault();
+  };
+  splitter.addEventListener("pointerdown", startPanelDrag);
   host._incytrSidechainCy = cy;
   host._incytrSidechainCleanup = () => {
+    stopPanelDrag();
+    splitter.removeEventListener("pointerdown", startPanelDrag);
     fullscreenButton.removeEventListener("click", requestFullscreen);
     document.removeEventListener("fullscreenchange", resetGraphSize);
     window.removeEventListener("resize", resetGraphSize);

@@ -19,15 +19,14 @@ import pandas as pd
 _INCYTR_FC_NODES = ("Ligand", "Receptor", "EM", "Target")
 
 _INCYTR_SIDECHAIN_INTERACTOME_COLUMNS = (
-    "source_gene", "target_gene", "provenance", "weight", "weight_lit",
-    "weight_motif", "in_vivo_refs", "in_vitro_refs", "n_motif_contrasts",
-    "motif_contrasts",
+    "source_gene", "target_gene", "provenance", "in_vivo_refs", "in_vitro_refs",
+    "n_motif_contrasts", "motif_contrasts",
 )
 _INCYTR_SIDECHAIN_TERMINAL_COLUMNS = (
     "kinase", "source_gene", "target_gene", "role", "contrast", "owning_cluster", "celltype_match",
-    "provenance", "weight", "weight_lit", "weight_motif", "best_abs_pds",
+    "provenance", "best_abs_pds",
     "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
-    "sites",
+    "sites", "n_significant_concordant", "edge_delta",
 )
 _INCYTR_SIDECHAIN_INDEX_FILENAME = "sidechains_index.json"
 

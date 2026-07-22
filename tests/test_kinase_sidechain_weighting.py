@@ -6,6 +6,7 @@ import unittest
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from alz.cross_reference import kinase_kinase_edges as edges
@@ -33,6 +34,7 @@ class KinaseSidechainBackendTests(unittest.TestCase):
         )
         stoich = pd.DataFrame(
             {
+                "site_id": ["S_A", "S_B", "S_C"],
                 "motif": ["MOTIFA", "MOTIFB", "MOTIFC"],
                 "gene_symbol": ["GENE_A", "GENE_A", "GENE_B"],
             }
@@ -56,6 +58,8 @@ class KinaseSidechainBackendTests(unittest.TestCase):
         self.assertEqual(result.loc["GENE_B", "n_sites"], 1)
         self.assertEqual(result.loc["GENE_A", "FDR"], 0.9)
         sites = json.loads(result.loc["GENE_A", "sites"])
+        self.assertEqual([site["site_id"] for site in sites], ["S_B", "S_A"])
+        self.assertEqual([site["site_position"] for site in sites], [None, None])
         self.assertEqual([site["motif"] for site in sites], ["MOTIFB", "MOTIFA"])
         self.assertEqual([site["residue_type"] for site in sites], [None, None])
         self.assertEqual([site["kl_percentile"] for site in sites], [100.0, 99.0])
@@ -71,7 +75,7 @@ class KinaseSidechainBackendTests(unittest.TestCase):
             }
         )
         py_stoich = pd.DataFrame(
-            {"motif": ["PYMOTIF"], "gene_symbol": ["TYR_NODE"]}
+            {"site_id": ["TYR_Y1"], "motif": ["PYMOTIF"], "gene_symbol": ["TYR_NODE"]}
         )
         substrate_sets = pd.DataFrame(
             {
@@ -88,7 +92,7 @@ class KinaseSidechainBackendTests(unittest.TestCase):
         self.assertEqual(result.loc[0, "channel"], "py")
         self.assertEqual(result.loc[0, "NES"], -1.75)
 
-    def test_terminal_and_interactome_motif_weights_use_abs_nes(self) -> None:
+    def test_terminal_and_interactome_provenance_and_nes(self) -> None:
         motif = pd.DataFrame(
             {
                 "kinase": ["LOW", "HIGH", "LOW", "HIGH"],
@@ -102,6 +106,13 @@ class KinaseSidechainBackendTests(unittest.TestCase):
                 "signed_nes": [-1.0, 4.0, -1.0, 4.0],
                 "best_fdr": [0.01, 0.01, 0.01, 0.01],
                 "n_sites": [1, 3, 1, 3],
+                "n_significant_concordant": [1, 1, 1, 1],
+                "sites": [
+                    json.dumps([{"site_id": "L1", "delta": -1, "site_significance": 0.01, "concordant": True, "changed": True}]),
+                    json.dumps([{"site_id": f"H{i}", "delta": i + 1, "site_significance": 0.01, "concordant": True, "changed": True} for i in range(3)]),
+                    json.dumps([{"site_id": "L2", "delta": -1, "site_significance": 0.01, "concordant": True, "changed": True}]),
+                    json.dumps([{"site_id": f"H{i}", "delta": i + 1, "site_significance": 0.01, "concordant": True, "changed": True} for i in range(3)]),
+                ],
                 "celltype_match": [True] * 4,
             }
         )
@@ -115,21 +126,154 @@ class KinaseSidechainBackendTests(unittest.TestCase):
             list(terminal.columns),
             [
                 "kinase", "source_gene", "target_gene", "role", "contrast", "owning_cluster",
-                "celltype_match", "provenance", "weight", "weight_lit", "weight_motif",
-                "best_abs_pds", "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
-                "sites",
+                "celltype_match", "provenance", "best_abs_pds", "best_abs_nes", "signed_nes",
+                "best_fdr", "n_sites", "sites",
+                "n_significant_concordant", "edge_delta",
             ],
         )
+        # No PSP literature → every terminal edge stays motif-only; no fused weight.
+        self.assertTrue((terminal["provenance"] == "motif").all())
+        self.assertNotIn("weight", terminal.columns)
+        # Rows ordered by |NES| descending, not by any fused weight.
+        self.assertEqual(list(terminal["source_gene"]), ["HIGH", "LOW"])
+        self.assertEqual(by_kinase.loc["LOW", "best_abs_nes"], 1.0)
+        self.assertEqual(by_kinase.loc["HIGH", "best_abs_nes"], 4.0)
         self.assertEqual(by_kinase.loc["LOW", "best_abs_pds"], 100.0)
         self.assertEqual(by_kinase.loc["HIGH", "best_abs_pds"], 1.0)
-        self.assertEqual(by_kinase.loc["LOW", "weight_motif"], 0.25)
-        self.assertEqual(by_kinase.loc["HIGH", "weight_motif"], 1.0)
         self.assertEqual(by_kinase.loc["LOW", "n_sites"], 1)
         self.assertEqual(by_kinase.loc["HIGH", "n_sites"], 3)
+        self.assertEqual(by_kinase.loc["HIGH", "edge_delta"], 2.0)
 
         interactome = edges.build_interactome(motif.iloc[2:], psp)
+        self.assertEqual(
+            list(interactome.columns),
+            [
+                "source_gene", "target_gene", "provenance",
+                "in_vivo_refs", "in_vitro_refs", "n_motif_contrasts", "motif_contrasts",
+            ],
+        )
+        self.assertTrue((interactome["provenance"] == "motif").all())
+        self.assertNotIn("weight", interactome.columns)
         self.assertEqual(interactome.iloc[0]["source_gene"], "HIGH")
-        self.assertEqual(interactome.iloc[0]["weight_motif"], 1.0)
+
+    def test_significance_b_is_two_sided_and_bh_corrected_with_robust_bins(self) -> None:
+        rng = np.random.default_rng(20260721)
+        n_sites = 90
+        baseline = 10.0 + rng.uniform(-0.5, 0.5, n_sites)
+        delta = rng.normal(0.0, 0.1, n_sites)
+        delta[30] = 3.0
+        delta[60] = -3.0
+        matrix = pd.DataFrame({
+            "site_id": [f"S{i}" for i in range(n_sites)],
+            "D1_d2": baseline,
+            "D1_d13": baseline + delta,
+        })
+
+        calls = bridge.compute_site_significance_b(matrix, "D1_d13_vs_d2")
+        positive = calls.loc[calls["site_id"].eq("S30")].iloc[0]
+        negative = calls.loc[calls["site_id"].eq("S60")].iloc[0]
+        self.assertLess(float(positive["site_significance"]), 0.05)
+        self.assertLess(float(negative["site_significance"]), 0.05)
+        self.assertTrue(bool(positive["site_changed"]))
+        self.assertTrue(bool(negative["site_changed"]))
+        self.assertTrue((calls["site_significance"].dropna() >= 0).all())
+        self.assertTrue((calls["site_significance"].dropna() <= 1).all())
+
+        raw = pd.Series([0.001, 0.02, 0.5])
+        self.assertEqual(
+            list(bridge._benjamini_hochberg(raw).round(3)),
+            [0.003, 0.03, 0.5],
+        )
+
+    def test_concordance_uses_delta_and_signed_nes_signs(self) -> None:
+        self.assertTrue(bridge._site_concordant(2.0, 1.5))
+        self.assertTrue(bridge._site_concordant(-2.0, -1.5))
+        self.assertFalse(bridge._site_concordant(2.0, -1.5))
+        self.assertFalse(bridge._site_concordant(-2.0, 1.5))
+
+    def test_timecourse_consistency_spans_contrasts_including_mea_ineligible(self) -> None:
+        # Site S0 moves +3 in BOTH d13 (MEA-eligible, FDR 0.01) and d15
+        # (MEA-ineligible, FDR 0.40).  Only the eligible contrast is emitted as an
+        # edge, but the consistency count must see both (stored, not gated).
+        rng = np.random.default_rng(11)
+        n_sites = 60
+        baseline = 8.0 + rng.uniform(-0.5, 0.5, n_sites)
+        common = rng.normal(0.0, 0.05, n_sites)
+        first = np.zeros(n_sites)
+        first[0] = 3.0       # d13 movement of S0
+        second = np.zeros(n_sites)
+        second[0] = 3.0      # d15 movement of the same site
+        matrix = pd.DataFrame({
+            "site_id": [f"S{i}" for i in range(n_sites)],
+            "D1_d2": baseline,
+            "D1_d13": baseline + common + first,
+            "D1_d15": baseline + common + second,
+        })
+        site_json = json.dumps([{
+            "site_id": "S0", "site_position": "S10", "motif": "M0",
+            "residue_type": "ST", "kl_percentile": 99.0,
+        }])
+        substrate = pd.DataFrame({
+            "kinase": ["K1", "K1"],
+            "contrast": ["D1_d13_vs_d2", "D1_d15_vs_d2"],
+            "channel": ["st", "st"],
+            "NES": [2.0, 2.0],
+            "FDR": [0.01, 0.40],   # d13 MEA-eligible; d15 not
+            "gene_symbol": ["NODE", "NODE"],
+            "n_sites": [1, 1],
+            "sites": [site_json, site_json],
+        })
+        calls = bridge.annotate_tcell_direct_site_changes(substrate, {"st": matrix})
+
+        # Only the MEA-eligible contrast is emitted as an edge row.
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls.iloc[0]["contrast"], "D1_d13_vs_d2")
+        self.assertEqual(calls.iloc[0]["n_significant_concordant"], 1)
+        site = json.loads(calls.iloc[0]["sites"])[0]
+        self.assertTrue(site["concordant"])
+        self.assertTrue(site["changed"])
+        # ...but consistency counts BOTH contrasts, including the ineligible d15.
+        self.assertEqual(site["timecourse_consistency"], 2)
+        self.assertEqual(len(bridge.select_significant_concordant_edges(calls)), 1)
+
+    def test_edge_delta_consumes_stored_changed_flag_without_realphaing(self) -> None:
+        # edge_delta must average deltas of sites the bridge already flagged
+        # changed+concordant, ignoring a concordant-but-not-changed site — proving
+        # it does not re-threshold on site_significance with a forked alpha.
+        motif = pd.DataFrame({
+            "kinase": ["K"], "kinase_gene": ["K"], "target_gene": ["NODE"],
+            "role": ["Receptor"], "contrast": ["d13_d2"], "owning_cluster": ["c1"],
+            "best_abs_pds": [1.0], "best_abs_nes": [2.0], "signed_nes": [2.0],
+            "best_fdr": [0.01], "n_sites": [2], "n_significant_concordant": [1],
+            "celltype_match": [True],
+            "sites": [json.dumps([
+                {"site_id": "A", "delta": 4.0, "site_significance": 0.30, "concordant": True, "changed": True},
+                {"site_id": "B", "delta": 9.0, "site_significance": 0.01, "concordant": True, "changed": False},
+            ])],
+        })
+        psp = pd.DataFrame(columns=["source_gene", "target_gene", "in_vivo_refs", "in_vitro_refs"])
+        terminal = edges.build_terminal_map(motif, psp)
+        # Only site A (changed=True) counts, despite B having a smaller q-value.
+        self.assertEqual(terminal.iloc[0]["edge_delta"], 4.0)
+
+    def test_direct_change_edge_selection_drops_zero_count_rows(self) -> None:
+        rows = pd.DataFrame({
+            "kinase": ["K1", "K1"],
+            "n_significant_concordant": [0, 1],
+        })
+        selected = bridge.select_significant_concordant_edges(rows)
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected.iloc[0]["n_significant_concordant"], 1)
+
+        motif = pd.DataFrame({
+            "kinase": ["K0"], "kinase_gene": ["K0"], "target_gene": ["NODE"],
+            "role": ["Receptor"], "contrast": ["d13_d2"], "owning_cluster": ["c1"],
+            "best_abs_pds": [1.0], "best_abs_nes": [2.0], "signed_nes": [2.0],
+            "best_fdr": [0.01], "n_sites": [1], "sites": ["[]"],
+            "n_significant_concordant": [0], "celltype_match": [True],
+        })
+        psp = pd.DataFrame(columns=["source_gene", "target_gene", "in_vivo_refs", "in_vitro_refs"])
+        self.assertTrue(edges.build_terminal_map(motif, psp).empty)
 
     def test_load_motif_edges_carries_arg_max_aligned_nes_and_sites(self) -> None:
         bridge_root = self._tmp_path()
@@ -147,10 +291,11 @@ class KinaseSidechainBackendTests(unittest.TestCase):
                 "NES": [-2.5, 1.5, 2.5],
                 "FDR": [0.02, 0.01, 0.03],
                 "n_sites": [4, 1, 9],
+                "n_significant_concordant": [1, 1, 1],
                 "sites": [
-                    json.dumps([{"motif": f"M{i}", "residue_type": "ST", "kl_percentile": 99 + i} for i in range(4)]),
-                    json.dumps([{"motif": "M4", "residue_type": "ST", "kl_percentile": 99}]),
-                    json.dumps([{"motif": f"M{i}", "residue_type": "Y", "kl_percentile": 99 + i} for i in range(9)]),
+                    json.dumps([{"site_id": f"S{i}", "site_position": f"S{i}", "motif": f"M{i}", "residue_type": "ST", "kl_percentile": 99 + i, "delta": 1, "site_significance": 0.01, "concordant": True, "timecourse_consistency": 1} for i in range(4)]),
+                    json.dumps([{"site_id": "S4", "site_position": "S4", "motif": "M4", "residue_type": "ST", "kl_percentile": 99, "delta": 1, "site_significance": 0.01, "concordant": True, "timecourse_consistency": 1}]),
+                    json.dumps([{"site_id": f"Y{i}", "site_position": f"Y{i}", "motif": f"M{i}", "residue_type": "Y", "kl_percentile": 99 + i, "delta": 1, "site_significance": 0.01, "concordant": True, "timecourse_consistency": 1} for i in range(9)]),
                 ],
                 "celltype_match": [False, True, True],
             }
@@ -171,7 +316,7 @@ class KinaseSidechainBackendTests(unittest.TestCase):
             [
                 "kinase", "kinase_gene", "target_gene", "role", "contrast", "owning_cluster",
                 "best_abs_pds", "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
-                "sites",
+                "sites", "n_significant_concordant",
                 "celltype_match",
             ],
         )
@@ -181,6 +326,7 @@ class KinaseSidechainBackendTests(unittest.TestCase):
         self.assertEqual(row["signed_nes"], -2.5)
         self.assertEqual(abs(row["signed_nes"]), row["best_abs_nes"])
         self.assertEqual(row["n_sites"], 4)
+        self.assertEqual(row["n_significant_concordant"], 1)
         self.assertEqual(len(json.loads(row["sites"])), row["n_sites"])
         self.assertEqual(row["best_fdr"], 0.01)
         self.assertTrue(row["celltype_match"])
@@ -205,16 +351,19 @@ class KinaseSidechainViewerTests(unittest.TestCase):
             if (!src.includes("requestFullscreen") || !src.includes("fullscreenchange")
                 || !src.includes("cy.resize()"))
               throw new Error("fullscreen control does not refit Cytoscape after resizing");
-            if (!src.includes("infoPanel.append(filterControls, legend, edgeDetail, nodeRelationDetail, siteDetail)")
-                || !src.includes("nodeRelationDetail.replaceChildren(_isNodeRelationTable(evt.target, cy))")
-                || !src.includes('nodeRelationDetail.textContent = "Tap a node for its relationships.";')
-                || !src.includes("panel.append(graphHost, infoPanel, fullscreenButton)")
+            if (!src.includes("infoPanel.append(filterControls, legend, detail)")
+                || !src.includes("detail.replaceChildren(_isSelectionDetail(evt.target))")
+                || !src.includes('detail.textContent = "Tap a node or edge for details.";')
+                || !src.includes("panel.append(graphHost, splitter, infoPanel, fullscreenButton)")
+                || !src.includes('splitter.addEventListener("pointerdown", startPanelDrag)')
+                || !src.includes("const maxPanelWidthPx = panel.clientWidth - _IS_STYLE.minGraphWidthPx")
+                || !src.includes("Math.min(maxPanelWidthPx, width)")
                 || !src.includes("display:flex"))
-              throw new Error("fullscreen panel does not retain legend and edge evidence");
+              throw new Error("sidechain panel does not retain unified details and splitter");
             if (!src.includes('selector: "edge.is-focus-edge"')
                 || !src.includes('keep.edges().addClass("is-focus-edge")'))
               throw new Error("focused connectors do not reset opacity");
-            if (!src.includes('focus(edge.closedNeighborhood().union(spine), detail)'))
+            if (!src.includes('focus(edge.closedNeighborhood().union(spine))'))
               throw new Error("edge taps do not focus the selected edge and endpoints");
             if (src.includes('showAllEvidence')
                 || !src.includes('showChains.checked = false')
@@ -224,39 +373,43 @@ class KinaseSidechainViewerTests(unittest.TestCase):
             if (!src.includes("_isLegendSample") || src.includes("Bold ${{_IS_COLORS"))
               throw new Error("legend does not use visual color samples");
             if (!src.includes("_isTerminalSiteRows") || !src.includes("KL percentile")
-                || !src.includes("renderTerminalSites(edge, target"))
-              throw new Error("terminal edge site table is not wired");
+                || !src.includes("_isTerminalSiteTable")
+                || src.includes("Tap a terminal edge for phosphosite evidence"))
+              throw new Error("unified terminal edge site table is not wired");
 
             const terminalFields = [
-              "source_gene", "target_gene", "role", "contrast", "provenance", "weight",
+              "source_gene", "target_gene", "role", "contrast", "provenance",
               "best_abs_nes", "signed_nes", "best_fdr", "n_sites",
+              "n_significant_concordant", "edge_delta",
             ];
             const terminalRows = [];
             for (let i = 0; i < 12; i++) {{
               terminalRows.push({{
                 source_gene: `RK${{i}}`, target_gene: "R", role: "Receptor",
-                contrast: "d13_d2", provenance: "motif", weight: i,
+                contrast: "d13_d2", provenance: "motif",
                 best_abs_nes: 1 + i * 0.3, signed_nes: i % 2 ? -(1 + i * 0.3) : 1 + i * 0.3,
-                best_fdr: 0.01, n_sites: 1,
+                best_fdr: 0.01, n_sites: 1, n_significant_concordant: 1,
+                edge_delta: i * 0.2,
               }});
             }}
             // A high-|NES| edge that also has a poor FDR: under C it is NOT gated —
             // it must still be drawn (FDR no longer selects).
             terminalRows.push({{
               source_gene: "HIF", target_gene: "R", role: "Receptor",
-              contrast: "d13_d2", provenance: "motif", weight: 100,
+              contrast: "d13_d2", provenance: "motif",
               best_abs_nes: 5, signed_nes: 5, best_fdr: 0.5, n_sites: 1,
+              n_significant_concordant: 1, edge_delta: 4,
             }});
             const terminal = {{}};
             for (const field of terminalFields) terminal[field] = terminalRows.map(row => row[field]);
 
             const chainRows = [
-              {{source_gene: "RK1", target_gene: "RK2", provenance: "motif", weight: 0.5}},
-              {{source_gene: "UPSTREAM", target_gene: "RK2", provenance: "motif", weight: 100}},
-              {{source_gene: "RK3", target_gene: "OUTSIDE", provenance: "motif", weight: 100}},
+              {{source_gene: "RK1", target_gene: "RK2", provenance: "motif"}},
+              {{source_gene: "UPSTREAM", target_gene: "RK2", provenance: "motif"}},
+              {{source_gene: "RK3", target_gene: "OUTSIDE", provenance: "motif"}},
             ];
             const interactome = {{}};
-            for (const field of ["source_gene", "target_gene", "provenance", "weight"])
+            for (const field of ["source_gene", "target_gene", "provenance"])
               interactome[field] = chainRows.map(row => row[field]);
 
             const graph = ctx._isGraphForRow(
@@ -271,7 +424,7 @@ class KinaseSidechainViewerTests(unittest.TestCase):
             if (!graph.kinaseGenes.has("UPSTREAM") || !graph.kinaseGenes.has("OUTSIDE"))
               throw new Error("full view omitted one-hop kinase regulators");
             if (graph.nesMax !== 5) throw new Error(`nesMax was ${{graph.nesMax}}`);
-            if (graph.sitesMax !== 1) throw new Error(`sitesMax was ${{graph.sitesMax}}`);
+            if (graph.nesMax !== 5) throw new Error(`nesMax was ${{graph.nesMax}}`);
             // Full view adds the one-hop kinase→kinase neighborhood, while the
             // first-order UI filter hides its chain edges and chain-only nodes.
             if (graph.chainEdges.length !== 3)
@@ -280,7 +433,8 @@ class KinaseSidechainViewerTests(unittest.TestCase):
               n_sites: 2,
               sites: JSON.stringify([
                 {{motif: "LOW", residue_type: "ST", kl_percentile: 99.1}},
-                {{motif: "HIGH", residue_type: "ST", kl_percentile: 100}},
+                {{site_id: "S2", site_position: "S267", motif: "HIGH", residue_type: "ST", kl_percentile: 100,
+                  delta: 2, site_significance: 0.01, concordant: true, timecourse_consistency: 3}},
               ]),
             }});
             if (siteRows.length !== 2 || siteRows[0].motif !== "HIGH")
@@ -288,17 +442,17 @@ class KinaseSidechainViewerTests(unittest.TestCase):
             if (!ctx._isTerminalSiteRows({{n_sites: 2, sites: "[]"}}).error)
               throw new Error("site/count mismatch was not surfaced");
 
-            // Emphasis: convex, anchored at the null; monotone in |NES|.
+            // Emphasis: convex, anchored at zero measured movement; monotone in |Δ|.
             const near = 1e-9;
-            if (ctx._isEmphasis(1.0, 1.0, 5) !== 0) throw new Error("null NES did not map to 0");
-            if (ctx._isEmphasis(5, 1, 5) !== 1) throw new Error("max NES did not map to 1");
-            if (Math.abs(ctx._isEmphasis(3, 1, 5) - Math.pow(0.5, 3.5)) > near)
-              throw new Error("gamma=3.5 midpoint wrong");  // ((3-1)/(5-1))^3.5
-            if (!(ctx._isEmphasis(2, 1, 5) < ctx._isEmphasis(4, 1, 5)))
+            if (ctx._isEmphasis(0, 0, 4) !== 0) throw new Error("zero Δ did not map to 0");
+            if (ctx._isEmphasis(4, 0, 4) !== 1) throw new Error("anchor Δ did not map to 1");
+            if (Math.abs(ctx._isEmphasis(2, 0, 4) - Math.pow(0.5, 3.5)) > near)
+              throw new Error("gamma=3.5 midpoint wrong");  // (2/4)^3.5
+            if (!(ctx._isEmphasis(1, 0, 4) < ctx._isEmphasis(3, 0, 4)))
               throw new Error("emphasis not monotone");
 
-            // Positioned elements: the strongest edge is thicker AND more opaque
-            // than a null-NES edge (RK0, |NES|=1 → emphasis 0 → floor width/opacity).
+            // Positioned elements: the strongest measured-change edge is thicker
+            // and more opaque than the zero-Δ edge (RK0 → emphasis 0).
             const els = ctx._isPositionedElements(graph, 900, 500);
             const byId = new Map(els.map(el => [el.data.id, el.data]));
             const strong = els.find(el => el.data.kind === "terminal-edge"
@@ -308,7 +462,7 @@ class KinaseSidechainViewerTests(unittest.TestCase):
             if (!(strong.width > weak.width) || !(strong.opacity > weak.opacity))
               throw new Error("emphasis did not encode NES into width+opacity");
             if (Math.abs(weak.opacity - 0.03) > near || Math.abs(weak.width - 0.35) > near)
-              throw new Error("null-NES edge not floored to faint-but-present");
+              throw new Error("zero-Δ edge not floored to faint-but-present");
 
             // Node prominence: a kinase node's size tracks its strongest |NES|.
             // HIF (|NES|=5 → emphasis 1) is the max-diameter node; RK0 (|NES|=1 →
@@ -322,16 +476,16 @@ class KinaseSidechainViewerTests(unittest.TestCase):
             if (Math.abs(strongNode.size - 34) > near || Math.abs(weakNode.size - 9) > near)
               throw new Error("node size not mapped to [9, 34] diameter range");
 
-            // Substrate multiplicity changes terminal-edge emphasis only: equal-NES
-            // terminal edges with different counts get different widths, while their
-            // kinase-node sizes remain equal because node size reads |NES| alone.
+            // Measured edge Δ changes terminal-edge emphasis only: equal-NES
+            // terminal edges with different measured changes get different widths,
+            // while their kinase-node sizes remain equal because node size reads |NES| alone.
             const multiplicityGraph = ctx._isGraphForRow(
               {{interactome: {{}}, terminal_edges: {{
                 source_gene: ["FAN", "FAN"], target_gene: ["R", "E"],
                 role: ["Receptor", "EM"], contrast: ["d13_d2", "d13_d2"],
-                provenance: ["motif", "motif"], weight: [0, 0],
+                provenance: ["motif", "motif"],
                 best_abs_nes: [5, 5], signed_nes: [5, 5], best_fdr: [0.01, 0.01],
-                n_sites: [4, 1],
+                n_sites: [4, 1], n_significant_concordant: [2, 1], edge_delta: [4, 1],
               }}}},
               {{Ligand: "L", Receptor: "R", EM: "E", Target: "T", contrast: "d13_d2"}},
             );
@@ -340,21 +494,21 @@ class KinaseSidechainViewerTests(unittest.TestCase):
             const singleEdge = multiplicityEls.find(el => el.data.id === "terminal:1").data;
             const fanNode = multiplicityEls.find(el => el.data.id === "kinase:FAN").data;
             if (!(multiEdge.width > singleEdge.width))
-              throw new Error("substrate count did not differentiate one kinase fan");
+              throw new Error("edge Δ did not differentiate one kinase fan");
             const flatMultiplicityGraph = ctx._isGraphForRow(
               {{interactome: {{}}, terminal_edges: {{
                 source_gene: ["FAN", "FAN"], target_gene: ["R", "E"],
                 role: ["Receptor", "EM"], contrast: ["d13_d2", "d13_d2"],
-                provenance: ["motif", "motif"], weight: [0, 0],
+                provenance: ["motif", "motif"],
                 best_abs_nes: [5, 5], signed_nes: [5, 5], best_fdr: [0.01, 0.01],
-                n_sites: [1, 1],
+                n_sites: [1, 1], n_significant_concordant: [1, 1], edge_delta: [1, 1],
               }}}},
               {{Ligand: "L", Receptor: "R", EM: "E", Target: "T", contrast: "d13_d2"}},
             );
             const flatFanNode = ctx._isPositionedElements(flatMultiplicityGraph, 900, 500)
               .find(el => el.data.id === "kinase:FAN").data;
             if (Math.abs(fanNode.size - flatFanNode.size) > near)
-              throw new Error("substrate count changed kinase node size");
+              throw new Error("edge Δ changed kinase node size");
 
             // Signed NES is retained as raw edge evidence and mapped only to a
             // categorical enriched/depleted direction for the terminal-edge hue.
@@ -400,6 +554,7 @@ class KinaseSidechainViewerTests(unittest.TestCase):
             }}
             ctx.document = {{
               createElement: tagName => new FakeElement(tagName),
+              createDocumentFragment: () => new FakeElement("fragment"),
               createTextNode: value => ({{textContent: String(value)}}),
             }};
             const makeNode = (id, kind, label, role = "") => {{
@@ -439,13 +594,13 @@ class KinaseSidechainViewerTests(unittest.TestCase):
               kind: "terminal-edge", role: "Receptor", signed_nes: -1,
               nes_direction: "depleted", provenance: "psp",
             }});
-            makeEdge(upstream, high, {{
-              kind: "chain-edge", provenance: "psp", weight: 0.8,
+            const chainEdge = makeEdge(upstream, high, {{
+              kind: "chain-edge", provenance: "psp",
             }});
             makeEdge(high, downstream, {{
-              kind: "chain-edge", provenance: "both", weight: 1.5,
+              kind: "chain-edge", provenance: "both",
             }});
-            const spineTable = ctx._isNodeRelationTable(spineNode, {{}});
+            const spineTable = ctx._isNodeRelationTable(spineNode);
             if (spineTable.tagName !== "TABLE") throw new Error("spine tap did not produce a table");
             if (!spineTable.textContent.includes("3 kinases affecting · 2 enriched · 1 depleted"))
               throw new Error(`unexpected spine summary: ${{spineTable.textContent}}`);
@@ -460,7 +615,7 @@ class KinaseSidechainViewerTests(unittest.TestCase):
                 || !spineTable.textContent.includes("-1.000"))
               throw new Error("spine table omitted signed NES evidence");
 
-            const kinaseTable = ctx._isNodeRelationTable(high, {{}});
+            const kinaseTable = ctx._isNodeRelationTable(high);
             if (kinaseTable.tagName !== "TABLE") throw new Error("kinase tap did not produce a table");
             if (!kinaseTable.textContent.includes("targets 1 nodes · 2 kinases"))
               throw new Error(`unexpected kinase summary: ${{kinaseTable.textContent}}`);
@@ -472,9 +627,38 @@ class KinaseSidechainViewerTests(unittest.TestCase):
                 || !kinaseBody.children[1].textContent.includes("HIGH → DOWNSTREAM")
                 || !kinaseBody.children[2].textContent.includes("UPSTREAM → HIGH"))
               throw new Error("kinase rows did not put terminal NES rows before chains");
-            if (!kinaseBody.children[1].textContent.includes("1.500")
-                || !kinaseBody.children[2].textContent.includes("0.800"))
-              throw new Error("chain rows were not ordered by weight");
+            // Chain rows carry provenance (Evidence), not a fused weight; the table
+            // no longer renders a Weight column at all.
+            if (kinaseTable.textContent.includes("Weight"))
+              throw new Error("relationship table still renders a Weight column");
+            if (!kinaseBody.children[2].textContent.includes("psp"))
+              throw new Error("chain row dropped its provenance evidence");
+
+            const terminalDetailEdge = makeEdge(high, spineNode, {{
+              kind: "terminal-edge", role: "Receptor", contrast: "d13_d2",
+              signed_nes: 4, best_abs_nes: 4, best_fdr: 0.01, n_sites: 1,
+              n_significant_concordant: 1, edge_delta: 2, provenance: "motif",
+              sites: JSON.stringify([{{site_id: "HIGH_SITE", site_position: "S10", motif: "HIGH_MOTIF",
+                residue_type: "ST", kl_percentile: 99.5, delta: 2, site_significance: 0.01,
+                concordant: true, timecourse_consistency: 2}}]),
+            }});
+            const terminalDetail = ctx._isSelectionDetail(terminalDetailEdge);
+            if (!terminalDetail.textContent.includes("HIGH → R · d13_d2")
+                || !terminalDetail.textContent.includes("KL percentile")
+                || !terminalDetail.textContent.includes("HIGH_MOTIF"))
+              throw new Error("terminal selection detail omitted motif site evidence");
+            const chainDetail = ctx._isSelectionDetail(chainEdge);
+            const chainNoteCount = chainDetail.textContent.split(
+              "Per-site motif detail is available for kinase→pathway-gene edges only.").length - 1;
+            if (!chainDetail.textContent.includes("psp")
+                || chainDetail.textContent.includes("Weight")
+                || chainNoteCount !== 1)
+              throw new Error("chain selection detail lost provenance, kept a weight, or duplicated the site-gap note");
+            const kinaseDetail = ctx._isSelectionDetail(high);
+            const kinaseNoteCount = kinaseDetail.textContent.split(
+              "Per-site motif detail is available for kinase→pathway-gene edges only.").length - 1;
+            if (kinaseNoteCount !== 1)
+              throw new Error("kinase node detail repeated the site-gap note per chain edge");
             """
         )
         result = subprocess.run(

@@ -43,6 +43,7 @@ import glob
 import gzip
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -51,6 +52,7 @@ import uuid
 from pathlib import Path
 
 import duckdb
+import numpy as np
 import pandas as pd
 
 from alz.shared import config
@@ -100,6 +102,14 @@ ABS_PDS_CUTOFF = 0.2
 
 POSITIONS = ("Ligand", "Receptor", "EM", "Target")
 
+# Significance B parameters.  The bin count is the tercile stratification used
+# by the t-cell pilot; the alpha is the requested per-contrast FDR call.  These
+# are implementation parameters for the pilot, not exported viewer scores.
+SITE_CHANGE_FDR_ALPHA = 0.05
+SITE_CHANGE_INTENSITY_BIN_COUNT = 3
+SITE_CHANGE_UPPER_NORMAL_QUANTILE = 84.13
+SITE_CHANGE_LOWER_NORMAL_QUANTILE = 15.87
+
 
 def _fivexfad_age_from_contrast(mea_contrast: str) -> int:
     """TG_vs_WT_3mo -> 3"""
@@ -142,6 +152,22 @@ SUBSTRATE_BRIDGE_COLS = [
     "kinase", "contrast", "channel", "NES", "FDR", "gene_symbol", "n_sites",
     "sites",
 ]
+
+
+def _site_matrix_columns(path: Path, abundance_columns: list[str] | None = None) -> list[str]:
+    """Return the available site/motif columns plus requested abundance columns."""
+    header = pd.read_csv(path, nrows=0).columns
+    required = ["site_id", "gene_symbol", "site_position", "motif"]
+    requested = required + list(abundance_columns or [])
+    return [column for column in requested if column in header]
+
+
+def _load_site_matrix(path: Path, abundance_columns: list[str] | None = None) -> pd.DataFrame:
+    """Load one stoichiometry matrix without discarding physical-site evidence."""
+    if not path.exists():
+        return pd.DataFrame()
+    columns = _site_matrix_columns(path, abundance_columns)
+    return pd.read_csv(path, usecols=columns)
 
 
 def load_floor_substrate_sets(
@@ -192,16 +218,16 @@ def build_substrate_bridge(
     """Map floor-99 substrate motifs to per-gene evidence rows.
 
     Substrate membership is the absolute kinase-library floor
-    ``kl_percentile >= kl_floor`` from ``mea_substrate_sets.csv``; it is not
-    gated by MEA FDR.  MEA ``NES`` and ``FDR`` are retained as annotations for
-    the matching (kinase, contrast, track) row and are not used to select
-    edges.
+    ``kl_percentile >= kl_floor`` from ``mea_substrate_sets.csv``.  MEA ``NES``
+    and ``FDR`` are retained as annotations; the T-cell direct-change seam
+    applies the MEA gate after this motif-to-site mapping.
 
-    ``n_sites`` is the number of distinct floor-qualified motifs for a
+    ``n_sites`` is the number of distinct floor-qualified physical sites for a
     (kinase, contrast) row that map to a gene.  ``sites`` is the compact JSON
-    encoding of those same motifs, retaining the raw motif, residue type, and
-    kinase-library percentile. Both are computed before the node-index join,
-    so every role/sender/receiver fan-out retains the same raw evidence.
+    encoding of those same sites, retaining the site ID/position, raw motif,
+    residue type, and kinase-library percentile. Both are computed before the
+    node-index join, so every role/sender/receiver fan-out retains the same raw
+    evidence.
 
     Returns columns: kinase, contrast, channel, NES, FDR, gene_symbol, n_sites, sites
     """
@@ -227,15 +253,32 @@ def build_substrate_bridge(
         ascending=[True, True, True, False],
     ).drop_duplicates(["kinase", "contrast", "motif_key"])
 
-    motif_map = stoich_matrix[["motif", "gene_symbol"]].copy()
+    required_site_columns = {"site_id", "motif", "gene_symbol"}
+    missing_site_columns = required_site_columns - set(stoich_matrix.columns)
+    if missing_site_columns:
+        raise ValueError(
+            "stoichiometry matrix is missing physical-site columns: "
+            + ", ".join(sorted(missing_site_columns))
+        )
+    motif_map_columns = ["site_id", "gene_symbol", "motif"]
+    if "site_position" in stoich_matrix.columns:
+        motif_map_columns.append("site_position")
+    motif_map = stoich_matrix[motif_map_columns].copy()
+    if "site_position" not in motif_map.columns:
+        motif_map["site_position"] = None
     motif_map["motif_key"] = motif_map["motif"].map(_motif_key)
+    motif_map["site_id"] = motif_map["site_id"].astype("string")
     motif_map["gene_symbol"] = motif_map["gene_symbol"].astype("string")
-    motif_map = motif_map.dropna(subset=["gene_symbol"])
+    motif_map = motif_map.dropna(subset=["site_id", "gene_symbol"])
     motif_map = motif_map[motif_map["motif_key"].ne("")].drop_duplicates(
-        ["motif_key", "gene_symbol"]
+        ["motif_key", "gene_symbol", "site_id"]
     )
 
-    mapped = substrate.merge(motif_map[["motif_key", "gene_symbol"]], on="motif_key", how="left")
+    mapped = substrate.merge(
+        motif_map[["motif_key", "gene_symbol", "site_id", "site_position"]],
+        on="motif_key",
+        how="left",
+    )
     unmapped = mapped["gene_symbol"].isna()
     if unmapped.any():
         log.warning(
@@ -252,41 +295,45 @@ def build_substrate_bridge(
     mapped = mapped.dropna(subset=["gene_symbol"])
     if mapped.empty:
         return pd.DataFrame(columns=SUBSTRATE_BRIDGE_COLS)
-    mapped = mapped.drop_duplicates(["kinase", "contrast", "motif_key", "gene_symbol"])
+    mapped = mapped.drop_duplicates(
+        ["kinase", "contrast", "motif_key", "gene_symbol", "site_id"]
+    )
 
-    def encode_sites(group: pd.DataFrame) -> str:
-        ordered = group.sort_values(
-            ["kl_percentile", "motif_key"], ascending=[False, True]
-        )
-        records = []
-        for row in ordered.itertuples(index=False):
-            residue_type = row.residue_type
-            records.append({
-                "motif": str(row.motif),
-                "residue_type": None if pd.isna(residue_type) else str(residue_type),
-                "kl_percentile": float(row.kl_percentile),
-            })
-        return json.dumps(records, ensure_ascii=False, separators=(",", ":"))
-
-    site_rows = []
-    for keys, group in mapped.groupby(
-        ["kinase", "contrast", "gene_symbol"], sort=False
-    ):
-        site_rows.append({
-            "kinase": keys[0],
-            "contrast": keys[1],
-            "gene_symbol": keys[2],
-            "sites": encode_sites(group),
+    # Sort once at site grain, then aggregate prebuilt records.  The prior
+    # group-by/sort-per-gene implementation spent minutes on the donor1 floor-99
+    # receipt because most groups contain only one physical site.
+    ordered = mapped.sort_values(
+        ["kinase", "contrast", "gene_symbol", "kl_percentile", "motif_key"],
+        ascending=[True, True, True, False, True],
+    )
+    site_records = []
+    for row in ordered.itertuples(index=False):
+        site_records.append({
+            "site_id": str(row.site_id),
+            "site_position": None if pd.isna(row.site_position) else str(row.site_position),
+            "motif": str(row.motif),
+            "residue_type": None if pd.isna(row.residue_type) else str(row.residue_type),
+            "kl_percentile": float(row.kl_percentile),
         })
-    site_lists = pd.DataFrame(site_rows)
+    ordered = ordered.assign(_site_record=site_records)
+    site_lists = (
+        ordered.groupby(["kinase", "contrast", "gene_symbol"], sort=False)["_site_record"]
+        .agg(list)
+        .reset_index(name="_site_records")
+    )
+    site_lists["sites"] = site_lists["_site_records"].map(
+        lambda records: json.dumps(records, ensure_ascii=False, separators=(",", ":"))
+    )
+    site_lists = site_lists.drop(columns=["_site_records"])
     counts = (
-        mapped.groupby(["kinase", "contrast", "gene_symbol"], as_index=False)
-        .size()
-        .rename(columns={"size": "n_sites"})
+        mapped.groupby(["kinase", "contrast", "gene_symbol"], as_index=False)["site_id"]
+        .nunique()
+        .rename(columns={"site_id": "n_sites"})
     )
     counts = counts.merge(site_lists, on=["kinase", "contrast", "gene_symbol"], how="left")
     for row in counts.itertuples(index=False):
-        if len(json.loads(row.sites)) != int(row.n_sites):
+        records = json.loads(row.sites)
+        if len(records) != int(row.n_sites) or len({record["site_id"] for record in records}) != int(row.n_sites):
             raise ValueError(
                 "Substrate bridge site-list/count mismatch for "
                 f"{row.kinase}/{row.contrast}/{row.gene_symbol}"
@@ -294,10 +341,217 @@ def build_substrate_bridge(
 
     annotations = mea_stoich[["kinase", "contrast", "NES", "FDR"]].copy()
     annotations["channel"] = mea_stoich.get("track", "st")
+    annotations["channel"] = annotations["channel"].astype("string").str.lower()
     annotations = annotations.drop_duplicates(["kinase", "contrast", "channel"])
     result = annotations.merge(counts, on=["kinase", "contrast"], how="inner")
     result = result[SUBSTRATE_BRIDGE_COLS]
     return result
+
+
+def _contrast_sample_columns(contrast: str, columns: pd.Index) -> tuple[str, str]:
+    """Resolve a t-cell MEA contrast to its later-day and D2 matrix columns."""
+    value = str(contrast)
+    if value.endswith("_vs_d2"):
+        later = value[: -len("_vs_d2")]
+        baseline = re.sub(r"_d\d+$", "_d2", later)
+    else:
+        match = re.match(r"^(.*_d\d+)_d2$", value)
+        if not match:
+            raise ValueError(f"Cannot resolve t-cell contrast to matrix columns: {contrast!r}")
+        later = match.group(1)
+        baseline = re.sub(r"_d\d+$", "_d2", later)
+    if later not in columns or baseline not in columns:
+        raise KeyError(
+            f"Contrast {contrast!r} requires matrix columns {later!r} and {baseline!r}"
+        )
+    return later, baseline
+
+
+def _benjamini_hochberg(p_values: pd.Series) -> pd.Series:
+    """Return BH q-values, preserving the input index and missing values."""
+    numeric = pd.to_numeric(p_values, errors="coerce")
+    valid = numeric.notna()
+    result = pd.Series(np.nan, index=p_values.index, dtype=float)
+    if not valid.any():
+        return result
+    values = numeric.loc[valid].to_numpy(dtype=float)
+    order = np.argsort(values, kind="mergesort")
+    ranked = values[order]
+    ranks = np.arange(1, len(ranked) + 1, dtype=float)
+    adjusted = np.minimum.accumulate((ranked * len(ranked) / ranks)[::-1])[::-1]
+    adjusted = np.clip(adjusted, 0.0, 1.0)
+    restored = np.empty_like(adjusted)
+    restored[order] = adjusted
+    result.loc[valid] = restored
+    return result
+
+
+def compute_site_significance_b(
+    stoich_matrix: pd.DataFrame,
+    contrast: str,
+    *,
+    alpha: float = SITE_CHANGE_FDR_ALPHA,
+    intensity_bin_count: int = SITE_CHANGE_INTENSITY_BIN_COUNT,
+) -> pd.DataFrame:
+    """Compute Significance B site q-values for one channel and contrast.
+
+    The null is estimated independently inside intensity bins using a median and
+    asymmetric 15.87/84.13 percentile scales.  The tail is two-sided; the sign
+    of the observed delta is used only to select the corresponding asymmetric
+    scale.  BH correction is across all measured sites in this contrast.
+    """
+    later, baseline = _contrast_sample_columns(contrast, stoich_matrix.columns)
+    frame = stoich_matrix[["site_id", later, baseline]].copy()
+    frame["site_id"] = frame["site_id"].astype("string")
+    frame["delta"] = pd.to_numeric(frame[later], errors="coerce") - pd.to_numeric(
+        frame[baseline], errors="coerce"
+    )
+    frame["intensity"] = pd.concat(
+        [pd.to_numeric(frame[later], errors="coerce"), pd.to_numeric(frame[baseline], errors="coerce")],
+        axis=1,
+    ).mean(axis=1)
+    valid = frame["delta"].notna() & frame["intensity"].notna()
+    frame["site_significance"] = np.nan
+    if valid.any():
+        valid_frame = frame.loc[valid].copy()
+        valid_frame["intensity_bin"] = pd.qcut(
+            valid_frame["intensity"],
+            q=intensity_bin_count,
+            labels=False,
+            duplicates="drop",
+        )
+        p_values = pd.Series(np.nan, index=valid_frame.index, dtype=float)
+        for _, group in valid_frame.groupby("intensity_bin", observed=True):
+            values = group["delta"].to_numpy(dtype=float)
+            median = float(np.median(values))
+            right_sigma = float(np.percentile(values, SITE_CHANGE_UPPER_NORMAL_QUANTILE) - median)
+            left_sigma = float(median - np.percentile(values, SITE_CHANGE_LOWER_NORMAL_QUANTILE))
+            deltas = group["delta"].to_numpy(dtype=float)
+            sigma = np.where(deltas > median, right_sigma, left_sigma)
+            z = np.where(
+                deltas == median,
+                0.0,
+                np.where(sigma <= 0, math.inf, np.abs((deltas - median) / sigma)),
+            )
+            p_values.loc[group.index] = np.fromiter(
+                (math.erfc(value / math.sqrt(2.0)) for value in z),
+                dtype=float,
+                count=len(z),
+            )
+        frame.loc[valid, "site_significance"] = _benjamini_hochberg(p_values)
+    frame["site_changed"] = frame["site_significance"].lt(alpha)
+    return frame[["site_id", "delta", "site_significance", "site_changed"]]
+
+
+def _site_concordant(delta: object, signed_nes: object) -> bool:
+    """Apply the resolved MEA/site sign convention without a magnitude gate."""
+    try:
+        delta_value = float(delta)
+        nes_value = float(signed_nes)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(delta_value) or not math.isfinite(nes_value):
+        return False
+    return bool(np.sign(delta_value) == np.sign(nes_value))
+
+
+def annotate_tcell_direct_site_changes(
+    substrate_df: pd.DataFrame,
+    stoich_by_channel: dict[str, pd.DataFrame],
+    *,
+    alpha: float = SITE_CHANGE_FDR_ALPHA,
+) -> pd.DataFrame:
+    """Attach direct site evidence and retain only MEA-eligible bridge rows.
+
+    Every retained row keeps all floor-99 physical sites, each stamped with its
+    measured ``delta``, ``site_significance``, ``concordant``, ``changed``
+    (BH-significant) flags, and ``timecourse_consistency``.  The edge-level count
+    (``n_significant_concordant``) records how many sites are both BH-significant
+    and directionally concordant with the kinase's signed NES; callers decide
+    whether to emit the row based on that count.
+
+    ``timecourse_consistency`` counts every contrast a site is significant and
+    concordant in — including contrasts where the kinase is not MEA-eligible.
+    MEA eligibility gates only which rows are emitted, never the consistency
+    signal (stored for analysis, not gated).
+    """
+    if substrate_df.empty:
+        return substrate_df.copy()
+
+    # Timecourse consistency counts every contrast a site is significant and
+    # concordant in, independent of MEA eligibility (stored, not gated).  MEA
+    # eligibility (FDR < MEA_FDR_THRESH) gates only which rows are *emitted* as
+    # edges.  So scan all rows for the consistency count, but build the per-site
+    # evidence and n_significant_concordant only on MEA-eligible rows.
+    result = substrate_df.reset_index(drop=True).copy()
+    result["n_significant_concordant"] = 0
+    eligible = pd.to_numeric(result["FDR"], errors="coerce").lt(config.MEA_FDR_THRESH)
+    consistency_keys: set[tuple[str, str, str, str]] = set()
+    enriched_by_index: dict[int, list[dict]] = {}
+    for (channel, contrast), group in result.groupby(
+        ["channel", "contrast"], sort=False, observed=True
+    ):
+        matrix = stoich_by_channel.get(str(channel), pd.DataFrame())
+        if matrix.empty:
+            continue
+        calls = compute_site_significance_b(matrix, str(contrast), alpha=alpha)
+        call_lookup = calls.set_index("site_id")[
+            ["delta", "site_significance", "site_changed"]
+        ].to_dict("index")
+        for index, row in zip(group.index, group.itertuples(index=False)):
+            row_eligible = bool(eligible.loc[index])
+            site_records = json.loads(row.sites)
+            enriched_sites = []
+            n_significant_concordant = 0
+            for site in site_records:
+                call = call_lookup.get(str(site["site_id"]))
+                delta = call["delta"] if call else None
+                site_significance = call["site_significance"] if call else None
+                concordant = _site_concordant(delta, row.NES)
+                changed = bool(call and call["site_changed"])
+                if changed and concordant:
+                    # consistency spans all contrasts, eligible or not
+                    consistency_keys.add((
+                        str(row.kinase), str(channel), str(site["site_id"]), str(contrast)
+                    ))
+                    if row_eligible:
+                        n_significant_concordant += 1
+                if row_eligible:
+                    enriched = dict(site)
+                    enriched.update({
+                        "delta": None if pd.isna(delta) else float(delta),
+                        "site_significance": None if pd.isna(site_significance) else float(site_significance),
+                        "concordant": concordant,
+                        "changed": changed,
+                    })
+                    enriched_sites.append(enriched)
+            if row_eligible:
+                result.at[index, "n_significant_concordant"] = n_significant_concordant
+                enriched_by_index[index] = enriched_sites
+
+    consistency_counts = pd.Series(
+        [key[:3] for key in consistency_keys], dtype="object"
+    ).value_counts() if consistency_keys else pd.Series(dtype=int)
+    for index, sites in enriched_by_index.items():
+        row = result.loc[index]
+        updated = []
+        for site in sites:
+            key = (str(row["kinase"]), str(row["channel"]), str(site["site_id"]))
+            site["timecourse_consistency"] = int(consistency_counts.get(key, 0))
+            updated.append(site)
+        result.at[index, "sites"] = json.dumps(updated, ensure_ascii=False, separators=(",", ":"))
+
+    # Emit only MEA-eligible rows; consistency above already saw all contrasts.
+    return result.loc[eligible].reset_index(drop=True)
+
+
+def select_significant_concordant_edges(substrate_df: pd.DataFrame) -> pd.DataFrame:
+    """Emit only rows with at least one direct significant concordant site."""
+    if substrate_df.empty:
+        return substrate_df.copy()
+    return substrate_df.loc[
+        pd.to_numeric(substrate_df["n_significant_concordant"], errors="coerce").ge(1)
+    ].reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -998,8 +1252,8 @@ def run_song(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     mea_py = pd.read_csv(SONG_MEA_PY) if SONG_MEA_PY.exists() else pd.DataFrame()
 
     log.info("Song: loading stoichiometry matrix")
-    stoich_st = pd.read_csv(SONG_STOICH_MATRIX, usecols=["site_id", "gene_symbol", "motif"])
-    stoich_py = pd.read_csv(SONG_STOICH_MATRIX_PY, usecols=["site_id", "gene_symbol", "motif"])
+    stoich_st = _load_site_matrix(SONG_STOICH_MATRIX)
+    stoich_py = _load_site_matrix(SONG_STOICH_MATRIX_PY)
     substrate_st = load_floor_substrate_sets(SONG_SUBSTRATE_SETS)
     substrate_py = load_floor_substrate_sets(SONG_SUBSTRATE_SETS_PY)
 
@@ -1052,9 +1306,9 @@ def run_fivexfad(tissue: str) -> pd.DataFrame:
 
     mea_st = pd.read_csv(mea_st_path)
     mea_py = pd.read_csv(mea_py_path) if mea_py_path.exists() else pd.DataFrame()
-    stoich_st = pd.read_csv(stoich_path, usecols=["site_id", "gene_symbol", "motif"])
+    stoich_st = _load_site_matrix(stoich_path)
     stoich_py = (
-        pd.read_csv(stoich_py_path, usecols=["site_id", "gene_symbol", "motif"])
+        _load_site_matrix(stoich_py_path)
         if stoich_py_path.exists()
         else pd.DataFrame()
     )
@@ -1110,9 +1364,9 @@ def write_fivexfad_streamed(tissue: str, out_dir: Path, wide_glob: str) -> bool:
 
     mea_st = pd.read_csv(mea_st_path)
     mea_py = pd.read_csv(mea_py_path) if mea_py_path.exists() else pd.DataFrame()
-    stoich_st = pd.read_csv(stoich_path, usecols=["site_id", "gene_symbol", "motif"])
+    stoich_st = _load_site_matrix(stoich_path)
     stoich_py = (
-        pd.read_csv(stoich_py_path, usecols=["site_id", "gene_symbol", "motif"])
+        _load_site_matrix(stoich_py_path)
         if stoich_py_path.exists()
         else pd.DataFrame()
     )
@@ -1200,6 +1454,7 @@ def write_fivexfad_streamed(tissue: str, out_dir: Path, wide_glob: str) -> bool:
         final_sql = f"""
             WITH hits AS (
                 SELECT s.kinase, s.contrast, s.channel, s.NES, s.FDR, s.n_sites, s.sites,
+                       CAST(NULL AS INTEGER) AS n_significant_concordant,
                        s.gene_symbol, n.role, n.sender, n.receiver,
                        CASE WHEN n.role = 'Ligand' THEN n.sender ELSE n.receiver END AS owning_cluster,
                        n.n_rows, n.best_abs_pds
@@ -1210,6 +1465,7 @@ def write_fivexfad_streamed(tissue: str, out_dir: Path, wide_glob: str) -> bool:
                 SELECT 'fivexfad' AS cohort,
                        $tissue AS tissue,
                        h.kinase, h.contrast, h.channel, h.NES, h.FDR, h.n_sites, h.sites,
+                       h.n_significant_concordant,
                        h.gene_symbol, h.role, h.sender, h.receiver,
                        h.owning_cluster,
                        r.celltype_match_rank IS NOT NULL AS celltype_match,
@@ -1297,6 +1553,7 @@ def write_fivexfad_streamed(tissue: str, out_dir: Path, wide_glob: str) -> bool:
 
 FINAL_COLS = [
     "cohort", "tissue", "kinase", "contrast", "channel", "NES", "FDR", "n_sites", "sites",
+    "n_significant_concordant",
     "gene_symbol", "role", "sender", "receiver", "owning_cluster",
     "celltype_match", "celltype_match_rank",
     "n_rows", "best_abs_pds",
@@ -1430,9 +1687,10 @@ def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
     log.info("T-cell %s: loading MEA, floor-99 substrate sets, and stoichiometry matrix", donor)
     mea = pd.read_csv(mea_path)
     mea_py = pd.read_csv(mea_py_path) if mea_py_path.exists() else pd.DataFrame()
-    stoich_st = pd.read_csv(stoich_path, usecols=["site_id", "gene_symbol", "motif"])
+    tcell_abundance_columns = ["D1_d2", "D1_d13", "D1_d15", "D1_d17", "D1_d19", "D1_d20"]
+    stoich_st = _load_site_matrix(stoich_path, tcell_abundance_columns)
     stoich_py = (
-        pd.read_csv(stoich_py_path, usecols=["site_id", "gene_symbol", "motif"])
+        _load_site_matrix(stoich_py_path, tcell_abundance_columns)
         if stoich_py_path.exists()
         else pd.DataFrame()
     )
@@ -1442,7 +1700,18 @@ def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
     if not mea_py.empty:
         all_subs.append(build_substrate_bridge(mea_py, stoich_py, substrate_py))
     subs = pd.concat(all_subs, ignore_index=True).drop_duplicates()
-    log.info("T-cell %s: %s (kinase,contrast,gene) substrate rows", donor, len(subs))
+    subs = annotate_tcell_direct_site_changes(
+        subs,
+        {"st": stoich_st, "py": stoich_py},
+    )
+    n_before_change_gate = len(subs)
+    subs = select_significant_concordant_edges(subs)
+    log.info(
+        "T-cell %s: %s MEA-eligible substrate rows, %s direct-change rows",
+        donor,
+        n_before_change_gate,
+        len(subs),
+    )
     if subs.empty:
         log.warning("T-cell %s: no floor-99 substrate rows", donor)
         return False
@@ -1484,6 +1753,7 @@ def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
         final_sql = f"""
             WITH hits AS (
                 SELECT s.kinase, s.contrast, s.channel, s.NES, s.FDR, s.n_sites, s.sites,
+                       s.n_significant_concordant,
                        s.gene_symbol, n.role, n.sender, n.receiver,
                        CASE WHEN n.role = 'Ligand' THEN n.sender ELSE n.receiver END AS owning_cluster,
                        n.n_rows, n.best_abs_pds
@@ -1494,6 +1764,7 @@ def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
                 SELECT 'tcells' AS cohort,
                        $donor AS tissue,
                        h.kinase, h.contrast, h.channel, h.NES, h.FDR, h.n_sites, h.sites,
+                       h.n_significant_concordant,
                        h.gene_symbol, h.role, h.sender, h.receiver,
                        h.owning_cluster,
                        a.owning_cluster IS NOT NULL AS celltype_match,
@@ -1545,7 +1816,8 @@ def write_tcells_streamed(donor: str, out_dir: Path) -> bool:
 
     ## Parameters
     - Attribution substrate floor: kl_percentile >= {config.INCYTR_ATTRIBUTION_KL_PCT}
-      (no MEA-FDR gate; NES/FDR are retained as edge annotations)
+    - Terminal eligibility: MEA FDR < {config.MEA_FDR_THRESH} and at least one
+      Significance-B, direction-concordant measured site per node edge
     - Backbone floor: SigProb > {SIGPROB_CUTOFF} (either side) AND |PDS| >= {ABS_PDS_CUTOFF}
 
     ## Counts

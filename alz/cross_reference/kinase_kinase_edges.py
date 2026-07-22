@@ -1,18 +1,19 @@
 """Kinase→kinase interactome + per-node terminal-edge map (backend edge model).
 
-Unifies two evidence sources into one weighted, provenance-tagged edge model that
-the viewer walks to draw a single pathway's kinase sidechains:
+Unifies two evidence sources into one provenance-tagged edge model that the viewer
+walks to draw a single pathway's kinase sidechains:
 
   - literature (PhosphoSitePlus ``Kinase_Substrate_Dataset``): kinase→kinase edges
-    where the substrate gene is itself a kinase; weight = log1p(IN_VIVO_REF_COUNT).
+    where the substrate gene is itself a kinase (tags an edge ``psp`` / ``both``).
   - motif (the existing MEA/kldata bridge, ``kinase_incytr_bridge.py``): a kinase's
-    floor-99 substrate genes mapped onto pathway nodes; corroboration strength = |NES|.
+    floor-99 substrate sites mapped onto pathway nodes; terminal strength is the
+    measured edge delta.
 
 Two artifacts per cohort:
 
   interactome.csv    kinase→kinase edges (the internal signaling cascade the client
                      walks upstream from a terminal kinase). Provenance ``motif`` /
-                     ``psp`` / ``both``; weight = norm(log1p in_vivo) + norm(|NES|).
+                     ``psp`` / ``both`` tags which evidence source(s) support the edge.
   terminal_edges.csv kinase→pathway-node edges (the last hop attaching a kinase to a
                      pathway). Motif-derived, PSP-corroborated (tag ``both`` when PSP
                      confirms the same kinase→node pair, else ``motif``).
@@ -30,10 +31,9 @@ The motif source is the bridge's kinase_node_hits.parquet under ``BRIDGE_ROOT``
 (written by kinase_incytr_bridge.py) — a data dependency, not a code one. The wide
 Incytr shards are never read here; the bridge already reduced them.
 
-Weight is normalized-additive and NOT clamped to [0,1]: each component is normalized
-to [0,1] independently, then summed (range [0,2]). An edge corroborated by both
-sources therefore scores above either single source — that sum *is* the corroboration
-bonus. weight_lit / weight_motif are kept as separate columns for transparency.
+Terminal ranking retains |NES| for deterministic kinase-row selection, while the
+viewer uses measured ``edge_delta`` for terminal width. Chain edges carry no fused
+strength scalar; provenance is their only visual signal.
 
 Usage:
   pixi run python -m alz.cross_reference.kinase_kinase_edges --cohort song
@@ -158,9 +158,11 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
     a human gene symbol, then homology-mapped to mouse when ``is_mouse``. The target
     (pathway-node) gene is already cohort-native (mouse for song/5xFAD).
 
-    Contract schema (also produced by subplan 02 for t-cells):
+    Contract schema (the T-cell bridge supplies direct-change fields; AD cohorts
+    retain nulls for those fields until their cohort-specific change model lands):
       kinase, kinase_gene, target_gene, role, contrast, owning_cluster,
-      best_abs_pds, best_abs_nes, signed_nes, best_fdr, n_sites, sites, celltype_match
+      best_abs_pds, best_abs_nes, signed_nes, best_fdr, n_sites, sites,
+      n_significant_concordant, celltype_match
     """
     parquet = BRIDGE_ROOT / bridge_dir / "kinase_node_hits.parquet"
     if not parquet.exists():
@@ -179,6 +181,17 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
         f"DESCRIBE SELECT * FROM read_parquet('{safe}')"
     ).fetchdf()["column_name"])
     sites_select = "sites" if "sites" in parquet_columns else "NULL::VARCHAR"
+    has_direct_change_contract = "n_significant_concordant" in parquet_columns
+    if bridge_dir.startswith("tcells_") and not has_direct_change_contract:
+        raise ValueError(
+            f"{bridge_dir}: direct-change bridge contract is required; "
+            "motif-only terminal fallback is not supported"
+        )
+    n_sig_select = (
+        "n_significant_concordant"
+        if has_direct_change_contract
+        else "NULL::INTEGER"
+    )
     agg = con.execute(
         f"""
         WITH ranked_hits AS (
@@ -201,6 +214,7 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
                MAX(CASE WHEN nes_rank = 1 THEN NES END) AS signed_nes,
                MAX(CASE WHEN nes_rank = 1 THEN n_sites END) AS n_sites,
                MAX(CASE WHEN nes_rank = 1 THEN {sites_select} END) AS sites,
+               MAX(CASE WHEN nes_rank = 1 THEN {n_sig_select} END) AS n_significant_concordant,
                MIN(FDR) AS best_fdr,
                BOOL_OR(celltype_match) AS celltype_match
         FROM ranked_hits
@@ -225,9 +239,13 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
                 f"{row.kinase}/{row.target_gene}/{row.contrast}"
             )
         for site in sites:
-            if not isinstance(site, dict) or not {
-                "motif", "residue_type", "kl_percentile"
-            }.issubset(site):
+            required_site_fields = {"motif", "residue_type", "kl_percentile"}
+            if pd.notna(row.n_significant_concordant):
+                required_site_fields.update({
+                    "site_id", "site_position", "delta", "site_significance",
+                    "concordant", "timecourse_consistency",
+                })
+            if not isinstance(site, dict) or not required_site_fields.issubset(site):
                 raise ValueError(
                     f"{bridge_dir}: malformed terminal site evidence for "
                     f"{row.kinase}/{row.target_gene}/{row.contrast}"
@@ -248,12 +266,13 @@ def load_motif_edges(bridge_dir: str, is_mouse: bool) -> pd.DataFrame:
     if is_mouse:
         agg = _homology_map(agg, ["kinase_gene"])
 
-    return agg[
-        [
-            "kinase", "kinase_gene", "target_gene", "role", "contrast", "owning_cluster", "best_abs_pds",
-            "best_abs_nes", "signed_nes", "best_fdr", "n_sites", "sites", "celltype_match",
-        ]
-    ].reset_index(drop=True)
+    columns = [
+        "kinase", "kinase_gene", "target_gene", "role", "contrast", "owning_cluster", "best_abs_pds",
+        "best_abs_nes", "signed_nes", "best_fdr", "n_sites", "sites", "celltype_match",
+    ]
+    if has_direct_change_contract:
+        columns.insert(-1, "n_significant_concordant")
+    return agg[columns].reset_index(drop=True)
 
 
 def assert_song_celltype_join(motif_edges: pd.DataFrame) -> None:
@@ -291,27 +310,20 @@ def _homology_map(df: pd.DataFrame, gene_cols: list[str]) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# edge fusion: normalized-additive weight + motif/psp/both provenance tag
+# edge fusion: motif/psp/both provenance tag
 # ---------------------------------------------------------------------------
 
-def _norm(series: pd.Series, ceiling: float) -> pd.Series:
-    """Normalize to [0,1] by a fixed ceiling; 0 when the ceiling is degenerate."""
-    if not np.isfinite(ceiling) or ceiling <= 0:
-        return pd.Series(0.0, index=series.index)
-    return (series / ceiling).clip(lower=0.0, upper=1.0)
-
-
 def build_interactome(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd.DataFrame:
-    """Fuse the kinase→kinase evidence into one provenance-tagged, weighted edge list.
+    """Fuse the kinase→kinase evidence into one provenance-tagged edge list.
 
     Both frames must be in the same (cohort-native) gene space. The motif arm is
     restricted to edges whose target gene is itself a kinase (a source in either arm);
     the psp arm is the full literature kinase→kinase set. Motif contrasts are collapsed
-    (max |NES|) — the interactome is contrast-agnostic; per-contrast corroboration lives
-    in terminal_edges.csv.
+    — the interactome is contrast-agnostic; per-contrast corroboration lives in
+    terminal_edges.csv.
 
-    Returns: source_gene, target_gene, provenance, weight, weight_lit, weight_motif,
-             in_vivo_refs, in_vitro_refs, n_motif_contrasts, motif_contrasts
+    Returns: source_gene, target_gene, provenance, in_vivo_refs, in_vitro_refs,
+             n_motif_contrasts, motif_contrasts
     """
     kinase_set = (
         set(psp_edges["source_gene"])
@@ -322,7 +334,6 @@ def build_interactome(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd.
     motif_agg = (
         mkk.groupby(["kinase_gene", "target_gene"])
         .agg(
-            weight_motif_raw=("best_abs_nes", "max"),
             n_motif_contrasts=("contrast", "nunique"),
             motif_contrasts=("contrast", lambda s: ",".join(sorted(set(s)))),
         )
@@ -330,69 +341,90 @@ def build_interactome(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd.
         .rename(columns={"kinase_gene": "source_gene"})
     )
 
-    lit_ceiling = float(np.log1p(psp_edges["in_vivo_refs"]).max()) if not psp_edges.empty else 0.0
-    motif_ceiling = float(motif_agg["weight_motif_raw"].max()) if not motif_agg.empty else 0.0
-
-    psp = psp_edges.copy()
-    psp["weight_lit_raw"] = np.log1p(psp["in_vivo_refs"])
-
-    merged = psp.merge(motif_agg, on=["source_gene", "target_gene"], how="outer", indicator=True)
+    merged = psp_edges.merge(
+        motif_agg, on=["source_gene", "target_gene"], how="outer", indicator=True
+    )
     merged["provenance"] = merged["_merge"].map(
         {"both": "both", "left_only": "psp", "right_only": "motif"}
     )
-    merged["weight_lit"] = _norm(merged["weight_lit_raw"].fillna(0.0), lit_ceiling)
-    merged["weight_motif"] = _norm(merged["weight_motif_raw"].fillna(0.0), motif_ceiling)
-    merged["weight"] = merged["weight_lit"] + merged["weight_motif"]
     merged["in_vivo_refs"] = merged["in_vivo_refs"].fillna(0).astype(int)
     merged["in_vitro_refs"] = merged["in_vitro_refs"].fillna(0).astype(int)
     merged["n_motif_contrasts"] = merged["n_motif_contrasts"].fillna(0).astype(int)
     merged["motif_contrasts"] = merged["motif_contrasts"].fillna("")
 
     cols = [
-        "source_gene", "target_gene", "provenance", "weight", "weight_lit", "weight_motif",
+        "source_gene", "target_gene", "provenance",
         "in_vivo_refs", "in_vitro_refs", "n_motif_contrasts", "motif_contrasts",
     ]
-    return merged[cols].sort_values("weight", ascending=False).reset_index(drop=True)
+    return merged[cols].sort_values(
+        ["source_gene", "target_gene"]).reset_index(drop=True)
 
 
 def build_terminal_map(motif_edges: pd.DataFrame, psp_edges: pd.DataFrame) -> pd.DataFrame:
     """Fuse motif kinase→pathway-node edges with PSP literature corroboration.
 
-    Motif-driven: every row is a motif terminal edge (kinase→node at a pathway role,
-    per contrast). PSP corroborates a row (tag ``both``, adds weight_lit) when it knows
-    the same kinase→target pair; otherwise the row stays ``motif``. Pure-literature
+    A T-cell row is emitted only when its direct-change bridge count is at least
+    one.  AD rows retain their existing motif-created behavior while the shared
+    schema carries null direct-change fields. PSP corroborates a surviving row
+    (tag ``both``) when it knows the same kinase→target pair; otherwise the row
+    stays ``motif``. Pure-literature
     kinase→kinase edges with no motif support live in the interactome, not here.
 
     Returns: kinase, source_gene, target_gene, role, contrast, owning_cluster,
-             celltype_match, provenance,
-             weight, weight_lit, weight_motif, best_abs_pds, best_abs_nes, signed_nes,
-             best_fdr, n_sites, sites
+             celltype_match, provenance, best_abs_pds, best_abs_nes, signed_nes,
+             best_fdr, n_sites, sites, n_significant_concordant, edge_delta
     """
     motif_edges = motif_edges.copy()
     if "sites" not in motif_edges.columns:
         motif_edges["sites"] = None
-    lit_ceiling = float(np.log1p(psp_edges["in_vivo_refs"]).max()) if not psp_edges.empty else 0.0
-    motif_ceiling = float(motif_edges["best_abs_nes"].max()) if not motif_edges.empty else 0.0
+    has_direct_change_calls = (
+        "n_significant_concordant" in motif_edges.columns
+        and pd.to_numeric(
+            motif_edges["n_significant_concordant"], errors="coerce"
+        ).notna().any()
+    )
+    if has_direct_change_calls:
+        motif_edges = motif_edges.loc[
+            pd.to_numeric(motif_edges["n_significant_concordant"], errors="coerce").ge(1)
+        ].copy()
+    else:
+        motif_edges["n_significant_concordant"] = None
 
-    psp_lit = psp_edges[["source_gene", "target_gene", "in_vivo_refs"]].copy()
-    psp_lit["weight_lit_raw"] = np.log1p(psp_lit["in_vivo_refs"])
-    psp_lit = psp_lit[["source_gene", "target_gene", "weight_lit_raw"]]
+    def edge_delta(sites: object) -> float:
+        if sites is None or (isinstance(sites, float) and pd.isna(sites)):
+            return float("nan")
+        try:
+            records = json.loads(sites) if isinstance(sites, str) else sites
+        except (TypeError, json.JSONDecodeError):
+            return float("nan")
+        # The bridge already decided significance with its own alpha and stamped
+        # each site's `changed` (BH-significant) flag — consume it, do not
+        # re-threshold here (that would fork the significance cutoff).
+        deltas = [
+            float(site["delta"])
+            for site in records or []
+            if isinstance(site, dict)
+            and site.get("changed") is True
+            and site.get("concordant") is True
+            and pd.notna(site.get("delta"))
+        ]
+        return float(np.mean(deltas)) if deltas else float("nan")
+
+    psp_pairs = psp_edges[["source_gene", "target_gene"]].drop_duplicates().copy()
+    psp_pairs["_has_lit"] = True
 
     df = motif_edges.rename(columns={"kinase_gene": "source_gene"}).merge(
-        psp_lit, on=["source_gene", "target_gene"], how="left"
+        psp_pairs, on=["source_gene", "target_gene"], how="left"
     )
-    df["provenance"] = np.where(df["weight_lit_raw"].notna(), "both", "motif")
-    df["weight_lit"] = _norm(df["weight_lit_raw"].fillna(0.0), lit_ceiling)
-    df["weight_motif"] = _norm(df["best_abs_nes"].fillna(0.0), motif_ceiling)
-    df["weight"] = df["weight_lit"] + df["weight_motif"]
+    df["provenance"] = np.where(df["_has_lit"].notna(), "both", "motif")
+    df["edge_delta"] = df["sites"].map(edge_delta)
 
     cols = [
         "kinase", "source_gene", "target_gene", "role", "contrast", "owning_cluster",
-        "celltype_match", "provenance",
-        "weight", "weight_lit", "weight_motif", "best_abs_pds", "best_abs_nes", "signed_nes",
-        "best_fdr", "n_sites", "sites",
+        "celltype_match", "provenance", "best_abs_pds", "best_abs_nes", "signed_nes",
+        "best_fdr", "n_sites", "sites", "n_significant_concordant", "edge_delta",
     ]
-    return df[cols].sort_values("weight", ascending=False).reset_index(drop=True)
+    return df[cols].sort_values("best_abs_nes", ascending=False).reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -478,11 +510,9 @@ def run_cohort_dir(bridge_dir: str, is_mouse: bool) -> None:
         f"## Terminal edges (kinase→pathway-node)\n"
         f"- edges: {len(terminal)}\n"
         f"- provenance: motif={tprov.get('motif',0)} both={tprov.get('both',0)}\n"
-        f"- signed_nes: direction on terminal edges (+ enriched, − depleted); |NES| drives weight.\n"
-        f"- n_sites: distinct floor-99 substrate motifs per terminal edge; combines with |NES| for edge emphasis.\n\n"
-        f"## Weight\n"
-        f"- normalized-additive: norm(log1p(in_vivo_refs)) + norm(|NES|), range [0,2].\n"
-        f"- weight_lit / weight_motif kept separately. Rank on weight or |NES|, never p_value.\n"
+        f"- signed_nes: direction on terminal edges (+ enriched, − depleted); |NES| remains kinase evidence.\n"
+        f"- n_sites: distinct physical floor-99 sites per terminal edge; edge_delta is mean Δ over significant-concordant sites.\n"
+        f"- provenance (motif/psp/both) tags evidence source; rank on |NES|, never p_value.\n"
     )
     (out_dir / "MANIFEST.md").write_text(manifest)
 

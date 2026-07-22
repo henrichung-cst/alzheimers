@@ -17,9 +17,10 @@ The Incytr pathways view ranks Ligand→Receptor→EM→Target signaling pathway
 answers *which pathway*, not *which kinases drive it*. The sidechain view takes one
 selected pathway and overlays:
 
-- **Terminal edges** — kinase → pathway-node, where a kinase's motif is enriched
-  among the phosphosites of a node's gene. "Which kinases phosphorylate this
-  node's protein."
+- **Terminal edges** — kinase → pathway-node, where a floor-99 motif attributes
+  at least one physical phosphosite whose measured change is Significance-B
+  significant and direction-concordant with an MEA-eligible kinase call. "Which
+  kinase-attributed sites changed on this node's protein."
 - **Interactome edges** — kinase → kinase, among the regulators drawn, from
   literature and cohort motif co-enrichment. "How those kinases regulate each
   other."
@@ -37,7 +38,7 @@ kinase_incytr_bridge.py                 →  kinase_kinase_edges.py            �
 kinase_node_hits.parquet  ──────────────▶  interactome.csv                  ──▶  interactome / terminal_edges ──▶  spine + fans
   (kinase, gene, role,                      terminal_edges.csv                    tuple-guarded shard
    contrast, NES, FDR,
-   n_sites, sites, …)
+   n_sites, sites, n_significant_concordant, …)
 ```
 
 1. **Bridge** (`alz/cross_reference/kinase_incytr_bridge.py`) — per cohort, joins
@@ -48,7 +49,7 @@ kinase_node_hits.parquet  ──────────────▶  interac
    never `read_parquet` into pandas.
 
 2. **Edge model** (`alz/cross_reference/kinase_kinase_edges.py`) — reduces the hit
-   table into two provenance-tagged, weighted edge lists: `terminal_edges.csv`
+   table into two provenance-tagged edge lists: `terminal_edges.csv`
    (kinase→node) and `interactome.csv` (kinase→kinase). One dir per cohort tissue
    under `outputs/reports/kinase_kinase_edges/`.
 
@@ -68,16 +69,33 @@ kinase_node_hits.parquet  ──────────────▶  interac
 
 ### Terminal edges (kinase → pathway-node)
 
-**Source: cohort motif enrichment only.** A terminal edge exists because the
-kinase's motif is enriched among the phosphosites of the node's gene in this
-cohort. PhosphoSitePlus (PSP) literature only *corroborates* an existing edge
-(bumps provenance to `both`, adds `weight_lit`); it never creates one.
+**Source: measured phospho change, motif-attributed and MEA-gated.** In the
+t-cell pilot, a terminal edge exists only when the kinase has MEA `FDR < 0.25`
+for that contrast and channel and at least one floor-99 motif-matched physical
+site on the node gene is a Significance-B significant outlier whose Δ sign
+matches signed NES. PSP literature only *corroborates* an existing edge (bumps
+provenance to `both`); it never creates one.
 
 Per-edge fields carried to the viewer: `signed_nes`, `best_abs_nes`, `best_fdr`,
-`n_sites`, `sites`, `weight_motif`, `provenance`, `role`, `contrast`. `sites` is
-JSON-encoded floor-99 raw evidence (`motif`, `residue_type`,
-`kl_percentile`) attached at `(kinase, contrast, gene_symbol)` and selected from
-the same max-|NES| bridge row as `n_sites`.
+`n_sites`, `n_significant_concordant`, `edge_delta`, `sites`, `provenance`,
+`role`, `contrast`. `sites` is per-physical-site JSON evidence
+(`site_id`, `site_position`, `motif`, `residue_type`, `kl_percentile`, measured
+`delta`, corrected `site_significance`, `changed` (the BH-significant flag),
+`concordant`, and `timecourse_consistency`). `edge_delta` averages `delta` over
+sites where `changed and concordant` — reusing the bridge's stored flag, so the
+significance cutoff has one owner and is never re-thresholded downstream.
+Non-significant and discordant matched sites remain inside a surviving edge's
+`sites` evidence; only the edge is gated.
+
+Significance B is estimated per contrast and channel from intensity-binned,
+asymmetric robust nulls on MEA-normalized stoichiometry Δ values. Its two-sided
+tail probability is BH-corrected across sites. The five baseline timepoint
+contrasts share D2 and are therefore corroborating states, not independent
+replicates; `timecourse_consistency` counts every contrast a site is
+significant-concordant in — including contrasts where the kinase is not
+MEA-eligible — and is stored, never an edge gate (MEA eligibility gates only
+which rows are emitted). This criterion is the `tcells_donor1` pilot; Song and
+5xFAD remain unchanged this pass.
 
 ### Interactome edges (kinase → kinase)
 
@@ -87,21 +105,21 @@ the same max-|NES| bridge row as `n_sites`.
   `Kinase_Substrate_Dataset_count_07_2021.txt` (shipped inside the
   `kinase_library` package; not vendored). A kinase→kinase edge is a PSP substrate
   row whose `SUB_GENE` is itself a kinase gene; autophosphorylation self-loops
-  dropped; `IN_VIVO/IN_VITRO_REF_COUNT` summed per pair. Weight
-  `weight_lit = norm(log1p(in_vivo_refs))`.
+  dropped; `IN_VIVO/IN_VITRO_REF_COUNT` summed per pair (carried for reference).
 - **Motif arm** — motif edges whose *target* gene is itself a kinase
-  (contrast-collapsed to `max |NES|`). Weight `weight_motif = norm(max |NES|)`.
+  (contrast-collapsed; `n_motif_contrasts` / `motif_contrasts` carried for reference).
 
-Outer-joined on (source, target); provenance = `both` / `psp` / `motif`; final
-`weight = weight_lit + weight_motif` (range [0, 2]). Contrast-agnostic —
-per-contrast detail stays in the terminal edges.
+Outer-joined on (source, target); provenance = `both` / `psp` / `motif`.
+Chain edges carry **no fused strength scalar** — provenance is the only signal, and
+it drives edge color only. Contrast-agnostic — per-contrast detail stays in the
+terminal edges.
 
 Mouse cohorts (song, 5xFAD): PSP is human, homology-mapped to mouse before fusion.
 T-cells are human — no mapping.
 
 ---
 
-## Edge-weighting model — what drives strength
+## Edge-strength model — what drives visual emphasis
 
 This is the correctness-critical part and the least obvious.
 
@@ -112,11 +130,11 @@ This is the correctness-critical part and the least obvious.
   other*, and by itself a kinase's terminal fan is flat — every K→node edge from
   one kinase-contrast carries identical NES.
 
-- **Substrate multiplicity (`n_sites`) is the per-edge discriminator.** It is the
-  count of a kinase's distinct leading-substrate motifs that map to a given node's
-  gene. A node hit by 3 of a kinase's substrates is a stronger target than one hit
-  by 1. This count was originally computed then discarded by a dedup; subplan 07
-  recovers it. `load_motif_edges` aligns `n_sites` and `signed_nes` to the *same*
+- **Physical-site evidence is the per-edge discriminator.** `n_sites` is the
+  count of distinct physical `site_id` values mapped to the node gene. The
+  `n_significant_concordant` count gates t-cell edge existence, while `edge_delta`
+  is the mean measured Δ across those significant-concordant sites. The
+  `load_motif_edges` aligns these fields and `signed_nes` to the *same*
   max-|NES| row via a `ROW_NUMBER()` window (deterministic tie-break: `ABS(NES)
   DESC, FDR ASC, channel ASC`), so `abs(signed_nes) == best_abs_nes` always holds.
 
@@ -126,11 +144,13 @@ This is the correctness-critical part and the least obvious.
   quality categorically. Adding graded similarity would mean re-plumbing
   kinase-library per-site scoring — out of scope, do not add.
 
-- **Signed NES** carries direction (+ enriched / − depleted); magnitude drives
-  strength, sign drives hue only.
+- **Signed NES** carries direction (+ enriched / − depleted); its magnitude is
+  used for kinase node emphasis, while terminal edge strength comes from
+  measured `edge_delta`.
 
 - **PDS** (`best_abs_pds`) is carried for reference but does not drive terminal
-  strength — the motif weight is `norm(|NES|)`.
+  strength — terminal strength is `|edge_delta|` (see viewer encodings below);
+  there is no fused weight scalar.
 
 ---
 
@@ -141,16 +161,18 @@ Two visual axes, kept independent:
 | Element | Encodes | Formula |
 |---|---|---|
 | Kinase **node size** | kinase strength (which kinases matter) | `_isEmphasis(best_abs_nes)` — |NES| only |
-| Terminal **edge width + opacity** | edge strength (which node a kinase hits hardest) | `nesEmphasis × siteFactor`, `siteFactor = siteFloor + (1−siteFloor)·log1p(n_sites)/log1p(sitesMax)`, `siteFloor = 0.4` |
+| Terminal **edge width + opacity** | measured terminal change | `_isEmphasis(|edge_delta|, 0, 4)`; 4 is the pilot absolute-Δ 95th-percentile anchor |
 | Terminal **edge hue** | direction | signed NES > 0 → enriched red `#d73027`; < 0 → depleted blue `#4575b4` |
 | Terminal **edge style** | edge class | dotted (distinguishes from chain edges) |
 | Chain **edge color** | provenance | motif blue / PSP orange dashed / both purple |
+| Chain **edge width** | none (uniform) | fixed `chainEdgeWidthPx`; chain edges carry no strength scalar |
 | Spine **edge** | core pathway | bold `#1f4ea3`, always strongest |
 
 The emphasis transform `_isEmphasis(value, lo, hi) = clamp01((value−lo)/(hi−lo))^γ`
-is anchored at the biological null NES = 1 (`nesNull`), γ = 3.5, so strong edges
-separate aggressively from weak ones. Node/edge floors keep null-NES elements
-faint-but-present, never invisible.
+uses γ = 3.5. Node emphasis remains anchored at the biological null `|NES| = 1`;
+terminal edge emphasis is anchored at zero measured Δ and the pilot's 4-unit
+absolute-Δ reference. Node/edge floors keep weak evidence faint-but-present,
+never invisible.
 
 **Layout** — the 4 spine nodes sit on a shallow arc; each node's kinase fan opens
 into its own outward angular wedge (concentric arcs, strong kinases inner / weak
@@ -158,8 +180,8 @@ outer), so adjacent nodes' fans tile instead of competing for one axis.
 
 **Interaction** — tap a node to isolate its closed neighborhood (∪ spine) and
 zoom, *and* fill the relationship table (below); tap any edge for a detail panel
-(terminal: signed NES, direction, FDR, |NES|, site count, and the sorted floor-99
-motif table; chain: provenance, weight); tap background to clear. The graph and
+(terminal: signed NES, direction, FDR, measured Δ, significant/concordant count,
+and the sorted per-site evidence table; chain: provenance); tap background to clear. The graph and
 the dedicated right-side evidence panel remain side-by-side, including in browser
 full-screen mode. A static legend built from the style constants explains every
 encoding.
@@ -172,11 +194,13 @@ Direction-aware:
 - **Spine node** → rows are the kinases hitting it. Summary: `N kinases affecting
   · E enriched · D depleted`.
 - **Kinase node** → rows are what it points at — pathway nodes via terminal edges
-  (with role and signed NES), then other kinases via chain edges (provenance,
-  weight). Summary: `targets N nodes · M kinases`.
+  (with role and signed NES), then other kinases via chain edges (provenance).
+  Summary: `targets N nodes · M kinases`.
 
 Terminal rows sort by |signed NES| desc and always precede chain rows, which sort
-by weight desc. The table reads the loaded graph regardless of the `showChains`
+by relationship label. The table includes measured edge Δ and the significant/
+concordant count; the adjacent site table includes site Δ, corrected significance,
+concordance, and timecourse consistency. It reads the loaded graph regardless of the `showChains`
 graph filter — it is a text read-out, not a second view of the canvas. Purely
 viewer-side: every field already rides the Cytoscape edge data, so no backend,
 payload, or schema-guard column participates.
@@ -219,11 +243,13 @@ viewer emphasis/layout math, Node-executed against the real JS source).
 - **Streamed reads only.** `kinase_node_hits.parquet` is multi-GB; all reads are
   DuckDB with `memory_limit` set. Never whole-read it into pandas.
 - **`abs(signed_nes) == best_abs_nes`** for every terminal edge (same-row pick).
-- **Terminal edges are motif-created, PSP-corroborated.** Interactome edges can be
-  literature-only. Do not let PSP create terminal edges.
+- **Terminal edges are measured-change-created, motif-attributed, MEA-gated, and
+  PSP-corroborated.** Interactome edges can be literature-only. Do not let PSP
+  create terminal edges.
 - **Terminal site evidence reconciles.** For every regenerated terminal edge,
-  `len(sites) == n_sites`; each site carries its motif, residue type, and raw
-  `kl_percentile >= 99`. A mismatch fails the reducer/viewer contract check.
+  `len(sites) == n_sites`; each site carries its physical ID and position, motif,
+  residue type, raw `kl_percentile >= 99`, and direct-change evidence. A mismatch
+  fails the reducer/viewer contract check.
 - **Schema tuple guard is the change-detector.** Any new backend column must be
   appended to the payload column tuples in the same pass, or the shard build
   raises.

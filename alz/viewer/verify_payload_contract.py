@@ -32,6 +32,16 @@ REQUIRED_CONTEXT_FIELDS = {
     "capabilities",
 }
 CONTEXT_BLOCKS = ("kinases", "celltypes", "incytr_pathways")
+# Each shared block is served only by the contexts whose capability flag
+# advertises it: 5xFAD contexts are incytr-only (kinases/celltypes stay Song),
+# and some T-cell donors omit kinases. A block's by_context must cover every
+# capable context; extra entries are allowed and reconciled by
+# _check_capabilities against actual row counts.
+_BLOCK_CAPABILITY = {
+    "kinases": "kinases",
+    "celltypes": "celltypes",
+    "incytr_pathways": "incytr",
+}
 
 
 def _load_payload(path: Path) -> dict[str, Any]:
@@ -101,6 +111,11 @@ def _check_context_blocks(
     context_ids: list[str],
     errors: list[str],
 ) -> None:
+    capabilities = {
+        ctx.get("id"): ctx.get("capabilities", {})
+        for ctx in payload.get("meta", {}).get("contexts", [])
+        if isinstance(ctx, dict)
+    }
     for block_name in CONTEXT_BLOCKS:
         block = payload.get(block_name)
         if not isinstance(block, dict):
@@ -112,9 +127,18 @@ def _check_context_blocks(
         if not isinstance(by_context, dict):
             errors.append(f"{block_name}.by_context missing or not an object")
             continue
-        missing = sorted(set(context_ids) - set(by_context))
+        cap_key = _BLOCK_CAPABILITY[block_name]
+        required = {
+            ctx_id
+            for ctx_id in context_ids
+            if isinstance(capabilities.get(ctx_id), dict)
+            and capabilities[ctx_id].get(cap_key)
+        }
+        missing = sorted(required - set(by_context))
         if missing:
-            errors.append(f"{block_name}.by_context missing contexts: {missing}")
+            errors.append(
+                f"{block_name}.by_context missing capable contexts: {missing}"
+            )
 
     tt = payload.get("meta", {}).get("transcript_trace")
     if isinstance(tt, dict) and "by_donor" in tt:
@@ -264,10 +288,20 @@ def _check_incytr_sidechains(
                             f"{index} site-list/count mismatch"
                         )
                         continue
+                    direct_change_value = (
+                        columns.get("n_significant_concordant", [None])[index]
+                        if index < len(columns.get("n_significant_concordant", []))
+                        else None
+                    )
+                    direct_change_present = direct_change_value not in (None, "", "nan")
                     for site in sites:
-                        if not isinstance(site, dict) or not {
-                            "motif", "residue_type", "kl_percentile"
-                        }.issubset(site):
+                        required_site_fields = {"motif", "residue_type", "kl_percentile"}
+                        if direct_change_present:
+                            required_site_fields.update({
+                                "site_id", "site_position", "delta", "site_significance",
+                                "concordant", "timecourse_consistency",
+                            })
+                        if not isinstance(site, dict) or not required_site_fields.issubset(site):
                             errors.append(
                                 f"Incytr sidechain shard {context_id!r} terminal edge "
                                 f"{index} has malformed site evidence"
@@ -458,7 +492,7 @@ def _check_motif_peer_contract(payload: dict[str, Any], errors: list[str]) -> No
             if not isinstance(row, dict):
                 errors.append(f"motif_peer_narrowing {cohort} row {index} must be an object")
                 continue
-            if not {"kinase", "cell_type", "motif_peers_detected",
+            if not {"kinase", "cell_type", "detection_fraction", "motif_peers_detected",
                     "motif_peers_informative", "motif_peer_fractions"}.issubset(row):
                 errors.append(f"motif_peer_narrowing {cohort} row {index} lacks required fields")
                 continue
