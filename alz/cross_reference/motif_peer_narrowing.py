@@ -640,6 +640,7 @@ def _compact_cohort(rows: list[dict[str, Any]]) -> dict[str, Any]:
         compact.append({
             "kinase": kinase,
             "cell_type": str(row["cell_type"]),
+            "detection_fraction": round(float(row["detection_fraction"]), ROSTER_FRACTION_DECIMALS),
             "motif_peers_detected": int(row["motif_peers_detected"]),
             "motif_peers_informative": int(row["motif_peers_informative"]),
             "motif_peer_fractions": [
