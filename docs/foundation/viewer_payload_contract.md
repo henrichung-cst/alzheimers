@@ -110,6 +110,57 @@ Required viewer-facing fields are the same evidence fields defined in
 block when files are absent. Frontend labels must stay categorical and must not
 turn internal gate values into displayed analysis scores.
 
+### Kinase Incytr Participation
+
+`payload.kinase_incytr_participation` is the kinase-first inverse of the
+pathway-first Incytr sidechain graph. It is a flat, name-keyed block (not
+`by_context`), emitted for the donor1 T-cell context only because kinase MEA —
+and therefore terminal edges — exists only there. It drives the kinase detail
+pane's **Pathways** tab (peer of Attribution) and back-sources the Explorer
+`#pathways` / `#backbones` columns from the same single scan. See
+`docs/foundation/kinase_sidechain_incytr_graph.md` for the terminal-edge source
+and count semantics.
+
+```json
+{
+  "kinase_incytr_participation": {
+    "AAK1": {
+      "counts": {"pathways": 97569, "backbones": 41230, "total": 97569},
+      "by_role": {"Receptor": 0, "EM": 41230, "Target": 62144},
+      "by_contrast": {"d13_d2": 33012},
+      "by_receiver": {"CD8Tex": 51044}
+    }
+  }
+}
+```
+
+- `counts.pathways` = `|union of the kinase's role masks|`; `counts.backbones` =
+  `|Receptor ∪ EM|`; both are pathway-**row** counts over the donor's global
+  pathway index (large numbers, not distinct pathways). These are the exact
+  values the Explorer `incytr_pathway_count` / `incytr_backbone_count` columnar
+  arrays already carry — one computation populates both, and the arrays are not
+  re-sourced from this block.
+- `by_role` is role **membership** (each role's row count; a pathway row can
+  satisfy more than one role, so the three do not sum to `pathways`).
+- `by_contrast` and `by_receiver` **partition** `pathways` (each sums to it).
+- Kinases with zero participation appear with all-zero counts.
+
+The tab's per-edge detail table loads a lazy sidecar registered in
+`payload.audit_tables` under key `kinase_incytr_edges` (built via the standard
+`_audit_csv_meta` manifest path, empty `preview`). One row per observed terminal
+edge, columns in this exact order:
+
+```text
+kinase, target_gene, role, contrast, receiver, pathways, signed_nes, best_fdr,
+n_sites, edge_delta, n_significant_concordant, motif_peers_detected,
+motif_peers_informative
+```
+
+`contrast` uses the contrast-row form (e.g. `d13_d2`); every row has
+`pathways >= 1` (count-0 edges are dropped). Rows drive cross-nav into the Incytr
+Pathways explorer (receiver → `receiverIn`, target gene → any-role `searchText`).
+The block and sidecar are omitted when no donor exposes terminal edges.
+
 ## Meta Contract
 
 `payload.meta` is the routing contract for the frontend.

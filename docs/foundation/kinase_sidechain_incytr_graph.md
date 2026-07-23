@@ -218,6 +218,29 @@ payload, or schema-guard column participates.
 
 ---
 
+## Kinase-first inverse — Pathways detail tab
+
+The sidechain graph is pathway-first: pick one pathway, see its regulating
+kinases. The **Pathways** tab in the T-cell kinase detail pane
+(`alz/tcell_viewer/template/js/tabs/kinase_audit.js`, peer of Attribution) is
+the inverse: pick one kinase, see the pathways it participates in through its
+terminal edges. Donor1 only — terminal edges exist only where kinase MEA does.
+
+- **Source.** Both views read the same `terminal_edges.csv`. The tab's backend
+  (`_incytr_pathway_participation` in `slices_kinase.py`) does one scan of the
+  donor's global pathway index keyed by the terminal-edge tuples, producing the
+  `payload.kinase_incytr_participation` block, the per-edge
+  `kinase_incytr_edges` sidecar, and the Explorer `#pathways` / `#backbones`
+  columns together — no parallel recomputation.
+- **Counts.** `#pathways` = `|union of the kinase's role masks|` over the index;
+  `#backbones` = `|Receptor ∪ EM|`. These are pathway-**row** counts, not
+  distinct pathways. The block's `by_contrast` / `by_receiver` partition the
+  pathway count; `by_role` is role membership. Full block and sidecar schema:
+  `docs/foundation/viewer_payload_contract.md`.
+- **Cross-nav.** Each per-edge row links into the shared Incytr Pathways
+  explorer (receiver → `receiverIn`, target gene → any-role `searchText`), so a
+  kinase's participation row opens the pathway-first view filtered to that edge.
+
 ## Cohorts
 
 `COHORT_DIRS` in `kinase_kinase_edges.py`:
